@@ -192,10 +192,6 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--round-title", default="Clean Review Bundle")
     parser.add_argument("--report-path", required=True)
     parser.add_argument("--round-start-time", required=True)
-    parser.add_argument("--round-status", default="PASS")
-    parser.add_argument("--clean-source-status", default=None)
-    parser.add_argument("--tests-status", default=None)
-    parser.add_argument("--security-scan-status", default=None)
     parser.add_argument("--evidence-dir", type=Path)
     args = parser.parse_args(argv)
 
@@ -296,7 +292,9 @@ def main(argv: list[str] | None = None) -> int:
             "live_order_submission_allowed": False,
         }
         write_text(review / "ROUND_METADATA.json", json.dumps(metadata, indent=2, sort_keys=True))
-        completed = "Review bundle generator, unit tests, evidence capture, and independent ZIP verification."
+        completed = (
+            "Review bundle generator, unit tests, evidence capture, and source archive creation."
+        )
         change_summary = f"# Round Change Summary\n\n## Round goal\n{args.round_title}\n\n## Baseline\n`{args.base_commit}`\n\n## Completed\n{completed}\n\n## Incomplete\nNone.\n\n## Behavior/config/API/data changes\nAdds an offline audit artifact generator only; no trading, data, broker, or API behavior changes.\n\n## Security impact\nThe source snapshot is derived from committed Git objects; secrets and excluded artifacts are scanned before delivery.\n\n## Backtest, Paper Trading, and Live Trading impact\nNone; all trading controls remain disabled.\n\n## Compatibility and migration\nBackward compatible; no migration.\n\n## Known limitations\nNative Python 3.12 may be unavailable; Docker validation is recorded when used.\n\n## Recommended review files\n`scripts/build_review_bundle.py`, `tests/unit/test_review_bundle.py`, and `{args.report_path}`.\n"
         write_text(review / "CHANGE_SUMMARY.md", change_summary)
         write_text(
@@ -331,7 +329,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         reproduce = """# Reproduce\n\nExtract the ZIP, enter `source/`, and use Python 3.12.\n\nPowerShell:\n```powershell\npy -3.12 -m venv .venv\n.\\.venv\\Scripts\\python.exe -m pip install -e \".[dev]\"\n.\\.venv\\Scripts\\python.exe -m ruff check .\n.\\.venv\\Scripts\\python.exe -m ruff format --check .\n.\\.venv\\Scripts\\python.exe -m mypy src\n.\\.venv\\Scripts\\python.exe -m pytest\n.\\.venv\\Scripts\\python.exe -m quant_system.cli status\ndocker compose config\ndocker compose build app\n```\n\nPOSIX:\n```sh\npython3.12 -m venv .venv && . .venv/bin/activate\npython -m pip install -e '.[dev]'\npython -m ruff check . && python -m ruff format --check . && python -m mypy src && python -m pytest\npython -m quant_system.cli status\ndocker compose config && docker compose build app\n```\n\nReview `review/FULL_DIFF.patch`, then verify `review/CHECKSUMS.sha256` with SHA-256 tooling. No `.env`, API key, market data, database, or external service is required for the offline checks.\n"""
         write_text(review / "REPRODUCE.md", reproduce)
-        review_readme = f"""# Clean Review Bundle\n\nProject: US Equity Quantitative Trading System  \nPhase: Phase 0  \nRound: {args.round_id} — {args.round_title}  \nObjective: create an independently auditable committed-source snapshot.  \nBase commit: `{args.base_commit}`  \nCurrent commit: `{head}`  \nBranch: `{branch}`  \nStatus: {args.round_status}\n\nCompleted: generator, tests, evidence, source archive, checksums, and independent validation. Uncompleted: none. Not performed: strategy development, broker access, market data, Paper Trading, Live Trading, or orders.\n\nRecommended order: `review/CHANGE_SUMMARY.md`, `review/CHANGED_FILES.csv`, `review/FULL_DIFF.patch`, changed source/tests, `{args.report_path}`, `review/TEST_RESULTS.md`, then `review/KNOWN_LIMITATIONS.md`.\n\nThe ZIP excludes virtual environments, Docker images/volumes, dependency caches, market data, databases, logs, `.env`, API keys, Git history, and local user files.\n"""
+        review_readme = f"""# Clean Review Bundle\n\nProject: US Equity Quantitative Trading System  \nPhase: Phase 0  \nRound: {args.round_id} — {args.round_title}  \nObjective: create an independently auditable committed-source snapshot.  \nBase commit: `{args.base_commit}`  \nCurrent commit: `{head}`  \nBranch: `{branch}`  \nStatus: {derived_status}\n\nCompleted: generator, tests, evidence, source archive, checksums, and independent validation. Uncompleted: none. Not performed: strategy development, broker access, market data, Paper Trading, Live Trading, or orders.\n\nRecommended order: `review/CHANGE_SUMMARY.md`, `review/CHANGED_FILES.csv`, `review/FULL_DIFF.patch`, changed source/tests, `{args.report_path}`, `review/TEST_RESULTS.md`, then `review/KNOWN_LIMITATIONS.md`.\n\nThe ZIP excludes virtual environments, Docker images/volumes, dependency caches, market data, databases, logs, `.env`, API keys, Git history, and local user files.\n"""
         write_text(review / "REVIEW_README.md", review_readme)
         review_file_count = len([path for path in review.rglob("*") if path.is_file()]) + 2
         zip_file_count = len([path for path in staging.rglob("*") if path.is_file()]) + 3
