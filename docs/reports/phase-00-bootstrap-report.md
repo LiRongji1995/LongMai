@@ -13,7 +13,7 @@ The Phase 0 baseline is established: `main`, Python `src` layout, offline CLI, g
 | Verification Python | Docker Python 3.12.13 |
 | Git | 2.49.0.windows.1; identity configured but not recorded |
 | Docker / Compose | 29.4.1 / v5.1.3; daemon responsive |
-| GitHub CLI | BLOCKED: not installed |
+| GitHub CLI | 2.96.0 installed; BLOCKED: not authenticated |
 | Free disk before work | 36.99 GiB |
 | Initial workspace | Empty Git repository, no user changes; branch renamed to `main` |
 
@@ -47,10 +47,9 @@ High-confidence scans found no private-key headers, GitHub token formats, or AWS
 
 ## Git and GitHub — PASS WITH LIMITATIONS
 
-Initial baseline commit: `e17a9685a2b2d01e0ed89174c8bf93e96b9b7d7e` (`chore: initialize quantitative trading system project`). GitHub CLI is not installed, therefore authentication, safe private-repository creation, and push could not run. Unauthenticated non-interactive `git ls-remote` returned “Repository not found”; it cannot distinguish a nonexistent private repository from one unavailable to this environment. No remote was added or modified, and synchronization did not occur.
+Initial baseline commit: `e17a9685a2b2d01e0ed89174c8bf93e96b9b7d7e` (`chore: initialize quantitative trading system project`). GitHub CLI 2.96.0 is installed but no GitHub account is authenticated, therefore safe private-repository creation and push remain blocked. Unauthenticated non-interactive `git ls-remote` returned “Repository not found”; it cannot distinguish a nonexistent private repository from one unavailable to this environment. No remote was added or modified, and synchronization did not occur.
 
 ```powershell
-winget install --id GitHub.cli
 gh auth login
 gh repo view LiRongji1995/us-equity-quant-system --json isPrivate,isEmpty,url
 gh repo create LiRongji1995/us-equity-quant-system --private --source . --remote origin --push
@@ -60,7 +59,7 @@ Run the create command only after `gh repo view` confirms absence. If a reposito
 
 ## Known limitations and next gate — PASS WITH LIMITATIONS
 
-Native Python 3.12 and GitHub CLI are absent; Docker supplied isolated Python 3.12 validation. GitHub synchronization is BLOCKED, not claimed complete. The local root name differs from the suggested child name because the provided root was already an empty repository. Next: Phase 1 foundation audit for LEAN and Alpaca in clean source, with a minimal deterministic backtest and no Paper/Live enablement.
+Native Python 3.12 is absent; Docker supplied isolated Python 3.12 validation. GitHub CLI is installed but GitHub synchronization is BLOCKED pending account authentication, not claimed complete. The local root name differs from the suggested child name because the provided root was already an empty repository. Next: Phase 1 foundation audit for LEAN and Alpaca in clean source, with a minimal deterministic backtest and no Paper/Live enablement.
 
 ## Required declarations — PASS
 
