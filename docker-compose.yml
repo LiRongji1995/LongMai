@@ -1,0 +1,17 @@
+services:
+  app:
+    build: .
+    command: ["python", "-m", "quant_system.cli", "status"]
+    read_only: true
+    tmpfs: [/tmp]
+  postgres:
+    image: postgres:16-alpine
+    profiles: [database]
+    environment:
+      POSTGRES_DB: quant
+      POSTGRES_USER: quant
+      POSTGRES_PASSWORD: quant
+    ports: ["127.0.0.1:5432:5432"]
+    volumes: [postgres_data:/var/lib/postgresql/data]
+volumes:
+  postgres_data:
