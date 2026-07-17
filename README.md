@@ -48,6 +48,18 @@ py -3.12 -m venv .venv
 Run checks with `.\scripts\check.ps1`, or run Ruff, mypy, pytest, build, and the CLI individually.
 The CLI is offline and reports project/version/phase plus both trading switches as `false`.
 
+## Clean Review Bundle
+
+After committing a clean review round and its report, create a Git-object-derived external-review ZIP:
+
+```powershell
+python scripts/build_review_bundle.py --round-id "phase-00-clean-review-bundle" --base-commit "<recorded-base-commit>" --output-dir "artifacts/review-bundles" --report-path "docs/reports/phase-00-clean-review-bundle-report.md" --round-start-time "<ISO-8601-UTC>"
+```
+
+The tool refuses a dirty worktree and never archives the working directory directly. It packages only
+committed `HEAD` via `git archive`; review artifacts include the complete diff, evidence, checksums, and
+manifest. The generated ZIP is intentionally ignored by Git.
+
 ## Docker
 
 ```powershell
