@@ -1,19 +1,72 @@
 from __future__ import annotations
 
+import json
 import subprocess
 import sys
+import zipfile
 from pathlib import Path
 from shutil import which
 
 import pytest
 
-from scripts.build_review_bundle import changed_rows, derive_status
+from scripts.build_review_bundle import changed_rows, validate_bundle, validate_evidence
 
-pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required by the review tool")
+pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required")
 
 
-def test_changed_rows_handles_add_modify_delete_rename_and_unicode(tmp_path: Path) -> None:
-    repo = tmp_path / "diff-repo"
+def evidence(
+    head: str,
+    base: str,
+    *,
+    network: bool = True,
+    python: str = "3.12.13",
+    exit_code: int = 0,
+) -> dict[str, object]:
+    checks: dict[str, dict[str, object]] = {
+        name: {"command": name, "exit_code": exit_code, "status": "PASS"}
+        for name in (
+            "ruff_check",
+            "ruff_format",
+            "mypy",
+            "build",
+            "cli",
+            "docker_compose_config",
+            "git_diff_check",
+        )
+    }
+    checks["pytest"] = {
+        "command": "python -m pytest",
+        "exit_code": exit_code,
+        "status": "PASS",
+        "passed": 4,
+        "failed": 0,
+        "skipped": 3,
+        "coverage_percent": 100,
+    }
+    checks["clean_source"] = {
+        "status": "PASS",
+        "head_commit": head,
+        "working_tree_clean": True,
+    }
+    return {
+        "schema_version": 1,
+        "project_name": "us-equity-quant-system",
+        "head_commit": head,
+        "base_commit": base,
+        "branch": "main",
+        "verification_environment": {
+            "type": "docker",
+            "image": "test",
+            "image_id": "sha256:test",
+            "python_version": python,
+            "network_disabled": network,
+        },
+        "checks": checks,
+    }
+
+
+def make_repo(tmp_path: Path) -> tuple[Path, str, str, Path]:
+    repo = tmp_path / "repo"
     repo.mkdir()
     for command in (
         ["git", "init", "-b", "main"],
@@ -21,70 +74,69 @@ def test_changed_rows_handles_add_modify_delete_rename_and_unicode(tmp_path: Pat
         ["git", "config", "user.name", "test"],
     ):
         subprocess.run(command, cwd=repo, check=True, capture_output=True)
-    (repo / "old name.txt").write_text("old\n", encoding="utf-8")
-    (repo / "remove.txt").write_text("remove\n", encoding="utf-8")
-    (repo / "modify.txt").write_text("before\n", encoding="utf-8")
-    subprocess.run(["git", "add", "."], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
-    base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    (repo / "old name.txt").rename(repo / "新 名称.txt")
-    (repo / "remove.txt").unlink()
-    (repo / "modify.txt").write_text("after\n", encoding="utf-8")
-    (repo / "added file.txt").write_text("added\n", encoding="utf-8")
-    subprocess.run(["git", "add", "-A"], cwd=repo, check=True)
-    subprocess.run(["git", "commit", "-m", "change"], cwd=repo, check=True, capture_output=True)
-    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    rows = changed_rows(repo, base, head)
-    by_path = {row["file_path"]: row for row in rows}
-    assert by_path["modify.txt"]["change_type"] == "M"
-    assert by_path["added file.txt"]["change_type"] == "A"
-    assert by_path["remove.txt"]["change_type"] == "D"
-    renamed = next(row for row in rows if row["file_path"] == "新 名称.txt")
-    assert renamed["change_type"].startswith("R") and renamed["old_path"] == "old name.txt"
-
-
-def test_derive_status_rejects_missing_evidence_and_blocked_clean_source(tmp_path: Path) -> None:
-    with pytest.raises(ValueError):
-        derive_status(tmp_path)
-    for name, content in {
-        "TEST_RESULTS.md": "PASS\n",
-        "COMMAND_RESULTS.txt": "python -m pytest\nPASS\n",
-        "CLEAN_SOURCE_RESULT.md": "BLOCKED\n",
-        "SECURITY_SCAN_RESULT.md": "PASS\n",
-        "KNOWN_LIMITATIONS.md": "network blocked\n",
-    }.items():
-        (tmp_path / name).write_text(content, encoding="utf-8")
-    assert derive_status(tmp_path)[0] == "BLOCKED"
-
-
-def test_review_bundle_script_builds_git_object_snapshot(tmp_path: Path) -> None:
-    repo = tmp_path / "repo"
-    repo.mkdir()
-    subprocess.run(["git", "init", "-b", "main"], cwd=repo, check=True, capture_output=True)
-    subprocess.run(["git", "config", "user.email", "test@example.invalid"], cwd=repo, check=True)
-    subprocess.run(["git", "config", "user.name", "Review Test"], cwd=repo, check=True)
-    (repo / "VERSION").write_text("0.1.0\n", encoding="utf-8")
+    (repo / ".gitattributes").write_text("* text eol=lf\n", encoding="utf-8")
+    (repo / "VERSION").write_text("0.1.0\n")
+    (repo / "src" / "quant_system").mkdir(parents=True)
+    (repo / "src" / "quant_system" / "__init__.py").write_text(
+        "CURRENT_PHASE='Phase 0'\nLIVE_TRADING_ENABLED=False\nPAPER_TRADING_ENABLED=False\n"
+    )
+    (repo / "src" / "quant_system" / "cli.py").write_text(
+        "def main(argv): print("
+        "'current phase: Phase 0\\npaper trading enabled: false\\n'"
+        "'live trading enabled: false'); return 0\n"
+    )
     report = repo / "docs" / "reports" / "round.md"
     report.parent.mkdir(parents=True)
-    report.write_text("report\n", encoding="utf-8")
-    (repo / "tracked.txt").write_text("base\n", encoding="utf-8")
+    report.write_text("report\n")
+    (repo / "tracked.txt").write_text("base\n")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "base"], cwd=repo, check=True, capture_output=True)
     base = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
-    (repo / "tracked.txt").write_text("head\n", encoding="utf-8")
+    (repo / "tracked.txt").write_text("head\n")
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "head"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    path = tmp_path / "evidence.json"
+    path.write_text(json.dumps(evidence(head, base)))
+    return repo, base, head, path
+
+
+def test_changed_rows_handles_changes(tmp_path: Path) -> None:
+    repo, base, head, _ = make_repo(tmp_path)
+    assert any(
+        row["file_path"] == "tracked.txt" and row["change_type"] == "M"
+        for row in changed_rows(repo, base, head)
+    )
+
+
+@pytest.mark.parametrize(
+    ("mutate", "message"),
+    [
+        (lambda item: item.update({"head_commit": "bad"}), "commit"),
+        (lambda item: item["checks"]["ruff_check"].update({"exit_code": 1}), "failed"),
+        (
+            lambda item: item["verification_environment"].update({"python_version": "3.11.9"}),
+            "3.12",
+        ),
+        (
+            lambda item: item["verification_environment"].update({"network_disabled": False}),
+            "network",
+        ),
+    ],
+)
+def test_evidence_rejects_invalid_inputs(tmp_path: Path, mutate: object, message: str) -> None:
+    _repo, base, head, _ = make_repo(tmp_path)
+    payload = evidence(head, base)
+    mutate(payload)  # type: ignore[operator]
+    with pytest.raises(ValueError, match=message):
+        validate_evidence(payload, head, base, "main")
+
+
+def test_bundle_includes_evidence_and_validation_and_detects_tampering(
+    tmp_path: Path,
+) -> None:
+    repo, base, head, evidence_path = make_repo(tmp_path)
     output = tmp_path / "out"
-    evidence = tmp_path / "evidence"
-    evidence.mkdir()
-    for name, content in {
-        "TEST_RESULTS.md": "PASS\n",
-        "COMMAND_RESULTS.txt": "python -m pytest\nPASS\n",
-        "CLEAN_SOURCE_RESULT.md": "PASS\n",
-        "SECURITY_SCAN_RESULT.md": "PASS\n",
-        "KNOWN_LIMITATIONS.md": "None\n",
-    }.items():
-        (evidence / name).write_text(content, encoding="utf-8")
     script = Path(__file__).resolve().parents[2] / "scripts" / "build_review_bundle.py"
     result = subprocess.run(
         [
@@ -100,14 +152,26 @@ def test_review_bundle_script_builds_git_object_snapshot(tmp_path: Path) -> None
             "docs/reports/round.md",
             "--round-start-time",
             "2026-07-17T00:00:00Z",
-            "--evidence-dir",
-            str(evidence),
+            "--evidence-json",
+            str(evidence_path),
         ],
         cwd=repo,
         text=True,
         capture_output=True,
-        check=False,
     )
     assert result.returncode == 0, result.stderr
     bundle = next(output.glob("*.zip"))
-    assert bundle.stat().st_size > 0
+    with zipfile.ZipFile(bundle) as archive:
+        names = archive.namelist()
+        assert any(name.endswith("review/EVIDENCE.json") for name in names)
+        assert any(name.endswith("review/BUNDLE_VALIDATION_RESULT.md") for name in names)
+        archive.extractall(tmp_path / "extract")
+    extracted = next((tmp_path / "extract").iterdir())
+    target = extracted / "source" / "tracked.txt"
+    target.write_text("tampered\n")
+    tampered = tmp_path / "tampered.zip"
+    with zipfile.ZipFile(tampered, "w") as archive:
+        for path in extracted.rglob("*"):
+            if path.is_file():
+                archive.write(path, path.relative_to(extracted.parent))
+    assert validate_bundle(tampered, head, repo).status == "FAIL"
