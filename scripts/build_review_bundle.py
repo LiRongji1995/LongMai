@@ -142,6 +142,9 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-path", required=True)
     parser.add_argument("--round-start-time", required=True)
     parser.add_argument("--round-status", default="PASS")
+    parser.add_argument("--clean-source-status", default=None)
+    parser.add_argument("--tests-status", default=None)
+    parser.add_argument("--security-scan-status", default=None)
     parser.add_argument("--evidence-dir", type=Path)
     args = parser.parse_args(argv)
 
@@ -230,9 +233,9 @@ def main(argv: list[str] | None = None) -> int:
             "bundle_created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "python_required": "3.12",
             "working_tree_clean": True,
-            "clean_source_status": args.round_status,
-            "tests_status": args.round_status,
-            "security_scan_status": args.round_status,
+            "clean_source_status": args.clean_source_status or args.round_status,
+            "tests_status": args.tests_status or args.round_status,
+            "security_scan_status": args.security_scan_status or args.round_status,
             "paper_trading_enabled": False,
             "live_trading_enabled": False,
             "live_order_submission_allowed": False,

@@ -19,6 +19,8 @@ Add a cross-platform Python 3.12 review-bundle generator, unit coverage, and evi
 
 The authoritative final filename, size, SHA-256, source count, review-evidence count, and independent extraction result are recorded in the generated bundle's `BUNDLE_INFO.txt`, `ROUND_METADATA.json`, and terminal delivery summary. The ZIP hash cannot be embedded in this committed report without recursively changing the committed source snapshot that the hash covers. The bundle remains untracked under `artifacts/review-bundles/`.
 
+The clean-source clone was created solely from committed files, but its Python 3.12 dependency installation was blocked by a PyPI timeout. The final bundle status is therefore `PASS WITH LIMITATIONS`; no source integrity, Secret scan, or independent ZIP verification limitation is implied by that network failure.
+
 ## Known limitations
 
 Native Python 3.12 is unavailable; all quality and clean-source checks use Docker Python 3.12. No secret, market data, database, virtual environment, cache, Docker image/volume, or user file is eligible for the bundle.
