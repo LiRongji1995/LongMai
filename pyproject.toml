@@ -39,4 +39,3 @@ files = ["src"]
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=quant_system --cov-fail-under=90"
 testpaths = ["tests"]
-
