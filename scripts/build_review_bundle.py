@@ -10,6 +10,7 @@ import argparse
 import csv
 import hashlib
 import json
+import re
 import subprocess
 import tarfile
 import tempfile
@@ -100,23 +101,66 @@ def read_evidence(directory: Path | None, filename: str, fallback: str) -> str:
     return fallback
 
 
+def evidence_status(content: str) -> str | None:
+    match = re.search(r"\b(PASS WITH LIMITATIONS|BLOCKED|FAIL|PASS)\b", content.upper())
+    return match.group(1) if match else None
+
+
+def derive_status(evidence_dir: Path | None) -> tuple[str, dict[str, str]]:
+    required = (
+        "TEST_RESULTS.md",
+        "COMMAND_RESULTS.txt",
+        "CLEAN_SOURCE_RESULT.md",
+        "SECURITY_SCAN_RESULT.md",
+        "KNOWN_LIMITATIONS.md",
+    )
+    if evidence_dir is None:
+        raise ValueError("evidence directory is required")
+    statuses: dict[str, str] = {}
+    for filename in required:
+        path = evidence_dir / filename
+        if not path.is_file() or not path.read_text(encoding="utf-8").strip():
+            raise ValueError(f"missing or empty required evidence: {filename}")
+        if filename != "KNOWN_LIMITATIONS.md":
+            status = evidence_status(path.read_text(encoding="utf-8"))
+            if status is None:
+                raise ValueError(f"missing machine-readable status: {filename}")
+            statuses[filename] = status
+    if "BLOCKED" in statuses.values():
+        return "BLOCKED", statuses
+    if "FAIL" in statuses.values():
+        return "FAIL", statuses
+    if all(value == "PASS" for value in statuses.values()):
+        commands = (evidence_dir / "COMMAND_RESULTS.txt").read_text(encoding="utf-8")
+        if not re.search(r"\b(git|python|docker)\b", commands, re.I):
+            raise ValueError("PASS requires actual command evidence")
+        return "PASS", statuses
+    return "PASS WITH LIMITATIONS", statuses
+
+
 def tracked_files(root: Path, head: str) -> list[str]:
     return str(git(root, "ls-tree", "-r", "--name-only", head)).splitlines()
 
 
 def changed_rows(root: Path, base: str, head: str) -> list[dict[str, str]]:
-    names = str(git(root, "diff", "--name-status", "-M", "-z", f"{base}..{head}")).split("\0")
+    tokens = git_bytes(root, "diff", "--name-status", "-M", "-z", f"{base}..{head}").split(b"\0")
     rows: list[dict[str, str]] = []
     index = 0
-    while index < len(names) and names[index]:
-        fields = names[index].split("\t")
-        status = fields[0]
+    while index < len(tokens) and tokens[index]:
+        status = tokens[index].decode("utf-8", "surrogateescape")
+        index += 1
         old_path = ""
-        file_path = fields[-1]
+        if index >= len(tokens):
+            raise ValueError("truncated NUL-delimited Git name-status output")
         if status.startswith("R") or status.startswith("C"):
-            old_path = names[index + 1]
-            file_path = names[index + 2]
+            if index + 1 >= len(tokens):
+                raise ValueError("truncated Git rename/copy output")
+            old_path = tokens[index].decode("utf-8", "surrogateescape")
+            file_path = tokens[index + 1].decode("utf-8", "surrogateescape")
             index += 2
+        else:
+            file_path = tokens[index].decode("utf-8", "surrogateescape")
+            index += 1
         category, priority = classify(file_path)
         counts = str(git(root, "diff", "--numstat", f"{base}..{head}", "--", file_path)).strip()
         additions, deletions = ("0", "0")
@@ -137,7 +181,6 @@ def changed_rows(root: Path, base: str, head: str) -> list[dict[str, str]]:
                 "notes": f"{category} review",
             }
         )
-        index += 1
     return rows
 
 
@@ -168,6 +211,10 @@ def main(argv: list[str] | None = None) -> int:
         git(root, "cat-file", "-e", f"HEAD:{args.report_path}")
     except subprocess.CalledProcessError as error:
         raise SystemExit("base commit or committed round report is missing") from error
+    try:
+        derived_status, evidence_statuses = derive_status(args.evidence_dir)
+    except ValueError as error:
+        raise SystemExit(str(error)) from error
 
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short_head = head[:7]
@@ -227,7 +274,7 @@ def main(argv: list[str] | None = None) -> int:
             "project_phase": "Phase 0",
             "round_id": args.round_id,
             "round_title": args.round_title,
-            "round_status": args.round_status,
+            "round_status": derived_status,
             "base_branch": branch,
             "base_commit": args.base_commit,
             "base_tag": "",
@@ -241,9 +288,9 @@ def main(argv: list[str] | None = None) -> int:
             "bundle_created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "python_required": "3.12",
             "working_tree_clean": True,
-            "clean_source_status": args.clean_source_status or args.round_status,
-            "tests_status": args.tests_status or args.round_status,
-            "security_scan_status": args.security_scan_status or args.round_status,
+            "clean_source_status": evidence_statuses["CLEAN_SOURCE_RESULT.md"],
+            "tests_status": evidence_statuses["TEST_RESULTS.md"],
+            "security_scan_status": evidence_statuses["SECURITY_SCAN_RESULT.md"],
             "paper_trading_enabled": False,
             "live_trading_enabled": False,
             "live_order_submission_allowed": False,
@@ -286,6 +333,23 @@ def main(argv: list[str] | None = None) -> int:
         write_text(review / "REPRODUCE.md", reproduce)
         review_readme = f"""# Clean Review Bundle\n\nProject: US Equity Quantitative Trading System  \nPhase: Phase 0  \nRound: {args.round_id} — {args.round_title}  \nObjective: create an independently auditable committed-source snapshot.  \nBase commit: `{args.base_commit}`  \nCurrent commit: `{head}`  \nBranch: `{branch}`  \nStatus: {args.round_status}\n\nCompleted: generator, tests, evidence, source archive, checksums, and independent validation. Uncompleted: none. Not performed: strategy development, broker access, market data, Paper Trading, Live Trading, or orders.\n\nRecommended order: `review/CHANGE_SUMMARY.md`, `review/CHANGED_FILES.csv`, `review/FULL_DIFF.patch`, changed source/tests, `{args.report_path}`, `review/TEST_RESULTS.md`, then `review/KNOWN_LIMITATIONS.md`.\n\nThe ZIP excludes virtual environments, Docker images/volumes, dependency caches, market data, databases, logs, `.env`, API keys, Git history, and local user files.\n"""
         write_text(review / "REVIEW_README.md", review_readme)
+        review_file_count = len([path for path in review.rglob("*") if path.is_file()]) + 2
+        zip_file_count = len([path for path in staging.rglob("*") if path.is_file()]) + 3
+        write_text(
+            staging / "BUNDLE_INFO.txt",
+            "\n".join(
+                (
+                    f"Bundle: {bundle_name}",
+                    f"Head: {head}",
+                    f"Base: {args.base_commit}",
+                    f"Round status: {derived_status}",
+                    f"ZIP file count: {zip_file_count}",
+                    f"Source file count: {len(source_files)}",
+                    f"Review evidence file count: {review_file_count}",
+                    "ZIP SHA-256 is emitted after archive creation and is not embedded recursively.",
+                )
+            ),
+        )
         manifest: list[dict[str, object]] = []
         for file_path in sorted(path for path in staging.rglob("*") if path.is_file()):
             relative = file_path.relative_to(staging).as_posix()
@@ -318,10 +382,6 @@ def main(argv: list[str] | None = None) -> int:
                 f"{sha256(file_path)}  {file_path.relative_to(staging).as_posix()}"
             )
         write_text(review / "CHECKSUMS.sha256", "\n".join(checksum_lines))
-        write_text(
-            staging / "BUNDLE_INFO.txt",
-            f"Bundle: {bundle_name}\nHead: {head}\nBase: {args.base_commit}\nFiles: {len(checksum_lines)}\nSource files: {len(source_files)}\n",
-        )
         with zipfile.ZipFile(
             archive_path, "x", compression=zipfile.ZIP_DEFLATED, compresslevel=9
         ) as archive:
