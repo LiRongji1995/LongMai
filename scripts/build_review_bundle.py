@@ -20,7 +20,15 @@ from pathlib import Path, PurePosixPath
 
 def git(root: Path, *args: str) -> str:
     """Run Git in *root* and return stdout, raising on failure."""
-    result = subprocess.run(["git", *args], cwd=root, check=True, capture_output=True, text=True)
+    result = subprocess.run(
+        ["git", *args],
+        cwd=root,
+        check=True,
+        capture_output=True,
+        text=True,
+        encoding="utf-8",
+        errors="strict",
+    )
     return result.stdout
 
 
