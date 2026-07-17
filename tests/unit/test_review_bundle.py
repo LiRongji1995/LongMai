@@ -3,6 +3,12 @@ from __future__ import annotations
 import subprocess
 import sys
 from pathlib import Path
+from shutil import which
+
+import pytest
+
+
+pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required by the review tool")
 
 
 def test_review_bundle_script_builds_git_object_snapshot(tmp_path: Path) -> None:

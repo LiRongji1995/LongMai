@@ -14,7 +14,7 @@ import subprocess
 import tarfile
 import tempfile
 import zipfile
-from datetime import UTC, datetime
+from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 
 
@@ -79,7 +79,7 @@ def safe_extract_archive(archive: bytes, destination: Path) -> None:
                 or member.islnk()
             ):
                 raise ValueError(f"unsafe git archive member: {member.name}")
-        tar.extractall(destination, filter="data")
+            tar.extract(member, destination)
 
 
 def write_text(path: Path, content: str) -> None:
@@ -158,7 +158,7 @@ def main(argv: list[str] | None = None) -> int:
     except subprocess.CalledProcessError as error:
         raise SystemExit("base commit or committed round report is missing") from error
 
-    timestamp = datetime.now(UTC).strftime("%Y%m%dT%H%M%SZ")
+    timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     short_head = head[:7]
     bundle_name = f"review-bundle-{args.round_id}-{short_head}-{timestamp}"
     output_dir = args.output_dir.resolve()
@@ -226,8 +226,8 @@ def main(argv: list[str] | None = None) -> int:
             "head_tag": ",".join(str(git(root, "tag", "--points-at", head)).splitlines()),
             "remote_url": remote_url,
             "round_start_time": args.round_start_time,
-            "round_end_time": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
-            "bundle_created_at": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
+            "round_end_time": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
+            "bundle_created_at": datetime.now(timezone.utc).isoformat().replace("+00:00", "Z"),
             "python_required": "3.12",
             "working_tree_clean": True,
             "clean_source_status": args.round_status,
