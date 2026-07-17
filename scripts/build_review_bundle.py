@@ -164,6 +164,15 @@ def scan_paths_and_secrets(root: Path, *, allow_git_root: bool = False) -> list[
     return findings
 
 
+def scan_git_head(root: Path, head: str) -> list[str]:
+    """Scan only committed source, never ignored workspace caches or build output."""
+    with tempfile.TemporaryDirectory(prefix="bundle-source-scan-") as temporary:
+        source = Path(temporary) / "source"
+        source.mkdir()
+        safe_extract_archive(git_bytes(root, "archive", "--format=tar", head), source)
+        return scan_paths_and_secrets(source)
+
+
 def validate_evidence(payload: object, head: str, base: str, branch: str) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("evidence must be a JSON object")
@@ -508,7 +517,7 @@ def main(argv: list[str] | None = None) -> int:
         args.base_commit,
         branch,
     )
-    if scan_paths_and_secrets(root, allow_git_root=True):
+    if scan_git_head(root, head):
         raise SystemExit("repository secret or forbidden-file scan failed")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     name = f"review-bundle-{args.round_id}-{head[:7]}-{timestamp}"
