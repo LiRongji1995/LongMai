@@ -531,8 +531,11 @@ def main(argv: list[str] | None = None) -> int:
         review = staging / "review"
         source.mkdir(parents=True)
         review.mkdir()
-        safe_extract_archive(git_bytes(root, "archive", "--format=tar", head), source)
         source_files = git(root, "ls-tree", "-r", "--name-only", head).splitlines()
+        for relative_path in source_files:
+            destination = source / relative_path
+            destination.parent.mkdir(parents=True, exist_ok=True)
+            destination.write_bytes(git_bytes(root, "show", f"{head}:{relative_path}"))
         write_text(review / "TRACKED_FILES.txt", "\n".join(source_files))
         write_text(review / "EVIDENCE.json", json.dumps(evidence, indent=2, sort_keys=True))
         metadata = {
