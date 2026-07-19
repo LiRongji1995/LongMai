@@ -9,7 +9,12 @@ from shutil import which
 
 import pytest
 
-from scripts.build_review_bundle import changed_rows, validate_bundle, validate_evidence
+from scripts.build_review_bundle import (
+    changed_rows,
+    scan_paths_and_secrets,
+    validate_bundle,
+    validate_evidence,
+)
 
 pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required")
 
@@ -175,3 +180,55 @@ def test_bundle_includes_evidence_and_validation_and_detects_tampering(
             if path.is_file():
                 archive.write(path, path.relative_to(extracted.parent))
     assert validate_bundle(tampered, head, repo).status == "FAIL"
+
+
+def test_scan_rejects_restricted_files_but_allows_explicit_fixture(tmp_path: Path) -> None:
+    (tmp_path / ".env.production").write_text("not-a-secret\n")
+    (tmp_path / ".env.example").write_text("API_KEY=\n")
+    (tmp_path / "state.sqlite3").write_bytes(b"SQLite format 3")
+    (tmp_path / "prices.parquet").write_bytes(b"PAR1")
+    (tmp_path / "run.log").write_text("diagnostic\n")
+    fixture = tmp_path / "integrations" / "lean" / "data"
+    fixture.mkdir(parents=True)
+    (fixture / "synthetic-test.zip").write_bytes(b"fixture")
+
+    findings = scan_paths_and_secrets(tmp_path)
+
+    assert "forbidden-path:.env.production" in findings
+    assert "forbidden-path:state.sqlite3" in findings
+    assert "forbidden-path:prices.parquet" in findings
+    assert "forbidden-path:run.log" in findings
+    assert not any(".env.example" in finding for finding in findings)
+    assert not any("synthetic-test.zip" in finding for finding in findings)
+
+
+def test_successful_offline_cli_validation_has_no_error(tmp_path: Path) -> None:
+    repo, base, head, evidence_path = make_repo(tmp_path)
+    output = tmp_path / "out"
+    script = Path(__file__).resolve().parents[2] / "scripts" / "build_review_bundle.py"
+    result = subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--round-id",
+            "offline-cli-error",
+            "--base-commit",
+            base,
+            "--output-dir",
+            str(output),
+            "--report-path",
+            "docs/reports/round.md",
+            "--round-start-time",
+            "2026-07-17T00:00:00Z",
+            "--evidence-json",
+            str(evidence_path),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+    )
+    assert result.returncode == 0, result.stderr
+    bundle = next(output.glob("*.zip"))
+    validation = validate_bundle(bundle, head, repo)
+    assert validation.status == "PASS"
+    assert validation.checks["offline_cli"]["error"] == ""

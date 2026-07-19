@@ -64,6 +64,16 @@ SECRET_PATTERNS = (
     ("aws-access-key", re.compile(r"\bAKIA[0-9A-Z]{16}\b")),
     ("bearer-token", re.compile(r"\bBearer\s+[A-Za-z0-9._-]{20,}\b", re.I)),
 )
+FORBIDDEN_FILE_SUFFIXES = (
+    ".db",
+    ".sqlite",
+    ".sqlite3",
+    ".parquet",
+    ".feather",
+    ".arrow",
+    ".log",
+)
+MAX_NON_FIXTURE_BINARY_BYTES = 2 * 1024 * 1024
 
 
 @dataclass(frozen=True)
@@ -151,9 +161,24 @@ def scan_paths_and_secrets(root: Path, *, allow_git_root: bool = False) -> list[
         relative = path.relative_to(root)
         if allow_git_root and relative.parts and relative.parts[0] == ".git":
             continue
-        if any(part in FORBIDDEN_PARTS for part in relative.parts) or path.name == ".env":
+        name = path.name.lower()
+        is_fixture = relative.parts[:3] == ("integrations", "lean", "data") or relative.parts[
+            :2
+        ] == (
+            "tests",
+            "fixtures",
+        )
+        forbidden_env = name == ".env" or (name.startswith(".env.") and name != ".env.example")
+        forbidden_suffix = name.endswith(FORBIDDEN_FILE_SUFFIXES)
+        forbidden_log_directory = "logs" in relative.parts
+        if (
+            any(part in FORBIDDEN_PARTS for part in relative.parts)
+            or forbidden_env
+            or forbidden_suffix
+            or forbidden_log_directory
+        ):
             findings.append(f"forbidden-path:{relative.as_posix()}")
-        if path.is_file() and path.stat().st_size > 50 * 1024 * 1024:
+        if path.is_file() and not is_fixture and path.stat().st_size > MAX_NON_FIXTURE_BINARY_BYTES:
             findings.append(f"oversized-file:{relative.as_posix()}")
         if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
             continue
@@ -416,7 +441,9 @@ def validate_bundle(
                     checks,
                     "offline_cli",
                     cli_ok,
-                    error=cli.stderr.strip() or "offline CLI output mismatch",
+                    error=(cli.stderr.strip() or "offline CLI output mismatch")
+                    if not cli_ok
+                    else "",
                 )
     except (
         OSError,
