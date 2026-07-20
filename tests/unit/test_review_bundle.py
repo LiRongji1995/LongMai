@@ -6,6 +6,7 @@ import sys
 import zipfile
 from pathlib import Path
 from shutil import which
+from typing import Any
 
 import pytest
 
@@ -27,8 +28,8 @@ def evidence(
     network: bool = True,
     python: str = "3.12.13",
     exit_code: int = 0,
-) -> dict[str, object]:
-    checks: dict[str, dict[str, object]] = {
+) -> dict[str, Any]:
+    checks: dict[str, dict[str, Any]] = {
         name: {"command": name, "exit_code": exit_code, "status": "PASS"}
         for name in (
             "ruff_check",

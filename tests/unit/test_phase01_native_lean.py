@@ -16,6 +16,7 @@ def test_checked_in_toolbox_fixture_is_valid() -> None:
     assert manifest["lean_commit"] == LEAN_COMMIT
     assert manifest["seed"] == 11399
     assert manifest["symbol"] == "SYNTH"
+    assert isinstance(manifest["bar_count"], int)
     assert manifest["bar_count"] > 0
     checked_in_manifest = json.loads(
         Path("integrations/lean/data/fixture-manifest.json").read_text(encoding="utf-8")
