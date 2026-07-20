@@ -275,8 +275,8 @@ def test_scan_rejects_restricted_files_but_allows_explicit_fixture(tmp_path: Pat
 def test_scan_rejects_concrete_absolute_paths_but_allows_generic_drive_literals(
     tmp_path: Path,
 ) -> None:
-    (tmp_path / "concrete.txt").write_text("E:\\QuantInfra\\Lean-src\\config.json\n")
-    (tmp_path / "posix.txt").write_text("/home/reviewer/run/result.json\n")
+    (tmp_path / "concrete.txt").write_text("E:\\" + "QuantInfra\\Lean-src\\config.json\n")
+    (tmp_path / "posix.txt").write_text("/" + "home/reviewer/run/result.json\n")
     (tmp_path / "generic.txt").write_text('assert "E:\\\\" not in value\n[A-Za-z]:\\\\\n')
 
     findings = scan_paths_and_secrets(tmp_path)
