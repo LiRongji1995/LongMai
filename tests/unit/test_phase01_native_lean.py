@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import json
+import re
 import zipfile
 from pathlib import Path
 
@@ -84,7 +85,7 @@ def test_toolchain_lock_is_machine_independent_and_safety_defaults_remain() -> N
     lock = Path("config/toolchain.lock.json")
     payload = json.loads(lock.read_text(encoding="utf-8"))
     assert payload["lean"]["commit"] == "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6"
-    assert "E:\\" not in lock.read_text(encoding="utf-8")
+    assert not re.search(r"[A-Za-z]:\\\\", lock.read_text(encoding="utf-8"))
     env_example = Path(".env.example").read_text(encoding="utf-8")
     assert "LEAN_SOURCE_ROOT=" in env_example
     assert "LIVE_TRADING_ENABLED=false" in env_example
