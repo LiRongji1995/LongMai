@@ -2,6 +2,29 @@
 
 Status: **PASS WITH LIMITATIONS**
 
+## Final deterministic closure
+
+The prior Run C blocker was resolved without changing algorithm trading
+behavior, fixture content, or business Golden values. Golden comparison is now
+schema-checked semantic JSON comparison with stable order normalization; Run
+A/B were re-normalized from their preserved raw order events and produced the
+canonical Golden files. All business values remain a buy of 10 at 100.01, a
+sell of 10 at 97.73, final holdings of 0, and final cash of 977.20.
+
+The old binary SHA mismatch was traced to Git source-revision metadata injected
+into clean-clone builds. The algorithm project now has deterministic release
+settings, a stable path map, fixed version metadata, no debug symbols, and
+`IncludeSourceRevisionInInformationalVersion=false`. Two external directories
+and the final clean clone produced the same algorithm DLL SHA-256:
+`9ca5b943c67e4ac0c41ae0fba16b54483a4859aa84e821284618ca58da40a5f8`.
+`algorithm-build-identity.json` records the source, project, fixture, LEAN,
+SDK, and reference-assembly identities without local paths.
+
+Final clean-source Run C built from the final source revision, loaded the
+committed synthetic fixture, and semantically matched both canonical Golden
+orders and statistics. It had exactly two Filled simulated orders (buy then
+sell), no final holdings, no broker connection, and no Paper or Live trading.
+
 ## Scope and safety boundary
 
 This is an infrastructure-only deterministic smoke validation, not a trading
