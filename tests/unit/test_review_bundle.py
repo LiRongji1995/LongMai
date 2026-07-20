@@ -11,6 +11,7 @@ import pytest
 
 from scripts.build_review_bundle import (
     changed_rows,
+    load_evidence_json,
     scan_paths_and_secrets,
     validate_bundle,
     validate_evidence,
@@ -112,6 +113,23 @@ def test_changed_rows_handles_changes(tmp_path: Path) -> None:
         row["file_path"] == "tracked.txt" and row["change_type"] == "M"
         for row in changed_rows(repo, base, head)
     )
+
+
+def test_evidence_loader_accepts_utf8_with_and_without_bom_and_rejects_utf16(
+    tmp_path: Path,
+) -> None:
+    payload = {"schema_version": 1, "head_commit": "a" * 40}
+    plain = tmp_path / "plain.json"
+    bom = tmp_path / "bom.json"
+    utf16 = tmp_path / "utf16.json"
+    plain.write_text(json.dumps(payload), encoding="utf-8")
+    bom.write_bytes(b"\xef\xbb\xbf" + json.dumps(payload).encode("utf-8"))
+    utf16.write_text(json.dumps(payload), encoding="utf-16")
+
+    assert load_evidence_json(plain) == payload
+    assert load_evidence_json(bom) == payload
+    with pytest.raises(ValueError, match="UTF-16"):
+        load_evidence_json(utf16)
 
 
 @pytest.mark.parametrize(

@@ -110,6 +110,20 @@ def write_text(path: Path, content: str) -> None:
     path.write_text(content.rstrip() + "\n", encoding="utf-8", newline="\n")
 
 
+def load_evidence_json(path: Path) -> dict[str, Any]:
+    """Load UTF-8 evidence, accepting only an optional UTF-8 BOM."""
+    raw = path.read_bytes()
+    if raw.startswith((b"\xff\xfe", b"\xfe\xff", b"\xff\xfe\x00", b"\x00\x00\xfe\xff")):
+        raise ValueError("evidence must be UTF-8, not UTF-16 or UTF-32")
+    try:
+        payload = json.loads(raw.decode("utf-8-sig"))
+    except (UnicodeDecodeError, json.JSONDecodeError) as error:
+        raise ValueError("evidence must be valid UTF-8 JSON") from error
+    if not isinstance(payload, dict):
+        raise ValueError("evidence JSON root must be an object")
+    return payload
+
+
 def classify(path: str) -> tuple[str, str]:
     if path.startswith("tests/"):
         return "test", "MEDIUM"
@@ -539,7 +553,7 @@ def main(argv: list[str] | None = None) -> int:
         git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(),
     )
     evidence = validate_evidence(
-        json.loads(args.evidence_json.read_text(encoding="utf-8")),
+        load_evidence_json(args.evidence_json),
         head,
         args.base_commit,
         branch,
