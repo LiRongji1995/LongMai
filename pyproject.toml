@@ -38,6 +38,8 @@ select = ["E", "F", "I", "B", "UP", "SIM", "RUF"]
 python_version = "3.12"
 strict = true
 files = ["src", "scripts"]
+explicit_package_bases = true
+mypy_path = ["src"]
 
 [tool.pytest.ini_options]
 addopts = "--strict-config --strict-markers --cov=quant_system --cov-fail-under=90"
