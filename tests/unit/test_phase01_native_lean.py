@@ -7,7 +7,7 @@ from pathlib import Path
 import pytest
 
 from scripts.generate_phase01_synthetic_data import LEAN_COMMIT, validate_fixture
-from scripts.normalize_lean_result import load_orders, normalize
+from scripts.normalize_lean_result import compare_semantic, load_orders, normalize
 
 
 def test_checked_in_toolbox_fixture_is_valid() -> None:
@@ -67,7 +67,10 @@ def test_normalizer_uses_valid_order_events_and_rejects_bad_summary(tmp_path: Pa
     algorithm = tmp_path / "algorithm.dll"
     algorithm.write_bytes(b"test")
     normalized_orders, statistics = normalize(
-        orders_path, lean_commit="a" * 40, fixture_sha="b" * 64, algorithm_sha="c" * 64
+        orders_path,
+        lean_commit="a" * 40,
+        fixture_sha="b" * 64,
+        algorithm_source_sha="c" * 64,
     )
     assert len(normalized_orders["orders"]) == 2
     assert statistics["final_holdings"] == 0
@@ -93,3 +96,60 @@ def test_order_events_must_have_exactly_two_fills(tmp_path: Path) -> None:
     path.write_text("[]", encoding="utf-8")
     with pytest.raises(ValueError, match="exactly two"):
         load_orders(path)
+
+
+def test_semantic_comparison_normalizes_format_and_order() -> None:
+    expected = {
+        "algorithm": "Phase01DeterministicSmokeTest",
+        "lean_commit": "a" * 40,
+        "fixture_sha256": "b" * 64,
+        "orders": [
+            {
+                "time": 2,
+                "direction": "SELL",
+                "quantity": -10,
+                "status": "FILLED",
+                "fillQuantity": -10,
+                "fillPrice": 101,
+            },
+            {
+                "time": 1,
+                "direction": "BUY",
+                "quantity": 10,
+                "status": "FILLED",
+                "fillQuantity": 10,
+                "fillPrice": 100,
+            },
+        ],
+    }
+    actual = {
+        "fixture_sha256": "b" * 64,
+        "algorithm": "Phase01DeterministicSmokeTest",
+        "lean_commit": "a" * 40,
+        "orders": [
+            {
+                "time": 1.0,
+                "direction": "buy",
+                "quantity": 10.0,
+                "status": "filled",
+                "fillQuantity": 10.0,
+                "fillPrice": 100.0,
+            },
+            {
+                "time": 2.0,
+                "direction": "sell",
+                "quantity": -10.0,
+                "status": "filled",
+                "fillQuantity": -10.0,
+                "fillPrice": 101.0,
+            },
+        ],
+    }
+    compare_semantic(expected, actual)
+
+
+def test_semantic_comparison_rejects_business_difference() -> None:
+    expected = {"algorithm": "a", "lean_commit": "b", "fixture_sha256": "c", "final_cash": 1}
+    actual = {"algorithm": "a", "lean_commit": "b", "fixture_sha256": "c", "final_cash": 2}
+    with pytest.raises(ValueError, match=r"\$\.final_cash"):
+        compare_semantic(expected, actual)

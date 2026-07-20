@@ -1,9 +1,9 @@
 {
   "algorithm": "Phase01DeterministicSmokeTest",
-  "algorithm_sha256": "82004805833071ccf8fe8378269cbf9c85e58e5e45d4c6ddb24735e131a6e2c9",
+  "algorithm_source_sha256": "d977a4fe0c5745e86da39b0f2a1b49714db5a13b733bcab19a75071a6ef77066",
   "fixture_sha256": "fe5c2883599220d8f4c9354178f58a61c1fc7443df25dad9eabb19c634070e0f",
   "lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
   "run_a": {"exit_code": 0, "succeeded_data_requests": 1, "filled_orders": 2, "final_holdings": 0.0},
   "run_b": {"exit_code": 0, "succeeded_data_requests": 1, "filled_orders": 2, "final_holdings": 0.0},
-  "deterministic_comparison": "normalized order and statistic JSON matched exactly"
+  "deterministic_comparison": "Run A/B canonical semantic orders and statistics matched exactly"
 }
