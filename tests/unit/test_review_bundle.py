@@ -60,6 +60,10 @@ def evidence(
         "head_commit": head,
         "base_commit": base,
         "branch": "main",
+        "project_phase": "Phase 1",
+        "round_id": "test-round",
+        "round_status": "PASS WITH LIMITATIONS",
+        "limitations": ["test limitation"],
         "verification_environment": {
             "type": "docker",
             "image": "test",
@@ -153,6 +157,22 @@ def test_evidence_rejects_invalid_inputs(tmp_path: Path, mutate: object, message
     mutate(payload)  # type: ignore[operator]
     with pytest.raises(ValueError, match=message):
         validate_evidence(payload, head, base, "main")
+
+
+def test_native_evidence_requires_native_checks_not_docker(tmp_path: Path) -> None:
+    _repo, base, head, _ = make_repo(tmp_path)
+    payload = evidence(head, base)
+    payload["verification_environment"] = {
+        "type": "native",
+        "python_version": "3.12.10",
+        "network_disabled": True,
+    }
+    checks = payload["checks"]
+    del checks["docker_compose_config"]
+    checks["native_build"] = {"command": "dotnet build", "exit_code": 0, "status": "PASS"}
+    checks["native_run_c"] = {"command": "dotnet launcher", "exit_code": 0, "status": "PASS"}
+
+    validate_evidence(payload, head, base, "main")
 
 
 def test_bundle_includes_evidence_and_validation_and_detects_tampering(

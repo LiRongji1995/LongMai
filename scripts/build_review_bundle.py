@@ -16,17 +16,18 @@ from datetime import datetime, timezone
 from pathlib import Path, PurePosixPath
 from typing import Any
 
-REQUIRED_EVIDENCE_CHECKS = (
+COMMON_EVIDENCE_CHECKS = (
     "ruff_check",
     "ruff_format",
     "mypy",
     "pytest",
     "build",
     "cli",
-    "docker_compose_config",
     "git_diff_check",
     "clean_source",
 )
+DOCKER_EVIDENCE_CHECKS = ("docker_compose_config",)
+NATIVE_EVIDENCE_CHECKS = ("native_build", "native_run_c")
 REQUIRED_REVIEW_FILES = (
     "REVIEW_README.md",
     "ROUND_METADATA.json",
@@ -250,9 +251,12 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     if payload["round_status"] == "PASS WITH LIMITATIONS" and not payload["limitations"]:
         raise ValueError("PASS WITH LIMITATIONS evidence requires limitations")
     checks = payload["checks"]
-    if not isinstance(checks, dict) or set(REQUIRED_EVIDENCE_CHECKS) - checks.keys():
+    required_checks = COMMON_EVIDENCE_CHECKS + (
+        DOCKER_EVIDENCE_CHECKS if environment.get("type") == "docker" else NATIVE_EVIDENCE_CHECKS
+    )
+    if not isinstance(checks, dict) or set(required_checks) - checks.keys():
         raise ValueError("evidence is missing required checks")
-    for name in REQUIRED_EVIDENCE_CHECKS:
+    for name in required_checks:
         check = checks[name]
         if not isinstance(check, dict) or check.get("status") != "PASS":
             raise ValueError(f"evidence check is not PASS: {name}")
@@ -623,7 +627,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "KNOWN_LIMITATIONS.md",
-            "STATUS: " + str(evidence["round_status"]) + "\n\n" + "\n".join(evidence["limitations"]),
+            "STATUS: "
+            + str(evidence["round_status"])
+            + "\n\n"
+            + "\n".join(evidence["limitations"]),
         )
         write_text(
             review / "REVIEW_README.md",
