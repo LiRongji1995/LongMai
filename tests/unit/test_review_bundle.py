@@ -52,18 +52,21 @@ def evidence(
     checks["clean_source"] = {
         "status": "PASS",
         "head_commit": head,
+        "origin_main_commit": head,
         "working_tree_clean": True,
     }
     return {
         "schema_version": 1,
         "project_name": "us-equity-quant-system",
         "head_commit": head,
+        "origin_main_commit": head,
         "base_commit": base,
         "branch": "main",
         "project_phase": "Phase 1",
         "round_id": "test-round",
         "round_status": "PASS WITH LIMITATIONS",
         "limitations": ["test limitation"],
+        "working_tree_clean": True,
         "verification_environment": {
             "type": "docker",
             "image": "test",
@@ -170,7 +173,36 @@ def test_native_evidence_requires_native_checks_not_docker(tmp_path: Path) -> No
     checks = payload["checks"]
     del checks["docker_compose_config"]
     checks["native_build"] = {"command": "dotnet build", "exit_code": 0, "status": "PASS"}
-    checks["native_run_c"] = {"command": "dotnet launcher", "exit_code": 0, "status": "PASS"}
+    checks["native_build"].update({"dotnet_sdk_version": "10.0.302", "dll_sha256": "a" * 64})
+    checks["native_run_c"] = {
+        "command": "dotnet launcher",
+        "exit_code": 0,
+        "status": "PASS",
+        "filled_orders": 2,
+        "order_sequence": ["buy", "sell"],
+        "final_holdings": 0,
+        "golden_orders": "PASS",
+        "golden_statistics": "PASS",
+        "deterministic_build_identity": "PASS",
+        **{
+            name: "b" * 64
+            for name in (
+                "algorithm_source_sha256",
+                "csproj_sha256",
+                "fixture_zip_sha256",
+                "fixture_extracted_content_sha256",
+                "fixture_manifest_sha256",
+                "config_sha256",
+                "map_sha256",
+                "factor_sha256",
+                "golden_orders_sha256",
+                "golden_statistics_sha256",
+            )
+        },
+    }
+    payload["verification_environment"].update(
+        {"dotnet_sdk_version": "10.0.302", "lean_commit": "c" * 40}
+    )
 
     validate_evidence(payload, head, base, "main")
 
@@ -238,6 +270,20 @@ def test_scan_rejects_restricted_files_but_allows_explicit_fixture(tmp_path: Pat
     assert "forbidden-path:run.log" in findings
     assert not any(".env.example" in finding for finding in findings)
     assert not any("synthetic-test.zip" in finding for finding in findings)
+
+
+def test_scan_rejects_concrete_absolute_paths_but_allows_generic_drive_literals(
+    tmp_path: Path,
+) -> None:
+    (tmp_path / "concrete.txt").write_text("E:\\QuantInfra\\Lean-src\\config.json\n")
+    (tmp_path / "posix.txt").write_text("/home/reviewer/run/result.json\n")
+    (tmp_path / "generic.txt").write_text('assert "E:\\\\" not in value\n[A-Za-z]:\\\\\n')
+
+    findings = scan_paths_and_secrets(tmp_path)
+
+    assert "absolute-path:concrete.txt" in findings
+    assert "absolute-path:posix.txt" in findings
+    assert "absolute-path:generic.txt" not in findings
 
 
 def test_successful_offline_cli_validation_has_no_error(tmp_path: Path) -> None:

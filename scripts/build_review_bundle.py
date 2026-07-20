@@ -75,6 +75,11 @@ FORBIDDEN_FILE_SUFFIXES = (
     ".log",
 )
 MAX_NON_FIXTURE_BINARY_BYTES = 2 * 1024 * 1024
+SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
+CONCRETE_ABSOLUTE_PATH_PATTERNS = (
+    re.compile(r"[A-Za-z]:\\(?:[^\\/\r\n]+\\)+[^\\/\r\n]+"),
+    re.compile(r"/(?:home|Users)/[^/\s]+(?:/[^/\s]+)*"),
+)
 
 
 @dataclass(frozen=True)
@@ -198,6 +203,8 @@ def scan_paths_and_secrets(root: Path, *, allow_git_root: bool = False) -> list[
         if not path.is_file() or path.stat().st_size > 2 * 1024 * 1024:
             continue
         content = path.read_text(encoding="utf-8", errors="ignore")
+        if any(pattern.search(content) for pattern in CONCRETE_ABSOLUTE_PATH_PATTERNS):
+            findings.append(f"absolute-path:{relative.as_posix()}")
         for kind, pattern in SECRET_PATTERNS:
             if pattern.search(content):
                 findings.append(f"{kind}:{relative.as_posix()}")
@@ -233,6 +240,8 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         raise ValueError("evidence schema is incomplete or unsupported")
     if (
         payload["head_commit"] != head
+        or payload.get("origin_main_commit") != head
+        or payload.get("working_tree_clean") is not True
         or payload["base_commit"] != base
         or payload["branch"] != branch
     ):
@@ -246,8 +255,8 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         raise ValueError("evidence must record network_disabled=true")
     if environment.get("type") == "docker" and not environment.get("image_id"):
         raise ValueError("docker evidence must record image_id")
-    if environment.get("type") == "native" and environment.get("image_id"):
-        raise ValueError("native evidence must not record image_id")
+    if environment.get("type") == "native" and ({"image", "image_id"} & environment.keys()):
+        raise ValueError("native evidence must not record image or image_id")
     if payload["round_status"] == "PASS WITH LIMITATIONS" and not payload["limitations"]:
         raise ValueError("PASS WITH LIMITATIONS evidence requires limitations")
     checks = payload["checks"]
@@ -275,6 +284,42 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     clean = checks["clean_source"]
     if clean.get("head_commit") != head or clean.get("working_tree_clean") is not True:
         raise ValueError("evidence clean-source result does not match HEAD")
+    if environment.get("type") == "native":
+        if not re.fullmatch(r"[0-9a-f]{40}", str(environment.get("lean_commit", ""))):
+            raise ValueError("native evidence must record a 40-character LEAN commit")
+        if not environment.get("dotnet_sdk_version"):
+            raise ValueError("native evidence must record dotnet_sdk_version")
+        native_build = checks["native_build"]
+        if native_build.get("dotnet_sdk_version") != environment[
+            "dotnet_sdk_version"
+        ] or not SHA256_PATTERN.fullmatch(str(native_build.get("dll_sha256", ""))):
+            raise ValueError("native build identity is incomplete")
+        native_run = checks["native_run_c"]
+        if (
+            native_run.get("filled_orders") != 2
+            or native_run.get("order_sequence") != ["buy", "sell"]
+            or native_run.get("final_holdings") != 0
+            or native_run.get("golden_orders") != "PASS"
+            or native_run.get("golden_statistics") != "PASS"
+            or native_run.get("deterministic_build_identity") != "PASS"
+        ):
+            raise ValueError("native Run C result is incomplete")
+        required_hashes = (
+            "algorithm_source_sha256",
+            "csproj_sha256",
+            "fixture_zip_sha256",
+            "fixture_extracted_content_sha256",
+            "fixture_manifest_sha256",
+            "config_sha256",
+            "map_sha256",
+            "factor_sha256",
+            "golden_orders_sha256",
+            "golden_statistics_sha256",
+        )
+        if any(
+            not SHA256_PATTERN.fullmatch(str(native_run.get(name, ""))) for name in required_hashes
+        ):
+            raise ValueError("native Run C hashes are incomplete")
     return payload
 
 
@@ -491,16 +536,17 @@ def validate_bundle(
 
 
 def render_validation(
-    result: BundleValidationResult, filename: str, head: str, timestamp: str
+    result: BundleValidationResult, filename: str, head: str, timestamp: str, scope: str
 ) -> str:
     lines = [
         "# Bundle Validation Result",
         "",
         f"STATUS: {result.status}",
         "",
-        "## Bundle",
+        "## Validation Scope",
         "",
-        f"- Filename: `{filename}`",
+        f"- Scope: {scope}",
+        f"- Candidate filename: `{filename}`",
         f"- Head commit: `{head}`",
         f"- Validation timestamp: `{timestamp}`",
         "",
@@ -623,7 +669,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "SECURITY_SCAN_RESULT.md",
-            "STATUS: PASS\n\nRepository, staging, and final ZIP scans found no disallowed secrets.",
+            "STATUS: PASS\n\nCommitted source and pre-packaging staging contents found no disallowed secrets.",
         )
         write_text(
             review / "KNOWN_LIMITATIONS.md",
@@ -680,7 +726,13 @@ def main(argv: list[str] | None = None) -> int:
             )
         write_text(
             review / "BUNDLE_VALIDATION_RESULT.md",
-            render_validation(candidate_result, candidate.name, head, timestamp),
+            render_validation(
+                candidate_result,
+                candidate.name,
+                head,
+                timestamp,
+                "Pre-packaging candidate-content validation; this is not final-ZIP validation.",
+            ),
         )
         populate_integrity_files(staging, source_files)
         zip_staging(staging, archive_path)

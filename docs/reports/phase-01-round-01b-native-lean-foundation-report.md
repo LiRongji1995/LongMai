@@ -1,74 +1,62 @@
-# Phase 1 Round 1B Native LEAN Foundation Report
+# Phase 1 Round 1B 原生 LEAN 基础设施最终验收报告
 
-Status: **PASS WITH LIMITATIONS**
+状态：**PASS WITH LIMITATIONS**
 
-## Final deterministic closure
+## 本轮技术结果与边界
 
-Round 1B closed from a fresh clean-source checkout of the final committed Git
-HEAD. Python 3.12 clean-source checks passed, the native C# deterministic build
-passed, and a fresh native LEAN Run C passed. The final verification targets the
-same Git HEAD archived in the official Clean Review Bundle; the Git evidence in
-that bundle records `main`, a clean working tree, and `HEAD == origin/main`
-after push.
+本轮技术执行结果为 **PASS WITH LIMITATIONS**。已在最终 Git HEAD 的全新
+clean-source 目录完成 Python 3.12 检查、原生 C# deterministic build 与真实
+Native LEAN Run C；正式 Review Bundle 已生成并提交独立审阅。在外部独立审阅
+通过前，Round 1B 尚未冻结；Round 1C 尚未启动。
 
-Run C used the committed synthetic SYNTH fixture and the project-owned C# smoke
-algorithm with the external official LEAN checkout pinned to
-`0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6`. The launcher exited 0 and loaded
-valid data. It processed 22 points and produced exactly two Filled simulated
-orders: first a buy of 10 at 100.01, then a sell of 10 at 97.73. Final holdings
-were 0, final cash and portfolio value were 977.20, and normalized orders and
-statistics semantically matched the committed Golden files.
+最终 HEAD、`origin/main`、分支和工作区状态均由 Native `EVIDENCE.json` 与
+Bundle 内 Git 证据记录：分支为 `main`、`HEAD == origin/main`、工作区干净，
+Round Base 始终为 `ec7bba61c6d190c7e6624a467c4a45a6911c46e1`。
 
-The deterministic build identity matched `algorithm-build-identity.json`:
-algorithm source SHA-256, project SHA-256, fixture ZIP SHA-256, extracted
-fixture-content SHA-256, map SHA-256, factor SHA-256, LEAN commit, .NET SDK,
-and deterministic algorithm DLL SHA-256 were all verified. The final DLL SHA-256
-was `9ca5b943c67e4ac0c41ae0fba16b54483a4859aa84e821284618ca58da40a5f8`.
+Run C 使用项目提交的 SYNTH fixture、项目自有 C# smoke algorithm，以及固定到
+`0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6` 的外部官方 LEAN 源码。launcher
+exit code 为 0，成功加载有效数据并处理 22 个数据点；恰有 2 笔 Filled 模拟订单，
+顺序为 buy → sell，最终持仓为 0，最终现金和组合价值均为 977.20。Golden orders
+与 Golden statistics 的语义比较均为 PASS，deterministic build identity 为 PASS。
 
-No Alpaca connection occurred. Paper Trading and Live Trading remained disabled,
-and no real order was submitted. This infrastructure smoke test does not
-validate profitability.
+## 身份与可复现性证据
 
-## Deterministic fixture evidence
+- Python：3.12.x；.NET SDK：`10.0.302`
+- LEAN commit：`0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6`
+- 算法源文件、csproj、fixture ZIP、fixture 解压内容、map、factor、manifest、
+  config、Golden orders、Golden statistics 与 deterministic DLL 的 SHA-256 均记录
+  于 Native `EVIDENCE.json`，并与 `algorithm-build-identity.json` 一致。
+- deterministic DLL SHA-256：
+  `9ca5b943c67e4ac0c41ae0fba16b54483a4859aa84e821284618ca58da40a5f8`
+- 未连接 Alpaca；未启用 Paper Trading 或 Live Trading；未发送真实订单；未验证
+  任何盈利能力。
 
-- Generator: LEAN ToolBox RandomDataGenerator (offline)
-- Security: USA Equity, Daily, Dense; ticker `SYNTH`
-- Date range: 2020-01-02 through 2020-01-31
-- Seed: `11399`; IPO, rename, split, dividend, quarterly-dividend, and coarse
-  generation disabled
-- Committed daily fixture SHA-256:
-  `fe5c2883599220d8f4c9354178f58a61c1fc7443df25dad9eabb19c634070e0f`
-- Daily extracted content SHA-256:
-  `e380d71e59d7de464d31c18117754b4413d8331be8995f1e8d8643a94db24248`
+## 最终检查
 
-## Final checks
-
-| Check | Result |
+| 检查 | 结果 |
 | --- | --- |
-| External LEAN source clean at pinned commit | PASS |
-| Python 3.12 clean-source Ruff, format, mypy, pytest, and CLI checks | PASS |
-| Review Bundle unit tests | PASS |
-| Native C# deterministic build | PASS WITH LIMITATIONS (upstream dependency advisories) |
-| Native LEAN Run C | PASS WITH LIMITATIONS (optional-reference-data warnings) |
-| Filled simulated orders: buy then sell | PASS (exactly 2) |
-| Final holdings | PASS (0) |
-| Golden orders and statistics semantic comparison | PASS |
-| Deterministic build identity and fixture/manifest/config identities | PASS |
-| Git push and `HEAD == origin/main` | PASS |
-| Final Clean Review Bundle integrity | PASS |
+| Python 3.12 clean-source：Ruff、format、mypy、pytest、build、CLI、git diff --check | PASS |
+| Native C# deterministic build | PASS WITH LIMITATIONS |
+| Native LEAN Run C | PASS WITH LIMITATIONS |
+| Filled 模拟订单 | PASS（恰好 2 笔；buy → sell） |
+| 最终持仓 | PASS（0） |
+| Golden orders | PASS |
+| Golden statistics | PASS |
+| deterministic build identity | PASS |
+| fixture、map、factor、manifest 与 config 身份 | PASS |
+| Native EVIDENCE 强制字段与 SHA-256 格式 | PASS |
+| Bundle candidate 内容验证 | PASS（仅打包前候选内容） |
+| 最终 ZIP 的外部 `validate_bundle` 验证 | PASS |
 
-## Limitations and next action
+## 限制与后续动作
 
-1. The LEAN upstream dependency graph still reports security advisories during
-   native build.
-2. LEAN may request optional reference data, including interest rates, and emits
-   non-fatal warnings when those optional files are absent.
-3. This Round verifies native C# foundation infrastructure, not a LEAN Python
-   algorithm.
-4. Alpaca has not been connected.
-5. Paper Trading and Live Trading have not been approved or enabled.
-6. No profitability capability has been validated.
+1. LEAN 上游依赖在原生 restore/build 时仍产生安全公告。
+2. LEAN 对可选参考数据（包括 interest rates）的请求会产生非致命警告。
+3. 本轮验证原生 C# 基础设施，不验证 LEAN Python algorithm。
+4. Alpaca 尚未连接；Paper Trading 与 Live Trading 未获批准且保持禁用。
+5. 本轮不构成盈利能力或投资建议验证。
 
-Review Bundle: **REQUIRED**. The final official bundle is Git-object-derived
-from the final committed HEAD, contains the formal report and fresh native
-evidence, and has a ZIP integrity status of PASS. Round 1C has not been started.
+Review Bundle：**REQUIRED**。Bundle 内嵌的 `BUNDLE_VALIDATION_RESULT.md`
+明确仅描述打包前 candidate 内容；最终 ZIP 的独立外部验证结果、真实路径与
+SHA-256 在交付记录中单独报告。`FULL_DIFF.patch` 完整保留；其中单独的通用盘符
+测试字面量不是具体本机路径。Round 1C 尚未启动。
