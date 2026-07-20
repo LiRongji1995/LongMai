@@ -60,6 +60,10 @@ def evidence(
         "head_commit": head,
         "base_commit": base,
         "branch": "main",
+        "project_phase": "Phase 1",
+        "round_id": "test-round",
+        "round_status": "PASS WITH LIMITATIONS",
+        "limitations": ["test limitation"],
         "verification_environment": {
             "type": "docker",
             "image": "test",

@@ -623,7 +623,10 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "KNOWN_LIMITATIONS.md",
-            "STATUS: " + str(evidence["round_status"]) + "\n\n" + "\n".join(evidence["limitations"]),
+            "STATUS: "
+            + str(evidence["round_status"])
+            + "\n\n"
+            + "\n".join(evidence["limitations"]),
         )
         write_text(
             review / "REVIEW_README.md",
