@@ -81,7 +81,7 @@ keys, logs, data, API responses, database files, caches, or reports.
 - [Charter](docs/PROJECT_CHARTER.md), [24-week roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md)
 - [Risk policy](docs/RISK_POLICY.md), [data governance](docs/DATA_GOVERNANCE.md), [testing](docs/TESTING_STRATEGY.md)
 - [Security](docs/SECURITY.md), [glossary](docs/GLOSSARY.md), [ADR 0001](docs/adr/0001-initial-architecture.md)
-- [Agent constitution](AGENTS.md), [contributing](CONTRIBUTING.md), [reports](docs/reports/README.md)
+- [Review Bundle policy](docs/REVIEW_BUNDLE_POLICY.md), [Agent constitution](AGENTS.md), [contributing](CONTRIBUTING.md), [reports](docs/reports/README.md)
 
 The 24-week plan moves from this baseline through foundation audit, governed data, realistic backtests,
 out-of-sample research, independent risk, Paper Trading execution, shadow operation, and a live-admission

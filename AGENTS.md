@@ -1,7 +1,18 @@
 # Agent Development Constitution
 
-Before work, read `README.md`, `docs/PROJECT_CHARTER.md`, `docs/ROADMAP.md`,
-`docs/ARCHITECTURE.md`, `docs/RISK_POLICY.md`, and the current phase report.
+## Mandatory task-start reading
+
+Before any write, every Agent must read: `AGENTS.md`, `README.md`,
+`docs/PROJECT_CHARTER.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`,
+`docs/RISK_POLICY.md`, `docs/REVIEW_BUNDLE_POLICY.md`, the current Phase's
+latest formal report, and the current user prompt's baseline and boundary.
+Then report Phase, Round, branch, Base commit, `origin/main`, worktree status,
+the single objective, and whether a Review Bundle is mandatory. Missing policy
+material is a stop-and-report condition, not permission to skip it.
+
+When documents conflict, precedence is: explicit current user instruction,
+then `AGENTS.md`, then Charter/Risk Policy, then Review Bundle Policy, then
+Roadmap, current report, and README.
 
 1. Each work round has one explicit primary objective; do not expand scope or silently lower acceptance.
 2. Establish Git/tool/test baseline before edits. Preserve user work; never delete tests to pass, fake a
@@ -20,3 +31,10 @@ Before work, read `README.md`, `docs/PROJECT_CHARTER.md`, `docs/ROADMAP.md`,
 9. Do not commit data, caches, logs, DB files, restricted reports, build output, or machine-specific settings.
 10. Each report states completed/incomplete work, files, actual checks, residual risks, commit, and next action
     using only `PASS`, `PASS WITH LIMITATIONS`, `BLOCKED`, or `FAIL`.
+
+## Mandatory task-end decision
+
+Every Round must explicitly report `Review Bundle: REQUIRED`, `OPTIONAL`, or
+`NOT REQUIRED` and why. When REQUIRED, an ungenerated or unvalidated bundle
+prevents formal completion and entry to the next Round; screenshots alone are
+not acceptance evidence.
