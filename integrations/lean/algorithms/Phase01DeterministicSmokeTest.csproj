@@ -1,0 +1,14 @@
+<Project Sdk="Microsoft.NET.Sdk">
+  <PropertyGroup>
+    <TargetFramework>net10.0</TargetFramework>
+    <ImplicitUsings>enable</ImplicitUsings>
+    <Nullable>enable</Nullable>
+    <LeanSourceRoot Condition="'$(LeanSourceRoot)' == ''">$(LEAN_SOURCE_ROOT)</LeanSourceRoot>
+  </PropertyGroup>
+  <Target Name="RequireLeanSourceRoot" BeforeTargets="ResolveReferences" Condition="'$(LeanSourceRoot)' == ''">
+    <Error Text="Set LEAN_SOURCE_ROOT or pass -p:LeanSourceRoot=&lt;external LEAN source root&gt;." />
+  </Target>
+  <ItemGroup>
+    <ProjectReference Include="$(LeanSourceRoot)\Algorithm\QuantConnect.Algorithm.csproj" />
+  </ItemGroup>
+</Project>

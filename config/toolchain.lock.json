@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "lean": {
+    "repository": "https://github.com/QuantConnect/Lean.git",
+    "commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
+    "commit_date": "2026-07-17T12:44:27-04:00",
+    "license": "Apache-2.0",
+    "target_framework": "net10.0",
+    "build_command": "dotnet restore QuantConnect.Lean.sln && dotnet build QuantConnect.Lean.sln --configuration Release --no-restore"
+  },
+  "dotnet_sdk_version": "10.0.302",
+  "python": {"status": "not yet approved"},
+  "docker": {"status": "not required for current foundation"},
+  "baseline_policy": {
+    "primary_baseline": "LEAN source commit",
+    "docker_image_is_project_dependency": false,
+    "commit_changes_require_separate_audit": true
+  },
+  "verified_on": "2026-07-20"
+}

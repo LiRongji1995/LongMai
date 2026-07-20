@@ -1,4 +1,7 @@
 .env
+.env.local
+.env.*
+!.env.example
 .venv/
 __pycache__/
 *.py[cod]
@@ -9,6 +12,8 @@ __pycache__/
 coverage.xml
 dist/
 build/
+**/bin/
+**/obj/
 *.egg-info/
 data/*
 !data/README.md
@@ -20,4 +25,6 @@ cache/
 *.sqlite*
 *.parquet
 *.csv
+!integrations/lean/data/*.csv
+!integrations/lean/data/**/*.csv
 *.jsonl

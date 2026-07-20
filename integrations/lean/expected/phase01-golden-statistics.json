@@ -1,0 +1,12 @@
+{
+  "algorithm": "Phase01DeterministicSmokeTest",
+  "fee_model": "ConstantFeeModel(0)",
+  "fill_model": "ImmediateFillModel",
+  "final_cash": 977.2,
+  "final_holdings": 0.0,
+  "final_portfolio_value": 977.2,
+  "fixture_sha256": "fe5c2883599220d8f4c9354178f58a61c1fc7443df25dad9eabb19c634070e0f",
+  "initial_cash": 1000.0,
+  "lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
+  "slippage_model": "NullSlippageModel"
+}
