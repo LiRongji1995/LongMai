@@ -12,6 +12,7 @@
     <AssemblyVersion>0.1.0.0</AssemblyVersion>
     <FileVersion>0.1.0.0</FileVersion>
     <InformationalVersion>phase01-native-lean</InformationalVersion>
+    <IncludeSourceRevisionInInformationalVersion>false</IncludeSourceRevisionInInformationalVersion>
   </PropertyGroup>
   <Target Name="RequireLeanSourceRoot" BeforeTargets="ResolveReferences" Condition="'$(LeanSourceRoot)' == ''">
     <Error Text="Set LEAN_SOURCE_ROOT or pass -p:LeanSourceRoot=&lt;external LEAN source root&gt;." />
