@@ -221,6 +221,10 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         "head_commit",
         "base_commit",
         "branch",
+        "project_phase",
+        "round_id",
+        "round_status",
+        "limitations",
         "verification_environment",
         "checks",
     }
@@ -233,12 +237,18 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     ):
         raise ValueError("evidence commit or branch does not match bundle")
     environment = payload["verification_environment"]
-    if not isinstance(environment, dict) or environment.get("type") != "docker":
-        raise ValueError("evidence must record a docker verification environment")
+    if not isinstance(environment, dict) or environment.get("type") not in {"docker", "native"}:
+        raise ValueError("evidence must record a docker or native verification environment")
     if not re.fullmatch(r"3\.12\.\d+", str(environment.get("python_version", ""))):
         raise ValueError("evidence Python version must be 3.12.x")
-    if environment.get("network_disabled") is not True or not environment.get("image_id"):
-        raise ValueError("evidence must record network_disabled=true and image_id")
+    if environment.get("network_disabled") is not True:
+        raise ValueError("evidence must record network_disabled=true")
+    if environment.get("type") == "docker" and not environment.get("image_id"):
+        raise ValueError("docker evidence must record image_id")
+    if environment.get("type") == "native" and environment.get("image_id"):
+        raise ValueError("native evidence must not record image_id")
+    if payload["round_status"] == "PASS WITH LIMITATIONS" and not payload["limitations"]:
+        raise ValueError("PASS WITH LIMITATIONS evidence requires limitations")
     checks = payload["checks"]
     if not isinstance(checks, dict) or set(REQUIRED_EVIDENCE_CHECKS) - checks.keys():
         raise ValueError("evidence is missing required checks")
@@ -581,9 +591,9 @@ def main(argv: list[str] | None = None) -> int:
         write_text(review / "EVIDENCE.json", json.dumps(evidence, indent=2, sort_keys=True))
         metadata = {
             "project_name": "us-equity-quant-system",
-            "project_phase": "Phase 0",
-            "round_id": args.round_id,
-            "round_status": "PASS",
+            "project_phase": evidence["project_phase"],
+            "round_id": evidence["round_id"],
+            "round_status": evidence["round_status"],
             "base_commit": args.base_commit,
             "head_branch": branch,
             "head_commit": head,
@@ -601,7 +611,7 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "COMMAND_RESULTS.txt",
-            "STATUS: PASS\n\nOffline Docker verification commands are recorded in EVIDENCE.json.",
+            "STATUS: PASS\n\nNative Python/.NET/LEAN clean-source commands are recorded in EVIDENCE.json.",
         )
         write_text(
             review / "CLEAN_SOURCE_RESULT.md",
@@ -613,15 +623,15 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "KNOWN_LIMITATIONS.md",
-            "STATUS: PASS\n\nNo known limitations for this verification round.",
+            "STATUS: " + str(evidence["round_status"]) + "\n\n" + "\n".join(evidence["limitations"]),
         )
         write_text(
             review / "REVIEW_README.md",
-            f"# Clean Review Bundle\n\nSTATUS: PASS\n\nHead: `{head}`\nBase: `{args.base_commit}`",
+            f"# Clean Review Bundle\n\nSTATUS: {evidence['round_status']}\n\nHead: `{head}`\nBase: `{args.base_commit}`",
         )
         write_text(
             review / "CHANGE_SUMMARY.md",
-            f"# Round Change Summary\n\nSTATUS: PASS\n\nBase: `{args.base_commit}`\nHead: `{head}`",
+            f"# Round Change Summary\n\nSTATUS: {evidence['round_status']}\n\nBase: `{args.base_commit}`\nHead: `{head}`",
         )
         write_text(
             review / "FULL_DIFF.patch",
