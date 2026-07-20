@@ -3,8 +3,8 @@
   "daily_content_sha256": "e380d71e59d7de464d31c18117754b4413d8331be8995f1e8d8643a94db24248",
   "files": {
     "equity/usa/daily/synth.zip": "fe5c2883599220d8f4c9354178f58a61c1fc7443df25dad9eabb19c634070e0f",
-    "equity/usa/factor_files/synth.csv": "87fdf0502fa5dbc1472aabadf034eae89562379ee02c48d348d2049bbd567817",
-    "equity/usa/map_files/synth.csv": "7d29be95a21c4d628dc2d73c6f70ec73805398d8773f487ec810aecea2e99b9e"
+    "equity/usa/factor_files/synth.csv": "3304b98cb4d4050fcaa2595aacd03c388b25e9b9f6c124e6a7b1f443d62a9ee0",
+    "equity/usa/map_files/synth.csv": "6f7e565fa8145de3b1f6101f87a589a2ab06c44bf78ca814798d9d82031c29a7"
   },
   "generator": "LEAN ToolBox RandomDataGenerator",
   "lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",

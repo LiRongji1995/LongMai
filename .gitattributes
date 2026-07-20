@@ -1,2 +1,4 @@
 * text=auto eol=lf
 *.ps1 text eol=crlf
+# Preserve the exact bytes emitted by LEAN ToolBox for the checked-in fixture.
+integrations/lean/data/**/*.csv -text
