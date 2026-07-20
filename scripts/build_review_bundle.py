@@ -28,6 +28,8 @@ COMMON_EVIDENCE_CHECKS = (
 )
 DOCKER_EVIDENCE_CHECKS = ("docker_compose_config",)
 NATIVE_EVIDENCE_CHECKS = ("native_build", "native_run_c")
+ROUND_ID = "phase-01-round-01b-native-lean-foundation"
+ROUND_BASE = "ec7bba61c6d190c7e6624a467c4a45a6911c46e1"
 REQUIRED_REVIEW_FILES = (
     "REVIEW_README.md",
     "ROUND_METADATA.json",
@@ -269,8 +271,10 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         check = checks[name]
         if not isinstance(check, dict) or check.get("status") != "PASS":
             raise ValueError(f"evidence check is not PASS: {name}")
-        if name != "clean_source" and (
-            not isinstance(check.get("command"), str) or check.get("exit_code") != 0
+        if (
+            not isinstance(check.get("command"), str)
+            or not check["command"].strip()
+            or check.get("exit_code") != 0
         ):
             raise ValueError(f"evidence command is incomplete or failed: {name}")
     pytest = checks["pytest"]
@@ -504,11 +508,7 @@ def validate_bundle(
                 )
                 cli_ok = cli.returncode == 0 and all(
                     token in cli.stdout
-                    for token in (
-                        "current phase: Phase 0",
-                        "paper trading enabled: false",
-                        "live trading enabled: false",
-                    )
+                    for token in ("paper trading enabled: false", "live trading enabled: false")
                 )
                 _check(
                     checks,
@@ -612,12 +612,33 @@ def main(argv: list[str] | None = None) -> int:
         git(root, "rev-parse", "HEAD").strip(),
         git(root, "rev-parse", "--abbrev-ref", "HEAD").strip(),
     )
+    origin_main = git(root, "rev-parse", "origin/main").strip()
+    if branch != "main" or head != origin_main:
+        raise SystemExit("branch or origin/main does not match HEAD")
+    if subprocess.run(
+        ["git", "merge-base", "--is-ancestor", args.base_commit, head], cwd=root, check=False
+    ).returncode:
+        raise SystemExit("recorded base is not an ancestor of HEAD")
+    report = Path(args.report_path)
+    if not report.is_file():
+        raise SystemExit("round arguments or report path are invalid")
+    if args.report_path not in git(root, "ls-tree", "-r", "--name-only", head).splitlines():
+        raise SystemExit("formal report is not tracked by HEAD")
     evidence = validate_evidence(
         load_evidence_json(args.evidence_json),
         head,
         args.base_commit,
         branch,
     )
+    if args.round_id == ROUND_ID and (
+        args.base_commit != ROUND_BASE
+        or evidence["project_name"] != "us-equity-quant-system"
+        or evidence["project_phase"] != "Phase 1"
+        or evidence["round_id"] != args.round_id
+        or evidence["round_status"] != "PASS WITH LIMITATIONS"
+        or evidence["base_commit"] != args.base_commit
+    ):
+        raise SystemExit("round arguments or evidence identity are invalid")
     if scan_git_head(root, head):
         raise SystemExit("repository secret or forbidden-file scan failed")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")

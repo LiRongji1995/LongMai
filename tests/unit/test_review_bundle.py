@@ -50,6 +50,8 @@ def evidence(
         "coverage_percent": 100,
     }
     checks["clean_source"] = {
+        "command": "git clone --no-hardlinks --no-local . clean-source",
+        "exit_code": exit_code,
         "status": "PASS",
         "head_commit": head,
         "origin_main_commit": head,
@@ -109,9 +111,99 @@ def make_repo(tmp_path: Path) -> tuple[Path, str, str, Path]:
     subprocess.run(["git", "add", "."], cwd=repo, check=True)
     subprocess.run(["git", "commit", "-m", "head"], cwd=repo, check=True, capture_output=True)
     head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(
+        ["git", "update-ref", "refs/remotes/origin/main", head],
+        cwd=repo,
+        check=True,
+    )
     path = tmp_path / "evidence.json"
     path.write_text(json.dumps(evidence(head, base)))
     return repo, base, head, path
+
+
+def build_bundle(
+    repo: Path, base: str, evidence_path: Path, output: Path
+) -> subprocess.CompletedProcess[str]:
+    script = Path(__file__).resolve().parents[2] / "scripts" / "build_review_bundle.py"
+    return subprocess.run(
+        [
+            sys.executable,
+            str(script),
+            "--round-id",
+            "test",
+            "--base-commit",
+            base,
+            "--output-dir",
+            str(output),
+            "--report-path",
+            "docs/reports/round.md",
+            "--round-start-time",
+            "2026-07-17T00:00:00Z",
+            "--evidence-json",
+            str(evidence_path),
+        ],
+        cwd=repo,
+        text=True,
+        capture_output=True,
+    )
+
+
+@pytest.mark.parametrize(
+    ("case", "expected"),
+    [
+        ("missing_origin", "origin/main"),
+        ("origin_behind", "origin/main"),
+        ("origin_other", "origin/main"),
+        ("non_main_branch", "branch or origin/main"),
+        ("dirty", "working tree is not clean"),
+        ("base_not_ancestor", "recorded base is not an ancestor"),
+        ("forged_evidence_origin", "branch or origin/main"),
+    ],
+)
+def test_bundle_requires_real_git_origin_main_and_clean_main_branch(
+    tmp_path: Path, case: str, expected: str
+) -> None:
+    repo, base, head, evidence_path = make_repo(tmp_path)
+    if case == "missing_origin":
+        subprocess.run(
+            ["git", "update-ref", "-d", "refs/remotes/origin/main"], cwd=repo, check=True
+        )
+    elif case == "origin_behind":
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", base], cwd=repo, check=True
+        )
+    elif case == "origin_other":
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True
+        ).strip()
+        other = subprocess.check_output(
+            ["git", "commit-tree", tree, "-p", head], cwd=repo, input="other\n", text=True
+        ).strip()
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", other], cwd=repo, check=True
+        )
+    elif case == "non_main_branch":
+        subprocess.run(["git", "branch", "-m", "review"], cwd=repo, check=True)
+    elif case == "dirty":
+        (repo / "dirty.txt").write_text("dirty\n", encoding="utf-8")
+    elif case == "base_not_ancestor":
+        tree = subprocess.check_output(
+            ["git", "rev-parse", "HEAD^{tree}"], cwd=repo, text=True
+        ).strip()
+        unrelated = subprocess.check_output(
+            ["git", "commit-tree", tree], cwd=repo, input="unrelated\n", text=True
+        ).strip()
+        payload = evidence(head, unrelated)
+        evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+        base = unrelated
+    elif case == "forged_evidence_origin":
+        subprocess.run(
+            ["git", "update-ref", "refs/remotes/origin/main", base], cwd=repo, check=True
+        )
+        # The forged JSON retains HEAD as origin_main_commit; Git is authoritative.
+    result = build_bundle(repo, base, evidence_path, tmp_path / "out")
+    assert result.returncode != 0
+    assert expected in result.stderr
 
 
 def test_changed_rows_handles_changes(tmp_path: Path) -> None:
