@@ -30,6 +30,9 @@ exit code 为 0，成功加载有效数据并处理 22 个数据点；恰有 2 �
   `9ca5b943c67e4ac0c41ae0fba16b54483a4859aa84e821284618ca58da40a5f8`
 - 未连接 Alpaca；未启用 Paper Trading 或 Live Trading；未发送真实订单；未验证
   任何盈利能力。
+- 完整 Run C config 的 SHA-256 记录于 EVIDENCE；Bundle 仅包含机器无关的安全投影
+  `RUN_C_CONFIG_EVIDENCE.json`，未包含原始本机路径，且该投影不用于重新计算完整
+  config SHA。
 
 ## 最终检查
 

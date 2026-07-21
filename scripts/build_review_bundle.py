@@ -48,6 +48,7 @@ REQUIRED_REVIEW_FILES = (
     "FILE_MANIFEST.json",
     "CHECKSUMS.sha256",
     "EVIDENCE.json",
+    "RUN_C_CONFIG_EVIDENCE.json",
     "BUNDLE_INFO.txt",
 )
 FORBIDDEN_PARTS = {
@@ -114,6 +115,28 @@ def sha256(path: Path) -> str:
     return digest.hexdigest()
 
 
+def zip_member_sha256(path: Path, member_name: str) -> str:
+    """Hash one exact fixture member without trusting the ZIP container hash."""
+    with zipfile.ZipFile(path) as archive:
+        names = archive.namelist()
+        if names != [member_name]:
+            raise ValueError("fixture ZIP has an unexpected member layout")
+        return hashlib.sha256(archive.read(member_name)).hexdigest()
+
+
+def validate_round_identity(payload: dict[str, Any]) -> None:
+    """Apply the non-negotiable identity checks to final Round 1B evidence."""
+    if payload.get("round_id") != ROUND_ID:
+        return
+    if (
+        payload.get("project_name") != "us-equity-quant-system"
+        or payload.get("project_phase") != "Phase 1"
+        or payload.get("round_status") != "PASS WITH LIMITATIONS"
+        or payload.get("base_commit") != ROUND_BASE
+    ):
+        raise ValueError("Round 1B evidence identity is invalid")
+
+
 def write_text(path: Path, content: str) -> None:
     path.write_text(content.rstrip() + "\n", encoding="utf-8", newline="\n")
 
@@ -130,6 +153,75 @@ def load_evidence_json(path: Path) -> dict[str, Any]:
     if not isinstance(payload, dict):
         raise ValueError("evidence JSON root must be an object")
     return payload
+
+
+def validate_native_hash_bindings(
+    evidence: dict[str, Any], source: Path, config_evidence: dict[str, Any]
+) -> None:
+    """Bind final native evidence to the exact bytes packaged in the ZIP."""
+    if evidence.get("round_id") != ROUND_ID:
+        return
+    validate_round_identity(evidence)
+    environment = evidence["verification_environment"]
+    if environment.get("lean_commit") != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6":
+        raise ValueError("Round 1B LEAN commit is invalid")
+    if environment.get("dotnet_sdk_version") != "10.0.302":
+        raise ValueError("Round 1B .NET SDK is invalid")
+    checks = evidence["checks"]
+    native = checks["native_run_c"]
+    expected_paths = {
+        "algorithm_source_sha256": "integrations/lean/algorithms/Phase01DeterministicSmokeTest.cs",
+        "csproj_sha256": "integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj",
+        "fixture_zip_sha256": "integrations/lean/data/equity/usa/daily/synth.zip",
+        "fixture_manifest_sha256": "integrations/lean/data/fixture-manifest.json",
+        "map_sha256": "integrations/lean/data/equity/usa/map_files/synth.csv",
+        "factor_sha256": "integrations/lean/data/equity/usa/factor_files/synth.csv",
+        "golden_orders_sha256": "integrations/lean/expected/phase01-golden-orders.json",
+        "golden_statistics_sha256": "integrations/lean/expected/phase01-golden-statistics.json",
+    }
+    for field, relative in expected_paths.items():
+        if native.get(field) != sha256(source / relative):
+            raise ValueError(f"native evidence hash does not bind {field}")
+    fixture = source / expected_paths["fixture_zip_sha256"]
+    extracted = zip_member_sha256(fixture, "synth.csv")
+    if native.get("fixture_extracted_content_sha256") != extracted:
+        raise ValueError("native evidence hash does not bind fixture extracted content")
+    manifest = json.loads(
+        (source / expected_paths["fixture_manifest_sha256"]).read_text(encoding="utf-8")
+    )
+    if (
+        manifest.get("daily_content_sha256") != extracted
+        or manifest.get("files", {}).get("equity/usa/daily/synth.zip")
+        != native["fixture_zip_sha256"]
+        or manifest.get("files", {}).get("equity/usa/map_files/synth.csv") != native["map_sha256"]
+        or manifest.get("files", {}).get("equity/usa/factor_files/synth.csv")
+        != native["factor_sha256"]
+    ):
+        raise ValueError("fixture manifest does not bind packaged fixture bytes")
+    identity = json.loads(
+        (source / "integrations/lean/expected/algorithm-build-identity.json").read_text(
+            encoding="utf-8"
+        )
+    )
+    if checks["native_build"].get("dll_sha256") != identity.get(
+        "deterministic_build_a_b_dll_sha256"
+    ):
+        raise ValueError("native build DLL hash does not bind algorithm identity")
+    if config_evidence.get("actual_config_sha256") != native.get("config_sha256"):
+        raise ValueError("Run C config evidence does not bind config SHA")
+    required_config = {
+        "machine_independent_projection",
+        "projection_sha256",
+        "algorithm_type_name",
+        "live_mode",
+        "data_folder_environment_variable",
+        "results_folder_environment_variable",
+        "lean_commit",
+        "generation_command",
+        "removed_or_replaced_path_fields",
+    }
+    if required_config - config_evidence.keys() or config_evidence.get("live_mode") is not False:
+        raise ValueError("Run C config evidence is incomplete or unsafe")
 
 
 def classify(path: str) -> tuple[str, str]:
@@ -277,6 +369,12 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
             or check.get("exit_code") != 0
         ):
             raise ValueError(f"evidence command is incomplete or failed: {name}")
+        if check["command"] in {
+            "dotnet restore and dotnet build -c Release",
+            "dotnet launcher",
+            "python -c offline CLI status",
+        }:
+            raise ValueError(f"evidence command is descriptive, not executable: {name}")
     pytest = checks["pytest"]
     if any(
         not isinstance(pytest.get(key), int) or pytest[key] < 0
@@ -492,6 +590,10 @@ def validate_bundle(
                         "head_branch"
                     ],
                 )
+                config_evidence = json.loads(
+                    (review / "RUN_C_CONFIG_EVIDENCE.json").read_text(encoding="utf-8")
+                )
+                validate_native_hash_bindings(evidence, extracted / "source", config_evidence)
                 _check(checks, "evidence_schema", evidence["head_commit"] == expected_head)
                 command = [
                     "python",
@@ -604,6 +706,7 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--report-path", required=True)
     parser.add_argument("--round-start-time", required=True)
     parser.add_argument("--evidence-json", required=True, type=Path)
+    parser.add_argument("--run-c-config-evidence", type=Path)
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     if git(root, "status", "--porcelain").strip():
@@ -639,6 +742,11 @@ def main(argv: list[str] | None = None) -> int:
         or evidence["base_commit"] != args.base_commit
     ):
         raise SystemExit("round arguments or evidence identity are invalid")
+    config_evidence: dict[str, Any] | None = None
+    if args.round_id == ROUND_ID:
+        if args.run_c_config_evidence is None:
+            raise SystemExit("Round 1B requires Run C config evidence")
+        config_evidence = load_evidence_json(args.run_c_config_evidence)
     if scan_git_head(root, head):
         raise SystemExit("repository secret or forbidden-file scan failed")
     timestamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
@@ -660,6 +768,13 @@ def main(argv: list[str] | None = None) -> int:
             destination.write_bytes(git_bytes(root, "show", f"{head}:{relative_path}"))
         write_text(review / "TRACKED_FILES.txt", "\n".join(source_files))
         write_text(review / "EVIDENCE.json", json.dumps(evidence, indent=2, sort_keys=True))
+        if config_evidence is not None:
+            write_text(
+                review / "RUN_C_CONFIG_EVIDENCE.json",
+                json.dumps(config_evidence, indent=2, sort_keys=True),
+            )
+        else:
+            write_text(review / "RUN_C_CONFIG_EVIDENCE.json", "{}")
         metadata = {
             "project_name": "us-equity-quant-system",
             "project_phase": evidence["project_phase"],

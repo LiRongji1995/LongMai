@@ -268,7 +268,7 @@ def test_native_evidence_requires_native_checks_not_docker(tmp_path: Path) -> No
     checks["native_build"] = {"command": "dotnet build", "exit_code": 0, "status": "PASS"}
     checks["native_build"].update({"dotnet_sdk_version": "10.0.302", "dll_sha256": "a" * 64})
     checks["native_run_c"] = {
-        "command": "dotnet launcher",
+        "command": "dotnet launcher --config $env:LEAN_CONFIG",
         "exit_code": 0,
         "status": "PASS",
         "filled_orders": 2,
