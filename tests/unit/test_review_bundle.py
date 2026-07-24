@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import hashlib
 import json
 import subprocess
 import sys
@@ -11,11 +12,14 @@ from typing import Any
 import pytest
 
 from scripts.build_review_bundle import (
+    canonical_projection_bytes,
     changed_rows,
     load_evidence_json,
     scan_paths_and_secrets,
     validate_bundle,
     validate_evidence,
+    validate_round_identity,
+    validate_run_c_config_evidence,
 )
 
 pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required")
@@ -298,6 +302,92 @@ def test_native_evidence_requires_native_checks_not_docker(tmp_path: Path) -> No
     )
 
     validate_evidence(payload, head, base, "main")
+
+
+def native_config_evidence(*, projection_sha256: str | None = None) -> dict[str, Any]:
+    projection = {
+        "algorithm_language": "CSharp",
+        "environment": "backtesting",
+        "live_mode": False,
+    }
+    return {
+        "actual_config_sha256": "a" * 64,
+        "machine_independent_projection": projection,
+        "projection_sha256": projection_sha256
+        or hashlib.sha256(canonical_projection_bytes(projection)).hexdigest(),
+        "algorithm_type_name": "Phase01DeterministicSmokeTest",
+        "algorithm_language": "CSharp",
+        "environment": "backtesting",
+        "live_mode": False,
+        "brokerage_safety_status": "backtesting-safe",
+        "transaction_handler_safety_status": "backtesting-safe",
+        "data_folder_environment_variable": "LEAN_DATA_ROOT",
+        "results_folder_environment_variable": "LEAN_RESULTS_ROOT",
+        "lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
+        "removed_or_replaced_path_fields": ["data-folder", "results-destination-folder"],
+        "generation_command": (
+            "$env:PYTHON312 scripts/project_run_c_config.py --input $env:LEAN_CONFIG "
+            "--output $env:RUN_C_CONFIG_EVIDENCE"
+        ),
+    }
+
+
+@pytest.mark.parametrize(
+    "mutate",
+    [
+        lambda item: item.update({"projection_sha256": "0" * 64}),
+        lambda item: item.update({"projection_sha256": "0" * 63}),
+        lambda item: item["machine_independent_projection"].update({"live_mode": True}),
+        lambda item: item.update({"generation_command": ""}),
+        lambda item: item.update(
+            {"generation_command": "config projection generated from LEAN_CONFIG"}
+        ),
+        lambda item: item.pop("brokerage_safety_status"),
+        lambda item: item.pop("transaction_handler_safety_status"),
+    ],
+)
+def test_round_1b_config_evidence_fails_closed_for_projection_and_safety(mutate: object) -> None:
+    config = native_config_evidence()
+    mutate(config)  # type: ignore[operator]
+    with pytest.raises(ValueError):
+        validate_run_c_config_evidence(config, "a" * 64)
+
+
+@pytest.mark.parametrize(
+    "field,value",
+    [
+        ("project_name", "wrong-project"),
+        ("project_phase", "Phase 0"),
+        ("round_id", "wrong-round"),
+        ("round_status", "PASS"),
+        ("base_commit", "0" * 40),
+    ],
+)
+def test_round_1b_identity_rejects_every_required_mismatch(field: str, value: str) -> None:
+    payload = {
+        "project_name": "us-equity-quant-system",
+        "project_phase": "Phase 1",
+        "round_id": "phase-01-round-01b-native-lean-foundation",
+        "round_status": "PASS WITH LIMITATIONS",
+        "base_commit": "ec7bba61c6d190c7e6624a467c4a45a6911c46e1",
+    }
+    payload[field] = value
+    with pytest.raises(ValueError):
+        validate_round_identity(payload)
+
+
+def test_round_1b_requires_real_post_run_commands(tmp_path: Path) -> None:
+    _repo, base, head, _ = make_repo(tmp_path)
+    payload = evidence(head, base)
+    payload.update(
+        {
+            "round_id": "phase-01-round-01b-native-lean-foundation",
+            "base_commit": "ec7bba61c6d190c7e6624a467c4a45a6911c46e1",
+            "commands": [],
+        }
+    )
+    with pytest.raises(ValueError, match="command evidence"):
+        validate_evidence(payload, head, payload["base_commit"], "main")
 
 
 def test_bundle_includes_evidence_and_validation_and_detects_tampering(

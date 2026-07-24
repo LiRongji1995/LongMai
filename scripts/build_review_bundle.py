@@ -124,13 +124,19 @@ def zip_member_sha256(path: Path, member_name: str) -> str:
         return hashlib.sha256(archive.read(member_name)).hexdigest()
 
 
+def canonical_projection_bytes(projection: dict[str, Any]) -> bytes:
+    """Return the one permitted machine-independent config projection encoding."""
+    return json.dumps(projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
+        "utf-8"
+    )
+
+
 def validate_round_identity(payload: dict[str, Any]) -> None:
     """Apply the non-negotiable identity checks to final Round 1B evidence."""
-    if payload.get("round_id") != ROUND_ID:
-        return
     if (
         payload.get("project_name") != "us-equity-quant-system"
         or payload.get("project_phase") != "Phase 1"
+        or payload.get("round_id") != ROUND_ID
         or payload.get("round_status") != "PASS WITH LIMITATIONS"
         or payload.get("base_commit") != ROUND_BASE
     ):
@@ -155,12 +161,112 @@ def load_evidence_json(path: Path) -> dict[str, Any]:
     return payload
 
 
+def validate_run_c_config_evidence(config: dict[str, Any], expected_config_sha256: str) -> None:
+    """Fail closed on the portable, safe Run C config evidence projection."""
+    required = {
+        "actual_config_sha256",
+        "machine_independent_projection",
+        "projection_sha256",
+        "algorithm_type_name",
+        "algorithm_language",
+        "environment",
+        "live_mode",
+        "brokerage_safety_status",
+        "transaction_handler_safety_status",
+        "data_folder_environment_variable",
+        "results_folder_environment_variable",
+        "lean_commit",
+        "removed_or_replaced_path_fields",
+        "generation_command",
+    }
+    if required - config.keys():
+        raise ValueError("Run C config evidence is incomplete")
+    projection = config["machine_independent_projection"]
+    if not isinstance(projection, dict):
+        raise ValueError("Run C config projection must be an object")
+    projection_sha = hashlib.sha256(canonical_projection_bytes(projection)).hexdigest()
+    if config["projection_sha256"] != projection_sha:
+        raise ValueError("Run C config projection SHA is invalid")
+    if config["actual_config_sha256"] != expected_config_sha256:
+        raise ValueError("Run C config evidence does not bind config SHA")
+    if (
+        config["algorithm_language"] != projection.get("algorithm_language")
+        or config["environment"] != projection.get("environment")
+        or config["live_mode"] is not False
+        or projection.get("live_mode") is not False
+        or config["lean_commit"] != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6"
+        or config["brokerage_safety_status"] != "backtesting-safe"
+        or config["transaction_handler_safety_status"] != "backtesting-safe"
+        or config["data_folder_environment_variable"] != "LEAN_DATA_ROOT"
+        or config["results_folder_environment_variable"] != "LEAN_RESULTS_ROOT"
+    ):
+        raise ValueError("Run C config evidence is unsafe or inconsistent")
+    command = config["generation_command"]
+    if (
+        not isinstance(command, str)
+        or not command.strip()
+        or "\n" in command
+        or command.strip().lower()
+        in {"generated from config", "config projection generated from lean_config"}
+        or not re.search(r"(?:^|\s)(?:python|py|dotnet|&|\$env:)[^\s]*", command, re.I)
+        or "--input" not in command
+        or "--output" not in command
+    ):
+        raise ValueError("Run C config generation command is not executable evidence")
+    removed = config["removed_or_replaced_path_fields"]
+    if (
+        not isinstance(removed, list)
+        or not removed
+        or not all(isinstance(item, str) for item in removed)
+    ):
+        raise ValueError("Run C config path-field record is invalid")
+
+
+def validate_command_evidence(payload: dict[str, Any]) -> None:
+    """Require the real native execution chain, including post-Run-C comparisons."""
+    if payload.get("round_id") != ROUND_ID:
+        return
+    required = {
+        "native_restore",
+        "native_build",
+        "native_run_c",
+        "normalizer",
+        "golden_orders",
+        "golden_statistics",
+        "deterministic_identity",
+    }
+    commands = payload.get("commands")
+    if not isinstance(commands, list):
+        raise ValueError("Round 1B command evidence is missing")
+    actual: set[str] = set()
+    for item in commands:
+        if not isinstance(item, dict):
+            raise ValueError("Round 1B command evidence is invalid")
+        name, command = item.get("name"), item.get("command")
+        if (
+            not isinstance(name, str)
+            or not isinstance(command, str)
+            or not command.strip()
+            or item.get("exit_code") != 0
+            or item.get("status") != "PASS"
+            or command.strip().lower()
+            in {
+                "normalize run c output",
+                "compare golden",
+                "deterministic identity check",
+                "native run c",
+            }
+        ):
+            raise ValueError("Round 1B command evidence is invalid")
+        actual.add(name)
+    if required - actual:
+        raise ValueError("Round 1B command evidence is incomplete")
+
+
 def validate_native_hash_bindings(
     evidence: dict[str, Any], source: Path, config_evidence: dict[str, Any]
 ) -> None:
     """Bind final native evidence to the exact bytes packaged in the ZIP."""
-    if evidence.get("round_id") != ROUND_ID:
-        return
     validate_round_identity(evidence)
     environment = evidence["verification_environment"]
     if environment.get("lean_commit") != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6":
@@ -207,21 +313,7 @@ def validate_native_hash_bindings(
         "deterministic_build_a_b_dll_sha256"
     ):
         raise ValueError("native build DLL hash does not bind algorithm identity")
-    if config_evidence.get("actual_config_sha256") != native.get("config_sha256"):
-        raise ValueError("Run C config evidence does not bind config SHA")
-    required_config = {
-        "machine_independent_projection",
-        "projection_sha256",
-        "algorithm_type_name",
-        "live_mode",
-        "data_folder_environment_variable",
-        "results_folder_environment_variable",
-        "lean_commit",
-        "generation_command",
-        "removed_or_replaced_path_fields",
-    }
-    if required_config - config_evidence.keys() or config_evidence.get("live_mode") is not False:
-        raise ValueError("Run C config evidence is incomplete or unsafe")
+    validate_run_c_config_evidence(config_evidence, native["config_sha256"])
 
 
 def classify(path: str) -> tuple[str, str]:
@@ -353,6 +445,9 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         raise ValueError("native evidence must not record image or image_id")
     if payload["round_status"] == "PASS WITH LIMITATIONS" and not payload["limitations"]:
         raise ValueError("PASS WITH LIMITATIONS evidence requires limitations")
+    if payload.get("round_id") == ROUND_ID:
+        validate_round_identity(payload)
+        validate_command_evidence(payload)
     checks = payload["checks"]
     required_checks = COMMON_EVIDENCE_CHECKS + (
         DOCKER_EVIDENCE_CHECKS if environment.get("type") == "docker" else NATIVE_EVIDENCE_CHECKS
@@ -590,10 +685,28 @@ def validate_bundle(
                         "head_branch"
                     ],
                 )
-                config_evidence = json.loads(
-                    (review / "RUN_C_CONFIG_EVIDENCE.json").read_text(encoding="utf-8")
-                )
-                validate_native_hash_bindings(evidence, extracted / "source", config_evidence)
+                metadata = json.loads((review / "ROUND_METADATA.json").read_text(encoding="utf-8"))
+                if evidence.get("round_id") == ROUND_ID:
+                    validate_round_identity(evidence)
+                    for key in (
+                        "project_name",
+                        "project_phase",
+                        "round_id",
+                        "round_status",
+                        "base_commit",
+                        "head_commit",
+                        "limitations",
+                    ):
+                        if metadata.get(key) != evidence.get(key):
+                            raise ValueError(f"Round metadata does not match evidence: {key}")
+                    if metadata.get("head_branch") != evidence.get("branch") or metadata.get(
+                        "verification_environment_type"
+                    ) != evidence["verification_environment"].get("type"):
+                        raise ValueError("Round metadata does not match evidence environment")
+                    config_evidence = json.loads(
+                        (review / "RUN_C_CONFIG_EVIDENCE.json").read_text(encoding="utf-8")
+                    )
+                    validate_native_hash_bindings(evidence, extracted / "source", config_evidence)
                 _check(checks, "evidence_schema", evidence["head_commit"] == expected_head)
                 command = [
                     "python",
@@ -783,6 +896,8 @@ def main(argv: list[str] | None = None) -> int:
             "base_commit": args.base_commit,
             "head_branch": branch,
             "head_commit": head,
+            "limitations": evidence["limitations"],
+            "verification_environment_type": evidence["verification_environment"]["type"],
             "clean_source_status": "PASS",
             "tests_status": "PASS",
             "security_scan_status": "PASS",
