@@ -17,9 +17,11 @@ from scripts.build_review_bundle import (
     load_evidence_json,
     scan_paths_and_secrets,
     validate_bundle,
+    validate_command_evidence,
     validate_evidence,
     validate_round_identity,
     validate_run_c_config_evidence,
+    validate_run_c_review_artifacts,
 )
 
 pytestmark = pytest.mark.skipif(which("git") is None, reason="Git is required")
@@ -499,3 +501,204 @@ def test_successful_offline_cli_validation_has_no_error(tmp_path: Path) -> None:
     validation = validate_bundle(bundle, head, repo)
     assert validation.status == "PASS"
     assert validation.checks["offline_cli"]["error"] == ""
+
+
+def _round_1b_review_artifacts(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
+    review = tmp_path / "review"
+    review.mkdir()
+    source = Path(__file__).resolve().parents[2]
+    orders = json.loads(
+        (source / "integrations/lean/expected/phase01-golden-orders.json").read_text()
+    )
+    statistics = json.loads(
+        (source / "integrations/lean/expected/phase01-golden-statistics.json").read_text()
+    )
+    raw = [
+        {"status": "filled", "direction": "buy", "fillQuantity": 10.0, "fillPrice": 100.01},
+        {"status": "filled", "direction": "sell", "fillQuantity": -10.0, "fillPrice": 97.73},
+    ]
+    (review / "RUN_C_RAW_ORDER_EVENTS.json").write_text(json.dumps(raw), encoding="utf-8")
+    (review / "RUN_C_NORMALIZED_ORDERS.json").write_text(json.dumps(orders), encoding="utf-8")
+    (review / "RUN_C_NORMALIZED_STATISTICS.json").write_text(
+        json.dumps(statistics), encoding="utf-8"
+    )
+    summary = {
+        "algorithm_status": "Completed",
+        "runtime_error": "",
+        "launcher_exit_code": 0,
+        "processed_data_points": 22,
+        "filled_orders": 2,
+        "order_sequence": ["buy", "sell"],
+        "final_holdings": 0,
+        "final_cash": 977.20,
+        "final_portfolio_value": 977.20,
+        "raw_order_events_sha256": hashlib.sha256(
+            (review / "RUN_C_RAW_ORDER_EVENTS.json").read_bytes()
+        ).hexdigest(),
+        "normalized_orders_sha256": hashlib.sha256(
+            (review / "RUN_C_NORMALIZED_ORDERS.json").read_bytes()
+        ).hexdigest(),
+        "normalized_statistics_sha256": hashlib.sha256(
+            (review / "RUN_C_NORMALIZED_STATISTICS.json").read_bytes()
+        ).hexdigest(),
+        "config_sha256": "a" * 64,
+        "algorithm_dll_sha256": "b" * 64,
+        "lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
+        "run_start_time_utc": "2026-07-26T00:00:00Z",
+        "run_end_time_utc": "2026-07-26T00:00:01Z",
+        "duration_seconds": 1.0,
+    }
+    (review / "RUN_C_EXECUTION_SUMMARY.json").write_text(json.dumps(summary), encoding="utf-8")
+    support = {
+        "support_files": [
+            {
+                "lean_repository_relative_path": (
+                    "Data/symbol-properties/symbol-properties-database.csv"
+                ),
+                "destination_role": "symbol-properties",
+                "sha256": "c" * 64,
+                "source_lean_commit": "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6",
+            }
+        ]
+    }
+    (review / "RUN_C_SUPPORT_DATA_EVIDENCE.json").write_text(json.dumps(support), encoding="utf-8")
+    evidence = {
+        "checks": {
+            "native_run_c": {"config_sha256": "a" * 64},
+            "native_build": {"dll_sha256": "b" * 64},
+        }
+    }
+    return review, evidence
+
+
+@pytest.mark.parametrize(
+    "case",
+    [
+        "missing-orders",
+        "missing-statistics",
+        "tampered-orders",
+        "tampered-statistics",
+        "third-fill",
+        "wrong-sequence",
+        "wrong-price",
+        "wrong-quantity",
+        "holdings",
+        "portfolio-value",
+        "status",
+        "runtime-error",
+        "hash",
+        "missing-support",
+        "support-commit",
+    ],
+)
+def test_round_1b_normalized_artifacts_fail_closed(tmp_path: Path, case: str) -> None:
+    review, evidence_payload = _round_1b_review_artifacts(tmp_path)
+    if case == "missing-orders":
+        (review / "RUN_C_NORMALIZED_ORDERS.json").unlink()
+    elif case == "missing-statistics":
+        (review / "RUN_C_NORMALIZED_STATISTICS.json").unlink()
+    elif case == "tampered-orders":
+        path = review / "RUN_C_NORMALIZED_ORDERS.json"
+        payload = json.loads(path.read_text())
+        payload["orders"][0]["fillPrice"] = 1
+        path.write_text(json.dumps(payload))
+    elif case == "tampered-statistics":
+        path = review / "RUN_C_NORMALIZED_STATISTICS.json"
+        payload = json.loads(path.read_text())
+        payload["final_cash"] = 1
+        path.write_text(json.dumps(payload))
+    elif case == "third-fill":
+        path = review / "RUN_C_RAW_ORDER_EVENTS.json"
+        payload = json.loads(path.read_text())
+        payload.append(dict(payload[0]))
+        path.write_text(json.dumps(payload))
+    elif case in {
+        "wrong-sequence",
+        "wrong-price",
+        "wrong-quantity",
+        "holdings",
+        "portfolio-value",
+        "status",
+        "runtime-error",
+        "hash",
+    }:
+        path = review / "RUN_C_EXECUTION_SUMMARY.json"
+        payload = json.loads(path.read_text())
+        key, value = {
+            "wrong-sequence": ("order_sequence", ["sell", "buy"]),
+            "wrong-price": ("final_cash", 1),
+            "wrong-quantity": ("filled_orders", 3),
+            "holdings": ("final_holdings", 1),
+            "portfolio-value": ("final_portfolio_value", 1),
+            "status": ("algorithm_status", "Failed"),
+            "runtime-error": ("runtime_error", "boom"),
+            "hash": ("normalized_orders_sha256", "0" * 64),
+        }[case]
+        payload[key] = value
+        path.write_text(json.dumps(payload))
+    elif case == "missing-support":
+        (review / "RUN_C_SUPPORT_DATA_EVIDENCE.json").unlink()
+    else:
+        path = review / "RUN_C_SUPPORT_DATA_EVIDENCE.json"
+        payload = json.loads(path.read_text())
+        payload["support_files"][0]["source_lean_commit"] = "0" * 40
+        path.write_text(json.dumps(payload))
+    with pytest.raises(ValueError):
+        validate_run_c_review_artifacts(
+            review, Path(__file__).resolve().parents[2], evidence_payload
+        )
+
+
+@pytest.mark.parametrize(
+    "case", ["orders-import", "statistics-no-call", "identity-hash-only", "limitations-boundary"]
+)
+def test_round_1b_command_and_limitation_evidence_fail_closed(case: str) -> None:
+    commands = [
+        {"name": "native_restore", "command": "dotnet restore x", "exit_code": 0, "status": "PASS"},
+        {"name": "native_build", "command": "dotnet build x", "exit_code": 0, "status": "PASS"},
+        {"name": "native_run_c", "command": "dotnet x", "exit_code": 0, "status": "PASS"},
+        {"name": "normalizer", "command": "python normalize.py", "exit_code": 0, "status": "PASS"},
+        {
+            "name": "golden_orders",
+            "command": (
+                "python -c 'compare_semantic(phase01-golden-orders.json, "
+                "RUN_C_NORMALIZED_ORDERS.json)'"
+            ),
+            "exit_code": 0,
+            "status": "PASS",
+        },
+        {
+            "name": "golden_statistics",
+            "command": (
+                "python -c 'compare_semantic(phase01-golden-statistics.json, "
+                "RUN_C_NORMALIZED_STATISTICS.json)'"
+            ),
+            "exit_code": 0,
+            "status": "PASS",
+        },
+        {
+            "name": "deterministic_identity",
+            "command": (
+                "python -c 'x=algorithm-build-identity.json; "
+                "y=deterministic_build_a_b_dll_sha256; assert actual != expected'"
+            ),
+            "exit_code": 0,
+            "status": "PASS",
+        },
+    ]
+    if case == "orders-import":
+        commands[4]["command"] = (
+            "python -c 'from scripts.normalize_lean_result import compare_semantic'"
+        )
+    elif case == "statistics-no-call":
+        commands[5]["command"] = (
+            "python -c 'phase01-golden-statistics.json "
+            "RUN_C_NORMALIZED_STATISTICS.json compare_semantic'"
+        )
+    elif case == "identity-hash-only":
+        commands[6]["command"] = "Get-FileHash dll"
+    else:
+        commands.pop()
+    payload = {"round_id": "phase-01-round-01b-native-lean-foundation", "commands": commands}
+    with pytest.raises(ValueError):
+        validate_command_evidence(payload)

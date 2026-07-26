@@ -49,6 +49,11 @@ REQUIRED_REVIEW_FILES = (
     "CHECKSUMS.sha256",
     "EVIDENCE.json",
     "RUN_C_CONFIG_EVIDENCE.json",
+    "RUN_C_RAW_ORDER_EVENTS.json",
+    "RUN_C_NORMALIZED_ORDERS.json",
+    "RUN_C_NORMALIZED_STATISTICS.json",
+    "RUN_C_EXECUTION_SUMMARY.json",
+    "RUN_C_SUPPORT_DATA_EVIDENCE.json",
     "BUNDLE_INFO.txt",
 )
 FORBIDDEN_PARTS = {
@@ -82,6 +87,14 @@ SHA256_PATTERN = re.compile(r"[0-9a-f]{64}")
 CONCRETE_ABSOLUTE_PATH_PATTERNS = (
     re.compile(r"[A-Za-z]:\\(?:[^\\/\r\n]+\\)+[^\\/\r\n]+"),
     re.compile(r"/(?:home|Users)/[^/\s]+(?:/[^/\s]+)*"),
+)
+REQUIRED_LIMITATIONS = (
+    "DotNetZip and System.Drawing.Common upstream security warnings",
+    "optional interest-rate and result-analysis non-fatal warnings",
+    "Native C# foundation only; LEAN Python algorithms are not validated",
+    "Alpaca is not connected",
+    "Paper Trading and Live Trading are not approved",
+    "profitability is not validated",
 )
 
 
@@ -129,6 +142,44 @@ def canonical_projection_bytes(projection: dict[str, Any]) -> bytes:
     return json.dumps(projection, sort_keys=True, separators=(",", ":"), ensure_ascii=False).encode(
         "utf-8"
     )
+
+
+def compare_run_c_semantic(expected: dict[str, Any], actual: dict[str, Any]) -> None:
+    """Equivalent fail-closed semantic comparison for portable review artifacts."""
+
+    def canonicalize(payload: dict[str, Any]) -> dict[str, Any]:
+        required = {"algorithm", "lean_commit", "fixture_sha256"}
+        if missing := required - payload.keys():
+            raise ValueError(f"normalized result is missing fields: {sorted(missing)}")
+        result = dict(payload)
+        if "orders" in result:
+            orders = result["orders"]
+            fields = {"time", "direction", "quantity", "status", "fillQuantity", "fillPrice"}
+            if not isinstance(orders, list) or any(
+                not isinstance(item, dict) or fields - item.keys() for item in orders
+            ):
+                raise ValueError("normalized orders are invalid")
+            result["orders"] = sorted(
+                [
+                    {
+                        "time": float(item["time"]),
+                        "direction": str(item["direction"]).lower(),
+                        "quantity": float(item["quantity"]),
+                        "status": str(item["status"]).lower(),
+                        "fillQuantity": float(item["fillQuantity"]),
+                        "fillPrice": float(item["fillPrice"]),
+                    }
+                    for item in orders
+                ],
+                key=lambda item: (item["time"], item["direction"], item["quantity"]),
+            )
+        for field in ("initial_cash", "final_holdings", "final_cash", "final_portfolio_value"):
+            if field in result:
+                result[field] = float(result[field])
+        return result
+
+    if canonicalize(expected) != canonicalize(actual):
+        raise ValueError("normalized result does not match Golden")
 
 
 def validate_round_identity(payload: dict[str, Any]) -> None:
@@ -258,6 +309,28 @@ def validate_command_evidence(payload: dict[str, Any]) -> None:
             }
         ):
             raise ValueError("Round 1B command evidence is invalid")
+        lower = command.lower()
+        required_command_content = {
+            "golden_orders": (
+                "phase01-golden-orders.json",
+                "run_c_normalized_orders.json",
+                "compare_semantic(",
+            ),
+            "golden_statistics": (
+                "phase01-golden-statistics.json",
+                "run_c_normalized_statistics.json",
+                "compare_semantic(",
+            ),
+            "deterministic_identity": (
+                "algorithm-build-identity.json",
+                "deterministic_build_a_b_dll_sha256",
+                "!=",
+            ),
+        }
+        if name in required_command_content and not all(
+            token in lower for token in required_command_content[name]
+        ):
+            raise ValueError("Round 1B command evidence does not prove a comparison")
         actual.add(name)
     if required - actual:
         raise ValueError("Round 1B command evidence is incomplete")
@@ -314,6 +387,117 @@ def validate_native_hash_bindings(
     ):
         raise ValueError("native build DLL hash does not bind algorithm identity")
     validate_run_c_config_evidence(config_evidence, native["config_sha256"])
+
+
+def _require_sha256(value: object, field: str) -> str:
+    if not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value):
+        raise ValueError(f"{field} must be a SHA-256")
+    return value
+
+
+def validate_run_c_review_artifacts(review: Path, source: Path, evidence: dict[str, Any]) -> None:
+    """Recompute the Round 1B native result assertions from ZIP members."""
+    names = (
+        "RUN_C_RAW_ORDER_EVENTS.json",
+        "RUN_C_NORMALIZED_ORDERS.json",
+        "RUN_C_NORMALIZED_STATISTICS.json",
+        "RUN_C_EXECUTION_SUMMARY.json",
+        "RUN_C_SUPPORT_DATA_EVIDENCE.json",
+    )
+    if any(not (review / name).is_file() for name in names):
+        raise ValueError("Round 1B normalized Run C evidence is incomplete")
+    raw = review / "RUN_C_RAW_ORDER_EVENTS.json"
+    orders = review / "RUN_C_NORMALIZED_ORDERS.json"
+    statistics = review / "RUN_C_NORMALIZED_STATISTICS.json"
+    summary = json.loads((review / "RUN_C_EXECUTION_SUMMARY.json").read_text(encoding="utf-8"))
+    support = json.loads((review / "RUN_C_SUPPORT_DATA_EVIDENCE.json").read_text(encoding="utf-8"))
+    normalized_orders = json.loads(orders.read_text(encoding="utf-8"))
+    normalized_statistics = json.loads(statistics.read_text(encoding="utf-8"))
+    compare_run_c_semantic(
+        json.loads(
+            (source / "integrations/lean/expected/phase01-golden-orders.json").read_text(
+                encoding="utf-8"
+            )
+        ),
+        normalized_orders,
+    )
+    compare_run_c_semantic(
+        json.loads(
+            (source / "integrations/lean/expected/phase01-golden-statistics.json").read_text(
+                encoding="utf-8"
+            )
+        ),
+        normalized_statistics,
+    )
+    required = {
+        "algorithm_status",
+        "runtime_error",
+        "launcher_exit_code",
+        "processed_data_points",
+        "filled_orders",
+        "order_sequence",
+        "final_holdings",
+        "final_cash",
+        "final_portfolio_value",
+        "raw_order_events_sha256",
+        "normalized_orders_sha256",
+        "normalized_statistics_sha256",
+        "config_sha256",
+        "algorithm_dll_sha256",
+        "lean_commit",
+        "run_start_time_utc",
+        "run_end_time_utc",
+        "duration_seconds",
+    }
+    if not isinstance(summary, dict) or required - summary.keys():
+        raise ValueError("Run C execution summary is incomplete")
+    if (
+        summary["algorithm_status"] != "Completed"
+        or summary["runtime_error"] != ""
+        or summary["launcher_exit_code"] != 0
+        or summary["processed_data_points"] != 22
+        or summary["filled_orders"] != 2
+        or summary["order_sequence"] != ["buy", "sell"]
+        or summary["final_holdings"] != 0
+        or float(summary["final_cash"]) != 977.20
+        or float(summary["final_portfolio_value"]) != 977.20
+        or summary["lean_commit"] != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6"
+        or not isinstance(summary["duration_seconds"], (int, float))
+        or summary["duration_seconds"] < 0
+    ):
+        raise ValueError("Run C execution summary has an invalid result")
+    expected_hashes = {
+        "raw_order_events_sha256": sha256(raw),
+        "normalized_orders_sha256": sha256(orders),
+        "normalized_statistics_sha256": sha256(statistics),
+        "config_sha256": evidence["checks"]["native_run_c"]["config_sha256"],
+        "algorithm_dll_sha256": evidence["checks"]["native_build"]["dll_sha256"],
+    }
+    if any(summary.get(key) != value for key, value in expected_hashes.items()):
+        raise ValueError("Run C execution summary hashes do not bind artifacts")
+    raw_orders = json.loads(raw.read_text(encoding="utf-8"))
+    fills = [item for item in raw_orders if item.get("status") == "filled"]
+    if len(fills) != 2 or [
+        (item.get("direction"), item.get("fillQuantity"), item.get("fillPrice")) for item in fills
+    ] != [("buy", 10.0, 100.01), ("sell", -10.0, 97.73)]:
+        raise ValueError("Run C raw order events do not prove expected fills")
+    files = support.get("support_files") if isinstance(support, dict) else None
+    if not isinstance(files, list) or not files:
+        raise ValueError("Run C support-data evidence is incomplete")
+    for item in files:
+        if (
+            not isinstance(item, dict)
+            or {"lean_repository_relative_path", "destination_role", "sha256", "source_lean_commit"}
+            - item.keys()
+        ):
+            raise ValueError("Run C support-data evidence is invalid")
+        if (
+            item["source_lean_commit"] != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6"
+            or not isinstance(item["lean_repository_relative_path"], str)
+            or re.search(r"(?:^[A-Za-z]:|/home/|/Users/)", item["lean_repository_relative_path"])
+        ):
+            raise ValueError("Run C support-data provenance is invalid")
+        _require_sha256(item["sha256"], "support-data SHA")
 
 
 def classify(path: str) -> tuple[str, str]:
@@ -448,6 +632,8 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     if payload.get("round_id") == ROUND_ID:
         validate_round_identity(payload)
         validate_command_evidence(payload)
+        if any(item not in payload["limitations"] for item in REQUIRED_LIMITATIONS):
+            raise ValueError("Round 1B limitations are incomplete")
     checks = payload["checks"]
     required_checks = COMMON_EVIDENCE_CHECKS + (
         DOCKER_EVIDENCE_CHECKS if environment.get("type") == "docker" else NATIVE_EVIDENCE_CHECKS
@@ -598,6 +784,15 @@ def validate_bundle(
                         target.write_bytes(archive.read(info))
                 review = extracted / "review"
                 required = set(REQUIRED_REVIEW_FILES)
+                metadata = json.loads((review / "ROUND_METADATA.json").read_text(encoding="utf-8"))
+                if metadata.get("round_id") != ROUND_ID:
+                    required -= {
+                        "RUN_C_RAW_ORDER_EVENTS.json",
+                        "RUN_C_NORMALIZED_ORDERS.json",
+                        "RUN_C_NORMALIZED_STATISTICS.json",
+                        "RUN_C_EXECUTION_SUMMARY.json",
+                        "RUN_C_SUPPORT_DATA_EVIDENCE.json",
+                    }
                 if not require_validation_result:
                     required.remove("BUNDLE_VALIDATION_RESULT.md")
                 missing = [name for name in required if not (review / name).is_file()]
@@ -685,7 +880,6 @@ def validate_bundle(
                         "head_branch"
                     ],
                 )
-                metadata = json.loads((review / "ROUND_METADATA.json").read_text(encoding="utf-8"))
                 if evidence.get("round_id") == ROUND_ID:
                     validate_round_identity(evidence)
                     for key in (
@@ -707,6 +901,12 @@ def validate_bundle(
                         (review / "RUN_C_CONFIG_EVIDENCE.json").read_text(encoding="utf-8")
                     )
                     validate_native_hash_bindings(evidence, extracted / "source", config_evidence)
+                    validate_run_c_review_artifacts(review, extracted / "source", evidence)
+                    known_limitations = (review / "KNOWN_LIMITATIONS.md").read_text(
+                        encoding="utf-8"
+                    )
+                    if any(item not in known_limitations for item in REQUIRED_LIMITATIONS):
+                        raise ValueError("Round 1B limitations are inconsistent")
                 _check(checks, "evidence_schema", evidence["head_commit"] == expected_head)
                 command = [
                     "python",
@@ -820,6 +1020,11 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--round-start-time", required=True)
     parser.add_argument("--evidence-json", required=True, type=Path)
     parser.add_argument("--run-c-config-evidence", type=Path)
+    parser.add_argument("--run-c-raw-order-events", type=Path)
+    parser.add_argument("--run-c-normalized-orders", type=Path)
+    parser.add_argument("--run-c-normalized-statistics", type=Path)
+    parser.add_argument("--run-c-execution-summary", type=Path)
+    parser.add_argument("--run-c-support-data-evidence", type=Path)
     args = parser.parse_args(argv)
     root = Path.cwd().resolve()
     if git(root, "status", "--porcelain").strip():
@@ -859,6 +1064,15 @@ def main(argv: list[str] | None = None) -> int:
     if args.round_id == ROUND_ID:
         if args.run_c_config_evidence is None:
             raise SystemExit("Round 1B requires Run C config evidence")
+        required_artifacts = (
+            args.run_c_raw_order_events,
+            args.run_c_normalized_orders,
+            args.run_c_normalized_statistics,
+            args.run_c_execution_summary,
+            args.run_c_support_data_evidence,
+        )
+        if any(path is None or not path.is_file() for path in required_artifacts):
+            raise SystemExit("Round 1B requires normalized Run C evidence")
         config_evidence = load_evidence_json(args.run_c_config_evidence)
     if scan_git_head(root, head):
         raise SystemExit("repository secret or forbidden-file scan failed")
@@ -888,6 +1102,17 @@ def main(argv: list[str] | None = None) -> int:
             )
         else:
             write_text(review / "RUN_C_CONFIG_EVIDENCE.json", "{}")
+        if args.round_id == ROUND_ID:
+            run_artifacts = {
+                "RUN_C_RAW_ORDER_EVENTS.json": args.run_c_raw_order_events,
+                "RUN_C_NORMALIZED_ORDERS.json": args.run_c_normalized_orders,
+                "RUN_C_NORMALIZED_STATISTICS.json": args.run_c_normalized_statistics,
+                "RUN_C_EXECUTION_SUMMARY.json": args.run_c_execution_summary,
+                "RUN_C_SUPPORT_DATA_EVIDENCE.json": args.run_c_support_data_evidence,
+            }
+            for name, path in run_artifacts.items():
+                assert path is not None
+                (review / name).write_bytes(path.read_bytes())
         metadata = {
             "project_name": "us-equity-quant-system",
             "project_phase": evidence["project_phase"],
