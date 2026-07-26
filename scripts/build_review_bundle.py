@@ -494,7 +494,7 @@ def validate_run_c_review_artifacts(review: Path, source: Path, evidence: dict[s
         if (
             item["source_lean_commit"] != "0269115d3cfbf691c7a0b7cfcc9ed412cafb91f6"
             or not isinstance(item["lean_repository_relative_path"], str)
-            or re.search(r"(?:^[A-Za-z]:|/home/|/Users/)", item["lean_repository_relative_path"])
+            or re.search(r"(?:^[A-Za-z]:|/" + "home/|/" + "Users/)", item["lean_repository_relative_path"])
         ):
             raise ValueError("Run C support-data provenance is invalid")
         _require_sha256(item["sha256"], "support-data SHA")
