@@ -28,8 +28,26 @@ COMMON_EVIDENCE_CHECKS = (
 )
 DOCKER_EVIDENCE_CHECKS = ("docker_compose_config",)
 NATIVE_EVIDENCE_CHECKS = ("native_build", "native_run_c")
+DOCUMENT_EVIDENCE_CHECKS = (
+    "relative_link_validation",
+    "json_example_validation",
+    "absolute_path_scan",
+    "secret_scan",
+    "cross_document_consistency",
+)
 ROUND_ID = "phase-01-round-01b-native-lean-foundation"
 ROUND_BASE = "ec7bba61c6d190c7e6624a467c4a45a6911c46e1"
+DOCUMENT_SUMMARY_FIELDS = (
+    "relative_link_validation",
+    "json_example_validation",
+    "absolute_path_scan",
+    "secret_scan",
+    "cross_document_consistency",
+)
+DOCUMENT_SUPPORT_FILES = {
+    "scripts/build_review_bundle.py",
+    "tests/unit/test_review_bundle.py",
+}
 REQUIRED_REVIEW_FILES = (
     "REVIEW_README.md",
     "ROUND_METADATA.json",
@@ -96,6 +114,9 @@ REQUIRED_LIMITATIONS = (
     "Paper Trading and Live Trading are not approved",
     "profitability is not validated",
 )
+MARKDOWN_LINK_PATTERN = re.compile(r"(?<!!)\[[^\]]+\]\(([^)]+)\)")
+JSON_FENCE_PATTERN = re.compile(r"```json\s*\n(.*?)\n```", re.IGNORECASE | re.DOTALL)
+ROUND_ID_PATTERN = re.compile(r"[a-z0-9]+(?:-[a-z0-9]+)*")
 
 
 @dataclass(frozen=True)
@@ -192,6 +213,136 @@ def validate_round_identity(payload: dict[str, Any]) -> None:
         or payload.get("base_commit") != ROUND_BASE
     ):
         raise ValueError("Round 1B evidence identity is invalid")
+
+
+def is_repository_relative_posix_path(value: object) -> bool:
+    if not isinstance(value, str) or not value or "\\" in value:
+        return False
+    path = PurePosixPath(value)
+    return (
+        not path.is_absolute()
+        and path.as_posix() == value
+        and path != PurePosixPath(".")
+        and ".." not in path.parts
+        and not re.match(r"^[A-Za-z]:", value)
+    )
+
+
+def validate_document_evidence(payload: dict[str, Any]) -> None:
+    """Validate generic evidence fields used by documentation-only rounds."""
+    documents = payload.get("created_documents")
+    hashes = payload.get("document_sha256")
+    if (
+        not isinstance(documents, list)
+        or not documents
+        or any(not is_repository_relative_posix_path(path) for path in documents)
+        or len(documents) != len(set(documents))
+        or not isinstance(hashes, dict)
+        or set(hashes) != set(documents)
+        or any(
+            not isinstance(value, str) or not SHA256_PATTERN.fullmatch(value)
+            for value in hashes.values()
+        )
+    ):
+        raise ValueError("document evidence paths or SHA values are invalid")
+    for name in DOCUMENT_SUMMARY_FIELDS:
+        summary = payload.get(name)
+        if (
+            not isinstance(summary, dict)
+            or summary.get("status") != "PASS"
+            or not isinstance(summary.get("checked"), int)
+            or isinstance(summary.get("checked"), bool)
+            or summary["checked"] < 0
+            or not isinstance(summary.get("failed"), int)
+            or isinstance(summary.get("failed"), bool)
+            or summary["failed"] != 0
+        ):
+            raise ValueError(f"document validation summary is invalid: {name}")
+    for name in ("python_checks", "git_checks"):
+        summary = payload.get(name)
+        if not isinstance(summary, dict) or summary.get("status") != "PASS":
+            raise ValueError(f"document check summary is invalid: {name}")
+
+
+def validate_document_source(source: Path, evidence: dict[str, Any]) -> dict[str, int]:
+    """Recompute generic document hashes, relative links, JSON, and content scans."""
+    validate_document_evidence(evidence)
+    source_root = source.resolve()
+    link_count = 0
+    json_count = 0
+    documents = evidence["created_documents"]
+    for relative in documents:
+        path = source / relative
+        try:
+            path.resolve().relative_to(source_root)
+        except ValueError as error:
+            raise ValueError(f"document path escapes source: {relative}") from error
+        if not path.is_file():
+            raise ValueError(f"document is missing: {relative}")
+        if sha256(path) != evidence["document_sha256"][relative]:
+            raise ValueError(f"document SHA mismatch: {relative}")
+        text = path.read_text(encoding="utf-8")
+        for raw_target in MARKDOWN_LINK_PATTERN.findall(text):
+            target = raw_target.strip().strip("<>")
+            if not target or target.startswith("#") or re.match(r"^[a-z]+://", target, re.I):
+                continue
+            target = target.split("#", 1)[0]
+            resolved = (path.parent / target).resolve()
+            try:
+                resolved.relative_to(source_root)
+            except ValueError as error:
+                raise ValueError(f"document relative link escapes source: {relative}") from error
+            if not resolved.is_file():
+                raise ValueError(f"document relative link is broken: {relative} -> {target}")
+            link_count += 1
+        for block in JSON_FENCE_PATTERN.findall(text):
+            try:
+                json.loads(block)
+            except json.JSONDecodeError as error:
+                raise ValueError(f"document JSON example is invalid: {relative}") from error
+            json_count += 1
+        for name, pattern in SECRET_PATTERNS:
+            if pattern.search(text):
+                raise ValueError(f"document Secret scan failed: {name} in {relative}")
+        if any(pattern.search(text) for pattern in CONCRETE_ABSOLUTE_PATH_PATTERNS):
+            raise ValueError(f"document absolute path scan failed: {relative}")
+    actual = {
+        "relative_link_validation": link_count,
+        "json_example_validation": json_count,
+        "absolute_path_scan": len(documents),
+        "secret_scan": len(documents),
+    }
+    for name, checked in actual.items():
+        if evidence[name]["checked"] != checked:
+            raise ValueError(f"document validation count mismatch: {name}")
+    return actual
+
+
+def validate_document_change_scope(
+    repository_root: Path,
+    base: str,
+    head: str,
+    report_path: object,
+    evidence: dict[str, Any],
+) -> None:
+    """Bind a documentation bundle to the complete Base..Head change set."""
+    validate_document_evidence(evidence)
+    if not is_repository_relative_posix_path(report_path):
+        raise ValueError("formal report path is invalid")
+    documents = set(evidence["created_documents"])
+    if any(not path.startswith("docs/") or not path.endswith(".md") for path in documents):
+        raise ValueError("created documents must be Markdown files below docs/")
+    changed = set(git(repository_root, "diff", "--name-only", base, head).splitlines())
+    allowed = documents | {str(report_path)} | DOCUMENT_SUPPORT_FILES
+    if not documents.issubset(changed) or not changed.issubset(allowed):
+        raise ValueError("document evidence does not cover the Base..Head change set")
+    statuses = {
+        fields[-1]: fields[0]
+        for line in git(repository_root, "diff", "--name-status", base, head).splitlines()
+        if (fields := line.split("\t"))
+    }
+    if any(statuses.get(path) != "A" for path in documents):
+        raise ValueError("created documents must be newly added in Base..Head")
 
 
 def write_text(path: Path, content: str) -> None:
@@ -610,6 +761,10 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     }
     if required - payload.keys() or payload.get("schema_version") != 1:
         raise ValueError("evidence schema is incomplete or unsupported")
+    if not isinstance(payload["round_id"], str) or not ROUND_ID_PATTERN.fullmatch(
+        payload["round_id"]
+    ):
+        raise ValueError("evidence round_id must be a safe lowercase slug")
     if (
         payload["head_commit"] != head
         or payload.get("origin_main_commit") != head
@@ -619,16 +774,22 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
     ):
         raise ValueError("evidence commit or branch does not match bundle")
     environment = payload["verification_environment"]
-    if not isinstance(environment, dict) or environment.get("type") not in {"docker", "native"}:
-        raise ValueError("evidence must record a docker or native verification environment")
+    if not isinstance(environment, dict) or environment.get("type") not in {
+        "docker",
+        "native",
+        "document",
+    }:
+        raise ValueError("evidence must record a docker, native, or document environment")
     if not re.fullmatch(r"3\.12\.\d+", str(environment.get("python_version", ""))):
         raise ValueError("evidence Python version must be 3.12.x")
     if environment.get("network_disabled") is not True:
         raise ValueError("evidence must record network_disabled=true")
     if environment.get("type") == "docker" and not environment.get("image_id"):
         raise ValueError("docker evidence must record image_id")
-    if environment.get("type") == "native" and ({"image", "image_id"} & environment.keys()):
-        raise ValueError("native evidence must not record image or image_id")
+    if environment.get("type") in {"native", "document"} and (
+        {"image", "image_id"} & environment.keys()
+    ):
+        raise ValueError("non-Docker evidence must not record image or image_id")
     if payload["round_status"] == "PASS WITH LIMITATIONS" and not payload["limitations"]:
         raise ValueError("PASS WITH LIMITATIONS evidence requires limitations")
     if payload.get("round_id") == ROUND_ID:
@@ -636,10 +797,15 @@ def validate_evidence(payload: object, head: str, base: str, branch: str) -> dic
         validate_command_evidence(payload)
         if any(item not in payload["limitations"] for item in REQUIRED_LIMITATIONS):
             raise ValueError("Round 1B limitations are incomplete")
+    if environment.get("type") == "document":
+        validate_document_evidence(payload)
     checks = payload["checks"]
-    required_checks = COMMON_EVIDENCE_CHECKS + (
-        DOCKER_EVIDENCE_CHECKS if environment.get("type") == "docker" else NATIVE_EVIDENCE_CHECKS
-    )
+    environment_checks = {
+        "docker": DOCKER_EVIDENCE_CHECKS,
+        "native": NATIVE_EVIDENCE_CHECKS,
+        "document": DOCUMENT_EVIDENCE_CHECKS,
+    }[environment["type"]]
+    required_checks = COMMON_EVIDENCE_CHECKS + environment_checks
     if not isinstance(checks, dict) or set(required_checks) - checks.keys():
         raise ValueError("evidence is missing required checks")
     for name in required_checks:
@@ -789,6 +955,7 @@ def validate_bundle(
                 metadata = json.loads((review / "ROUND_METADATA.json").read_text(encoding="utf-8"))
                 if metadata.get("round_id") != ROUND_ID:
                     required -= {
+                        "RUN_C_CONFIG_EVIDENCE.json",
                         "RUN_C_RAW_ORDER_EVENTS.json",
                         "RUN_C_NORMALIZED_ORDERS.json",
                         "RUN_C_NORMALIZED_STATISTICS.json",
@@ -882,23 +1049,23 @@ def validate_bundle(
                         "head_branch"
                     ],
                 )
+                for key in (
+                    "project_name",
+                    "project_phase",
+                    "round_id",
+                    "round_status",
+                    "base_commit",
+                    "head_commit",
+                    "limitations",
+                ):
+                    if metadata.get(key) != evidence.get(key):
+                        raise ValueError(f"Round metadata does not match evidence: {key}")
+                if metadata.get("head_branch") != evidence.get("branch") or metadata.get(
+                    "verification_environment_type"
+                ) != evidence["verification_environment"].get("type"):
+                    raise ValueError("Round metadata does not match evidence environment")
                 if evidence.get("round_id") == ROUND_ID:
                     validate_round_identity(evidence)
-                    for key in (
-                        "project_name",
-                        "project_phase",
-                        "round_id",
-                        "round_status",
-                        "base_commit",
-                        "head_commit",
-                        "limitations",
-                    ):
-                        if metadata.get(key) != evidence.get(key):
-                            raise ValueError(f"Round metadata does not match evidence: {key}")
-                    if metadata.get("head_branch") != evidence.get("branch") or metadata.get(
-                        "verification_environment_type"
-                    ) != evidence["verification_environment"].get("type"):
-                        raise ValueError("Round metadata does not match evidence environment")
                     config_evidence = json.loads(
                         (review / "RUN_C_CONFIG_EVIDENCE.json").read_text(encoding="utf-8")
                     )
@@ -909,6 +1076,21 @@ def validate_bundle(
                     )
                     if any(item not in known_limitations for item in REQUIRED_LIMITATIONS):
                         raise ValueError("Round 1B limitations are inconsistent")
+                elif evidence["verification_environment"].get("type") == "document":
+                    validate_document_source(extracted / "source", evidence)
+                    validate_document_change_scope(
+                        repository_root,
+                        evidence["base_commit"],
+                        expected_head,
+                        metadata.get("formal_report_path"),
+                        evidence,
+                    )
+                    _check(
+                        checks,
+                        "document_source",
+                        True,
+                        len(evidence["created_documents"]),
+                    )
                 _check(checks, "evidence_schema", evidence["head_commit"] == expected_head)
                 command = [
                     "python",
@@ -1028,6 +1210,8 @@ def main(argv: list[str] | None = None) -> int:
     parser.add_argument("--run-c-execution-summary", type=Path)
     parser.add_argument("--run-c-support-data-evidence", type=Path)
     args = parser.parse_args(argv)
+    if not ROUND_ID_PATTERN.fullmatch(args.round_id):
+        raise SystemExit("round id must be a safe lowercase slug")
     root = Path.cwd().resolve()
     if git(root, "status", "--porcelain").strip():
         raise SystemExit("working tree is not clean")
@@ -1053,15 +1237,27 @@ def main(argv: list[str] | None = None) -> int:
         args.base_commit,
         branch,
     )
+    if evidence["round_id"] != args.round_id:
+        raise SystemExit("round argument does not match evidence identity")
     if args.round_id == ROUND_ID and (
         args.base_commit != ROUND_BASE
         or evidence["project_name"] != "us-equity-quant-system"
         or evidence["project_phase"] != "Phase 1"
-        or evidence["round_id"] != args.round_id
         or evidence["round_status"] != "PASS WITH LIMITATIONS"
         or evidence["base_commit"] != args.base_commit
     ):
         raise SystemExit("round arguments or evidence identity are invalid")
+    if evidence["verification_environment"]["type"] == "document":
+        try:
+            validate_document_change_scope(
+                root,
+                args.base_commit,
+                head,
+                args.report_path,
+                evidence,
+            )
+        except ValueError as error:
+            raise SystemExit(str(error)) from error
     config_evidence: dict[str, Any] | None = None
     if args.round_id == ROUND_ID:
         if args.run_c_config_evidence is None:
@@ -1102,8 +1298,6 @@ def main(argv: list[str] | None = None) -> int:
                 review / "RUN_C_CONFIG_EVIDENCE.json",
                 json.dumps(config_evidence, indent=2, sort_keys=True),
             )
-        else:
-            write_text(review / "RUN_C_CONFIG_EVIDENCE.json", "{}")
         if args.round_id == ROUND_ID:
             run_artifacts = {
                 "RUN_C_RAW_ORDER_EVENTS.json": args.run_c_raw_order_events,
@@ -1129,6 +1323,8 @@ def main(argv: list[str] | None = None) -> int:
             "tests_status": "PASS",
             "security_scan_status": "PASS",
         }
+        if evidence["verification_environment"]["type"] == "document":
+            metadata["formal_report_path"] = args.report_path
         write_text(
             review / "ROUND_METADATA.json",
             json.dumps(metadata, indent=2, sort_keys=True),
@@ -1139,7 +1335,12 @@ def main(argv: list[str] | None = None) -> int:
         )
         write_text(
             review / "COMMAND_RESULTS.txt",
-            "STATUS: PASS\n\nNative Python/.NET/LEAN clean-source commands are recorded in EVIDENCE.json.",
+            "STATUS: PASS\n\n"
+            + (
+                "Native Python/.NET/LEAN clean-source commands are recorded in EVIDENCE.json."
+                if args.round_id == ROUND_ID
+                else "Actual verification commands are recorded in EVIDENCE.json."
+            ),
         )
         write_text(
             review / "CLEAN_SOURCE_RESULT.md",

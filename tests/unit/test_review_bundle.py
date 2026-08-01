@@ -18,6 +18,7 @@ from scripts.build_review_bundle import (
     scan_paths_and_secrets,
     validate_bundle,
     validate_command_evidence,
+    validate_document_source,
     validate_evidence,
     validate_round_identity,
     validate_run_c_config_evidence,
@@ -129,7 +130,12 @@ def make_repo(tmp_path: Path) -> tuple[Path, str, str, Path]:
 
 
 def build_bundle(
-    repo: Path, base: str, evidence_path: Path, output: Path
+    repo: Path,
+    base: str,
+    evidence_path: Path,
+    output: Path,
+    *,
+    round_id: str = "test-round",
 ) -> subprocess.CompletedProcess[str]:
     script = Path(__file__).resolve().parents[2] / "scripts" / "build_review_bundle.py"
     return subprocess.run(
@@ -137,7 +143,7 @@ def build_bundle(
             sys.executable,
             str(script),
             "--round-id",
-            "test",
+            round_id,
             "--base-commit",
             base,
             "--output-dir",
@@ -306,6 +312,176 @@ def test_native_evidence_requires_native_checks_not_docker(tmp_path: Path) -> No
     validate_evidence(payload, head, base, "main")
 
 
+def document_evidence(head: str, base: str) -> dict[str, Any]:
+    payload = evidence(head, base)
+    payload["verification_environment"] = {
+        "type": "document",
+        "python_version": "3.12.13",
+        "network_disabled": True,
+    }
+    del payload["checks"]["docker_compose_config"]
+    for name in (
+        "relative_link_validation",
+        "json_example_validation",
+        "absolute_path_scan",
+        "secret_scan",
+        "cross_document_consistency",
+    ):
+        payload["checks"][name] = {
+            "command": f"python -c validate_{name}",
+            "exit_code": 0,
+            "status": "PASS",
+        }
+    payload.update(
+        {
+            "created_documents": ["docs/test.md"],
+            "document_sha256": {"docs/test.md": "a" * 64},
+            "relative_link_validation": {"status": "PASS", "checked": 0, "failed": 0},
+            "json_example_validation": {"status": "PASS", "checked": 0, "failed": 0},
+            "absolute_path_scan": {"status": "PASS", "checked": 1, "failed": 0},
+            "secret_scan": {"status": "PASS", "checked": 1, "failed": 0},
+            "cross_document_consistency": {"status": "PASS", "checked": 1, "failed": 0},
+            "python_checks": {"status": "PASS"},
+            "git_checks": {"status": "PASS"},
+        }
+    )
+    return payload
+
+
+def test_document_evidence_requires_document_checks_not_native_or_docker(
+    tmp_path: Path,
+) -> None:
+    _repo, base, head, _ = make_repo(tmp_path)
+    payload = document_evidence(head, base)
+
+    validate_evidence(payload, head, base, "main")
+
+    del payload["checks"]["relative_link_validation"]
+    with pytest.raises(ValueError, match="required checks"):
+        validate_evidence(payload, head, base, "main")
+
+
+@pytest.mark.parametrize(
+    "unsafe_path",
+    ("../outside.md", "/outside.md", "C:\\outside.md", "docs\\outside.md", "docs//x.md"),
+)
+def test_document_evidence_rejects_non_repository_paths(tmp_path: Path, unsafe_path: str) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    payload = document_evidence("a" * 40, "b" * 40)
+    payload["created_documents"] = [unsafe_path]
+    payload["document_sha256"] = {unsafe_path: "a" * 64}
+
+    with pytest.raises(ValueError, match="document evidence paths"):
+        validate_document_source(source, payload)
+
+
+def test_document_evidence_rejects_boolean_counts(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    source.mkdir()
+    payload = document_evidence("a" * 40, "b" * 40)
+    payload["relative_link_validation"]["checked"] = True
+
+    with pytest.raises(ValueError, match="validation summary"):
+        validate_document_source(source, payload)
+
+
+DOCUMENTS = (
+    "docs/map.md",
+    "docs/contracts/data.md",
+    "docs/contracts/boundaries.md",
+    "docs/research/backtest.md",
+    "docs/research/lifecycle.md",
+    "docs/operations/runbook.md",
+)
+
+
+def document_round_evidence(head: str, base: str, hashes: dict[str, str]) -> dict[str, Any]:
+    payload = document_evidence(head, base)
+    payload.update(
+        {
+            "round_id": "test-document-round",
+            "round_status": "PASS WITH LIMITATIONS",
+            "limitations": ["contract baseline only"],
+            "created_documents": list(DOCUMENTS),
+            "document_sha256": hashes,
+            "relative_link_validation": {"status": "PASS", "checked": 1, "failed": 0},
+            "json_example_validation": {"status": "PASS", "checked": 8, "failed": 0},
+            "absolute_path_scan": {"status": "PASS", "checked": 6, "failed": 0},
+            "secret_scan": {"status": "PASS", "checked": 6, "failed": 0},
+            "cross_document_consistency": {"status": "PASS", "checked": 1, "failed": 0},
+            "python_checks": {"status": "PASS"},
+            "git_checks": {"status": "PASS"},
+        }
+    )
+    return payload
+
+
+def test_document_source_validation_fails_closed_on_tampering(tmp_path: Path) -> None:
+    source = tmp_path / "source"
+    for index, relative in enumerate(DOCUMENTS):
+        path = source / relative
+        path.parent.mkdir(parents=True, exist_ok=True)
+        link = "[data](contracts/data.md)\n" if index == 0 else ""
+        examples = 3 if index == 1 else 1
+        blocks = "\n".join(f'```json\n{{"example": {item}}}\n```' for item in range(examples))
+        path.write_text(f"# Document {index}\n\n{link}{blocks}\n", encoding="utf-8")
+    hashes = {
+        relative: hashlib.sha256((source / relative).read_bytes()).hexdigest()
+        for relative in DOCUMENTS
+    }
+    payload = document_round_evidence("a" * 40, "b" * 40, hashes)
+
+    validate_document_source(source, payload)
+
+    (source / DOCUMENTS[0]).write_text("tampered\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="SHA"):
+        validate_document_source(source, payload)
+
+
+def test_document_bundle_uses_generic_evidence_without_run_c_artifacts(tmp_path: Path) -> None:
+    repo, _base, previous_head, evidence_path = make_repo(tmp_path)
+    document = repo / "docs" / "test.md"
+    document.write_text("# Contract baseline\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/test.md"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "document"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], cwd=repo, check=True)
+    payload = document_evidence(head, previous_head)
+    committed = subprocess.check_output(["git", "show", f"{head}:docs/test.md"], cwd=repo)
+    payload["document_sha256"]["docs/test.md"] = hashlib.sha256(committed).hexdigest()
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_bundle(repo, previous_head, evidence_path, tmp_path / "out")
+
+    assert result.returncode == 0, result.stderr
+    bundle = next((tmp_path / "out").glob("*.zip"))
+    with zipfile.ZipFile(bundle) as archive:
+        assert not any("RUN_C_" in name for name in archive.namelist())
+    assert validate_bundle(bundle, head, repo).status == "PASS"
+
+
+def test_document_bundle_rejects_uncovered_code_change(tmp_path: Path) -> None:
+    repo, _base, previous_head, evidence_path = make_repo(tmp_path)
+    document = repo / "docs" / "test.md"
+    document.write_text("# Contract baseline\n", encoding="utf-8")
+    source = repo / "src" / "quant_system" / "cli.py"
+    source.write_text(source.read_text(encoding="utf-8") + "# unrelated\n", encoding="utf-8")
+    subprocess.run(["git", "add", "docs/test.md", "src/quant_system/cli.py"], cwd=repo, check=True)
+    subprocess.run(["git", "commit", "-m", "document"], cwd=repo, check=True, capture_output=True)
+    head = subprocess.check_output(["git", "rev-parse", "HEAD"], cwd=repo, text=True).strip()
+    subprocess.run(["git", "update-ref", "refs/remotes/origin/main", head], cwd=repo, check=True)
+    payload = document_evidence(head, previous_head)
+    committed = subprocess.check_output(["git", "show", f"{head}:docs/test.md"], cwd=repo)
+    payload["document_sha256"]["docs/test.md"] = hashlib.sha256(committed).hexdigest()
+    evidence_path.write_text(json.dumps(payload), encoding="utf-8")
+
+    result = build_bundle(repo, previous_head, evidence_path, tmp_path / "out")
+
+    assert result.returncode != 0
+    assert "does not cover the Base..Head change set" in result.stderr
+
+
 def native_config_evidence(*, projection_sha256: str | None = None) -> dict[str, Any]:
     projection = {
         "algorithm_language": "CSharp",
@@ -403,7 +579,7 @@ def test_bundle_includes_evidence_and_validation_and_detects_tampering(
             sys.executable,
             str(script),
             "--round-id",
-            "test",
+            "test-round",
             "--base-commit",
             base,
             "--output-dir",
@@ -480,7 +656,7 @@ def test_successful_offline_cli_validation_has_no_error(tmp_path: Path) -> None:
             sys.executable,
             str(script),
             "--round-id",
-            "offline-cli-error",
+            "test-round",
             "--base-commit",
             base,
             "--output-dir",
@@ -501,6 +677,31 @@ def test_successful_offline_cli_validation_has_no_error(tmp_path: Path) -> None:
     validation = validate_bundle(bundle, head, repo)
     assert validation.status == "PASS"
     assert validation.checks["offline_cli"]["error"] == ""
+
+
+def test_cli_rejects_round_id_that_does_not_match_evidence(tmp_path: Path) -> None:
+    repo, base, _head, evidence_path = make_repo(tmp_path)
+
+    result = build_bundle(
+        repo,
+        base,
+        evidence_path,
+        tmp_path / "out",
+        round_id="different-round",
+    )
+
+    assert result.returncode != 0
+    assert "round argument does not match evidence identity" in result.stderr
+
+
+@pytest.mark.parametrize("round_id", ("../escape", "Bad_Round", "round/name"))
+def test_evidence_rejects_unsafe_round_id(tmp_path: Path, round_id: str) -> None:
+    _repo, base, head, _evidence_path = make_repo(tmp_path)
+    payload = evidence(head, base)
+    payload["round_id"] = round_id
+
+    with pytest.raises(ValueError, match="safe lowercase slug"):
+        validate_evidence(payload, head, base, "main")
 
 
 def _round_1b_review_artifacts(tmp_path: Path) -> tuple[Path, dict[str, Any]]:
