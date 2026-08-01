@@ -111,7 +111,7 @@ Round 1C Base 时的 generator 只允许 Docker evidence，或会对 native evid
 | `python -m mypy src` | PASS；12 source files |
 | `python -m mypy scripts tests/unit/test_review_bundle.py` | PASS；4 source files |
 | `python -m pytest` | PASS；75 passed，coverage 100.00% |
-| `python -m build` | PASS；sdist 与 wheel 构建成功 |
+| `python -m build --no-isolation` | PASS；在已按 `[build-system].requires` 准备的项目 venv 中离线构建 sdist 与 wheel 成功 |
 | `python -m quant_system.cli status` | PASS；offline，Paper/Live 均为 false |
 | `git diff --check` | PASS |
 | Native Run C / deterministic A/B | 按 Round 边界未重跑，不作为本 Round PASS 证据 |

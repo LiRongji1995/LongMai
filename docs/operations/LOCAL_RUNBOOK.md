@@ -179,16 +179,25 @@ if ($version -notmatch '^Python 3\.12\.\d+$') {
 
 Set-Location -LiteralPath $env:PROJECT_ROOT
 & $env:PYTHON312 -m venv (Join-Path $env:PROJECT_ROOT '.venv')
+if ($LASTEXITCODE -ne 0) { throw 'Project venv creation failed.' }
 $projectPython = Join-Path $env:PROJECT_ROOT '.venv/Scripts/python.exe'
 & $projectPython -m pip install --upgrade pip
-& $projectPython -m pip install -e '.[dev]'
+if ($LASTEXITCODE -ne 0) { throw 'Project pip upgrade failed.' }
+$buildRequirements = @(& $projectPython -c "import tomllib; from pathlib import Path; data=tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8')); print(*data['build-system']['requires'], sep='\n')")
+if ($LASTEXITCODE -ne 0 -or $buildRequirements.Count -eq 0) { throw 'Build-system requirement discovery failed.' }
+& $projectPython -m pip install @buildRequirements
+if ($LASTEXITCODE -ne 0) { throw 'Build-system requirement install failed.' }
+& $projectPython -m pip install --no-build-isolation -e '.[dev]'
+if ($LASTEXITCODE -ne 0) { throw 'Project dependency install failed.' }
 ~~~
 
-若 py launcher 已确认映射 Python 3.12，也可使用真实入口：
+若 py launcher 已确认映射 Python 3.12，也可使用仓库真实的便捷入口：
 
 ~~~powershell
 & (Join-Path $env:PROJECT_ROOT 'scripts/bootstrap.ps1')
 ~~~
+
+当前 bootstrap.ps1 也没有逐项检查 native exit code，不能单独作为正式 fail-closed evidence；正式流程使用上面的显式 exit guards。
 
 依赖获取与 verification network isolation 是不同阶段。当前脚本不自动证明网络已禁用；正式 evidence 只能在实际关闭网络访问后记录 network_disabled=true。
 
@@ -627,26 +636,31 @@ Golden 只验证固定 smoke semantics；不得从 smoke 现金或组合数值�
 
 ## 15. Python 廉价检查、coverage、build 和 CLI
 
-Windows 的完整真实入口是 scripts/check.ps1，要求 PROJECT_ROOT/.venv 已存在：
+`scripts/check.ps1` 是要求 `PROJECT_ROOT/.venv` 已存在的便捷入口，但当前脚本没有在每个 native command 后检查 `$LASTEXITCODE`，且其中的默认隔离 build 未锁定 offline 行为。Windows PowerShell 不会因 `$ErrorActionPreference = 'Stop'` 自动把 native 非零退出转成 terminating error，因此该脚本不能单独作为正式 fail-closed acceptance evidence。
+
+正式 Windows gate 必须逐条执行并立即检查 exit code：
 
 ~~~powershell
 Set-Location -LiteralPath $env:PROJECT_ROOT
-& (Join-Path $env:PROJECT_ROOT 'scripts/check.ps1')
-~~~
-
-该脚本依次执行：
-
-~~~powershell
 & $projectPython -m ruff check .
+if ($LASTEXITCODE -ne 0) { throw 'Ruff check failed.' }
 & $projectPython -m ruff format --check .
+if ($LASTEXITCODE -ne 0) { throw 'Ruff format check failed.' }
 & $projectPython -m mypy src
+if ($LASTEXITCODE -ne 0) { throw 'mypy src failed.' }
+& $projectPython -m mypy scripts tests/unit/test_review_bundle.py
+if ($LASTEXITCODE -ne 0) { throw 'mypy governance scope failed.' }
 & $projectPython -m pytest
-& $projectPython -m build
+if ($LASTEXITCODE -ne 0) { throw 'pytest or coverage gate failed.' }
+& $projectPython -m build --no-isolation
+if ($LASTEXITCODE -ne 0) { throw 'Python package build failed.' }
 & $projectPython -m quant_system.cli status
+if ($LASTEXITCODE -ne 0) { throw 'Offline CLI check failed.' }
 git diff --check
+if ($LASTEXITCODE -ne 0) { throw 'git diff --check failed.' }
 ~~~
 
-pyproject.toml 已为 python -m pytest 配置 --cov=quant_system 和 --cov-fail-under=90，因此普通 pytest 命令就是当前 coverage gate。需要可读明细时可额外运行：
+pyproject.toml 已为 python -m pytest 配置 --cov=quant_system 和 --cov-fail-under=90，因此普通 pytest 命令就是当前 coverage gate。`build --no-isolation` 复用依赖准备阶段已按 pyproject.toml `[build-system].requires` 安装到项目 venv 的 build backend requirements，避免正式 offline verification 为临时 build env 访问 package index；依赖安装本身仍属于前置准备阶段。需要可读明细时可额外运行：
 
 ~~~powershell
 & $projectPython -m pytest --cov-report=term-missing
@@ -654,7 +668,7 @@ pyproject.toml 已为 python -m pytest 配置 --cov=quant_system 和 --cov-fail-
 
 当前 CLI 只有离线 status；预期输出必须包含 paper trading enabled: false 与 live trading enabled: false。它当前仍报告实现常量 CURRENT_PHASE=Phase 0，不能伪称 CLI 已进入 Phase 1。
 
-Makefile 的 check target 不含 build、CLI 或 git diff --check，不能单独作为完整 acceptance。CI 包含 Ruff、format、mypy、pytest、build 和 CLI，但不包含 Native LEAN、Bundle 或显式 clean-source 流程。
+`scripts/check.ps1`、`scripts/check.sh` 和 Makefile 的 check target 都不能单独作为完整 acceptance：PowerShell 脚本缺少逐命令 native exit guard，两个脚本的默认隔离 build 未证明 offline，Makefile 不含 build、CLI 或 git diff --check。CI 包含 Ruff、format、mypy、pytest、build 和 CLI，但不包含 Native LEAN、Bundle 或显式 clean-source 流程。
 
 ## 16. Clean-source validation
 
@@ -663,20 +677,62 @@ Makefile 的 check target 不含 build、CLI 或 git diff --check，不能单独
 ~~~powershell
 Set-Location -LiteralPath $env:PROJECT_ROOT
 $head = (git rev-parse HEAD).Trim()
-$cleanSource = Join-Path $env:LEAN_RESULTS_ROOT 'clean-source'
+$cleanSourceName = 'clean-source-{0}-{1}' -f $head.Substring(0, 12), [DateTime]::UtcNow.ToString('yyyyMMddTHHmmssZ')
+$cleanSource = Join-Path $env:LEAN_RESULTS_ROOT $cleanSourceName
+if (Test-Path -LiteralPath $cleanSource) { throw 'Clean-source target already exists.' }
 git clone --no-hardlinks --no-local $env:PROJECT_ROOT $cleanSource
+if ($LASTEXITCODE -ne 0) { throw 'Clean-source clone failed.' }
 git -C $cleanSource checkout --detach $head
+if ($LASTEXITCODE -ne 0) { throw 'Clean-source checkout failed.' }
 
-Set-Location -LiteralPath $cleanSource
-& $env:PYTHON312 -m venv (Join-Path $cleanSource '.venv')
-$cleanPython = Join-Path $cleanSource '.venv/Scripts/python.exe'
-& $cleanPython -m pip install --upgrade pip
-& $cleanPython -m pip install -e '.[dev]'
-& (Join-Path $cleanSource 'scripts/check.ps1')
+$previousPythonPath = $env:PYTHONPATH
+try {
+    Set-Location -LiteralPath $cleanSource
+    & $env:PYTHON312 -m venv (Join-Path $cleanSource '.venv')
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source venv creation failed.' }
+    $cleanPython = Join-Path $cleanSource '.venv/Scripts/python.exe'
+    & $cleanPython -m pip install --upgrade pip
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source pip upgrade failed.' }
+    $buildRequirements = @(& $cleanPython -c "import tomllib; from pathlib import Path; data=tomllib.loads(Path('pyproject.toml').read_text(encoding='utf-8')); print(*data['build-system']['requires'], sep='\n')")
+    if ($LASTEXITCODE -ne 0 -or $buildRequirements.Count -eq 0) { throw 'Clean-source build-system requirement discovery failed.' }
+    & $cleanPython -m pip install @buildRequirements
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source build-system requirement install failed.' }
+    & $cleanPython -m pip install --no-build-isolation -e '.[dev]'
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source dependency install failed.' }
+    $env:PYTHONPATH = Join-Path $cleanSource 'src'
+    $importedModule = (& $cleanPython -c "from pathlib import Path; import quant_system; print(Path(quant_system.__file__).resolve())").Trim()
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source import provenance check failed.' }
+    $expectedImportRoot = [IO.Path]::GetFullPath((Join-Path $cleanSource 'src'))
+    if (-not $importedModule.StartsWith($expectedImportRoot + [IO.Path]::DirectorySeparatorChar, [StringComparison]::OrdinalIgnoreCase)) {
+        throw "quant_system was imported outside clean source: $importedModule"
+    }
+    & $cleanPython -m ruff check .
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source Ruff check failed.' }
+    & $cleanPython -m ruff format --check .
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source Ruff format check failed.' }
+    & $cleanPython -m mypy src
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source mypy src failed.' }
+    & $cleanPython -m mypy scripts tests/unit/test_review_bundle.py
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source mypy governance scope failed.' }
+    & $cleanPython -m pytest
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source pytest or coverage gate failed.' }
+    & $cleanPython -m build --no-isolation
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source Python package build failed.' }
+    & $cleanPython -m quant_system.cli status
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source offline CLI check failed.' }
+    git diff --check
+    if ($LASTEXITCODE -ne 0) { throw 'Clean-source git diff --check failed.' }
 
-if ((git rev-parse HEAD).Trim() -ne $head) { throw 'Clean-source HEAD mismatch.' }
-if (git status --porcelain) { throw 'Clean-source worktree is not clean.' }
-Set-Location -LiteralPath $env:PROJECT_ROOT
+    if ((git rev-parse HEAD).Trim() -ne $head) { throw 'Clean-source HEAD mismatch.' }
+    if (git status --porcelain) { throw 'Clean-source worktree is not clean.' }
+} finally {
+    if ($null -eq $previousPythonPath) {
+        Remove-Item Env:PYTHONPATH -ErrorAction SilentlyContinue
+    } else {
+        $env:PYTHONPATH = $previousPythonPath
+    }
+    Set-Location -LiteralPath $env:PROJECT_ROOT
+}
 ~~~
 
 正式 evidence 必须记录依赖准备是否访问网络，并在 verification 阶段真实满足 network_disabled 要求。当前没有跨平台自动隔离网络的仓库脚本，见 TBD register。
@@ -709,11 +765,19 @@ $bundleArgs = @(
     '--round-start-time', $roundStartTime,
     '--evidence-json', $evidencePath
 )
-& $env:PYTHON312 scripts/build_review_bundle.py @bundleArgs
+$bundleOutputLines = @(& $env:PYTHON312 scripts/build_review_bundle.py @bundleArgs)
 if ($LASTEXITCODE -ne 0) { throw 'Review Bundle generation failed.' }
+$bundleRecord = $bundleOutputLines[-1] | ConvertFrom-Json
+if ($bundleRecord.status -ne 'PASS') { throw 'Review Bundle generator did not report PASS.' }
+$bundlePath = (Resolve-Path -LiteralPath ([string]$bundleRecord.bundle_path)).Path
+$expectedBundleDirectory = [IO.Path]::GetFullPath($bundleOutput)
+if ([IO.Path]::GetDirectoryName($bundlePath) -ne $expectedBundleDirectory) {
+    throw "Generated Bundle is outside the requested output directory: $bundlePath"
+}
+$bundleRecord | ConvertTo-Json -Compress | Out-Host
 ~~~
 
-report-path 必须是 Git 使用的 repository-relative forward-slash path；evidence 文件可位于 LEAN_RESULTS_ROOT 且不得提交。generator 从 committed HEAD 读取 source，不直接归档工作目录。
+report-path 必须是 Git 使用的 repository-relative forward-slash path；evidence 文件可位于 LEAN_RESULTS_ROOT 且不得提交。generator 从 committed HEAD 读取 source，不直接归档工作目录。必须保留本次 generator 返回的精确 bundle_path，不能按目录时间猜测最终 ZIP。
 
 ## 18. 独立 validate_bundle 与 ZIP SHA-256
 
@@ -721,10 +785,8 @@ validate_bundle 是 scripts/build_review_bundle.py 中的 Python 函数，不是
 
 ~~~powershell
 Set-Location -LiteralPath $env:PROJECT_ROOT
-$bundle = Get-ChildItem -LiteralPath (Join-Path $env:PROJECT_ROOT 'artifacts/review-bundles') -Filter '*.zip' |
-    Sort-Object LastWriteTimeUtc -Descending |
-    Select-Object -First 1
-if ($null -eq $bundle) { throw 'No Review Bundle ZIP found.' }
+$bundle = Get-Item -LiteralPath $bundlePath
+if (-not $bundle.Exists) { throw 'Generated Review Bundle ZIP is missing.' }
 $expectedHead = (git rev-parse HEAD).Trim()
 
 @'
@@ -764,16 +826,32 @@ LEAN_DOTNET="$LEAN_DOTNET_ROOT/dotnet"
 export LEAN_DOTNET
 test -x "$LEAN_DOTNET"
 
-"$PYTHON312" --version
+python_version="$("$PYTHON312" --version 2>&1)"
+case "$python_version" in
+    "Python 3.12."[0-9]*) ;;
+    *) printf '%s\n' "Expected Python 3.12.x, got $python_version" >&2; exit 1 ;;
+esac
 "$PYTHON312" -m venv "$PROJECT_ROOT/.venv"
-"$PROJECT_ROOT/.venv/bin/python" -m pip install --upgrade pip
-"$PROJECT_ROOT/.venv/bin/python" -m pip install -e '.[dev]'
-PATH="$PROJECT_ROOT/.venv/bin:$PATH" "$PROJECT_ROOT/scripts/check.sh"
+project_python="$PROJECT_ROOT/.venv/bin/python"
+"$project_python" -m pip install --upgrade pip
+"$project_python" -c 'import subprocess, sys, tomllib; from pathlib import Path; data=tomllib.loads(Path("pyproject.toml").read_text(encoding="utf-8")); reqs=data["build-system"]["requires"]; assert isinstance(reqs, list) and reqs; raise SystemExit(subprocess.call([sys.executable, "-m", "pip", "install", *reqs]))'
+"$project_python" -m pip install --no-build-isolation -e '.[dev]'
+"$project_python" -m ruff check .
+"$project_python" -m ruff format --check .
+"$project_python" -m mypy src
+"$project_python" -m mypy scripts tests/unit/test_review_bundle.py
+"$project_python" -m pytest
+"$project_python" -m build --no-isolation
+"$project_python" -m quant_system.cli status
+git diff --check
 
 dotnet_version="$("$LEAN_DOTNET" --version)"
 test "$dotnet_version" = "10.0.302"
-git -C "$LEAN_SOURCE_ROOT" rev-parse HEAD
-git -C "$LEAN_SOURCE_ROOT" status --porcelain
+expected_lean_commit="$("$project_python" -c 'import json; from pathlib import Path; print(json.loads(Path("config/toolchain.lock.json").read_text(encoding="utf-8"))["lean"]["commit"])')"
+actual_lean_commit="$(git -C "$LEAN_SOURCE_ROOT" rev-parse HEAD)"
+lean_status="$(git -C "$LEAN_SOURCE_ROOT" status --porcelain)"
+test "$actual_lean_commit" = "$expected_lean_commit"
+test -z "$lean_status"
 
 "$PYTHON312" -c 'import json; from pathlib import Path; from scripts.generate_phase01_synthetic_data import validate_fixture; root=Path("integrations/lean/data"); actual=validate_fixture(root); expected=json.loads((root/"fixture-manifest.json").read_text(encoding="utf-8")); assert actual == expected; print(json.dumps(actual, sort_keys=True))'
 
@@ -815,7 +893,7 @@ cd "$PROJECT_ROOT"
 | summary JSON 无法解析 | summary 不可信；不能据此宣称成功，仍须检查 raw order-events、normalizer 和 Golden。 |
 | Golden mismatch 或 final_holdings 非零 | FAIL；不得修改 Golden 掩盖业务差异。 |
 | python -m pytest coverage 低于 90 | FAIL；不得删除测试或降低 threshold。 |
-| Makefile check 通过但 build/CLI 未运行 | 证据不完整；运行 scripts/check.ps1 或 scripts/check.sh。 |
+| Makefile 或 scripts/check.sh 通过但治理 mypy/offline build 未完整运行 | 证据不完整；Windows 运行第 15 节逐项 exit-guarded gate；POSIX 运行第 20 节项目 venv 的显式 gate。 |
 | Bundle 报 working tree、branch 或 origin/main mismatch | 先完成 commit/push 与 clean Git gate；不得打包 uncommitted source。 |
 | Bundle 报 report untracked | 使用已由 HEAD 跟踪的 Round 1C 正式 report。 |
 | Bundle evidence 缺少 command、count、coverage 或 clean-source HEAD | 重新生成真实 evidence；不得填占位 PASS。 |
