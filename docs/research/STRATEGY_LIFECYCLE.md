@@ -8,7 +8,7 @@
 | 适用范围 | 所有未来 strategy_id 及其 strategy version / parameter version；不把基础设施 smoke、文档或临时 notebook 自动视为策略。 |
 | authoritative_for | lifecycle_state、合法状态转移、状态 gate、批准职责与版本继承规则。 |
 | 权威来源 | [Project Charter](../PROJECT_CHARTER.md)、[Risk Policy](../RISK_POLICY.md)、[Review Bundle Policy](../REVIEW_BUNDLE_POLICY.md) 与 [Roadmap](../ROADMAP.md)。 |
-| status | Draft；Round 1C 外部独立审阅冻结前不得标记 Active。 |
+| status | Active |
 | 当前实现状态 | `CONTRACT_DECISION`。当前没有真实策略进入生命周期，没有状态 registry，没有真实风险预算。Round 1B Smoke 算法不是盈利策略，也没有 lifecycle_state。 |
 | owner role | `Research Governance Owner`；独立风险批准由 `Independent Risk Owner`，运行批准由 `Human Approval Authority`，紧急暂停由独立控制执行。 |
 | 更新触发条件 | 状态、gate、approval role、risk budget、版本规则、Shadow/Paper/Live 边界或 Review Bundle 政策经批准变化。 |

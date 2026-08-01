@@ -1,8 +1,10 @@
 # Phase 1 Round 1C 文档与接口合同基线正式报告
 
-文档状态：**Draft**
+文档状态：**Active**
 
 Round 验证结论：**PASS WITH LIMITATIONS**
+
+Round 冻结状态：**等待最终外部复核；尚未冻结**
 
 ## Round 基线
 
@@ -12,7 +14,7 @@ Round 验证结论：**PASS WITH LIMITATIONS**
 - Base commit：`b9874e26240f8dfffdbf3ff2d270ffae9ccab92a`
 - Final commit：本报告所在 Git commit；确切 SHA 由最终 `ROUND_METADATA.json`、`EVIDENCE.json` 与交付记录提供，避免在提交内容中形成自引用。
 - 初始状态：工作树 clean，HEAD 与 `origin/main` 相同，ahead/behind 为 `0/0`，Round 1B 冻结提交是 HEAD 祖先。
-- 单一目标：建立文档地图、数据合同、Strategy/Portfolio/Risk 接口合同、回测验证标准、策略生命周期与本地验证手册。
+- 单一目标：完成 Local Runbook 的 SDK/runtime 与 raw order-events 闭环修正，激活六份文档，并使 Documentation Map 与本报告状态一致。
 
 ## 已完成范围
 
@@ -27,7 +29,16 @@ Round 验证结论：**PASS WITH LIMITATIONS**
 
 治理要求正式 Round 报告且 Review Bundle generator 要求 `--report-path` 指向 committed report，因此额外创建本报告。没有创建任何 Deferred 文档。
 
-`DOCUMENTATION_MAP.md` 登记全部 34 份既有 tracked `.md` / `.txt` 文档、本 Round 六文档和本报告，定义四值 status、冲突优先级、唯一权威、禁止重复、owner role、更新/取代/归档流程和跨文档术语；13 份未来文档仅以 `planning_state: Deferred` 登记。
+`DOCUMENTATION_MAP.md` 登记全部 41 份 tracked `.md` / `.txt` 文档（34 份既有文档、本 Round 六文档和本报告），定义四值 status、冲突优先级、唯一权威、禁止重复、owner role、更新/取代/归档流程和跨文档术语；13 份未来文档仅以 `planning_state: Deferred` 登记。
+
+## 最终修正与合同激活
+
+- `LEAN_DOTNET_ROOT` 只表示隔离安装的 .NET SDK 10.0.302 根；`LEAN_DOTNET` 是该根下的精确可执行文件；`LEAN_RUNTIME_ROOT` 是独立 Launcher runtime copy 与 working directory。
+- Launcher output 和算法 DLL 复制到 `LEAN_RUNTIME_ROOT`，安全 config 位于该目录，启动进程以 `LEAN_DOTNET` 为 executable、以 `LEAN_RUNTIME_ROOT` 为 cwd，并记录 stdout、stderr、exit code 和 timeout。
+- Round 1B 的 raw order-events 权威源已核实为 LEAN `BacktestingResultHandler` 在结果目录直接写出的 `<AlgorithmId>-order-events.json`，不是 summary，也不需要新 exporter。实际 normalizer 直接读取该结果，随后以标准 PowerShell 逐字节复制为 `RUN_C_RAW_ORDER_EVENTS.json`。
+- 使用保留的 Round 1B 最终结果完成轻量复验：源结果、重新捕获文件和冻结 raw evidence 的 SHA-256 均为 `34f35cdd6e360c006a62ff90c3010db1c2dbce8f2d0e02a9da028137f9137cd6`；4 个事件语义一致，normalizer orders/statistics 与冻结输出语义一致。
+- 六份文档已全部转为 `Active`；Documentation Map 已同步当前权威路由、41 份文档状态计数、Round 1B 历史路由、Round 1C 报告登记及 GLOSSARY 替代关系。
+- 本次最终修正只修改用户允许的七份文档，没有修改业务代码、算法、fixture、Golden、manifest 业务值、LEAN source、Bundle generator 或其测试。
 
 ## 合同主要决策
 
@@ -63,14 +74,14 @@ Round 验证结论：**PASS WITH LIMITATIONS**
 
 ### Local Runbook
 
-- 使用 `PROJECT_ROOT`、`LEAN_SOURCE_ROOT`、`LEAN_DOTNET_ROOT`、`LEAN_DATA_ROOT`、`LEAN_RESULTS_ROOT`、`NUGET_PACKAGES`、`PYTHON312`，不写具体本机路径。
+- 使用 `PROJECT_ROOT`、`LEAN_SOURCE_ROOT`、`LEAN_DOTNET_ROOT`、`LEAN_DOTNET`、`LEAN_RUNTIME_ROOT`、`LEAN_DATA_ROOT`、`LEAN_RESULTS_ROOT`、`NUGET_PACKAGES`、`PYTHON312`，不写具体本机路径。
 - 覆盖 Git/toolchain、Python 3.12、.NET SDK 10.0.302、锁定 LEAN source、fixture/map/factor、C# build、A/B identity、Launcher 副本、安全 config、Run C、timeout、stdout/stderr/exit code、normalizer、Golden、final holdings、manifest、Python checks、Review Bundle 和独立 `validate_bundle`。
-- 仓库没有统一 Native orchestrator、Launcher config generator、raw order-events exporter 或 Golden compare CLI；Runbook 只给出现有脚本与真实分步边界，并将缺口登记 TBD。
-- 本 Round 没有重新执行 Native Run C 或 deterministic A/B build，未复用 Round 1B Run C 证据作为本 Round 新证据。
+- 仓库没有统一 Native orchestrator、Launcher config generator 或 Golden compare CLI；Runbook 使用现有脚本与已验证的真实分步边界。raw order-events 由 LEAN 直接生成，并以标准 PowerShell 作 byte-identical evidence capture，因此不再把缺少 exporter 作为阻断。
+- 本 Round 没有重新执行 Native Run C 或 deterministic A/B build；只对保留的 Round 1B 最终结果执行 raw order-events 与 normalizer 轻量复验，且没有把它冒充本 Round 新 Native 证据。
 
 ## Review Bundle 最小通用化
 
-当前 generator 只允许 Docker evidence 或会强制要求 Native Run C 的 native evidence；本机无法诚实产出二者之一，而本 Round 明确禁止复用 Round 1B Run C 证据。按当前 Prompt 的条件例外，进行了 test-first 的最小通用化：
+Round 1C Base 时的 generator 只允许 Docker evidence，或会对 native evidence 强制要求 Native Run C；本机无法诚实产出二者之一，而本 Round 明确禁止复用 Round 1B Run C 证据。按当时 Prompt 的条件例外，进行了 test-first 的最小通用化：
 
 - 增加通用 `document` verification environment 及五项文档 evidence checks；
 - 对 `created_documents`、document SHA、相对链接、JSON 示例、Secret 与具体绝对路径重新验证；
@@ -85,11 +96,14 @@ Round 验证结论：**PASS WITH LIMITATIONS**
 
 | 检查 | 结果 |
 |---|---|
-| 六文档 UTF-8/元数据 | PASS；6/6 具有目的、范围、权威来源、当前状态、更新触发、owner role、失败行为和验证要求 |
-| 相对链接 | PASS；六文档共 102 个 repository-relative links，0 broken/case mismatch |
+| 六文档 UTF-8/元数据与状态 | PASS；6/6 具有目的、范围、权威来源、`Active` 状态、更新触发、owner role、失败行为和验证要求 |
+| 相对链接 | PASS；六文档共 144 个 repository-relative links，0 broken/case mismatch |
 | JSON 示例 | PASS；10/10 可由 Python 3.12 标准 `json` 解析器解析 |
 | 跨文档一致性 | PASS；Risk 枚举、lifecycle 状态、时间、版本、long-only/无杠杆、Shadow/Paper/Live 和术语 10 项检查通过 |
-| TBD | PASS；48 项，均登记未实现/未确认内容、原因、owner role 与触发条件 |
+| TBD | PASS；47 项，均登记未实现/未确认内容、原因、owner role 与触发条件 |
+| Local Runbook 专项审计 | PASS；SDK root、精确 executable、Launcher runtime、cwd、config、Windows/POSIX 与 raw order-events 八项语义一致 |
+| raw order-events 轻量复验 | PASS；源/捕获/冻结 evidence SHA-256 相同，4 个事件与 normalizer orders/statistics 语义一致；未重跑 Native Run C |
+| Local Runbook 全闭环 | PASS；从锁定工具链、build、runtime/config、Launcher、raw capture、normalizer/Golden 到 Bundle 验证均有真实分步命令和 fail-closed 条件 |
 | Secret scan | PASS；六文档高置信 pattern 0 findings |
 | 具体绝对路径 scan | PASS；六文档 0 findings |
 | `python -m ruff check .` | PASS |
@@ -106,15 +120,15 @@ Round 验证结论：**PASS WITH LIMITATIONS**
 
 ## 不完整工作与 limitations
 
-1. 六份基线文档仍为 Draft，等待外部独立审阅；本报告不冻结 Round 1C。
-2. 文档定义合同而非 runtime；数据、策略、Portfolio、Risk、Execution 和生命周期能力大多尚未实现。
-3. 48 个 TBD 涉及数据/质量、接口/聚合/Risk、回测门槛、生命周期 gate 以及 Native/Bundle 运营自动化。
+1. 文档定义合同而非 runtime；数据、策略、Portfolio、Risk、Execution 和生命周期能力大多尚未实现。
+2. 47 个 TBD 涉及数据/质量、接口/聚合/Risk、回测门槛、生命周期 gate 以及 Native/Bundle 运营自动化。
+3. Native Run C 与 deterministic A/B 未在 Round 1C 重跑；本轮轻量复验只证明保留的 Round 1B raw order-events 后处理可复现。
 4. README、CLI `CURRENT_PHASE` 与部分旧测试说明仍保留 Phase 0 文字；本 Round 明确禁止修改这些文件，当前治理事实由 Prompt、ADR 0002、冻结 Round 1B report 与本报告界定。
 5. Round 1B 的 upstream dependency 与可选结果告警仍然存在；本 Round 未改变 LEAN source 或 toolchain。
-6. Local Runbook 的完整 Native closure 仍需未来使用真实外部 LEAN 环境验证；本 Round 只审阅命令与边界。
+6. 当前没有真实策略、Paper、Live、Broker 连接、真实 order path 或盈利能力验证；相关安全开关继续保持关闭。
 
 ## 结论与下一动作
 
-本 Round 的文档与接口合同基线满足预定范围，状态为 **PASS WITH LIMITATIONS**。下一动作仅为：提交并普通 push 当前 Round；从 committed HEAD 生成并独立验证 `Review Bundle: REQUIRED`；等待外部独立审阅。Round 1C 尚未冻结，不启动后续 Round。
+Agent 内部验证完成，六份文档已为 `Active`，本 Round 状态为 **PASS WITH LIMITATIONS**。从最终 committed HEAD 生成并独立验证的新 `Review Bundle` 将作为最终外部复核对象；在该复核完成前 Round 1C 尚未冻结，且未启动后续 Round。
 
-**Review Bundle: REQUIRED**，原因是本 Round 将作为正式验收与外部审阅对象，且包含为文档 Round 所需的最小 Bundle machinery 变更。
+**Review Bundle: REQUIRED**，原因是本 Round 将作为正式验收与最终外部复核对象，且 clean-source validation 是 acceptance criterion。

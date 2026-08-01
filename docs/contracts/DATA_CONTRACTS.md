@@ -2,7 +2,7 @@
 
 ## 文档控制
 
-- 文档状态：`Draft`
+- 文档状态：`Active`
 - `owner_role`：`Data Governance Owner`
 - 目的：为项目中的 Bar、Tick、Corporate Action 与 Feature 定义统一、可审计的数据边界，以及时间、数值、质量、版本和失败语义。
 - 适用范围：研究、回测以及未来受治理数据管道所交换或持久化的数据记录。本文件不定义数据供应商、许可条款、数据库实现或实时行情能力。

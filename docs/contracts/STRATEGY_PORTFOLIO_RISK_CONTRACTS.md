@@ -2,7 +2,7 @@
 
 ## 文档控制
 
-- 文档状态：`Draft`
+- 文档状态：`Active`
 - `owner_role`：`Architecture Owner`
 - 目的：定义 `StrategySignal → PortfolioTarget → RiskDecision → ExecutionIntent` 的稳定、可审计且 fail-closed 的内部边界。
 - 适用范围：未来研究、回测、Shadow 评估及受治理执行系统之间的内部对象。本文件不定义 Broker order、账户连接、真实订单提交或真实资金操作。

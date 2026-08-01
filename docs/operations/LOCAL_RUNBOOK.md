@@ -4,7 +4,7 @@
 
 | 字段 | 值 |
 | --- | --- |
-| status | Draft |
+| status | Active |
 | 目的 | 让不了解既有机器历史的开发者，从受控 Git source 完成 Python 基线检查、Native C# LEAN 基础验证和 Review Bundle 验证。 |
 | 适用范围 | Phase 1 的本地、离线优先、合成 fixture 基础设施验证；不构成策略、回测盈利能力、Broker、Paper 或 Live 能力说明。 |
 | 权威来源 | [AGENTS.md](../../AGENTS.md)、[Project Charter](../PROJECT_CHARTER.md)、[Risk Policy](../RISK_POLICY.md)、[Review Bundle Policy](../REVIEW_BUNDLE_POLICY.md)、[ADR 0002](../adr/0002-lean-native-source-foundation.md)、[Round 1B 正式报告](../reports/phase-01-round-01b-native-lean-foundation-report.md)、[toolchain lock](../../config/toolchain.lock.json) 和当前任务的显式边界。 |
@@ -30,19 +30,21 @@
 - Round 1B 的 Phase01DeterministicSmokeTest 是 infrastructure smoke test，不是盈利策略。
 - Execution Intent 不是真实 order；本流程不连接 Broker，不下载真实行情，不发送真实订单。
 - LLM 不参与实时 signal、risk decision 或 order submission。
-- 本 Round 1C 只编写文档，没有重新运行 Native Run C 或 deterministic A/B build；不得把 Round 1B 证据冒充本 Round 新证据。
+- 本 Round 1C 没有重新运行 Native Run C 或 deterministic A/B build；只使用保留的 Round 1B 最终结果轻量复验 raw order-events 捕获和 normalizer，且不得把该复验冒充新的 Native Run C 证据。
 
 所有 runtime、data、results 和 NuGet 内容都位于 Git 外部。开始前应让目标目录为新目录或空目录；若已有未知内容，立即停止并选择新的受控目录。本文不提供目录删除命令。
 
 ## 2. 路径和环境变量合同
 
-只使用下列 filesystem root；文档、证据和命令不得记录其机器实际值。
+只使用下列受控路径与可执行文件；文档、证据和命令不得记录其机器实际值。
 
 | 环境变量 | 语义 | 必要条件 |
 | --- | --- | --- |
 | PROJECT_ROOT | 本项目 Git checkout | main branch；正式 Bundle 时 HEAD 与 origin/main 相同且工作树 clean |
 | LEAN_SOURCE_ROOT | 官方 QuantConnect/Lean Git checkout | detached at toolchain lock 的 commit；tracked source clean |
-| LEAN_DOTNET_ROOT | 隔离的 Launcher runtime copy | 新目录或空目录；不等同于 LEAN source |
+| LEAN_DOTNET_ROOT | 隔离安装的 .NET SDK 10.0.302 根目录 | 只表示 SDK 根；不得用作 Launcher working directory |
+| LEAN_DOTNET | 精确的 .NET 可执行文件 | Windows 为 `Join-Path $env:LEAN_DOTNET_ROOT 'dotnet.exe'`；所有 .NET 命令必须使用该值 |
+| LEAN_RUNTIME_ROOT | 隔离的 Launcher runtime copy | 新目录或空目录；不等同于 SDK 根或 LEAN source |
 | LEAN_DATA_ROOT | Run C 的合成数据和静态 support data | 新目录或空目录；不得含真实市场数据 |
 | LEAN_RESULTS_ROOT | A/B build、Run C、clean-source 和 evidence 输出根 | Git 外部或 Git-ignored；不得提交 |
 | NUGET_PACKAGES | 机器本地 NuGet cache | 不得提交；restore 后可用于离线 build |
@@ -56,6 +58,7 @@ $required = @(
     'PROJECT_ROOT',
     'LEAN_SOURCE_ROOT',
     'LEAN_DOTNET_ROOT',
+    'LEAN_RUNTIME_ROOT',
     'LEAN_DATA_ROOT',
     'LEAN_RESULTS_ROOT',
     'NUGET_PACKAGES',
@@ -66,6 +69,10 @@ foreach ($name in $required) {
     if ([string]::IsNullOrWhiteSpace($value)) {
         throw "Required environment variable is unset: $name"
     }
+}
+$env:LEAN_DOTNET = Join-Path $env:LEAN_DOTNET_ROOT 'dotnet.exe'
+if (-not (Test-Path -LiteralPath $env:LEAN_DOTNET -PathType Leaf)) {
+    throw 'LEAN_DOTNET does not point to the isolated SDK executable.'
 }
 Set-Location -LiteralPath $env:PROJECT_ROOT
 ~~~
@@ -193,7 +200,8 @@ $projectPython = Join-Path $env:PROJECT_ROOT '.venv/Scripts/python.exe'
 Set-Location -LiteralPath $env:PROJECT_ROOT
 $toolchain = Get-Content -LiteralPath 'config/toolchain.lock.json' -Raw | ConvertFrom-Json
 $leanCommit = [string]$toolchain.lean.commit
-$dotnetVersion = (dotnet --version).Trim()
+$dotnetVersion = (& $env:LEAN_DOTNET --version).Trim()
+if ($LASTEXITCODE -ne 0) { throw 'Isolated .NET SDK version check failed.' }
 
 if ($dotnetVersion -ne [string]$toolchain.dotnet_sdk_version) {
     throw "Expected .NET SDK $($toolchain.dotnet_sdk_version), got $dotnetVersion"
@@ -226,13 +234,13 @@ if ($leanStatus) { throw 'LEAN source has tracked or untracked changes.' }
 
 ~~~powershell
 $leanSolution = Join-Path $env:LEAN_SOURCE_ROOT 'QuantConnect.Lean.sln'
-dotnet restore $leanSolution
+& $env:LEAN_DOTNET restore $leanSolution
 if ($LASTEXITCODE -ne 0) { throw 'LEAN restore failed.' }
-dotnet build $leanSolution --configuration Release --no-restore
+& $env:LEAN_DOTNET build $leanSolution --configuration Release --no-restore
 if ($LASTEXITCODE -ne 0) { throw 'LEAN Release build failed.' }
 ~~~
 
-NUGET_PACKAGES 由 dotnet 自动读取。restore 可能需要网络；后续 offline build 不得把 restore 的网络访问误记为离线验证。
+NUGET_PACKAGES 由 .NET CLI 自动读取。restore 可能需要网络；后续 offline build 不得把 restore 的网络访问误记为离线验证。
 
 ## 7. 提交的 synthetic fixture、map 和 factor 验证
 
@@ -257,9 +265,9 @@ Set-Location -LiteralPath $env:PROJECT_ROOT
 $algorithmProject = Join-Path $env:PROJECT_ROOT 'integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj'
 $leanProperty = "-p:LeanSourceRoot=$env:LEAN_SOURCE_ROOT"
 
-dotnet restore $algorithmProject $leanProperty
+& $env:LEAN_DOTNET restore $algorithmProject $leanProperty
 if ($LASTEXITCODE -ne 0) { throw 'Algorithm restore failed.' }
-dotnet build $algorithmProject --configuration Release --no-restore $leanProperty
+& $env:LEAN_DOTNET build $algorithmProject --configuration Release --no-restore $leanProperty
 if ($LASTEXITCODE -ne 0) { throw 'Algorithm Release build failed.' }
 ~~~
 
@@ -282,9 +290,9 @@ git -C $sourceB checkout --detach $head
 
 foreach ($source in @($sourceA, $sourceB)) {
     $project = Join-Path $source 'integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj'
-    dotnet restore $project "-p:LeanSourceRoot=$env:LEAN_SOURCE_ROOT"
+    & $env:LEAN_DOTNET restore $project "-p:LeanSourceRoot=$env:LEAN_SOURCE_ROOT"
     if ($LASTEXITCODE -ne 0) { throw "Restore failed for $source" }
-    dotnet build $project --configuration Release --no-restore "-p:LeanSourceRoot=$env:LEAN_SOURCE_ROOT"
+    & $env:LEAN_DOTNET build $project --configuration Release --no-restore "-p:LeanSourceRoot=$env:LEAN_SOURCE_ROOT"
     if ($LASTEXITCODE -ne 0) { throw "Build failed for $source" }
 }
 
@@ -313,7 +321,7 @@ if (-not (Test-Path -LiteralPath (Join-Path $launcherSource 'QuantConnect.Lean.L
     throw 'Pinned LEAN Launcher output is missing.'
 }
 
-foreach ($target in @($env:LEAN_DOTNET_ROOT, $env:LEAN_DATA_ROOT)) {
+foreach ($target in @($env:LEAN_RUNTIME_ROOT, $env:LEAN_DATA_ROOT)) {
     if (Test-Path -LiteralPath $target) {
         if (Get-ChildItem -LiteralPath $target -Force | Select-Object -First 1) {
             throw "Target must be empty: $target"
@@ -323,8 +331,8 @@ foreach ($target in @($env:LEAN_DOTNET_ROOT, $env:LEAN_DATA_ROOT)) {
     }
 }
 
-Copy-Item -Path (Join-Path $launcherSource '*') -Destination $env:LEAN_DOTNET_ROOT -Recurse
-Copy-Item -LiteralPath $dllA -Destination (Join-Path $env:LEAN_DOTNET_ROOT 'Phase01DeterministicSmokeTest.dll')
+Copy-Item -Path (Join-Path $launcherSource '*') -Destination $env:LEAN_RUNTIME_ROOT -Recurse
+Copy-Item -LiteralPath $dllA -Destination (Join-Path $env:LEAN_RUNTIME_ROOT 'Phase01DeterministicSmokeTest.dll')
 
 Copy-Item -Path (Join-Path $env:PROJECT_ROOT 'integrations/lean/data/equity') -Destination $env:LEAN_DATA_ROOT -Recurse
 New-Item -ItemType Directory -Path (Join-Path $env:LEAN_DATA_ROOT 'market-hours') | Out-Null
@@ -337,7 +345,7 @@ market-hours 和 symbol-properties 来自已核对 commit 的官方 source；其
 
 ## 11. 本地安全 config
 
-仓库当前没有 Launcher config generator。不得引用不存在的 project_run_c_config.py 或虚构 --config 参数。Launcher 从 LEAN_DOTNET_ROOT 下的 config.json 读取配置，因此使用下面的本地-only、纯 backtesting 配置生成步骤：
+仓库当前没有 Launcher config generator。不得引用不存在的 project_run_c_config.py 或虚构 --config 参数。Launcher 从其 working directory `LEAN_RUNTIME_ROOT` 下的 config.json 读取配置，因此使用下面的本地-only、纯 backtesting 配置生成步骤：
 
 ~~~powershell
 $runRoot = Join-Path $env:LEAN_RESULTS_ROOT 'run-c'
@@ -349,7 +357,7 @@ if (Test-Path -LiteralPath $runRoot) {
     New-Item -ItemType Directory -Path $runRoot | Out-Null
 }
 
-$configPath = Join-Path $env:LEAN_DOTNET_ROOT 'config.json'
+$configPath = Join-Path $env:LEAN_RUNTIME_ROOT 'config.json'
 @'
 import json
 import os
@@ -361,8 +369,8 @@ data_root = str(Path(os.environ["LEAN_DATA_ROOT"]).resolve())
 results_root = str((Path(os.environ["LEAN_RESULTS_ROOT"]) / "run-c").resolve())
 payload = {
     "environment": "backtesting",
-    "algorithm-id": "phase01-run-c",
-    "algorithm-type-name": "Phase01DeterministicSmokeTest",
+    "algorithm-id": "QuantSystem.Lean.Phase01DeterministicSmokeTest",
+    "algorithm-type-name": "QuantSystem.Lean.Phase01DeterministicSmokeTest",
     "algorithm-language": "CSharp",
     "algorithm-location": "Phase01DeterministicSmokeTest.dll",
     "data-folder": data_root,
@@ -413,7 +421,12 @@ $config = Get-Content -LiteralPath $configPath -Raw | ConvertFrom-Json
 if ($config.environment -ne 'backtesting') { throw 'Unsafe environment.' }
 if ($config.environments.backtesting.'live-mode' -ne $false) { throw 'live-mode must be false.' }
 if ($config.'algorithm-language' -ne 'CSharp') { throw 'Unexpected algorithm language.' }
-if ($config.'algorithm-type-name' -ne 'Phase01DeterministicSmokeTest') { throw 'Unexpected algorithm.' }
+if ($config.'algorithm-id' -ne 'QuantSystem.Lean.Phase01DeterministicSmokeTest') {
+    throw 'Unexpected algorithm id.'
+}
+if ($config.'algorithm-type-name' -ne 'QuantSystem.Lean.Phase01DeterministicSmokeTest') {
+    throw 'Unexpected algorithm type.'
+}
 $expectedDataRoot = [IO.Path]::GetFullPath($env:LEAN_DATA_ROOT)
 $expectedRunRoot = [IO.Path]::GetFullPath($runRoot)
 if ([IO.Path]::GetFullPath([string]$config.'data-folder') -ne $expectedDataRoot) {
@@ -447,7 +460,8 @@ import sys
 from datetime import datetime, timezone
 from pathlib import Path
 
-runtime = Path(os.environ["LEAN_DOTNET_ROOT"])
+dotnet = Path(os.environ["LEAN_DOTNET"]).resolve()
+runtime = Path(os.environ["LEAN_RUNTIME_ROOT"]).resolve()
 results = Path(os.environ["LEAN_RESULTS_ROOT"]) / "run-c"
 timeout_seconds = int(os.environ["RUN_TIMEOUT_SECONDS"])
 stdout_path = results / "launcher.stdout.txt"
@@ -457,11 +471,17 @@ started = datetime.now(timezone.utc)
 timed_out = False
 exit_code = 1
 try:
+    if not dotnet.is_file():
+        raise FileNotFoundError(f"LEAN_DOTNET is not a file: {dotnet}")
+    if not (runtime / "QuantConnect.Lean.Launcher.dll").is_file():
+        raise FileNotFoundError("Launcher DLL is missing from LEAN_RUNTIME_ROOT")
+    if not (runtime / "config.json").is_file():
+        raise FileNotFoundError("config.json is missing from LEAN_RUNTIME_ROOT")
     with stdout_path.open("w", encoding="utf-8") as stdout, stderr_path.open(
         "w", encoding="utf-8"
     ) as stderr:
         completed = subprocess.run(
-            ["dotnet", "QuantConnect.Lean.Launcher.dll"],
+            [str(dotnet), "QuantConnect.Lean.Launcher.dll"],
             cwd=runtime,
             stdout=stdout,
             stderr=stderr,
@@ -495,23 +515,46 @@ if ($LASTEXITCODE -ne 0) { throw "Run C failed or timed out with exit code $LAST
 
 本 Round 1C 不执行本节。
 
-## 13. Normalizer、Golden 和最终持仓
+## 13. Raw order-events、Normalizer、Golden 和最终持仓
 
-真实 normalizer CLI 是 scripts/normalize_lean_result.py：
+锁定 LEAN 的 `BacktestingResultHandler` 会把 order events 直接写为 `results-destination-folder/<AlgorithmId>-order-events.json`。Round 1B 最终 Run C 的真实源文件因此等价于 `$runRoot/QuantSystem.Lean.Phase01DeterministicSmokeTest-order-events.json`；保留的 `RUN_C_RAW_ORDER_EVENTS.json` 是该文件的逐字节 evidence copy，不是从 summary 提取，也不是由额外 exporter 生成。
 
-仓库当前没有把 Launcher 结果导出为独立 raw order-events JSON 的命令；下列文件名只是本地 evidence 约定。必须由经审阅的 Run C evidence collector 产生该文件，否则在此停止，不能从可能损坏的 summary 猜测或伪造输入。
+Round 1B `EVIDENCE.json` 记录的真实 normalizer 命令以这个 LEAN 结果文件作为 `scripts/normalize_lean_result.py --orders` 输入；历史真实顺序是先 normalizer，再把同一源文件逐字节复制为 `RUN_C_RAW_ORDER_EVENTS.json`。下面保持该顺序。复制不改变内容，不构成新 exporter：
 
 ~~~powershell
 Set-Location -LiteralPath $env:PROJECT_ROOT
 $fixtureManifest = Get-Content -LiteralPath 'integrations/lean/data/fixture-manifest.json' -Raw | ConvertFrom-Json
 $fixtureSha = [string]$fixtureManifest.files.'equity/usa/daily/synth.zip'
-$rawOrders = Join-Path $runRoot 'phase01-run-c-order-events.json'
-if (-not (Test-Path -LiteralPath $rawOrders -PathType Leaf)) {
-    throw 'Authoritative Run C raw order-events export is missing; exporter is TBD.'
+$algorithmId = 'QuantSystem.Lean.Phase01DeterministicSmokeTest'
+$rawOrdersSource = Join-Path $runRoot "$algorithmId-order-events.json"
+$rawOrders = Join-Path $runRoot 'RUN_C_RAW_ORDER_EVENTS.json'
+if (-not (Test-Path -LiteralPath $rawOrdersSource -PathType Leaf)) {
+    throw 'LEAN BacktestingResultHandler raw order-events result is missing.'
 }
+if (Test-Path -LiteralPath $rawOrders) {
+    throw 'Raw order-events evidence target already exists; use a new empty Run C result directory.'
+}
+
+@'
+import json
+import sys
+from pathlib import Path
+
+source = Path(sys.argv[1])
+events = json.loads(source.read_text(encoding="utf-8"))
+required = {"algorithmId", "orderId", "orderEventId", "status", "time"}
+if not isinstance(events, list) or not events:
+    raise SystemExit("raw order-events root must be a non-empty list")
+for index, event in enumerate(events):
+    if not isinstance(event, dict) or not required.issubset(event):
+        raise SystemExit(f"raw order-event {index} is missing required fields")
+print(f"validated raw order-events: {len(events)}")
+'@ | & $env:PYTHON312 - $rawOrdersSource
+if ($LASTEXITCODE -ne 0) { throw 'LEAN raw order-events JSON validation failed.' }
+
 $normalizerArgs = @(
     'scripts/normalize_lean_result.py',
-    '--orders', $rawOrders,
+    '--orders', $rawOrdersSource,
     '--output-dir', $runRoot,
     '--lean-commit', $leanCommit,
     '--fixture-sha', $fixtureSha,
@@ -519,7 +562,17 @@ $normalizerArgs = @(
 )
 & $env:PYTHON312 @normalizerArgs
 if ($LASTEXITCODE -ne 0) { throw 'Normalizer failed.' }
+
+Copy-Item -LiteralPath $rawOrdersSource -Destination $rawOrders
+$sourceRawSha = (Get-FileHash -LiteralPath $rawOrdersSource -Algorithm SHA256).Hash.ToLowerInvariant()
+$evidenceRawSha = (Get-FileHash -LiteralPath $rawOrders -Algorithm SHA256).Hash.ToLowerInvariant()
+if ($sourceRawSha -ne $evidenceRawSha) {
+    throw 'Raw order-events evidence copy SHA does not match the LEAN result.'
+}
+$evidenceRawSha
 ~~~
+
+输入是 LEAN 直接生成的 order-events list；输出是 normalizer 生成的 `normalized-orders.json`、`normalized-statistics.json`，以及 byte-identical `RUN_C_RAW_ORDER_EVENTS.json` evidence copy。源文件缺失、JSON 非 list/为空/缺字段、目标已存在、normalizer 失败、复制 SHA 不同或 Golden/final holdings 任一失败时必须停止。summary JSON 只可辅助诊断，永远不是 raw order-events 权威来源。
 
 normalizer 会拒绝不是两个 Filled event 的输入，并在最终 holdings 非零时失败。
 
@@ -630,7 +683,7 @@ Set-Location -LiteralPath $env:PROJECT_ROOT
 
 ## 17. Review Bundle 生成
 
-Review Bundle: REQUIRED，因为 Round 1C 将提交外部独立审阅且 clean-source 是 acceptance criterion。
+Review Bundle: REQUIRED，因为 Round 1C 将提交最终外部复核且 clean-source 是 acceptance criterion。
 
 真实 CLI 必须包含 --evidence-json；README 中缺少该参数的旧示例不能直接复制。生成前必须：
 
@@ -701,11 +754,15 @@ $zipSha256
 
 ## 20. 简洁 POSIX 对照
 
-POSIX 使用相同七个 path root、同一 toolchain lock 和同一 Python scripts；将 PowerShell 的 $env:NAME 改为 $NAME，并使用正斜杠。核心入口：
+POSIX 使用相同环境变量语义、同一 toolchain lock 和同一 Python scripts；将 PowerShell 的 `$env:NAME` 改为 `$NAME`，并使用正斜杠。`LEAN_DOTNET_ROOT` 仍只表示 SDK 根，`LEAN_RUNTIME_ROOT` 仍只表示 Launcher working directory：
 
 ~~~sh
 set -eu
 cd "$PROJECT_ROOT"
+
+LEAN_DOTNET="$LEAN_DOTNET_ROOT/dotnet"
+export LEAN_DOTNET
+test -x "$LEAN_DOTNET"
 
 "$PYTHON312" --version
 "$PYTHON312" -m venv "$PROJECT_ROOT/.venv"
@@ -713,16 +770,17 @@ cd "$PROJECT_ROOT"
 "$PROJECT_ROOT/.venv/bin/python" -m pip install -e '.[dev]'
 PATH="$PROJECT_ROOT/.venv/bin:$PATH" "$PROJECT_ROOT/scripts/check.sh"
 
-test "$(dotnet --version)" = "10.0.302"
+dotnet_version="$("$LEAN_DOTNET" --version)"
+test "$dotnet_version" = "10.0.302"
 git -C "$LEAN_SOURCE_ROOT" rev-parse HEAD
 git -C "$LEAN_SOURCE_ROOT" status --porcelain
 
 "$PYTHON312" -c 'import json; from pathlib import Path; from scripts.generate_phase01_synthetic_data import validate_fixture; root=Path("integrations/lean/data"); actual=validate_fixture(root); expected=json.loads((root/"fixture-manifest.json").read_text(encoding="utf-8")); assert actual == expected; print(json.dumps(actual, sort_keys=True))'
 
-dotnet restore "$LEAN_SOURCE_ROOT/QuantConnect.Lean.sln"
-dotnet build "$LEAN_SOURCE_ROOT/QuantConnect.Lean.sln" --configuration Release --no-restore
-dotnet restore "$PROJECT_ROOT/integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj" "-p:LeanSourceRoot=$LEAN_SOURCE_ROOT"
-dotnet build "$PROJECT_ROOT/integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj" --configuration Release --no-restore "-p:LeanSourceRoot=$LEAN_SOURCE_ROOT"
+"$LEAN_DOTNET" restore "$LEAN_SOURCE_ROOT/QuantConnect.Lean.sln"
+"$LEAN_DOTNET" build "$LEAN_SOURCE_ROOT/QuantConnect.Lean.sln" --configuration Release --no-restore
+"$LEAN_DOTNET" restore "$PROJECT_ROOT/integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj" "-p:LeanSourceRoot=$LEAN_SOURCE_ROOT"
+"$LEAN_DOTNET" build "$PROJECT_ROOT/integrations/lean/algorithms/Phase01DeterministicSmokeTest.csproj" --configuration Release --no-restore "-p:LeanSourceRoot=$LEAN_SOURCE_ROOT"
 ~~~
 
 deterministic A/B、safe config、timeout wrapper、normalizer、Golden compare 和 validate_bundle 均使用上文相同 Python 代码，不改变语义。POSIX 没有仓库自带的 Native orchestrator；不得用一个虚构命令替代这些步骤。
@@ -746,12 +804,12 @@ cd "$PROJECT_ROOT"
 | --- | --- |
 | scripts/bootstrap.ps1 报 Python launcher 不存在 | 该脚本真实依赖 py；使用 PYTHON312 的手工 venv 流程。 |
 | Python 不是 3.12.x | 停止；不得用 3.11 或 3.13 代替 evidence。 |
-| dotnet version 不是 10.0.302 | 停止；按 toolchain provisioning TBD 安装正确 SDK。 |
+| `& $env:LEAN_DOTNET --version` 不是 10.0.302 | 停止；确认 `LEAN_DOTNET_ROOT` 只指向隔离 SDK 10.0.302 根，并按 toolchain provisioning TBD 安装正确 SDK。 |
 | LEAN HEAD 或 status 不一致 | 停止；只接受 toolchain lock 的官方 commit 和 clean tracked source。 |
 | fixture/map/factor hash mismatch | 停止；不得重写 manifest 或 fixture 使测试通过。 |
 | MSBuild 要求 LeanSourceRoot | 传入 -p:LeanSourceRoot=LEAN_SOURCE_ROOT，并确认 official checkout。 |
 | deterministic DLL SHA mismatch | FAIL；保留 A/B 输出供诊断，不更新 algorithm identity。 |
-| Launcher runtime/data/results 目标已有未知内容 | 停止并选择新的受控目录，不覆盖。 |
+| `LEAN_RUNTIME_ROOT`/data/results 目标已有未知内容 | 停止并选择新的受控目录，不覆盖；不得把 SDK 根当作 runtime。 |
 | config 出现 live mode、Broker 或 credential 字段 | FAIL；不得启动 Launcher。 |
 | Run C timeout、exit code 非零或 raw order-events 缺失 | FAIL；记录 stdout/stderr/exit evidence 后诊断。 |
 | summary JSON 无法解析 | summary 不可信；不能据此宣称成功，仍须检查 raw order-events、normalizer 和 Golden。 |
@@ -770,10 +828,9 @@ cd "$PROJECT_ROOT"
 | TBD | 未实现或未确认内容 | 原因 | owner role | 触发补充条件 |
 | --- | --- | --- | --- | --- |
 | Toolchain provisioning | .NET SDK 10.0.302 和 Python 3.12 的受批准下载、checksum 与安装流程 | 仓库只锁版本，没有 installer 或供应链校验脚本 | Platform Owner / Security Owner | 新机器正式 onboarding 前批准来源与 checksum |
-| Fixture regeneration | 仅用本 Runbook 七个 path root 的统一 ToolBox regeneration 命令 | 现有 generator 需要额外隔离 ToolBox runtime；本 Round 不重生成 fixture | LEAN Integration Owner | fixture 或 LEAN commit 获批变更时 |
+| Fixture regeneration | 仅用本 Runbook 环境变量边界的统一 ToolBox regeneration 命令 | 现有 generator 需要额外隔离 ToolBox runtime；本 Round 不重生成 fixture | LEAN Integration Owner | fixture 或 LEAN commit 获批变更时 |
 | Launcher config generator | 可复用、测试覆盖的 config generator 与 portable config evidence | 当前只有本地 inline 分步流程，没有提交脚本 | LEAN Integration Owner / Independent Risk Owner | 下次必须重跑 Native Run 或配置结构变化前 |
 | Native Run orchestrator | 统一执行 runtime copy、config、timeout、stdout/stderr/exit 和 manifest 的命令 | 当前仓库没有 orchestrator | LEAN Integration Owner | 下一次 Native acceptance Run 前，test-first 实现 |
-| Raw order-events exporter | 从实际 Launcher 结果生成独立、可追溯的 raw order-events JSON | 当前仓库只有 normalizer，没有受控 exporter；summary 不能作为不可信输入的替代 | LEAN Integration Owner / QA Owner | 下一次 Run C normalizer 执行前 |
 | Deterministic A/B command | 统一的双 source build 与 identity validator | 当前仅有真实分步流程和静态 identity | Build Owner | algorithm/csproj/toolchain 变化或下一次重建证据前 |
 | Golden compare CLI | 独立 compare-orders / compare-statistics CLI | 当前只有 compare_semantic Python 函数 | QA Owner | normalizer/Golden schema 变化或频繁人工运行前 |
 | Support-data evidence generator | 自动记录 market-hours/symbol-properties provenance 与 SHA | 当前需人工收集 | Data Governance Owner / LEAN Integration Owner | 下一次 Run C bundle 前 |

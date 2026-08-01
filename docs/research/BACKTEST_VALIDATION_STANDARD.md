@@ -8,7 +8,7 @@
 | 适用范围 | 研究假设、Prototype 之后的回测、walk-forward、样本外评估、Shadow/Paper 准入证据；不授权任何交易。 |
 | authoritative_for | 回测实验设计、证据字段、偏差控制、淘汰条件与研究侧准入标准。 |
 | 权威来源 | [Project Charter](../PROJECT_CHARTER.md)、[Data Governance](../DATA_GOVERNANCE.md)、[Testing Strategy](../TESTING_STRATEGY.md)、[Risk Policy](../RISK_POLICY.md) 与 [Review Bundle Policy](../REVIEW_BUNDLE_POLICY.md)。 |
-| status | Draft；须经 Round 1C 外部独立审阅后方可转为 Active。 |
+| status | Active |
 | 当前实现状态 | `CONTRACT_DECISION`。仓库只有冻结的 Native C# 基础设施 smoke 证据；当前没有真实策略、可信策略回测或已批准准入记录。 |
 | owner role | `Research Governance Owner`；数据边界由 `Data Governance Owner`、风险边界由 `Independent Risk Owner`、准入证据由 `Independent Reviewer` 复核。 |
 | 更新触发条件 | 验证方法、数据合同、成本模型、生命周期 gate、量化门槛或 Review Bundle 政策经批准变化。 |

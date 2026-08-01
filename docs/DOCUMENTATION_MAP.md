@@ -6,15 +6,15 @@
 
 ## 2. 适用范围与权威来源
 
-- 适用范围：仓库中现有 34 份 tracked `.md` / `.txt` 文档、本 Round 指定的六份文档、可选 Round 1C 正式报告，以及仅作未来规划登记的 Deferred 文档。
+- 适用范围：仓库中现有 41 份 tracked `.md` / `.txt` 文档，以及仅作未来规划登记的 Deferred 文档。
 - 权威来源：当前 Round Prompt、[`AGENTS.md`](../AGENTS.md)、[`PROJECT_CHARTER.md`](PROJECT_CHARTER.md)、[`RISK_POLICY.md`](RISK_POLICY.md) 和 [`REVIEW_BUNDLE_POLICY.md`](REVIEW_BUNDLE_POLICY.md)。
-- 本文档的 `status` 表示文档生命周期，不表示文档描述的系统能力已经实现。处于 `Active` 的政策文档仍可描述未来 gate；处于 `Draft` 的合同不得被当作已获外部冻结的能力。
-- 本文档处于 `Draft`。外部独立审阅冻结前，它不取代任何 `Active` 文档。
+- 本文档的 `status` 表示文档生命周期，不表示文档描述的系统能力已经实现，也不表示当前 Round 已完成最终外部复核或冻结。处于 `Active` 的政策与合同仍可描述未来 gate 和尚未实现的 runtime。
+- 本文档处于 `Active`，是文档生命周期、权威路由和跨文档术语关系的当前权威来源。
 
 ## 3. 当前实现状态
 
-- **已经实现：** 已登记基线中的 34 份 tracked 文档，并为每份文档提供全部治理字段。
-- **合同决策：** 本 Round 六份文档及可选 Round 1C 报告当前均为 `Draft`；只有外部独立审阅冻结后才能转为 `Active`。
+- **已经实现：** 已登记全部 41 份 tracked 文档，并为每份文档提供全部治理字段；本 Round 六份合同/治理文档与 Round 1C 正式报告均为 `Active`。
+- **合同决策：** 六份文档的 `Active` 表示其文档合同当前生效，不表示对应 runtime 已实现。Round 1C 正式报告是等待最终外部复核的当前候选；最终复核前 Round 1C 仍未冻结。
 - **未来规划：** Prompt 指定的未来文档仅以 `planning_state: Deferred` 登记，不创建占位文件，也不建立指向不存在文件的链接。
 - 本文档没有未分配 owner role 或未定义触发条件的未决项。
 
@@ -77,7 +77,7 @@
 3. [`PROJECT_CHARTER.md`](PROJECT_CHARTER.md) 与 [`RISK_POLICY.md`](RISK_POLICY.md)；
 4. [`REVIEW_BUNDLE_POLICY.md`](REVIEW_BUNDLE_POLICY.md)；
 5. [`ROADMAP.md`](ROADMAP.md)；
-6. 当前最新正式报告；当前为 [`phase-01-round-01b-native-lean-foundation-report.md`](reports/phase-01-round-01b-native-lean-foundation-report.md)；
+6. 当前最新正式报告；当前为 [`phase-01-round-01c-documentation-interface-contract-baseline-report.md`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md)；
 7. [`README.md`](../README.md)。
 
 同一优先级内先按 `authoritative_for` 的领域范围判断。仍无法消解时必须 fail closed，由对应领域 owner role 与 `Governance Owner` 共同解决；不得仅因文件较新就自动覆盖。正式报告记录特定 commit 和时间点的事实，不能改写政策；ADR 只能决定其明确范围，不能覆盖更高优先级 gate。
@@ -86,8 +86,8 @@
 
 1. 同一规则只能有一个 `Active` 权威来源。其他文档必须链接引用，不得复制后再独立演化。
 2. 本地图负责文档路由、生命周期和术语索引，不重写风险、数据或 Review Bundle 的详细规则。
-3. `Draft` 文档列出的 `authoritative_for` 是外部冻结后的预定范围；在其转为 `Active` 前，现有 `Active` 政策仍然有效。
-4. 当前唯一权威路由如下；带“冻结后”的项目在本 Round 外部冻结前尚不生效。
+3. 本 Round 六份文档已经转为 `Active`；其 `authoritative_for` 当前生效，但不把任何 `TBD` 或 `CONTRACT_DECISION` 冒充 runtime 实现。
+4. 当前唯一权威路由如下：
 
 | 领域 | 唯一权威来源 |
 |---|---|
@@ -98,16 +98,17 @@
 | Phase 顺序与计划 gate | [`ROADMAP.md`](ROADMAP.md) |
 | 逻辑架构与模块边界 | [`ARCHITECTURE.md`](ARCHITECTURE.md)；具体已接受决定由对应 ADR 负责 |
 | 数据治理与许可 | [`DATA_GOVERNANCE.md`](DATA_GOVERNANCE.md) |
-| 数据 schema 与时间语义 | 冻结后：`docs/contracts/DATA_CONTRACTS.md` |
-| Strategy→Portfolio→Risk→Execution 接口 | 冻结后：`docs/contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md` |
-| 回测验证与研究证据 | 冻结后：`docs/research/BACKTEST_VALIDATION_STANDARD.md` |
-| 策略状态与转移 | 冻结后：`docs/research/STRATEGY_LIFECYCLE.md` |
-| Native LEAN 本地验证步骤 | 冻结后：`docs/operations/LOCAL_RUNBOOK.md` |
+| 数据 schema 与时间语义 | [`DATA_CONTRACTS.md`](contracts/DATA_CONTRACTS.md) |
+| Strategy→Portfolio→Risk→Execution 接口 | [`STRATEGY_PORTFOLIO_RISK_CONTRACTS.md`](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| 回测验证与研究证据 | [`BACKTEST_VALIDATION_STANDARD.md`](research/BACKTEST_VALIDATION_STANDARD.md) |
+| 策略状态与转移 | [`STRATEGY_LIFECYCLE.md`](research/STRATEGY_LIFECYCLE.md) |
+| Native LEAN 本地验证步骤 | [`LOCAL_RUNBOOK.md`](operations/LOCAL_RUNBOOK.md) |
 | secret 与 credential 安全 | [`SECURITY.md`](SECURITY.md) |
 | 测试分类与 CI 原则 | [`TESTING_STRATEGY.md`](TESTING_STRATEGY.md) |
 | 锁定的 Native LEAN source 决定 | [`ADR 0002`](adr/0002-lean-native-source-foundation.md) |
-| 当前已冻结 Round 结果 | [`Round 1B 正式报告`](reports/phase-01-round-01b-native-lean-foundation-report.md) |
-| 术语表 | 当前：[`GLOSSARY.md`](GLOSSARY.md)；本地图转为 `Active` 后由本地图承接 |
+| 当前 Round 候选状态 | [`Round 1C 正式报告`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md)；最终外部复核前尚未冻结 |
+| 已冻结 Native Round 历史证据 | [`Round 1B 正式报告`](reports/phase-01-round-01b-native-lean-foundation-report.md) |
+| 跨文档统一术语与详细权威路由 | 本文档第 12 节；短版 [`GLOSSARY.md`](GLOSSARY.md) 已被本地图取代并仅保留历史上下文 |
 
 ## 9. 现有文档登记
 
@@ -134,7 +135,7 @@
 |---|---|---|---|---|---|---|---|---|
 | [`ARCHITECTURE.md`](ARCHITECTURE.md) | 定义逻辑架构 | 模块边界、控制流、风险不可绕过和追溯原则 | Active | Architecture Owner | 组件边界、依赖方向或控制路径变化 | Charter; Risk Policy; ADRs; interface contracts | — | — |
 | [`DATA_GOVERNANCE.md`](DATA_GOVERNANCE.md) | 定义数据治理 | 数据层、来源许可、血缘、manifest 和质量政策 | Active | Data Governance Owner | source、license、schema、质量、保留或 lineage 变化 | Data Contracts; Backtest Standard; data README | — | — |
-| [`GLOSSARY.md`](GLOSSARY.md) | 提供现有短术语表 | 本地图仍为 Draft 时的现有术语定义 | Active | Governance Owner | 本地图外部冻结并转为 Active | Documentation Map; contracts; Lifecycle; Risk Policy | — | — |
+| [`GLOSSARY.md`](GLOSSARY.md) | 保存原短术语表 | 激活本地图之前的术语历史上下文；不再定义当前跨文档术语 | Superseded | Governance Owner | 不原地更新；当前术语只在 Documentation Map 或对应详细权威中更新 | Documentation Map; contracts; Lifecycle; Risk Policy | — | `docs/DOCUMENTATION_MAP.md` |
 | [`PROJECT_CHARTER.md`](PROJECT_CHARTER.md) | 定义项目 mandate | V1 范围、成功条件、非目标和最高层 gate | Active | Project Owner | mandate、范围、时间线或最高层 gate 经批准变化 | Roadmap; Architecture; Risk Policy | — | — |
 | [`REVIEW_BUNDLE_POLICY.md`](REVIEW_BUNDLE_POLICY.md) | 定义 Clean Review Bundle 政策 | 触发、内容、状态、来源、验证、命名与保留 | Active | Review Bundle Maintainer | 显式用户要求、安全缺陷或验收所需 machinery 缺陷 | `AGENTS.md`; reports index; Local Runbook | — | — |
 | [`RISK_POLICY.md`](RISK_POLICY.md) | 定义风险政策 | deny-by-default、risk gate、kill switch 与真实资金准入 | Active | Independent Risk Owner | 风险限制、gate、kill switch 或资本准入经批准变化 | Charter; Architecture; interface contracts; Lifecycle | — | — |
@@ -163,25 +164,25 @@
 | [`phase-00-review-bundle-implementation-fix-report.md`](reports/phase-00-review-bundle-implementation-fix-report.md) | 保存 Phase 0 Bundle implementation fix 历史 | 最后一轮 Phase 0 Bundle 修复的历史事实 | Archived | Review Bundle Maintainer | 不原地更新；新缺陷使用新报告 | Review Bundle Policy; prior remediation reports | final-remediation report | — |
 | [`phase-01-lean-dependency-audit.md`](reports/phase-01-lean-dependency-audit.md) | 记录锁定 LEAN 的 dependency audit | 当前 pinned commit 的 upstream 风险与后续准入阻断 | Active | Security Owner | LEAN commit、dependency graph、upstream advisory 或准入变化 | ADR 0002; Round 1B report; Security | — | — |
 | [`phase-01-lean-result-encoding-audit.md`](reports/phase-01-lean-result-encoding-audit.md) | 记录 LEAN result encoding audit | malformed summary 的当前信任边界 | Active | LEAN Integration Owner | LEAN commit、host encoding、result writer 或 normalizer 变化 | ADR 0002; Round 1B report; Testing Strategy | — | — |
-| [`phase-01-round-01b-native-lean-foundation-report.md`](reports/phase-01-round-01b-native-lean-foundation-report.md) | 保存已冻结 Round 1B 报告 | Round 1B 范围、结果、限制和 Bundle 要求 | Active | LEAN Integration Owner | Round 1C 外部冻结后将本登记改为 Archived；报告正文保持历史原貌 | ADR 0002; two audits; LEAN README; Review Bundle Policy | — | — |
+| [`phase-01-round-01b-native-lean-foundation-report.md`](reports/phase-01-round-01b-native-lean-foundation-report.md) | 保存已冻结 Round 1B 报告 | Round 1B 范围、结果、限制和 Bundle 要求的历史证据 | Archived | LEAN Integration Owner | 不原地更新；Native 基线变化使用后续正式报告 | ADR 0002; two audits; LEAN README; Review Bundle Policy; Round 1C report | — | — |
 
-现有文档状态计数为：`Active 28`、`Draft 1`、`Superseded 3`、`Archived 2`，合计 34。
+全部 tracked 文档状态计数为：`Active 33`、`Draft 1`、`Superseded 4`、`Archived 3`，合计 41。
 
 ## 10. 本 Round 文档登记
 
-本节的 `authoritative_for` 均为外部独立审阅冻结后的预定范围。当前 `status` 一律为 `Draft`。
+本节六份合同/治理文档与正式报告均为 `Active`。文档状态生效不等于 runtime 已实现，也不等于 Round 1C 已通过最终外部复核或冻结。
 
 | document | purpose | authoritative_for | status | owner_role | update_trigger | related_documents | supersedes | superseded_by |
 |---|---|---|---|---|---|---|---|---|
-| [`docs/DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md) | 登记文档、冲突规则和统一术语 | 文档治理元数据与术语路由 | Draft | Governance Owner | 文档、status、authority、owner、关系或术语变化 | all registered documents | — | — |
-| `docs/contracts/DATA_CONTRACTS.md` | 定义数据接口合同 | schema、时间、质量、版本与 manifest 语义 | Draft | Data Governance Owner | schema、时间语义、质量枚举、source 或 manifest 绑定变化 | Data Governance; data README; Backtest Standard | — | — |
-| `docs/contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md` | 定义 Strategy→Portfolio→Risk→Execution 边界 | interface 字段、risk decision 枚举、状态机和 fail-closed 行为 | Draft | Architecture Owner | interface、risk decision、聚合或状态机变化；风险变化须 Independent Risk Owner 批准 | Architecture; Risk Policy; Lifecycle | — | — |
-| `docs/research/BACKTEST_VALIDATION_STANDARD.md` | 定义研究验证标准 | hypothesis、OOS、成本、偏差、复现和 Review Bundle 证据 | Draft | Research Governance Owner | 验证方法、成本模型、证据、量化门槛获批或 gate 变化 | Charter; Data Contracts; Testing Strategy; Lifecycle | — | — |
-| `docs/research/STRATEGY_LIFECYCLE.md` | 定义策略生命周期 | 状态、转移、证据、approval role 和禁止活动 | Draft | Research Governance Owner | lifecycle 状态、gate、approval role、risk budget 或版本规则变化 | Risk Policy; Backtest Standard; interface contracts | — | — |
-| `docs/operations/LOCAL_RUNBOOK.md` | 定义 Native 验证步骤 | 本地工具、fixture、build、Run C、Golden 和 Bundle 流程 | Draft | LEAN Integration Owner | script、工具链、pinned commit、环境变量、fixture、Golden 或 Bundle 流程变化 | ADR 0002; LEAN README; Round 1B report; Review Bundle Policy | — | — |
-| `docs/reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md` | 可选的 Round 1C 正式报告 | 创建后记录 Round 1C scope、evidence、limitations、commit 和下一 gate | Draft | Governance Owner | 报告创建后，最终 evidence、commit 或 Bundle 事实变化；冻结后不原地改写 | six Round 1C documents; Review Bundle Policy | — | — |
+| [`docs/DOCUMENTATION_MAP.md`](DOCUMENTATION_MAP.md) | 登记文档、冲突规则和统一术语 | 文档治理元数据与跨文档术语路由 | Active | Governance Owner | 文档、status、authority、owner、关系或术语变化 | all registered documents | `docs/GLOSSARY.md` | — |
+| [`docs/contracts/DATA_CONTRACTS.md`](contracts/DATA_CONTRACTS.md) | 定义数据接口合同 | schema、时间、质量、版本与 manifest 语义 | Active | Data Governance Owner | schema、时间语义、质量枚举、source 或 manifest 绑定变化 | Data Governance; data README; Backtest Standard | — | — |
+| [`docs/contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md`](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) | 定义 Strategy→Portfolio→Risk→Execution 边界 | interface 字段、risk decision 枚举、状态机和 fail-closed 行为 | Active | Architecture Owner | interface、risk decision、聚合或状态机变化；风险变化须 Independent Risk Owner 批准 | Architecture; Risk Policy; Lifecycle | — | — |
+| [`docs/research/BACKTEST_VALIDATION_STANDARD.md`](research/BACKTEST_VALIDATION_STANDARD.md) | 定义研究验证标准 | hypothesis、OOS、成本、偏差、复现和 Review Bundle 证据 | Active | Research Governance Owner | 验证方法、成本模型、证据、量化门槛获批或 gate 变化 | Charter; Data Contracts; Testing Strategy; Lifecycle | — | — |
+| [`docs/research/STRATEGY_LIFECYCLE.md`](research/STRATEGY_LIFECYCLE.md) | 定义策略生命周期 | 状态、转移、证据、approval role 和禁止活动 | Active | Research Governance Owner | lifecycle 状态、gate、approval role、risk budget 或版本规则变化 | Risk Policy; Backtest Standard; interface contracts | — | — |
+| [`docs/operations/LOCAL_RUNBOOK.md`](operations/LOCAL_RUNBOOK.md) | 定义 Native 验证步骤 | 本地工具、fixture、build、Run C、Golden 和 Bundle 流程 | Active | LEAN Integration Owner | script、工具链、pinned commit、环境变量、fixture、Golden 或 Bundle 流程变化 | ADR 0002; LEAN README; Round 1B report; Review Bundle Policy | — | — |
+| [`docs/reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md) | 记录 Round 1C 当前正式候选 | Round 1C scope、evidence、limitations、commit 和下一 gate | Active | Governance Owner | 最终 evidence、commit、Bundle 或外部复核事实变化；冻结后不原地改写 | six Round 1C documents; Review Bundle Policy | — | — |
 
-若可选报告最终未创建，其登记仍是无链接的规划记录，不得声称已有报告。六份指定文档加可选报告状态计数为 `Draft 7`。
+本节七份文档状态计数为 `Active 7`。Round 1C 正式报告明确保留“等待最终外部复核、Round 尚未冻结”的 gate。
 
 ## 11. Deferred 文档登记
 
@@ -205,42 +206,42 @@
 
 ## 12. 跨文档统一术语
 
-本节给出跨文档短定义和详细权威路由。处于 `Draft` 的合同只有在外部冻结后才成为详细权威。
+本节给出当前生效的跨文档短定义和详细权威路由；详细字段与行为仍以所链接的领域文档为准。
 
 | 术语 | 统一定义 | 详细权威来源 |
 |---|---|---|
-| `signal` | 版本化策略基于已治理数据产生的方向或目标建议；不是 order，也不具有风险批准。 | 冻结后：Strategy/Portfolio/Risk contracts |
-| `target` | Portfolio 聚合后交给 Risk 的目标对象；它表达期望状态，不构成执行许可。 | 冻结后：Strategy/Portfolio/Risk contracts |
-| `target weight` | 目标资产占 portfolio 净值的比例；JSON 字段使用 `target_weight`。风险批准后的权重必须与原始目标区分。 | 冻结后：Strategy/Portfolio/Risk contracts |
-| `portfolio` | positions、cash、targets 和 aggregation rule 组成的组合状态；Strategy 不直接拥有执行权限。 | Architecture；冻结后：Strategy/Portfolio/Risk contracts |
-| `risk decision` | Independent Risk 对一个 target 的版本化决定；仅允许 `APPROVED`、`REJECTED`、`PARTIALLY_APPROVED`。 | Risk Policy；冻结后：Strategy/Portfolio/Risk contracts |
-| `execution intent` | 仅由风险批准后目标产生的候选执行意图；它不是 broker order，也不证明已提交。 | 冻结后：Strategy/Portfolio/Risk contracts |
+| `signal` | 版本化策略基于已治理数据产生的方向或目标建议；不是 order，也不具有风险批准。 | [Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| `target` | Portfolio 聚合后交给 Risk 的目标对象；它表达期望状态，不构成执行许可。 | [Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| `target weight` | 目标资产占 portfolio 净值的比例；JSON 字段使用 `target_weight`。风险批准后的权重必须与原始目标区分。 | [Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| `portfolio` | positions、cash、targets 和 aggregation rule 组成的组合状态；Strategy 不直接拥有执行权限。 | [Architecture](ARCHITECTURE.md)；[Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| `risk decision` | Independent Risk 对一个 target 的版本化决定；仅允许 `APPROVED`、`REJECTED`、`PARTIALLY_APPROVED`。 | [Risk Policy](RISK_POLICY.md)；[Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
+| `execution intent` | 仅由风险批准后目标产生的候选执行意图；它不是 broker order，也不证明已提交。 | [Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) |
 | `order` | 未来 OMS/adapter 管理的有状态执行对象。当前没有获批的真实 order path。 | Deferred `ORDER_BROKER_CONTRACTS.md` |
-| `event_time` | 源事件实际发生或生效的时间。 | 冻结后：Data Contracts |
-| `availability_time` | 该事件最早可被系统合法观察和用于决策的时间。 | 冻结后：Data Contracts |
-| `point-in-time` | 在 `as_of_time` 只使用 `availability_time` 不晚于该时点的信息，并保留当时可知的 universe、symbol 和 corporate action 状态。 | Data Governance；冻结后：Data Contracts |
-| `Golden` | 与固定 fixture、commit、configuration 和 manifest 绑定的确定性预期输出；不是盈利 benchmark。 | LEAN expected artifacts；冻结后：Local Runbook |
+| `event_time` | 源事件实际发生或生效的时间。 | [Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `availability_time` | 该事件最早可被系统合法观察和用于决策的时间。 | [Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `point-in-time` | 在 `as_of_time` 只使用 `availability_time` 不晚于该时点的信息，并保留当时可知的 universe、symbol 和 corporate action 状态。 | [Data Governance](DATA_GOVERNANCE.md)；[Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `Golden` | 与固定 fixture、commit、configuration 和 manifest 绑定的确定性预期输出；不是盈利 benchmark。 | LEAN expected artifacts；[Local Runbook](operations/LOCAL_RUNBOOK.md) |
 | `manifest` | 版本化 provenance、identity、checksum、配置和输入记录。 | Data Governance；具体 fixture 以 fixture manifest 为准 |
-| `data version` | 不可变数据状态或 manifest 的标识；schema 字段使用 `data_version`。 | 冻结后：Data Contracts |
-| `strategy version` | 策略逻辑版本标识，必须与 code commit 绑定，并与 parameter version 分开。schema 字段使用 `strategy_version`。 | 冻结后：Strategy/Portfolio/Risk contracts 与 Lifecycle |
-| `Raw` | 从已登记 source 获得且保持不可变的原始层。 | Data Governance；冻结后：Data Contracts |
-| `Clean` | 从 Raw 可重建、经过规范化和质量标记的数据层。 | Data Governance；冻结后：Data Contracts |
-| `Adjusted` | 按记录的方法处理 split、dividend 等 corporate action 的数据层。 | Data Governance；冻结后：Data Contracts |
-| `Features` | 从已治理输入和版本化逻辑完全可重现的派生特征。 | Data Governance；冻结后：Data Contracts |
+| `data version` | 不可变数据状态或 manifest 的标识；schema 字段使用 `data_version`。 | [Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `strategy version` | 策略逻辑版本标识，必须与 code commit 绑定，并与 parameter version 分开。schema 字段使用 `strategy_version`。 | [Strategy/Portfolio/Risk Contracts](contracts/STRATEGY_PORTFOLIO_RISK_CONTRACTS.md) 与 [Lifecycle](research/STRATEGY_LIFECYCLE.md) |
+| `Raw` | 从已登记 source 获得且保持不可变的原始层。 | [Data Governance](DATA_GOVERNANCE.md)；[Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `Clean` | 从 Raw 可重建、经过规范化和质量标记的数据层。 | [Data Governance](DATA_GOVERNANCE.md)；[Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `Adjusted` | 按记录的方法处理 split、dividend 等 corporate action 的数据层。 | [Data Governance](DATA_GOVERNANCE.md)；[Data Contracts](contracts/DATA_CONTRACTS.md) |
+| `Features` | 从已治理输入和版本化逻辑完全可重现的派生特征。 | [Data Governance](DATA_GOVERNANCE.md)；[Data Contracts](contracts/DATA_CONTRACTS.md) |
 | `OMS` | 管理 order lifecycle、状态和审计的未来 Order Management System；当前架构中的该层不表示已实现。 | Architecture；Deferred `ORDER_BROKER_CONTRACTS.md` |
 | `kill switch` | 由独立控制拥有、可阻止新增风险或 order submission 的全局控制；Strategy 不得拥有或绕过它。 | Risk Policy |
-| `Shadow` | 产生信号、目标和对比证据但不发送 order 的生命周期状态。 | 冻结后：Lifecycle |
-| `Paper Trading` | 使用 broker simulation 且不涉及真实资金的未来状态；当前未获批准并保持关闭。 | Risk Policy；冻结后：Lifecycle |
-| `Limited Live` | 未来需要单独批准、独立风险预算和完整 gate 的受限真实资金状态；当前没有批准。 | Charter; Risk Policy；冻结后：Lifecycle |
+| `Shadow` | 产生信号、目标和对比证据但不发送 order 的生命周期状态。 | [Lifecycle](research/STRATEGY_LIFECYCLE.md) |
+| `Paper Trading` | 使用 broker simulation 且不涉及真实资金的未来状态；当前未获批准并保持关闭。 | [Risk Policy](RISK_POLICY.md)；[Lifecycle](research/STRATEGY_LIFECYCLE.md) |
+| `Limited Live` | 未来需要单独批准、独立风险预算和完整 gate 的受限真实资金状态；当前没有批准。 | [Charter](PROJECT_CHARTER.md)；[Risk Policy](RISK_POLICY.md)；[Lifecycle](research/STRATEGY_LIFECYCLE.md) |
 
 `signal_timestamp` 是 signal 产生时间，不得无条件等同于数据的 `event_time`。prose 术语 `target weight`、`data version`、`strategy version` 分别映射到 schema 字段 `target_weight`、`data_version`、`strategy_version`。
 
 ## 13. 已知状态差异与解释规则
 
-1. [`README.md`](../README.md) 仍描述 Phase 0 scaffold、未集成 LEAN 和下一步 Phase 1；当前实现事实必须以 ADR 0002、Round 1B 正式报告和当前 Prompt 为准。
+1. [`README.md`](../README.md) 仍描述 Phase 0 scaffold、未集成 LEAN 和下一步 Phase 1；当前实现事实必须以 ADR 0002、Round 1B 历史报告、Round 1C 正式报告和当前 Prompt 为准。
 2. [`TESTING_STRATEGY.md`](TESTING_STRATEGY.md) 与 [`tests/integration/README.md`](../tests/integration/README.md) 的 Phase 0 实现描述不再代表当前仓库；其测试原则仍然有效。
 3. ADR 0001 仍为 `Draft`；其 LEAN foundation 部分已被 ADR 0002 的已接受决定取代，Python 和 Alpaca 等其余假设仍未获接受。
-4. Round 1B 报告中“Round 1C 尚未启动”是该报告形成时的历史事实，不是当前状态。
+4. Round 1B 报告是已冻结、已归档的历史证据；其中“Round 1C 尚未启动”只描述该报告形成时的事实。当前 Round 状态以 Round 1C 正式报告为准。
 5. Phase 0 报告中的 Python、Docker、network 和 host 限制只描述当时环境，不得当作当前环境事实。
 6. Roadmap 中的 Alpaca 内容是未来计划，不构成连接、Paper 或 Live 准入授权。
 7. Risk Policy 中的百分比和 capital stage 是 hypothesis / planned path，不是当前已批准的真实风险预算。
@@ -255,4 +256,4 @@
 6. 不再定义当前规则但仍需作为历史证据的文档改为 `Archived`；其历史内容和 commit 语义保持不变。
 7. 每次状态迁移必须更新本地图、检查相关链接和术语路由，并按 Review Bundle Policy 判断是否需要新 Bundle。
 
-本地图外部冻结后的首个维护动作应将本地图改为 `Active`、将 [`GLOSSARY.md`](GLOSSARY.md) 改为 `Superseded` 并建立双向替代关系；在该动作完成前，现有 Glossary 保持 `Active`。
+本轮已将本地图激活，并在本地图登记 [`GLOSSARY.md`](GLOSSARY.md) 为 `Superseded`。跨文档短定义与详细权威路由由本节负责；具体字段、枚举和行为仍由所链接的 Active 领域文档负责。
