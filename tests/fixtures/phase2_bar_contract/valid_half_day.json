@@ -1,0 +1,43 @@
+{
+  "fixture_id": "valid_half_day",
+  "synthetic": true,
+  "fixture_label": "SYNTHETIC_TEST_ONLY",
+  "session_control": {
+    "exchange_timezone": "America/New_York",
+    "controlled_window_utc": {
+      "start": "2024-11-29T14:30:00Z",
+      "end": "2024-11-29T18:00:00Z"
+    },
+    "calendar_status": "controlled_synthetic_half_day"
+  },
+  "records": [
+    {
+      "schema_name": "Bar",
+      "schema_version": "1.0.0",
+      "record_id": "record-synth-half-0001",
+      "instrument_id": "instrument-synth-0001",
+      "symbol": "SYNTH",
+      "bar_start_time": "2024-11-29T14:30:00Z",
+      "bar_end_time": "2024-11-29T18:00:00Z",
+      "event_time": "2024-11-29T18:00:00Z",
+      "availability_time": "2024-11-29T18:00:01Z",
+      "ingestion_time": "2024-11-29T18:00:02Z",
+      "as_of_time": "2024-11-29T18:00:02Z",
+      "exchange_timezone": "America/New_York",
+      "session": "REGULAR",
+      "resolution": "1d",
+      "open": "120.00",
+      "high": "121.50",
+      "low": "119.50",
+      "close": "121.00",
+      "volume": 700,
+      "price_basis": "RAW",
+      "adjustment_method_version": null,
+      "source": "project-synthetic-fixture",
+      "data_version": "0000000000000000000000000000000000000000000000000000000000000000",
+      "data_manifest_sha256": "1111111111111111111111111111111111111111111111111111111111111111",
+      "quality_status": "VALID",
+      "quality_issues": []
+    }
+  ]
+}

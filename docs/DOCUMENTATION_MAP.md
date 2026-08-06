@@ -77,7 +77,7 @@
 3. [`PROJECT_CHARTER.md`](PROJECT_CHARTER.md) 与 [`RISK_POLICY.md`](RISK_POLICY.md)；
 4. [`REVIEW_BUNDLE_POLICY.md`](REVIEW_BUNDLE_POLICY.md)；
 5. [`ROADMAP.md`](ROADMAP.md)；
-6. 当前最新正式报告；当前为 [`phase-01-round-01c-documentation-interface-contract-baseline-report.md`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md)；
+6. 当前最新正式报告；当前为 [`phase-02-round-01-governed-bar-contract-kernel-report.md`](reports/phase-02-round-01-governed-bar-contract-kernel-report.md)；
 7. [`README.md`](../README.md)。
 
 同一优先级内先按 `authoritative_for` 的领域范围判断。仍无法消解时必须 fail closed，由对应领域 owner role 与 `Governance Owner` 共同解决；不得仅因文件较新就自动覆盖。正式报告记录特定 commit 和时间点的事实，不能改写政策；ADR 只能决定其明确范围，不能覆盖更高优先级 gate。
@@ -106,7 +106,7 @@
 | secret 与 credential 安全 | [`SECURITY.md`](SECURITY.md) |
 | 测试分类与 CI 原则 | [`TESTING_STRATEGY.md`](TESTING_STRATEGY.md) |
 | 锁定的 Native LEAN source 决定 | [`ADR 0002`](adr/0002-lean-native-source-foundation.md) |
-| 当前 Round 候选状态 | [`Round 1C 正式报告`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md)；最终外部复核前尚未冻结 |
+| 当前 Round 候选状态 | [`Phase 2 Round 01 Governed Bar Contract Kernel`](reports/phase-02-round-01-governed-bar-contract-kernel-report.md)；本 Round 为候选实施并等待外部独立审阅 |
 | 已冻结 Native Round 历史证据 | [`Round 1B 正式报告`](reports/phase-01-round-01b-native-lean-foundation-report.md) |
 | 跨文档统一术语与详细权威路由 | 本文档第 12 节；短版 [`GLOSSARY.md`](GLOSSARY.md) 已被本地图取代并仅保留历史上下文 |
 
@@ -181,8 +181,9 @@
 | [`docs/research/STRATEGY_LIFECYCLE.md`](research/STRATEGY_LIFECYCLE.md) | 定义策略生命周期 | 状态、转移、证据、approval role 和禁止活动 | Active | Research Governance Owner | lifecycle 状态、gate、approval role、risk budget 或版本规则变化 | Risk Policy; Backtest Standard; interface contracts | — | — |
 | [`docs/operations/LOCAL_RUNBOOK.md`](operations/LOCAL_RUNBOOK.md) | 定义 Native 验证步骤 | 本地工具、fixture、build、Run C、Golden 和 Bundle 流程 | Active | LEAN Integration Owner | script、工具链、pinned commit、环境变量、fixture、Golden 或 Bundle 流程变化 | ADR 0002; LEAN README; Round 1B report; Review Bundle Policy | — | — |
 | [`docs/reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md`](reports/phase-01-round-01c-documentation-interface-contract-baseline-report.md) | 记录 Round 1C 当前正式候选 | Round 1C scope、evidence、limitations、commit 和下一 gate | Active | Governance Owner | 最终 evidence、commit、Bundle 或外部复核事实变化；冻结后不原地改写 | six Round 1C documents; Review Bundle Policy | — | — |
+| [`phase-02-round-01-governed-bar-contract-kernel-report.md`](reports/phase-02-round-01-governed-bar-contract-kernel-report.md) | 记录 Phase 2 Round 01 Synthetic Bar contract runtime kernel 候选 | 本 Round 的 Bar runtime、quality、manifest、synthetic-only scope、evidence 和 limitations | Active | Data Governance Owner | Round evidence、candidate commit、Review Bundle 或外部复核事实变化；冻结后不原地改写 | `DATA_CONTRACTS.md`; Review Bundle Policy | — | — |
 
-本节七份文档状态计数为 `Active 7`。Round 1C 正式报告明确保留“等待最终外部复核、Round 尚未冻结”的 gate。
+本节八份文档状态计数为 `Active 8`。Round 1C 与 Phase 2 Round 01 正式报告均明确保留“等待最终外部复核、Round 尚未冻结”的 gate。
 
 ## 11. Deferred 文档登记
 
