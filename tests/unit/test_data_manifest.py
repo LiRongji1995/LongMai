@@ -77,15 +77,21 @@ def manifest_for(
     policy: QualityPolicy = POLICY,
     expected_record_ids: list[str] | None = None,
 ) -> ManifestResult:
+    expected = (
+        expected_record_ids
+        if expected_record_ids is not None
+        else [record.record_id for record in records]
+    )
     quality = validate_quality(
         records,
-        expected_record_ids=expected_record_ids,
+        expected_record_ids=expected,
         policy=policy,
     )
     return build_manifest(
         records,
         quality_result=quality,
         quality_policy=policy,
+        expected_record_ids=expected,
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -221,11 +227,14 @@ def test_dataset_descriptor_contains_required_identity_inputs() -> None:
 
 def test_manifest_has_two_phase_hash_and_binds_bars() -> None:
     records = bars("valid_regular_est.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     result = build_manifest(
         records,
         quality_result=quality,
         quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -253,6 +262,7 @@ def test_manifest_has_two_phase_hash_and_binds_bars() -> None:
             records,
             quality_result=quality,
             quality_policy=QualityPolicy("different-policy"),
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -263,11 +273,14 @@ def test_manifest_has_two_phase_hash_and_binds_bars() -> None:
 
 def test_manifest_and_file_checksum_mismatches_fail_closed(tmp_path: Path) -> None:
     records = bars("valid_regular_est.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     result = build_manifest(
         records,
         quality_result=quality,
         quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -297,7 +310,7 @@ def test_manifest_and_file_checksum_mismatches_fail_closed(tmp_path: Path) -> No
 def test_build_manifest_rejects_stale_quality_result() -> None:
     record = bars("valid_regular_est.json")[0]
     policy = QualityPolicy("stale-result", late_after=timedelta(seconds=2))
-    quality = validate_quality([record], policy=policy)
+    quality = validate_quality([record], expected_record_ids=[record.record_id], policy=policy)
     changed_payload = record.to_mapping()
     changed_payload["ingestion_time"] = "2024-01-02T21:00:05Z"
     changed_payload["as_of_time"] = "2024-01-02T21:00:05Z"
@@ -307,6 +320,7 @@ def test_build_manifest_rejects_stale_quality_result() -> None:
             [changed],
             quality_result=quality,
             quality_policy=policy,
+            expected_record_ids=[record.record_id],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -318,7 +332,7 @@ def test_build_manifest_rejects_stale_quality_result() -> None:
 def test_build_manifest_reruns_quality_for_current_records() -> None:
     record = bars("valid_regular_est.json")[0]
     policy = QualityPolicy("stale-as-of", stale_after=timedelta(seconds=2))
-    quality = validate_quality([record], policy=policy)
+    quality = validate_quality([record], expected_record_ids=[record.record_id], policy=policy)
     changed_payload = record.to_mapping()
     changed_payload["as_of_time"] = "2024-01-02T21:00:06Z"
     changed = Bar.from_mapping(changed_payload)
@@ -327,6 +341,7 @@ def test_build_manifest_reruns_quality_for_current_records() -> None:
             [changed],
             quality_result=quality,
             quality_policy=policy,
+            expected_record_ids=[record.record_id],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -338,7 +353,7 @@ def test_build_manifest_reruns_quality_for_current_records() -> None:
 def test_build_manifest_rejects_changed_late_record_with_old_valid_result() -> None:
     record = bars("valid_regular_est.json")[0]
     policy = QualityPolicy("late-result", late_after=timedelta(seconds=2))
-    quality = validate_quality([record], policy=policy)
+    quality = validate_quality([record], expected_record_ids=[record.record_id], policy=policy)
     changed_payload = record.to_mapping()
     changed_payload["ingestion_time"] = "2024-01-02T21:00:05Z"
     changed_payload["as_of_time"] = "2024-01-02T21:00:05Z"
@@ -348,6 +363,7 @@ def test_build_manifest_rejects_changed_late_record_with_old_valid_result() -> N
             [changed],
             quality_result=quality,
             quality_policy=policy,
+            expected_record_ids=[record.record_id],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -359,17 +375,21 @@ def test_build_manifest_rejects_changed_late_record_with_old_valid_result() -> N
 def test_build_manifest_rejects_stale_valid_result_for_current_quarantined_record() -> None:
     record = bars("valid_regular_est.json")[0]
     policy = QualityPolicy("late-bypass", late_after=timedelta(seconds=1))
-    old_quality = validate_quality([record], policy=policy)
+    old_quality = validate_quality([record], expected_record_ids=[record.record_id], policy=policy)
     changed_payload = record.to_mapping()
     changed_payload["ingestion_time"] = "2024-01-02T21:00:04Z"
     changed_payload["as_of_time"] = "2024-01-02T21:00:04Z"
     changed = Bar.from_mapping(changed_payload)
-    assert validate_quality([changed], policy=policy).status is QualityStatus.QUARANTINED
+    assert (
+        validate_quality([changed], expected_record_ids=[record.record_id], policy=policy).status
+        is QualityStatus.QUARANTINED
+    )
     with pytest.raises(ManifestValidationError, match="quality result"):
         build_manifest(
             [changed],
             quality_result=old_quality,
             quality_policy=policy,
+            expected_record_ids=[record.record_id],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -380,13 +400,16 @@ def test_build_manifest_rejects_stale_valid_result_for_current_quarantined_recor
 
 def test_build_manifest_reruns_quality_for_added_duplicate_record() -> None:
     records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     duplicate_records = [*records, records[1]]
     with pytest.raises(ManifestValidationError, match="quality result"):
         build_manifest(
             duplicate_records,
             quality_result=quality,
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -397,12 +420,15 @@ def test_build_manifest_reruns_quality_for_added_duplicate_record() -> None:
 
 def test_build_manifest_reruns_quality_for_deleted_record() -> None:
     records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     with pytest.raises(ManifestValidationError, match="quality result"):
         build_manifest(
             records[:1],
             quality_result=quality,
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records[:1]],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -413,12 +439,15 @@ def test_build_manifest_reruns_quality_for_deleted_record() -> None:
 
 def test_build_manifest_reruns_quality_for_out_of_order_current_records() -> None:
     records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     with pytest.raises(ManifestValidationError, match="quality result"):
         build_manifest(
             list(reversed(records)),
             quality_result=quality,
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -429,11 +458,14 @@ def test_build_manifest_reruns_quality_for_out_of_order_current_records() -> Non
 
 def test_build_manifest_accepts_same_records_and_quality_result() -> None:
     records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     result = build_manifest(
         records,
         quality_result=quality,
         quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -448,8 +480,13 @@ def test_manifest_rejects_source_mismatch() -> None:
     with pytest.raises(CanonicalizationError, match="source"):
         build_manifest(
             records,
-            quality_result=validate_quality(records, policy=POLICY),
+            quality_result=validate_quality(
+                records,
+                expected_record_ids=[record.record_id for record in records],
+                policy=POLICY,
+            ),
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="wrong-source",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -463,8 +500,11 @@ def test_manifest_rejects_timezone_mismatch() -> None:
     with pytest.raises(CanonicalizationError, match="timezone"):
         build_manifest(
             [record],
-            quality_result=validate_quality([record], policy=POLICY),
+            quality_result=validate_quality(
+                [record], expected_record_ids=[record.record_id], policy=POLICY
+            ),
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -478,8 +518,13 @@ def test_manifest_rejects_interval_mismatch() -> None:
     with pytest.raises(CanonicalizationError, match="resolution"):
         build_manifest(
             records,
-            quality_result=validate_quality(records, policy=POLICY),
+            quality_result=validate_quality(
+                records,
+                expected_record_ids=[record.record_id for record in records],
+                policy=POLICY,
+            ),
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -494,8 +539,13 @@ def test_manifest_rejects_instrument_coverage_mismatch() -> None:
     with pytest.raises(CanonicalizationError, match="instrument IDs"):
         build_manifest(
             records,
-            quality_result=validate_quality(records, policy=POLICY),
+            quality_result=validate_quality(
+                records,
+                expected_record_ids=[record.record_id for record in records],
+                policy=POLICY,
+            ),
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -513,8 +563,13 @@ def test_manifest_rejects_empty_input_checksums(
     with pytest.raises(CanonicalizationError, match="must not be empty"):
         build_manifest(
             records,
-            quality_result=validate_quality(records, policy=POLICY),
+            quality_result=validate_quality(
+                records,
+                expected_record_ids=[record.record_id for record in records],
+                policy=POLICY,
+            ),
             quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -578,11 +633,14 @@ def test_manifest_accepts_non_empty_mapping_and_sequence_checksums() -> None:
 
 def test_manifest_reverification_checks_phase_a_phase_b_and_records() -> None:
     records = bars("valid_regular_est.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     result = build_manifest(
         records,
         quality_result=quality,
         quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -647,10 +705,13 @@ def test_verify_manifest_accepts_expected_missing_record_ids() -> None:
 
 def test_quality_identity_must_be_complete_and_matching() -> None:
     records = bars("valid_regular_est.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     kwargs = {
         "records": records,
         "quality_policy": POLICY,
+        "expected_record_ids": [record.record_id for record in records],
         "source_id": "project-synthetic-fixture",
         "license_id": "project-owned-synthetic",
         "exchange_timezone": "America/New_York",
@@ -746,11 +807,14 @@ def test_ab_runs_have_identical_identity_manifest_and_quarantine_bytes(tmp_path:
     outputs: list[tuple[dict[str, str], bytes, str, tuple[str, ...]]] = []
     for root in (tmp_path / "A", tmp_path / "B"):
         root.mkdir()
-        quality = validate_quality(records, policy=policy)
+        quality = validate_quality(
+            records, expected_record_ids=[record.record_id for record in records], policy=policy
+        )
         manifest = build_manifest(
             records,
             quality_result=quality,
             quality_policy=policy,
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -778,11 +842,14 @@ def test_ab_runs_have_identical_identity_manifest_and_quarantine_bytes(tmp_path:
 
 def test_manifest_json_loader_round_trips_canonical_bytes(tmp_path: Path) -> None:
     records = bars("valid_regular_est.json")
-    quality = validate_quality(records, policy=POLICY)
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
     result = build_manifest(
         records,
         quality_result=quality,
         quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
         source_id="project-synthetic-fixture",
         license_id="project-owned-synthetic",
         exchange_timezone="America/New_York",
@@ -810,14 +877,14 @@ def test_quarantined_records_are_never_bound() -> None:
 
 
 def test_rejected_records_are_never_bound() -> None:
-    record = quality_bar(QualityStatus.REJECTED, [])
+    record = quality_bar(QualityStatus.REJECTED, [QualityIssue.INVALID.value])
     result = manifest_for([record], policy=QualityPolicy("rejected"))
     assert result.bound_records == ()
     assert result.manifest["bound_record_ids"] == []
 
 
 def test_bind_manifest_cannot_bypass_quality_gate() -> None:
-    record = quality_bar(QualityStatus.REJECTED, [])
+    record = quality_bar(QualityStatus.REJECTED, [QualityIssue.INVALID.value])
     result = manifest_for([record], policy=QualityPolicy("rejected-bind"))
     assert bind_manifest([record], result) == ()
 
@@ -840,12 +907,17 @@ def test_allowed_suspect_only_binds_downstream_records() -> None:
 def test_policy_same_id_different_threshold_is_rejected() -> None:
     records = bars("valid_regular_est.json")
     source_policy = QualityPolicy("same-id", late_after=timedelta(seconds=1))
-    quality = validate_quality(records, policy=source_policy)
+    quality = validate_quality(
+        records,
+        expected_record_ids=[record.record_id for record in records],
+        policy=source_policy,
+    )
     with pytest.raises(ManifestValidationError, match="SHA-256"):
         build_manifest(
             records,
             quality_result=quality,
             quality_policy=QualityPolicy("same-id", late_after=timedelta(seconds=2)),
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -860,7 +932,11 @@ def test_policy_same_id_different_allowlist_is_rejected() -> None:
         "same-allowlist",
         allowed_suspect_issues=frozenset({QualityIssue.MISSING.value}),
     )
-    quality = validate_quality(records, policy=source_policy)
+    quality = validate_quality(
+        records,
+        expected_record_ids=[record.record_id for record in records],
+        policy=source_policy,
+    )
     with pytest.raises(ManifestValidationError, match="SHA-256"):
         build_manifest(
             records,
@@ -869,6 +945,7 @@ def test_policy_same_id_different_allowlist_is_rejected() -> None:
                 "same-allowlist",
                 allowed_suspect_issues=frozenset({QualityIssue.DUPLICATE.value}),
             ),
+            expected_record_ids=[record.record_id for record in records],
             source_id="project-synthetic-fixture",
             license_id="project-owned-synthetic",
             exchange_timezone="America/New_York",
@@ -918,6 +995,172 @@ def test_manifest_rejects_tampered_quality_result_with_rehashed_manifest() -> No
             tampered,
             expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
         )
+
+
+def test_quality_result_hash_changes_for_changed_valid_payload() -> None:
+    record = bars("valid_regular_est.json")[0]
+    old_quality = validate_quality([record], expected_record_ids=[record.record_id], policy=POLICY)
+    changed_payload = record.to_mapping()
+    changed_payload["close"] = "100.50"
+    changed = Bar.from_mapping(changed_payload)
+    new_quality = validate_quality(
+        [changed], expected_record_ids=[changed.record_id], policy=POLICY
+    )
+    assert old_quality.status is QualityStatus.VALID
+    assert new_quality.status is QualityStatus.VALID
+    assert old_quality.input_records_sha256 != new_quality.input_records_sha256
+
+
+def test_manifest_rejects_old_quality_for_changed_valid_payload() -> None:
+    record = bars("valid_regular_est.json")[0]
+    old_quality = validate_quality([record], expected_record_ids=[record.record_id], policy=POLICY)
+    changed_payload = record.to_mapping()
+    changed_payload["close"] = "100.50"
+    changed = Bar.from_mapping(changed_payload)
+    with pytest.raises(ManifestValidationError, match="quality result"):
+        build_manifest(
+            [changed],
+            quality_result=old_quality,
+            quality_policy=POLICY,
+            expected_record_ids=[changed.record_id],
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+
+
+def test_manifest_requires_explicit_expected_record_ids() -> None:
+    records = bars("valid_regular_est.json")
+    quality = validate_quality(records, policy=POLICY)
+    with pytest.raises(ManifestValidationError, match="explicit expected_record_ids"):
+        build_manifest(
+            records,
+            quality_result=quality,
+            quality_policy=POLICY,
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+
+    with pytest.raises(ManifestValidationError, match="quality_result"):
+        build_manifest(
+            records,
+            quality_result=object(),  # type: ignore[arg-type]
+            quality_policy=POLICY,
+            expected_record_ids=[record.record_id for record in records],
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+    with pytest.raises(ManifestValidationError, match="expected_record_ids"):
+        build_manifest(
+            records,
+            quality_result=quality,
+            quality_policy=POLICY,
+            expected_record_ids=1,  # type: ignore[arg-type]
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+
+
+def test_manifest_rejects_noncanonical_expected_ids() -> None:
+    records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
+    result = manifest_for(records)
+    tampered = deepcopy(result.manifest)
+    expected = tampered["quality"]["result"]["expected_record_ids"]  # type: ignore[index]
+    tampered["quality"]["result"]["expected_record_ids"] = list(reversed(expected))  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="expected_record_ids"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_noncanonical_input_hash_sequence() -> None:
+    records = bars("valid_regular_est.json")
+    quality = validate_quality(
+        records, expected_record_ids=[record.record_id for record in records], policy=POLICY
+    )
+    result = build_manifest(
+        records,
+        quality_result=quality,
+        quality_policy=POLICY,
+        expected_record_ids=[record.record_id for record in records],
+        source_id="project-synthetic-fixture",
+        license_id="project-owned-synthetic",
+        exchange_timezone="America/New_York",
+        calendar_id="synthetic-controlled-session-v1",
+        input_file_sha256=["a" * 64, "b" * 64],
+    )
+    tampered = deepcopy(result.manifest)
+    tampered["input_file_sha256"] = ["b" * 64, "a" * 64]
+    with pytest.raises(ManifestValidationError, match="not canonical"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_noncanonical_record_quality_status_order() -> None:
+    records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
+    result = manifest_for(records)
+    tampered = deepcopy(result.manifest)
+    statuses = tampered["quality"]["result"]["record_quality_statuses"]  # type: ignore[index]
+    tampered["quality"]["result"]["record_quality_statuses"] = list(reversed(statuses))  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="record_quality_statuses"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_noncanonical_instrument_coverage_order() -> None:
+    first = bars("valid_regular_est.json")[0]
+    second_payload = first.to_mapping()
+    second_payload["record_id"] = "record-synth-other-0001"
+    second_payload["instrument_id"] = "instrument-synth-0002"
+    second_payload["symbol"] = "OTHER"
+    second = Bar.from_mapping(second_payload)
+    result = manifest_for([first, second])
+    tampered = deepcopy(result.manifest)
+    tampered["instrument_coverage"] = list(reversed(tampered["instrument_coverage"]))  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="instrument_coverage"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_quality_result_requires_status_array() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered["quality"]["result"].pop("record_quality_statuses")  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="record_quality_statuses"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_invalid_input_hash_representation() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    for value in ("not-a-sequence", [1], {1: "a" * 64}):
+        tampered = deepcopy(result.manifest)
+        tampered["input_file_sha256"] = value
+        with pytest.raises(ManifestValidationError, match="input_file_sha256"):
+            verify_manifest(
+                tampered,
+                expected_manifest_sha256="0" * 64,
+            )
 
 
 def test_manifest_rejects_tampered_records_with_rehashed_manifest() -> None:

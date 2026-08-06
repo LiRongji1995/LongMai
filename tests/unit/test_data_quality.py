@@ -18,12 +18,15 @@ from quant_system.data import (
     QualityPolicyError,
     QualityStatus,
     QuarantineWriteError,
+    ValidationError,
     parse_and_validate,
     quarantine_evidence,
     quarantine_result,
     validate_dataset,
     validate_quality,
 )
+from quant_system.data.canonical import sha256_file
+from quant_system.data.quality import _freeze_record_statuses
 
 FIXTURE_ROOT = Path(__file__).parents[1] / "fixtures" / "phase2_bar_contract"
 POLICY = QualityPolicy("synthetic-quality-v1")
@@ -125,6 +128,15 @@ def test_missing_policy_and_unsafe_policy_fail_closed() -> None:
         QualityPolicy("production-default", label="PRODUCTION")
     with pytest.raises(QualityPolicyError):
         QualityPolicy("negative", late_after=timedelta(seconds=-1))
+
+    tampered_policy = object.__new__(QualityPolicy)
+    for field in QualityPolicy.__slots__:
+        object.__setattr__(tampered_policy, field, getattr(POLICY, field))
+    object.__setattr__(tampered_policy, "label", "PRODUCTION")
+    invalid_policy_result = validate_quality(bars("valid_regular_est.json"), policy=tampered_policy)
+    assert invalid_policy_result.status is QualityStatus.REJECTED
+    non_iterable_result = validate_quality(1, policy=POLICY)  # type: ignore[arg-type]
+    assert non_iterable_result.status is QualityStatus.REJECTED
 
 
 def test_policy_identity_round_trips_and_rejects_unsafe_allowlists() -> None:
@@ -337,7 +349,7 @@ def test_quarantine_result_rejects_unknown_record_id(tmp_path: Path) -> None:
         rejected_record_ids=("unknown-record",),
         record_quality_issues=(("unknown-record", (QualityIssue.LATE.value,)),),
     )
-    with pytest.raises(QuarantineWriteError, match="not present"):
+    with pytest.raises(QuarantineWriteError, match="does not match"):
         quarantine_result(
             result,
             tmp_path / "quarantine",
@@ -350,11 +362,7 @@ def test_quarantine_result_rejects_unknown_record_id(tmp_path: Path) -> None:
 
 def test_quarantine_result_skips_missing_ids_without_fabricating_bars(tmp_path: Path) -> None:
     missing_id = "missing-record"
-    result = replace(
-        validate_quality([], expected_record_ids=[missing_id], policy=POLICY),
-        status=QualityStatus.REJECTED,
-        rejected_record_ids=(missing_id,),
-    )
+    result = validate_quality([], expected_record_ids=[missing_id], policy=POLICY)
     paths = quarantine_result(
         result,
         tmp_path / "quarantine",
@@ -370,9 +378,14 @@ def test_quarantine_result_skips_missing_ids_without_fabricating_bars(tmp_path: 
 def test_quarantine_result_rejects_existing_rejected_record_without_reason(
     tmp_path: Path,
 ) -> None:
-    record = bar_with_quality(QualityStatus.REJECTED, [])
-    result = validate_quality([record], policy=POLICY)
-    with pytest.raises(QuarantineWriteError, match="record-specific"):
+    with pytest.raises(ValidationError, match="non-VALID"):
+        bar_with_quality(QualityStatus.REJECTED, [])
+
+
+def test_quarantine_result_rejects_tampered_record_reason(tmp_path: Path) -> None:
+    record = bar_with_quality(QualityStatus.REJECTED, [QualityIssue.INVALID.value])
+    result = replace(validate_quality([record], policy=POLICY), record_quality_issues=())
+    with pytest.raises(QuarantineWriteError, match="does not match"):
         quarantine_result(
             result,
             tmp_path / "quarantine",
@@ -390,7 +403,7 @@ def test_quarantine_result_rejects_valid_result_with_rejected_ids(tmp_path: Path
         rejected_record_ids=(record.record_id,),
         record_quality_issues=((record.record_id, (QualityIssue.INVALID.value,)),),
     )
-    with pytest.raises(QuarantineWriteError, match="QUARANTINED or REJECTED"):
+    with pytest.raises(QuarantineWriteError, match="does not match"):
         quarantine_result(
             result,
             tmp_path / "quarantine",
@@ -402,7 +415,7 @@ def test_quarantine_result_rejects_valid_result_with_rejected_ids(tmp_path: Path
 
 
 def test_quarantine_result_rejects_non_bar_records_argument(tmp_path: Path) -> None:
-    result = validate_quality([], policy=POLICY)
+    result = validate_quality([object()], policy=POLICY)  # type: ignore[list-item]
     with pytest.raises(QuarantineWriteError, match="validated Bar"):
         quarantine_result(
             result,
@@ -449,13 +462,8 @@ def test_suspect_requires_explicit_policy_allowance() -> None:
 
 
 def test_suspect_without_issues_fails_closed() -> None:
-    result = validate_quality(
-        [bar_with_quality(QualityStatus.SUSPECT, [])],
-        policy=QualityPolicy("suspect-empty"),
-    )
-    assert result.status is QualityStatus.SUSPECT
-    assert result.issues == ()
-    assert result.downstream_records == ()
+    with pytest.raises(ValidationError, match="non-VALID"):
+        bar_with_quality(QualityStatus.SUSPECT, [])
 
 
 def test_quality_validation_rejects_non_bar_objects() -> None:
@@ -470,7 +478,7 @@ def test_quarantined_and_rejected_records_never_reach_downstream() -> None:
         policy=QualityPolicy("quarantined", late_after=timedelta(seconds=2)),
     )
     rejected = validate_quality(
-        [bar_with_quality(QualityStatus.REJECTED, [])],
+        [bar_with_quality(QualityStatus.REJECTED, [QualityIssue.INVALID.value])],
         policy=QualityPolicy("rejected"),
     )
     assert quarantined.status is QualityStatus.QUARANTINED
@@ -484,6 +492,7 @@ def test_quarantine_issues_are_record_specific(tmp_path: Path) -> None:
     stale = bars("stale_synthetic_policy.json")[0]
     result = validate_quality(
         [late, stale],
+        expected_record_ids=[late.record_id, stale.record_id],
         policy=QualityPolicy(
             "mixed-latency",
             late_after=timedelta(seconds=1),
@@ -521,7 +530,12 @@ def test_quarantine_reason_matrix_is_record_specific(tmp_path: Path) -> None:
             ),
             FIXTURE_ROOT / "duplicate_conflict.json",
             bars("duplicate_conflict.json"),
-            {"record-synth-conflict-0001": [QualityIssue.DUPLICATE.value]},
+            {
+                "record-synth-conflict-0001": [
+                    QualityIssue.DUPLICATE.value,
+                    QualityIssue.INVALID.value,
+                ]
+            },
         ),
         (
             "out-of-order",
@@ -568,6 +582,239 @@ def test_quarantine_reason_matrix_is_record_specific(tmp_path: Path) -> None:
             for payload in (json.loads(path.read_text(encoding="utf-8")) for path in paths)
         }
         assert actual == expected
+
+
+def test_quality_result_binds_exact_record_payload() -> None:
+    record = bars("valid_regular_est.json")[0]
+    result = validate_quality([record], expected_record_ids=[record.record_id], policy=POLICY)
+    assert result.input_records_sha256
+    assert result.expectation_mode == "EXPLICIT"
+    assert result.expected_record_ids == (record.record_id,)
+    assert result.record_quality_statuses == ((record.record_id, "VALID"),)
+    assert result.to_mapping()["input_records_sha256"] == result.input_records_sha256
+
+
+def test_record_quality_status_freeze_rejects_unknown_status() -> None:
+    with pytest.raises(ValidationError, match="record quality status"):
+        _freeze_record_statuses({"record": "UNKNOWN"})
+
+
+def test_quality_result_hash_changes_when_close_changes() -> None:
+    record = bars("valid_regular_est.json")[0]
+    changed_payload = record.to_mapping()
+    changed_payload["close"] = "100.50"
+    changed = Bar.from_mapping(changed_payload)
+    original = validate_quality([record], expected_record_ids=[record.record_id], policy=POLICY)
+    current = validate_quality([changed], expected_record_ids=[changed.record_id], policy=POLICY)
+    assert original.status is QualityStatus.VALID
+    assert current.status is QualityStatus.VALID
+    assert original.input_records_sha256 != current.input_records_sha256
+
+
+def test_quality_result_hash_preserves_input_order() -> None:
+    records = bars("valid_regular_est.json") + bars("valid_regular_edt.json")
+    expected = [record.record_id for record in records]
+    first = validate_quality(records, expected_record_ids=expected, policy=POLICY)
+    second = validate_quality(list(reversed(records)), expected_record_ids=expected, policy=POLICY)
+    assert first.input_records_sha256 != second.input_records_sha256
+
+
+def test_expected_record_ids_rejects_string() -> None:
+    result = validate_quality(
+        bars("valid_regular_est.json"), expected_record_ids="abc", policy=POLICY
+    )  # type: ignore[arg-type]
+    assert result.status is QualityStatus.REJECTED
+    assert result.issues == (QualityIssue.INVALID.value,)
+
+
+def test_expected_record_ids_rejects_non_string_entries() -> None:
+    for value in ([None], [1], [True], ["a", 1], 1):
+        result = validate_quality(
+            bars("valid_regular_est.json"), expected_record_ids=value, policy=POLICY
+        )  # type: ignore[arg-type]
+        assert result.status is QualityStatus.REJECTED
+        assert result.issues == (QualityIssue.INVALID.value,)
+
+
+def test_expected_record_ids_rejects_empty_and_duplicates() -> None:
+    for value in ([""], ["   "], ["record", "record"]):
+        result = validate_quality([], expected_record_ids=value, policy=POLICY)
+        assert result.status is QualityStatus.REJECTED
+        assert result.issues == (QualityIssue.INVALID.value,)
+
+
+def test_expected_record_ids_rejects_unexpected_current_record() -> None:
+    record = bars("valid_regular_est.json")[0]
+    result = validate_quality([record], expected_record_ids=["other-record"], policy=POLICY)
+    assert result.status is QualityStatus.REJECTED
+    assert result.missing_record_ids == ("other-record",)
+    assert result.record_issue_map[record.record_id] == (QualityIssue.INVALID.value,)
+
+
+def test_quality_validation_rejects_unexplained_non_valid_bar() -> None:
+    record = bar_with_quality(QualityStatus.SUSPECT, [QualityIssue.LATE.value])
+    tampered = object.__new__(Bar)
+    for field in Bar.__slots__:
+        object.__setattr__(tampered, field, getattr(record, field))
+    object.__setattr__(tampered, "quality_status", QualityStatus.SUSPECT)
+    object.__setattr__(tampered, "quality_issues", ())
+    result = validate_quality([tampered], policy=POLICY)
+    assert result.status is QualityStatus.REJECTED
+    assert result.record_issue_map[record.record_id] == (QualityIssue.INVALID.value,)
+
+
+def test_quarantine_result_validates_stored_identity(tmp_path: Path) -> None:
+    record = bars("valid_regular_est.json")[0]
+    observed = validate_quality([record], policy=POLICY)
+    explicit = validate_quality([record], expected_record_ids=[record.record_id], policy=POLICY)
+    common = {
+        "root": tmp_path,
+        "data_version": "1" * 64,
+        "source_fixture": FIXTURE_ROOT / "valid_regular_est.json",
+        "code_commit": "placeholder",
+        "records": [record],
+    }
+    cases = (
+        (object(), {}, "QualityResult"),
+        (replace(observed, policy=None), {}, "complete quality policy"),
+        (observed, {"policy": object()}, "QualityPolicy"),
+        (replace(observed, expectation_mode="UNKNOWN"), {}, "expectation mode"),
+        (replace(observed, expected_record_ids=(record.record_id,)), {}, "observed-only"),
+        (
+            replace(explicit, expected_record_ids=(record.record_id, 1)),
+            {},
+            "expected IDs",
+        ),
+        (
+            replace(explicit, expected_record_ids=("z", "a")),
+            {},
+            "not canonical",
+        ),
+    )
+    for result, options, message in cases:
+        with pytest.raises(QuarantineWriteError, match=message):
+            quarantine_result(result, **common, **options)  # type: ignore[arg-type]
+
+
+def test_quarantine_rejects_stale_result_for_current_valid_record(tmp_path: Path) -> None:
+    base = bars("valid_regular_est.json")[0]
+    changed_payload = base.to_mapping()
+    changed_payload["ingestion_time"] = "2024-01-02T21:00:05Z"
+    changed_payload["as_of_time"] = "2024-01-02T21:00:05Z"
+    late = Bar.from_mapping(changed_payload)
+    policy = QualityPolicy("stale-quarantine", late_after=timedelta(seconds=1))
+    old = validate_quality([late], expected_record_ids=[late.record_id], policy=policy)
+    root = tmp_path / "quarantine"
+    with pytest.raises(QuarantineWriteError, match="does not match"):
+        quarantine_result(
+            old,
+            root,
+            data_version="a" * 64,
+            source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+            code_commit="placeholder",
+            records=[base],
+        )
+    assert not root.exists()
+
+
+def test_quarantine_rejects_old_valid_result_for_current_late_record(tmp_path: Path) -> None:
+    base = bars("valid_regular_est.json")[0]
+    changed_payload = base.to_mapping()
+    changed_payload["ingestion_time"] = "2024-01-02T21:00:05Z"
+    changed_payload["as_of_time"] = "2024-01-02T21:00:05Z"
+    late = Bar.from_mapping(changed_payload)
+    policy = QualityPolicy("stale-quarantine-reverse", late_after=timedelta(seconds=1))
+    old = validate_quality([base], expected_record_ids=[base.record_id], policy=policy)
+    root = tmp_path / "quarantine"
+    with pytest.raises(QuarantineWriteError, match="does not match"):
+        quarantine_result(
+            old,
+            root,
+            data_version="a" * 64,
+            source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+            code_commit="placeholder",
+            records=[late],
+        )
+    assert not root.exists()
+
+
+def test_duplicate_conflict_has_record_level_invalid() -> None:
+    result = parse_and_validate(
+        fixture_payload("duplicate_conflict.json")["records"],  # type: ignore[arg-type]
+        policy=POLICY,
+    )
+    assert result.status is QualityStatus.REJECTED
+    assert set(result.record_issue_map["record-synth-conflict-0001"]) == {
+        QualityIssue.DUPLICATE.value,
+        QualityIssue.INVALID.value,
+    }
+
+
+def test_quarantine_uses_record_specific_status(tmp_path: Path) -> None:
+    rejected = bar_with_quality(QualityStatus.REJECTED, [QualityIssue.INVALID.value])
+    late_base = bars("late_synthetic_policy.json")[0]
+    policy = QualityPolicy("record-statuses", late_after=timedelta(seconds=1))
+    result = validate_quality(
+        [rejected, late_base],
+        expected_record_ids=[rejected.record_id, late_base.record_id],
+        policy=policy,
+    )
+    assert result.record_status_map[rejected.record_id] == QualityStatus.REJECTED.value
+    assert result.record_status_map[late_base.record_id] == QualityStatus.QUARANTINED.value
+    paths = quarantine_result(
+        result,
+        tmp_path / "quarantine",
+        data_version="c" * 64,
+        source_fixture=FIXTURE_ROOT / "late_synthetic_policy.json",
+        code_commit="placeholder",
+        records=[rejected, late_base],
+    )
+    evidence = {
+        json.loads(path.read_text(encoding="utf-8"))["record_id"]: json.loads(
+            path.read_text(encoding="utf-8")
+        )["quality_status"]
+        for path in paths
+    }
+    assert evidence == {
+        rejected.record_id: QualityStatus.REJECTED.value,
+        late_base.record_id: QualityStatus.QUARANTINED.value,
+    }
+
+
+def test_quarantine_evidence_is_idempotent(tmp_path: Path) -> None:
+    kwargs = {
+        "root": tmp_path,
+        "data_version": "d" * 64,
+        "record_id": "record-synth-late-0001",
+        "quality_status": QualityStatus.QUARANTINED,
+        "quality_issues": [QualityIssue.LATE.value],
+        "deterministic_reason": "status=QUARANTINED;issues=LATE",
+        "source_fixture_sha256": "e" * 64,
+        "code_commit": "placeholder",
+    }
+    first = quarantine_evidence(**kwargs)  # type: ignore[arg-type]
+    first_bytes = first.read_bytes()
+    second = quarantine_evidence(**kwargs)  # type: ignore[arg-type]
+    assert second == first
+    assert second.read_bytes() == first_bytes
+
+
+def test_quarantine_evidence_rejects_conflicting_overwrite(tmp_path: Path) -> None:
+    kwargs = {
+        "root": tmp_path,
+        "data_version": "f" * 64,
+        "record_id": "record-synth-late-0001",
+        "quality_status": QualityStatus.QUARANTINED,
+        "quality_issues": [QualityIssue.LATE.value],
+        "deterministic_reason": "status=QUARANTINED;issues=LATE",
+        "source_fixture_sha256": "0" * 64,
+        "code_commit": "placeholder",
+    }
+    first = quarantine_evidence(**kwargs)  # type: ignore[arg-type]
+    before = sha256_file(first)
+    with pytest.raises(QuarantineWriteError, match="immutable"):
+        quarantine_evidence(**{**kwargs, "deterministic_reason": "status=QUARANTINED;issues=STALE"})  # type: ignore[arg-type]
+    assert sha256_file(first) == before
 
 
 def test_windows_timezone_dependency_is_declared() -> None:

@@ -258,6 +258,14 @@
 7. 每次状态迁移必须更新本地图、检查相关链接和术语路由，并按 Review Bundle Policy 判断是否需要新 Bundle。
 
 本轮已将本地图激活，并在本地图登记 [`GLOSSARY.md`](GLOSSARY.md) 为 `Superseded`。跨文档短定义与详细权威路由由本节负责；具体字段、枚举和行为仍由所链接的 Active 领域文档负责。
-## Phase 2 Round 01 Corrective 2 Documentation Update
+## Phase 2 Round 01 Corrective 3 文档登记
 
-The registered Phase 2 Round 01 report remains the authoritative report for the governed synthetic Bar kernel. Its current addendum records Corrective 2, based on Candidate `a6946603c3aa9d5cfef1a1e467cc037e21078639`, with Review Bundle `REQUIRED`, pending independent review, and no freeze. Earlier Candidate failure history remains preserved in that report.
+Phase 2 Round 01 正式报告仍是 governed synthetic Bar runtime kernel 的权威报告。本轮
+Corrective 3 以 Candidate `7cc60f665f7cddafa572b5a56a8701eb8c778c6a` 为基线，保留
+`b7da13f`、`a694660` 与 `7cc60f` 的外部 `FAIL` 历史，并记录精确 payload 证据绑定、
+显式 expected record 集合、stale quarantine 拒绝、非 `VALID` 原因、duplicate conflict
+证据和隔离文件不可变性。当前状态仍为等待外部独立复核、尚未冻结。
+
+本轮为 synthetic/project-owned fixture only；没有真实数据、市场 API、API key、strategy、
+Broker、Alpaca、Paper 或 Live 接入。Review Bundle 为 `REQUIRED`，正式判断必须依赖新鲜
+Bundle、外部 probe、A/B 结果、SHA-256 与独立解包验证，不得以截图或文档单独替代。

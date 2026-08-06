@@ -152,14 +152,43 @@ Bundle generator 生成，并由独立 extraction、manifest/checksum 与 scope 
 完整 diff、独立探针、A/B、build hashes、Git remote equality 与 extraction validation
 进行复核。复核通过前保持 Candidate 未冻结；不得接入真实数据、启用策略、连接
 Broker/Alpaca 或开启 Paper/Live。
-## Phase 2 Round 01 Corrective 2 Addendum
+## Phase 2 Round 01 Corrective 3：精确 payload 证据与不可变隔离
 
-**Status: PASS WITH LIMITATIONS**
+**状态：PASS WITH LIMITATIONS；等待外部独立复核。**
 
-This addendum preserves the original Phase 2 Round 01 Candidate failure history above and records the current corrective round. The authoritative root is `D:\us-equity-quant-system`; the base Candidate is `a6946603c3aa9d5cfef1a1e467cc037e21078639`. The single objective is to bind manifest quality results to the exact current records and enforce truthful metadata, checksum, bound-record, and quarantine evidence invariants.
+本节取代此前追加的 Corrective 2 英文附录，并保留历史审阅链：原始 Candidate
+`b7da13ff145a3453d31b4015e003ac98086cb9ee` 的外部结论为 `FAIL`；后续 Candidate
+`a6946603c3aa9d5cfef1a1e467cc037e21078639` 的外部结论为 `FAIL`；Candidate
+`7cc60f665f7cddafa572b5a56a8701eb8c778c6a` 的外部结论仍为 `FAIL`，因此本轮开始时
+没有任何 Candidate 被冻结。
 
-The implementation remains within the current round allowlist: canonical identity, quality, manifest, and their unit tests. No Bar schema fields, fixtures, project dependency declarations, Bundle generator, strategy, Broker, Alpaca, Paper, Live, or real-data path was changed. The current evidence is synthetic-only and uses no market-data/API/key/secret material.
+本轮唯一目标是在权威仓库 `D:\us-equity-quant-system`、基线
+`7cc60f665f7cddafa572b5a56a8701eb8c778c6a` 之上，修复以下六类绕过：
 
-Corrective 2 closes the stale `QualityResult` bypass by rerunning the quality gate for the current records and comparing the complete deterministic result. Manifest construction and verification now enforce exact source, timezone, interval, schema/version, inferred or exact instrument coverage, non-empty safe input checksums, and canonical `bound_record_ids`. Quarantine evidence is restricted to valid lowercase SHA-256 data versions, `QUARANTINED`/`REJECTED` status, supported non-empty issue codes, deterministic reasons, safe record IDs, source hashes, and non-empty commits; missing records do not produce fabricated Bars or files.
+- `QualityResult` 绑定原始 caller 顺序下完整 canonical Bar payload array 的 SHA-256，
+  并记录显式 expected ID 集合、expectation mode、逐记录质量状态和逐记录确定性原因；
+- 严格拒绝字符串、空值、整数、布尔值、空白或重复的 `expected_record_ids`，显式集合
+  必须覆盖所有当前 records，缺失只表达为数据集级事实；
+- manifest 只接受 `EXPLICIT` expectation，使用当前 records、当前 policy 和调用方显式
+  expected 集合重新运行质量门禁，并比较完整 `QualityResult` mapping；
+- `quarantine_result` 在写文件前重新验证当前 records、policy、expectation 和 payload
+  摘要，拒绝 stale result，隔离证据使用各 record 自身的状态与原因；
+- Bar 的非 `VALID` 状态必须有非空质量原因，duplicate conflict 同时产生 record-level
+  `DUPLICATE` 与 `INVALID`；
+- quarantine evidence 使用 exclusive creation；同字节重放幂等，不同字节不得覆盖既有
+  证据，并对创建竞争 fail closed。
 
-The current round must be judged from its fresh external evidence and Review Bundle, not from the earlier corrective evidence. Review Bundle: REQUIRED. New Candidate status remains pending independent review and is not frozen. Remaining TBD items are production data-source/license approval, production late/stale policy, instrument registry, calendar, corporate-action/adjustment semantics, precision/rounding, and future LEAN/strategy/execution integration.
+同时，manifest 的 instrument coverage、sequence 形式 input checksum、expected IDs 和
+逐记录状态数组必须保持 canonical 顺序。已有 manifest mapping checksum 语义没有改写。
+本轮只修改任务 allowlist 中的数据模型、canonical、quality、manifest、单元测试及本报告和
+文档地图；没有修改 fixture、Review Bundle generator、README、CURRENT_PHASE、Phase 1
+Active 文档或项目依赖。
+
+验证范围仍为 synthetic/project-owned fixture only。没有接入真实 market data、数据 API、
+API key、strategy、Broker、Alpaca、Paper 或 Live；也没有发送订单或启用交易路径。
+正式 Review Bundle 为 `REQUIRED`，必须以新鲜外部环境、external probe、A/B 证据、官方
+Bundle、外层 ZIP、SHA-256 和独立解包验证作为交付依据；截图或本报告本身不能替代 Bundle。
+
+新 Candidate 仍待外部独立审阅，不得视为冻结。生产数据源与许可证、生产 late/stale policy、
+instrument registry、calendar、corporate-action/adjustment、精度舍入、LEAN、策略和执行
+集成均为 TBD，不属于本轮 corrective 范围。

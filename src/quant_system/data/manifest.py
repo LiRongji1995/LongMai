@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import json
-from collections.abc import Mapping, Sequence
+from collections.abc import Iterable, Mapping, Sequence
 from dataclasses import dataclass
 from pathlib import Path
 
@@ -16,7 +16,14 @@ from .canonical import (
     sha256_file,
 )
 from .models import Bar, ValidationError
-from .quality import QualityPolicy, QualityResult, validate_quality
+from .quality import (
+    EXPECTATION_MODE_EXPLICIT,
+    QUALITY_STATUS_ORDER,
+    QualityPolicy,
+    QualityResult,
+    _normalize_expected_record_ids,
+    validate_quality,
+)
 
 MANIFEST_SCHEMA_NAME = "BarDatasetManifest"
 MANIFEST_SCHEMA_VERSION = "1.0.0"
@@ -63,15 +70,23 @@ def _revalidate_quality_result(
     records: Sequence[Bar],
     quality_result: QualityResult,
     policy: QualityPolicy,
+    expected_record_ids: Iterable[str] | None = None,
 ) -> QualityResult:
-    current_ids = _record_ids(records)
-    missing_ids = quality_result.missing_record_ids
-    if any(not isinstance(record_id, str) or not record_id for record_id in missing_ids):
-        raise ManifestValidationError("quality result missing_record_ids are invalid")
-    expected_record_ids = current_ids | set(missing_ids)
+    if expected_record_ids is None:
+        raise ManifestValidationError("manifest requires explicit expected_record_ids")
+    try:
+        expectation_mode, normalized_expected_ids = _normalize_expected_record_ids(
+            expected_record_ids
+        )
+    except ValidationError as error:
+        raise ManifestValidationError("manifest expected_record_ids are invalid") from error
+    if expectation_mode != EXPECTATION_MODE_EXPLICIT:
+        raise ManifestValidationError("manifest requires explicit expected_record_ids")
+    if quality_result.expectation_mode != EXPECTATION_MODE_EXPLICIT:
+        raise ManifestValidationError("manifest quality result must use EXPLICIT expectation")
     rerun = validate_quality(
         records,
-        expected_record_ids=expected_record_ids,
+        expected_record_ids=normalized_expected_ids,
         policy=policy,
     )
     if rerun.to_mapping() != quality_result.to_mapping():
@@ -112,6 +127,7 @@ def build_manifest(
     *,
     quality_result: QualityResult,
     quality_policy: QualityPolicy,
+    expected_record_ids: Iterable[str] | None = None,
     source_id: str,
     license_id: str,
     exchange_timezone: str,
@@ -125,7 +141,9 @@ def build_manifest(
     if not isinstance(quality_result, QualityResult):
         raise ManifestValidationError("quality_result must be a QualityResult")
     _quality_identity(quality_result, quality_policy)
-    current_quality = _revalidate_quality_result(records, quality_result, quality_policy)
+    current_quality = _revalidate_quality_result(
+        records, quality_result, quality_policy, expected_record_ids
+    )
     identity_quality = _quality_identity(current_quality, quality_policy)
     descriptor = DatasetDescriptor.from_records(
         records,
@@ -215,10 +233,7 @@ def bind_manifest(records: Sequence[Bar], result: ManifestResult) -> tuple[Bar, 
     stored_result = stored_quality["result"]
     if not isinstance(stored_result, dict):
         raise ManifestValidationError("manifest quality result must be an object")
-    missing = stored_result.get("missing_record_ids")
-    if not isinstance(missing, list) or any(not isinstance(item, str) for item in missing):
-        raise ManifestValidationError("manifest missing_record_ids are invalid")
-    expected_ids = {record.record_id for record in records} | set(missing)
+    expected_ids = _quality_expected_ids(stored_result)
     rerun = validate_quality(records, expected_record_ids=expected_ids, policy=policy)
     if rerun.to_mapping() != stored_result:
         raise ManifestValidationError("manifest quality result does not pass the quality gate")
@@ -303,6 +318,7 @@ def _quality_from_manifest(
         raise ManifestValidationError("manifest quality result policy_id mismatch")
     if result_mapping.get("policy_sha256") != policy.policy_sha256:
         raise ManifestValidationError("manifest quality result policy SHA-256 mismatch")
+    _validate_quality_arrays(result_mapping)
     return policy, quality
 
 
@@ -344,6 +360,10 @@ def _descriptor_from_manifest(manifest: Mapping[str, object]) -> DatasetDescript
             if not isinstance(item, str):
                 raise ManifestValidationError("manifest input_file_sha256 sequence is invalid")
             normalized_hashes.append(item)
+        if normalized_hashes != sorted(normalized_hashes):
+            raise ManifestValidationError(
+                "manifest input_file_sha256 sequence is not canonical"
+            )
     else:
         raise ManifestValidationError("manifest input_file_sha256 is invalid")
     try:
@@ -383,18 +403,14 @@ def _validate_manifest_quality_and_bound_ids(
     result_mapping = quality_mapping.get("result")
     if not isinstance(result_mapping, dict):
         raise ManifestValidationError("manifest quality result must be an object")
-    missing = result_mapping.get("missing_record_ids")
-    if not isinstance(missing, list) or any(
-        not isinstance(record_id, str) or not record_id for record_id in missing
-    ):
-        raise ManifestValidationError("manifest quality missing_record_ids are invalid")
+    expected_ids = _quality_expected_ids(result_mapping)
     record_ids = _record_ids(records)
     unknown_bound_ids = set(bound_record_ids) - record_ids
     if unknown_bound_ids:
         raise ManifestValidationError("manifest bound_record_ids contain unknown records")
     rerun = validate_quality(
         records,
-        expected_record_ids=record_ids | set(missing),
+        expected_record_ids=expected_ids,
         policy=policy,
     )
     if rerun.to_mapping() != result_mapping:
@@ -409,6 +425,42 @@ def _manifest_string(manifest: Mapping[str, object], field: str) -> str:
     if not isinstance(value, str) or not value:
         raise ManifestValidationError(f"manifest {field} is invalid")
     return value
+
+
+def _quality_expected_ids(result_mapping: Mapping[str, object]) -> tuple[str, ...]:
+    mode = result_mapping.get("expectation_mode")
+    expected = result_mapping.get("expected_record_ids")
+    if mode != EXPECTATION_MODE_EXPLICIT or not isinstance(expected, list):
+        raise ManifestValidationError("manifest quality result must use explicit expected IDs")
+    if any(type(item) is not str or not item or item.strip() != item for item in expected):
+        raise ManifestValidationError("manifest expected_record_ids are invalid")
+    if len(expected) != len(set(expected)) or expected != sorted(expected):
+        raise ManifestValidationError("manifest expected_record_ids are not canonical")
+    return tuple(expected)
+
+
+def _validate_quality_arrays(result_mapping: Mapping[str, object]) -> None:
+    _quality_expected_ids(result_mapping)
+    statuses = result_mapping.get("record_quality_statuses")
+    if not isinstance(statuses, list):
+        raise ManifestValidationError("manifest record_quality_statuses are invalid")
+    status_ids: list[str] = []
+    for item in statuses:
+        if not isinstance(item, dict) or set(item) != {"record_id", "quality_status"}:
+            raise ManifestValidationError("manifest record_quality_statuses are invalid")
+        record_id = item.get("record_id")
+        status = item.get("quality_status")
+        if (
+            type(record_id) is not str
+            or not record_id
+            or record_id.strip() != record_id
+            or status not in QUALITY_STATUS_ORDER
+        ):
+            raise ManifestValidationError("manifest record_quality_statuses are invalid")
+        status_ids.append(record_id)
+    if len(status_ids) != len(set(status_ids)) or status_ids != sorted(status_ids):
+        raise ManifestValidationError("manifest record_quality_statuses are not canonical")
+
 
 
 def _validate_manifest_structure(manifest: Mapping[str, object]) -> None:
@@ -456,7 +508,9 @@ def _validate_manifest_structure(manifest: Mapping[str, object]) -> None:
         character not in "0123456789abcdef" for character in data_version
     ):
         raise ManifestValidationError("manifest data_version is not a lowercase SHA-256")
-    _manifest_string_list(manifest, "instrument_coverage")
+    coverage = _manifest_string_list(manifest, "instrument_coverage")
+    if coverage != sorted(coverage):
+        raise ManifestValidationError("manifest instrument_coverage is not canonical")
     _manifest_string_list(manifest, "bound_record_ids", allow_empty=True)
 
 

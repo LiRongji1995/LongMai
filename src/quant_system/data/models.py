@@ -314,6 +314,8 @@ class Bar:
         object.__setattr__(self, "quality_issues", issues)
         if quality_status is QualityStatus.VALID and issues:
             raise ValidationError("VALID Bars must not contain quality issues")
+        if quality_status is not QualityStatus.VALID and not issues:
+            raise ValidationError("non-VALID Bars must contain quality issues")
         if QualityIssue.INVALID.value in issues and quality_status not in {
             QualityStatus.QUARANTINED,
             QualityStatus.REJECTED,

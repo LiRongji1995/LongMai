@@ -147,6 +147,17 @@ def test_ohlc_quality_and_lineage_invariants_are_fail_closed() -> None:
         Bar.from_mapping(payload)
 
 
+@pytest.mark.parametrize(
+    "status", (QualityStatus.SUSPECT, QualityStatus.QUARANTINED, QualityStatus.REJECTED)
+)
+def test_non_valid_bar_requires_quality_issue(status: QualityStatus) -> None:
+    payload = valid_payload()
+    payload["quality_status"] = status.value
+    payload["quality_issues"] = []
+    with pytest.raises(ValidationError, match="non-VALID"):
+        Bar.from_mapping(payload)
+
+
 def test_round_trip_normalizes_times_but_preserves_decimal_semantics() -> None:
     bar = Bar.from_mapping(valid_payload())
     round_trip = Bar.from_mapping(bar.to_mapping())
