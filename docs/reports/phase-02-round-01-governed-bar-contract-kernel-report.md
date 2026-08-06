@@ -152,3 +152,14 @@ Bundle generator 生成，并由独立 extraction、manifest/checksum 与 scope 
 完整 diff、独立探针、A/B、build hashes、Git remote equality 与 extraction validation
 进行复核。复核通过前保持 Candidate 未冻结；不得接入真实数据、启用策略、连接
 Broker/Alpaca 或开启 Paper/Live。
+## Phase 2 Round 01 Corrective 2 Addendum
+
+**Status: PASS WITH LIMITATIONS**
+
+This addendum preserves the original Phase 2 Round 01 Candidate failure history above and records the current corrective round. The authoritative root is `D:\us-equity-quant-system`; the base Candidate is `a6946603c3aa9d5cfef1a1e467cc037e21078639`. The single objective is to bind manifest quality results to the exact current records and enforce truthful metadata, checksum, bound-record, and quarantine evidence invariants.
+
+The implementation remains within the current round allowlist: canonical identity, quality, manifest, and their unit tests. No Bar schema fields, fixtures, project dependency declarations, Bundle generator, strategy, Broker, Alpaca, Paper, Live, or real-data path was changed. The current evidence is synthetic-only and uses no market-data/API/key/secret material.
+
+Corrective 2 closes the stale `QualityResult` bypass by rerunning the quality gate for the current records and comparing the complete deterministic result. Manifest construction and verification now enforce exact source, timezone, interval, schema/version, inferred or exact instrument coverage, non-empty safe input checksums, and canonical `bound_record_ids`. Quarantine evidence is restricted to valid lowercase SHA-256 data versions, `QUARANTINED`/`REJECTED` status, supported non-empty issue codes, deterministic reasons, safe record IDs, source hashes, and non-empty commits; missing records do not produce fabricated Bars or files.
+
+The current round must be judged from its fresh external evidence and Review Bundle, not from the earlier corrective evidence. Review Bundle: REQUIRED. New Candidate status remains pending independent review and is not frozen. Remaining TBD items are production data-source/license approval, production late/stale policy, instrument registry, calendar, corporate-action/adjustment semantics, precision/rounding, and future LEAN/strategy/execution integration.

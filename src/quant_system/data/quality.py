@@ -479,8 +479,15 @@ def quarantine_evidence(
 
     safe_version = _safe_component(data_version, "data_version")
     safe_record = _safe_component(record_id, "record_id")
+    if (
+        len(data_version) != 64
+        or any(character not in "0123456789abcdef" for character in data_version)
+    ):
+        raise QuarantineWriteError("data_version must be a lowercase SHA-256")
     if not isinstance(quality_status, QualityStatus):
         raise QuarantineWriteError("quality_status must be a QualityStatus")
+    if quality_status not in {QualityStatus.QUARANTINED, QualityStatus.REJECTED}:
+        raise QuarantineWriteError("quarantine evidence requires QUARANTINED or REJECTED status")
     if not isinstance(deterministic_reason, str) or not deterministic_reason:
         raise QuarantineWriteError("deterministic reason is required")
     if (
@@ -492,6 +499,8 @@ def quarantine_evidence(
     if not isinstance(code_commit, str) or not code_commit:
         raise QuarantineWriteError("code commit or placeholder is required")
     allowed = set(QUALITY_ISSUE_ORDER)
+    if not quality_issues:
+        raise QuarantineWriteError("quarantine quality issues must not be empty")
     if any(issue not in allowed for issue in quality_issues):
         raise QuarantineWriteError("quarantine quality issue is not a contract reason code")
     evidence = {
@@ -523,24 +532,37 @@ def quarantine_result(
     data_version: str,
     source_fixture: Path,
     code_commit: str,
-    records: Sequence[Bar] | None = None,
+    records: Sequence[Bar],
 ) -> tuple[Path, ...]:
-    """Quarantine all rejected/quarantined records; missing IDs have no fake Bar."""
+    """Quarantine caller-provided rejected records without fabricating Bars."""
 
+    by_id: dict[str, Bar] = {}
+    for record in records:
+        if not isinstance(record, Bar):
+            raise QuarantineWriteError("quarantine records must be validated Bar objects")
+        by_id[record.record_id] = record
     record_issues = result.record_issue_map
     source_sha = sha256_file(source_fixture)
+    missing_ids = set(result.missing_record_ids)
     paths: list[Path] = []
     for record_id in result.rejected_record_ids:
+        if record_id in missing_ids:
+            continue
+        if record_id not in by_id:
+            raise QuarantineWriteError(
+                f"rejected record {record_id} is not present in quarantine records"
+            )
         issues = record_issues.get(record_id, ())
-        status = (
-            QualityStatus.REJECTED if result.status is QualityStatus.REJECTED else result.status
-        )
+        if not issues:
+            raise QuarantineWriteError(
+                f"rejected record {record_id} has no record-specific quality issues"
+            )
         paths.append(
             quarantine_evidence(
                 root,
                 data_version=data_version,
                 record_id=record_id,
-                quality_status=status,
+                quality_status=result.status,
                 quality_issues=issues,
                 deterministic_reason=result.deterministic_reason,
                 source_fixture_sha256=source_sha,

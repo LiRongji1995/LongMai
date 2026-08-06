@@ -287,6 +287,133 @@ def test_quarantine_evidence_validates_all_identity_fields(tmp_path: Path) -> No
             quarantine_evidence(**payload)  # type: ignore[arg-type]
 
 
+@pytest.mark.parametrize("data_version", ("A" * 64, "a" * 63, "g" * 64))
+def test_quarantine_requires_sha256_data_version(tmp_path: Path, data_version: str) -> None:
+    with pytest.raises(QuarantineWriteError, match="lowercase SHA-256"):
+        quarantine_evidence(
+            tmp_path,
+            data_version=data_version,
+            record_id="record-synth-late-0001",
+            quality_status=QualityStatus.QUARANTINED,
+            quality_issues=[QualityIssue.LATE.value],
+            deterministic_reason="late synthetic record",
+            source_fixture_sha256="b" * 64,
+            code_commit="placeholder",
+        )
+
+
+def test_quarantine_rejects_valid_status(tmp_path: Path) -> None:
+    with pytest.raises(QuarantineWriteError, match="QUARANTINED or REJECTED"):
+        quarantine_evidence(
+            tmp_path,
+            data_version="a" * 64,
+            record_id="record-synth-late-0001",
+            quality_status=QualityStatus.VALID,
+            quality_issues=[QualityIssue.LATE.value],
+            deterministic_reason="late synthetic record",
+            source_fixture_sha256="b" * 64,
+            code_commit="placeholder",
+        )
+
+
+def test_quarantine_rejects_empty_issues(tmp_path: Path) -> None:
+    with pytest.raises(QuarantineWriteError, match="must not be empty"):
+        quarantine_evidence(
+            tmp_path,
+            data_version="a" * 64,
+            record_id="record-synth-late-0001",
+            quality_status=QualityStatus.REJECTED,
+            quality_issues=[],
+            deterministic_reason="rejected synthetic record",
+            source_fixture_sha256="b" * 64,
+            code_commit="placeholder",
+        )
+
+
+def test_quarantine_result_rejects_unknown_record_id(tmp_path: Path) -> None:
+    fixture = FIXTURE_ROOT / "late_synthetic_policy.json"
+    result = replace(
+        validate_quality(bars("late_synthetic_policy.json"), policy=POLICY),
+        rejected_record_ids=("unknown-record",),
+        record_quality_issues=(("unknown-record", (QualityIssue.LATE.value,)),),
+    )
+    with pytest.raises(QuarantineWriteError, match="not present"):
+        quarantine_result(
+            result,
+            tmp_path / "quarantine",
+            data_version="a" * 64,
+            source_fixture=fixture,
+            code_commit="placeholder",
+            records=bars("late_synthetic_policy.json"),
+        )
+
+
+def test_quarantine_result_skips_missing_ids_without_fabricating_bars(tmp_path: Path) -> None:
+    missing_id = "missing-record"
+    result = replace(
+        validate_quality([], expected_record_ids=[missing_id], policy=POLICY),
+        status=QualityStatus.REJECTED,
+        rejected_record_ids=(missing_id,),
+    )
+    paths = quarantine_result(
+        result,
+        tmp_path / "quarantine",
+        data_version="a" * 64,
+        source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+        code_commit="placeholder",
+        records=[],
+    )
+    assert paths == ()
+    assert not (tmp_path / "quarantine").exists()
+
+
+def test_quarantine_result_rejects_existing_rejected_record_without_reason(
+    tmp_path: Path,
+) -> None:
+    record = bar_with_quality(QualityStatus.REJECTED, [])
+    result = validate_quality([record], policy=POLICY)
+    with pytest.raises(QuarantineWriteError, match="record-specific"):
+        quarantine_result(
+            result,
+            tmp_path / "quarantine",
+            data_version="a" * 64,
+            source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+            code_commit="placeholder",
+            records=[record],
+        )
+
+
+def test_quarantine_result_rejects_valid_result_with_rejected_ids(tmp_path: Path) -> None:
+    record = bars("valid_regular_est.json")[0]
+    result = replace(
+        validate_quality([record], policy=POLICY),
+        rejected_record_ids=(record.record_id,),
+        record_quality_issues=((record.record_id, (QualityIssue.INVALID.value,)),),
+    )
+    with pytest.raises(QuarantineWriteError, match="QUARANTINED or REJECTED"):
+        quarantine_result(
+            result,
+            tmp_path / "quarantine",
+            data_version="a" * 64,
+            source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+            code_commit="placeholder",
+            records=[record],
+        )
+
+
+def test_quarantine_result_rejects_non_bar_records_argument(tmp_path: Path) -> None:
+    result = validate_quality([], policy=POLICY)
+    with pytest.raises(QuarantineWriteError, match="validated Bar"):
+        quarantine_result(
+            result,
+            tmp_path / "quarantine",
+            data_version="a" * 64,
+            source_fixture=FIXTURE_ROOT / "valid_regular_est.json",
+            code_commit="placeholder",
+            records=[object()],  # type: ignore[list-item]
+        )
+
+
 def test_quality_result_mapping_is_deterministic() -> None:
     result = validate_quality(bars("valid_regular_est.json"), policy=POLICY)
     mapping = result.to_mapping()
@@ -329,6 +456,12 @@ def test_suspect_without_issues_fails_closed() -> None:
     assert result.status is QualityStatus.SUSPECT
     assert result.issues == ()
     assert result.downstream_records == ()
+
+
+def test_quality_validation_rejects_non_bar_objects() -> None:
+    result = validate_quality([object()], policy=POLICY)  # type: ignore[list-item]
+    assert result.status is QualityStatus.REJECTED
+    assert result.issues == (QualityIssue.INVALID.value,)
 
 
 def test_quarantined_and_rejected_records_never_reach_downstream() -> None:
@@ -402,13 +535,13 @@ def test_quarantine_reason_matrix_is_record_specific(tmp_path: Path) -> None:
         ),
         (
             "existing-invalid",
-            parse_and_validate(
-                fixture_payload("invalid_decimal.json")["records"],  # type: ignore[arg-type]
+            validate_quality(
+                [bar_with_quality(QualityStatus.REJECTED, [QualityIssue.INVALID.value])],
                 policy=POLICY,
             ),
-            FIXTURE_ROOT / "invalid_decimal.json",
-            [],
-            {"record-synth-invalid-decimal-0001": [QualityIssue.INVALID.value]},
+            FIXTURE_ROOT / "valid_regular_est.json",
+            [bar_with_quality(QualityStatus.REJECTED, [QualityIssue.INVALID.value])],
+            {"record-synth-est-0001": [QualityIssue.INVALID.value]},
         ),
         (
             "existing-quarantined",

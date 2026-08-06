@@ -125,22 +125,49 @@ def canonicalize_records(
 def _relative_input_file_hashes(
     value: Mapping[str, str] | Sequence[str],
 ) -> dict[str, str] | list[str]:
+    def normalize_path(path: object) -> str:
+        if not isinstance(path, str) or not path:
+            raise CanonicalizationError(
+                "input file paths must be non-empty POSIX-relative strings"
+            )
+        if "\\" in path:
+            raise CanonicalizationError("input file paths must use POSIX separators")
+        posix_path = PurePosixPath(path)
+        windows_path = PureWindowsPath(path)
+        if posix_path.is_absolute() or windows_path.is_absolute() or windows_path.drive:
+            raise CanonicalizationError("absolute paths must not enter dataset identity")
+        if (
+            windows_path.root
+            or any(part in {"", ".", ".."} for part in path.split("/"))
+            or posix_path.as_posix() != path
+        ):
+            raise CanonicalizationError(
+                "input file paths must be absolute-free and safe POSIX-relative paths"
+            )
+        return path
+
     if isinstance(value, Mapping):
+        if not value:
+            raise CanonicalizationError("input file SHA-256 mapping must not be empty")
         normalized: dict[str, str] = {}
-        for path, digest in value.items():
-            if not isinstance(path, str) or not path or "\\" in path:
-                raise CanonicalizationError(
-                    "input file paths must be non-empty POSIX-relative strings"
-                )
-            if PurePosixPath(path).is_absolute() or PureWindowsPath(path).is_absolute():
-                raise CanonicalizationError("absolute paths must not enter dataset identity")
-            if len(digest) != 64 or any(
+        for raw_path, digest in value.items():
+            path = normalize_path(raw_path)
+            if not isinstance(digest, str) or len(digest) != 64 or any(
                 character not in "0123456789abcdef" for character in digest
             ):
                 raise CanonicalizationError("input file SHA-256 must be lowercase hexadecimal")
+            if path in normalized:
+                raise CanonicalizationError("input file paths must not normalize to duplicates")
             normalized[path] = digest
         return {key: normalized[key] for key in sorted(normalized)}
-    hashes = list(value)
+    if isinstance(value, str):
+        raise CanonicalizationError("input file SHA-256 sequence is invalid")
+    try:
+        hashes = list(value)
+    except TypeError as error:
+        raise CanonicalizationError("input file SHA-256 sequence is invalid") from error
+    if not hashes:
+        raise CanonicalizationError("input file SHA-256 sequence must not be empty")
     if any(
         not isinstance(item, str)
         or len(item) != 64
@@ -148,6 +175,8 @@ def _relative_input_file_hashes(
         for item in hashes
     ):
         raise CanonicalizationError("input file SHA-256 sequence is invalid")
+    if len(hashes) != len(set(hashes)):
+        raise CanonicalizationError("input file SHA-256 sequence must not contain duplicates")
     return sorted(hashes)
 
 
@@ -191,15 +220,6 @@ class DatasetDescriptor:
         schema_version: str = BAR_SCHEMA_VERSION,
     ) -> DatasetDescriptor:
         ordered = canonicalize_records(records)
-        coverage = tuple(
-            sorted(
-                set(instrument_coverage)
-                if instrument_coverage is not None
-                else {record.instrument_id for record in ordered}
-            )
-        )
-        if not coverage or any(not isinstance(item, str) or not item for item in coverage):
-            raise CanonicalizationError("instrument coverage must contain stable IDs")
         for field_name, field_value in (
             ("schema_name", schema_name),
             ("schema_version", schema_version),
@@ -211,6 +231,33 @@ class DatasetDescriptor:
         ):
             if not isinstance(field_value, str) or not field_value:
                 raise CanonicalizationError(f"{field_name} must be a non-empty string")
+        if not ordered:
+            raise CanonicalizationError("records must not be empty")
+        for record in ordered:
+            if record.schema_name != schema_name:
+                raise CanonicalizationError("record schema_name does not match descriptor")
+            if record.schema_version != schema_version:
+                raise CanonicalizationError("record schema_version does not match descriptor")
+            if record.source != source_id:
+                raise CanonicalizationError("record source does not match source_id")
+            if record.exchange_timezone != exchange_timezone:
+                raise CanonicalizationError("record timezone does not match exchange_timezone")
+            if record.resolution.value != interval:
+                raise CanonicalizationError("record resolution does not match interval")
+        actual_coverage = tuple(sorted({record.instrument_id for record in ordered}))
+        if instrument_coverage is None:
+            coverage = actual_coverage
+        else:
+            supplied_coverage = tuple(instrument_coverage)
+            if any(not isinstance(item, str) or not item for item in supplied_coverage):
+                raise CanonicalizationError("instrument coverage must contain stable IDs")
+            if len(supplied_coverage) != len(set(supplied_coverage)):
+                raise CanonicalizationError("instrument coverage must not contain duplicates")
+            coverage = tuple(sorted(supplied_coverage))
+            if coverage != actual_coverage:
+                raise CanonicalizationError(
+                    "instrument coverage does not match record instrument IDs"
+                )
         return cls(
             schema_name=schema_name,
             schema_version=schema_version,

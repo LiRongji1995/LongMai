@@ -50,6 +50,37 @@ def _quality_identity(quality_result: QualityResult, policy: QualityPolicy) -> d
     }
 
 
+def _record_ids(records: Sequence[Bar]) -> set[str]:
+    identifiers: set[str] = set()
+    for record in records:
+        if not isinstance(record, Bar):
+            raise ManifestValidationError("manifest records must be validated Bar objects")
+        identifiers.add(record.record_id)
+    return identifiers
+
+
+def _revalidate_quality_result(
+    records: Sequence[Bar],
+    quality_result: QualityResult,
+    policy: QualityPolicy,
+) -> QualityResult:
+    current_ids = _record_ids(records)
+    missing_ids = quality_result.missing_record_ids
+    if any(not isinstance(record_id, str) or not record_id for record_id in missing_ids):
+        raise ManifestValidationError("quality result missing_record_ids are invalid")
+    expected_record_ids = current_ids | set(missing_ids)
+    rerun = validate_quality(
+        records,
+        expected_record_ids=expected_record_ids,
+        policy=policy,
+    )
+    if rerun.to_mapping() != quality_result.to_mapping():
+        raise ManifestValidationError(
+            "quality result does not match the current records and policy"
+        )
+    return rerun
+
+
 def _build_manifest_mapping(
     descriptor: DatasetDescriptor,
     *,
@@ -93,7 +124,9 @@ def build_manifest(
 
     if not isinstance(quality_result, QualityResult):
         raise ManifestValidationError("quality_result must be a QualityResult")
-    identity_quality = _quality_identity(quality_result, quality_policy)
+    _quality_identity(quality_result, quality_policy)
+    current_quality = _revalidate_quality_result(records, quality_result, quality_policy)
+    identity_quality = _quality_identity(current_quality, quality_policy)
     descriptor = DatasetDescriptor.from_records(
         records,
         source_id=source_id,
@@ -117,7 +150,10 @@ def build_manifest(
         interval=interval,
     )
     ordered_records = descriptor_records(descriptor, records)
-    downstream_ids = tuple(record.record_id for record in quality_result.downstream_records)
+    downstream_id_set = {record.record_id for record in current_quality.downstream_records}
+    downstream_ids = tuple(
+        record.record_id for record in ordered_records if record.record_id in downstream_id_set
+    )
     ordered_by_id = {record.record_id: record for record in ordered_records}
     if any(record_id not in ordered_by_id for record_id in downstream_ids):
         raise ManifestValidationError("downstream records do not match descriptor records")
@@ -272,15 +308,28 @@ def _quality_from_manifest(
 
 def _descriptor_from_manifest(manifest: Mapping[str, object]) -> DatasetDescriptor:
     _validate_manifest_structure(manifest)
-    _, quality = _quality_from_manifest(manifest)
+    policy, quality = _quality_from_manifest(manifest)
     ordered = manifest["ordered_canonical_records"]
     if not isinstance(ordered, list):
         raise ManifestValidationError("manifest ordered_canonical_records are invalid")
     ordered_records: list[dict[str, object]] = []
+    parsed_records: list[Bar] = []
     for item in ordered:
         if not isinstance(item, dict):
             raise ManifestValidationError("manifest ordered_canonical_records are invalid")
+        if {"data_version", "data_manifest_sha256"} & set(item):
+            raise ManifestValidationError("manifest canonical records must exclude derived fields")
+        payload = dict(item)
+        payload["data_version"] = "0" * 64
+        payload["data_manifest_sha256"] = "0" * 64
+        try:
+            record = Bar.from_mapping(payload)
+        except ValidationError as error:
+            raise ManifestValidationError("manifest ordered canonical record is invalid") from error
+        if canonical_bar_payload(record) != item:
+            raise ManifestValidationError("manifest ordered canonical record is not canonical")
         ordered_records.append(item)
+        parsed_records.append(record)
     input_hashes = manifest["input_file_sha256"]
     normalized_hashes: dict[str, str] | list[str]
     if isinstance(input_hashes, dict):
@@ -297,19 +346,62 @@ def _descriptor_from_manifest(manifest: Mapping[str, object]) -> DatasetDescript
             normalized_hashes.append(item)
     else:
         raise ManifestValidationError("manifest input_file_sha256 is invalid")
-    return DatasetDescriptor(
-        schema_name=_manifest_string(manifest, "schema_name"),
-        schema_version=_manifest_string(manifest, "schema_version"),
-        source_id=_manifest_string(manifest, "source_id"),
-        license_id=_manifest_string(manifest, "license_id"),
-        instrument_coverage=tuple(_manifest_string_list(manifest, "instrument_coverage")),
-        interval=_manifest_string(manifest, "interval"),
-        exchange_timezone=_manifest_string(manifest, "exchange_timezone"),
-        calendar_id=_manifest_string(manifest, "calendar_id"),
-        ordered_canonical_records=tuple(ordered_records),
-        quality_result=quality,
-        input_file_sha256=normalized_hashes,
+    try:
+        descriptor = DatasetDescriptor.from_records(
+            parsed_records,
+            schema_name=_manifest_string(manifest, "schema_name"),
+            schema_version=_manifest_string(manifest, "schema_version"),
+            source_id=_manifest_string(manifest, "source_id"),
+            license_id=_manifest_string(manifest, "license_id"),
+            instrument_coverage=tuple(_manifest_string_list(manifest, "instrument_coverage")),
+            interval=_manifest_string(manifest, "interval"),
+            exchange_timezone=_manifest_string(manifest, "exchange_timezone"),
+            calendar_id=_manifest_string(manifest, "calendar_id"),
+            quality_result=quality,
+            input_file_sha256=normalized_hashes,
+        )
+    except ValidationError as error:
+        raise ManifestValidationError("manifest metadata does not match its records") from error
+    if descriptor.ordered_canonical_records != tuple(ordered_records):
+        raise ManifestValidationError("manifest ordered records are not canonical")
+    _validate_manifest_quality_and_bound_ids(
+        parsed_records,
+        policy=policy,
+        quality_mapping=quality,
+        bound_record_ids=_manifest_string_list(manifest, "bound_record_ids", allow_empty=True),
     )
+    return descriptor
+
+
+def _validate_manifest_quality_and_bound_ids(
+    records: Sequence[Bar],
+    *,
+    policy: QualityPolicy,
+    quality_mapping: dict[str, object],
+    bound_record_ids: Sequence[str],
+) -> None:
+    result_mapping = quality_mapping.get("result")
+    if not isinstance(result_mapping, dict):
+        raise ManifestValidationError("manifest quality result must be an object")
+    missing = result_mapping.get("missing_record_ids")
+    if not isinstance(missing, list) or any(
+        not isinstance(record_id, str) or not record_id for record_id in missing
+    ):
+        raise ManifestValidationError("manifest quality missing_record_ids are invalid")
+    record_ids = _record_ids(records)
+    unknown_bound_ids = set(bound_record_ids) - record_ids
+    if unknown_bound_ids:
+        raise ManifestValidationError("manifest bound_record_ids contain unknown records")
+    rerun = validate_quality(
+        records,
+        expected_record_ids=record_ids | set(missing),
+        policy=policy,
+    )
+    if rerun.to_mapping() != result_mapping:
+        raise ManifestValidationError("manifest quality result does not match its records")
+    expected_bound_ids = [record.record_id for record in rerun.downstream_records]
+    if list(bound_record_ids) != expected_bound_ids:
+        raise ManifestValidationError("manifest bound_record_ids do not match the quality gate")
 
 
 def _manifest_string(manifest: Mapping[str, object], field: str) -> str:

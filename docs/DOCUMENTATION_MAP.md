@@ -258,3 +258,6 @@
 7. 每次状态迁移必须更新本地图、检查相关链接和术语路由，并按 Review Bundle Policy 判断是否需要新 Bundle。
 
 本轮已将本地图激活，并在本地图登记 [`GLOSSARY.md`](GLOSSARY.md) 为 `Superseded`。跨文档短定义与详细权威路由由本节负责；具体字段、枚举和行为仍由所链接的 Active 领域文档负责。
+## Phase 2 Round 01 Corrective 2 Documentation Update
+
+The registered Phase 2 Round 01 report remains the authoritative report for the governed synthetic Bar kernel. Its current addendum records Corrective 2, based on Candidate `a6946603c3aa9d5cfef1a1e467cc037e21078639`, with Review Bundle `REQUIRED`, pending independent review, and no freeze. Earlier Candidate failure history remains preserved in that report.
