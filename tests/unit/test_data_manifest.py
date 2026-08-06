@@ -4,6 +4,8 @@ from __future__ import annotations
 
 import hashlib
 import json
+from copy import deepcopy
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
 
@@ -11,7 +13,10 @@ import pytest
 
 from quant_system.data import (
     Bar,
+    ManifestResult,
+    QualityIssue,
     QualityPolicy,
+    QualityStatus,
     build_manifest,
     compute_manifest_sha256,
     quarantine_result,
@@ -26,6 +31,7 @@ from quant_system.data.canonical import (
     canonical_json_bytes,
     canonicalize_records,
     compute_data_version,
+    sha256_bytes,
     sha256_file,
 )
 from quant_system.data.manifest import (
@@ -55,6 +61,37 @@ def file_hashes(root: Path) -> dict[str, str]:
         for path in sorted(root.rglob("*"))
         if path.is_file()
     }
+
+
+def quality_bar(status: QualityStatus, issues: list[str]) -> Bar:
+    payload = fixture_payload("valid_regular_est.json")["records"][0]
+    assert isinstance(payload, dict)
+    payload["quality_status"] = status.value
+    payload["quality_issues"] = issues
+    return Bar.from_mapping(payload)  # type: ignore[arg-type]
+
+
+def manifest_for(
+    records: list[Bar],
+    *,
+    policy: QualityPolicy = POLICY,
+    expected_record_ids: list[str] | None = None,
+) -> ManifestResult:
+    quality = validate_quality(
+        records,
+        expected_record_ids=expected_record_ids,
+        policy=policy,
+    )
+    return build_manifest(
+        records,
+        quality_result=quality,
+        quality_policy=policy,
+        source_id="project-synthetic-fixture",
+        license_id="project-owned-synthetic",
+        exchange_timezone="America/New_York",
+        calendar_id="synthetic-controlled-session-v1",
+        input_file_sha256={"valid_regular_est.json": "a" * 64},
+    )
 
 
 def test_canonical_json_is_utf8_sorted_and_rejects_float_identity() -> None:
@@ -200,7 +237,7 @@ def test_manifest_and_file_checksum_mismatches_fail_closed(tmp_path: Path) -> No
     )
     tampered = dict(result.manifest)
     tampered["source_id"] = "tampered"
-    with pytest.raises(ManifestValidationError, match="manifest bytes"):
+    with pytest.raises(ManifestValidationError, match="data_version"):
         verify_manifest(tampered, expected_manifest_sha256=result.data_manifest_sha256)
     with pytest.raises(ManifestValidationError, match="must not contain"):
         verify_manifest(
@@ -216,6 +253,134 @@ def test_manifest_and_file_checksum_mismatches_fail_closed(tmp_path: Path) -> No
         verify_input_file_sha256(input_file, "a" * 64)
     with pytest.raises(CanonicalizationError, match="unable to read"):
         sha256_file(tmp_path / "missing-input")
+
+
+def test_manifest_reverification_checks_phase_a_phase_b_and_records() -> None:
+    records = bars("valid_regular_est.json")
+    quality = validate_quality(records, policy=POLICY)
+    result = build_manifest(
+        records,
+        quality_result=quality,
+        quality_policy=POLICY,
+        source_id="project-synthetic-fixture",
+        license_id="project-owned-synthetic",
+        exchange_timezone="America/New_York",
+        calendar_id="synthetic-controlled-session-v1",
+        input_file_sha256=["a" * 64],
+    )
+    verify_manifest(
+        result.manifest,
+        expected_manifest_sha256=result.data_manifest_sha256,
+        records=records,
+    )
+    with pytest.raises(ManifestValidationError, match="data_version"):
+        verify_manifest(
+            result.manifest,
+            expected_manifest_sha256=result.data_manifest_sha256,
+            expected_data_version="2" * 64,
+        )
+    with pytest.raises(ManifestValidationError, match="canonical manifest bytes"):
+        verify_manifest(result.manifest, expected_manifest_sha256="0" * 64)
+    with pytest.raises(ManifestValidationError, match="canonical record list"):
+        verify_manifest(
+            result.manifest,
+            expected_manifest_sha256=result.data_manifest_sha256,
+            records=[],
+        )
+
+
+def test_quality_identity_must_be_complete_and_matching() -> None:
+    records = bars("valid_regular_est.json")
+    quality = validate_quality(records, policy=POLICY)
+    kwargs = {
+        "records": records,
+        "quality_policy": POLICY,
+        "source_id": "project-synthetic-fixture",
+        "license_id": "project-owned-synthetic",
+        "exchange_timezone": "America/New_York",
+        "calendar_id": "synthetic-controlled-session-v1",
+        "input_file_sha256": {"valid_regular_est.json": "a" * 64},
+    }
+    with pytest.raises(ManifestValidationError, match="complete policy"):
+        build_manifest(quality_result=replace(quality, policy=None), **kwargs)
+    with pytest.raises(ManifestValidationError, match="id"):
+        build_manifest(quality_result=replace(quality, policy_id="other"), **kwargs)
+    with pytest.raises(ManifestValidationError, match="SHA-256"):
+        build_manifest(quality_result=replace(quality, policy_sha256="0" * 64), **kwargs)
+    other_policy = QualityPolicy(POLICY.policy_id, late_after=timedelta(seconds=1))
+    with pytest.raises(ManifestValidationError, match="mapping"):
+        build_manifest(
+            quality_result=replace(
+                quality,
+                policy=other_policy,
+                policy_sha256=POLICY.policy_sha256,
+            ),
+            **kwargs,
+        )
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    (
+        ("manifest_schema_name", "WrongManifest"),
+        ("source_id", ""),
+        ("data_version", "g" * 64),
+        ("instrument_coverage", []),
+        ("instrument_coverage", ["instrument-synth-0001"] * 2),
+        ("instrument_coverage", "not-an-array"),
+        ("bound_record_ids", "not-an-array"),
+        ("ordered_canonical_records", ["not-an-object"]),
+    ),
+)
+def test_manifest_structure_rejects_invalid_fields(field: str, value: object) -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered[field] = value
+    with pytest.raises(ManifestValidationError):
+        verify_manifest(tampered, expected_manifest_sha256=result.data_manifest_sha256)
+
+    missing = deepcopy(result.manifest)
+    del missing["source_id"]
+    with pytest.raises(ManifestValidationError, match="incomplete"):
+        verify_manifest(missing, expected_manifest_sha256=result.data_manifest_sha256)
+
+
+def test_manifest_quality_identity_and_loader_fail_closed(tmp_path: Path) -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    malformed_cases = (
+        "not-an-object",
+        {"policy": POLICY.to_mapping()},
+        {"policy": {}, "result": {}},
+        {"policy": POLICY.to_mapping(), "result": {}},
+    )
+    for quality in malformed_cases:
+        tampered = deepcopy(result.manifest)
+        tampered["quality"] = quality
+        with pytest.raises(ManifestValidationError):
+            verify_manifest(tampered, expected_manifest_sha256=result.data_manifest_sha256)
+
+    invalid_root = tmp_path / "array.json"
+    invalid_root.write_text("[]", encoding="utf-8")
+    with pytest.raises(ManifestValidationError, match="root"):
+        load_manifest(invalid_root)
+
+
+def test_bind_manifest_rejects_tampered_bound_ids_and_result_lineage() -> None:
+    records = bars("valid_regular_est.json")
+    result = manifest_for(records)
+    tampered = deepcopy(result.manifest)
+    tampered["bound_record_ids"] = []
+    tampered_bytes = canonical_json_bytes(tampered)
+    tampered_result = replace(
+        result,
+        manifest=tampered,
+        manifest_bytes=tampered_bytes,
+        data_manifest_sha256=sha256_bytes(tampered_bytes),
+    )
+    with pytest.raises(ManifestValidationError, match="bypass"):
+        bind_manifest(records, tampered_result)
+    with pytest.raises(ManifestValidationError, match="inconsistent"):
+        bind_manifest(records, replace(result, bound_records=()))
 
 
 def test_ab_runs_have_identical_identity_manifest_and_quarantine_bytes(tmp_path: Path) -> None:
@@ -276,6 +441,138 @@ def test_manifest_json_loader_round_trips_canonical_bytes(tmp_path: Path) -> Non
     invalid_path.write_text("not-json", encoding="utf-8")
     with pytest.raises(ManifestValidationError, match="valid UTF-8 JSON"):
         load_manifest(invalid_path)
+
+
+def test_quarantined_records_are_never_bound() -> None:
+    record = quality_bar(QualityStatus.QUARANTINED, [QualityIssue.LATE.value])
+    result = manifest_for(
+        [record],
+        policy=QualityPolicy("quarantine", late_after=timedelta(seconds=2)),
+    )
+    assert result.bound_records == ()
+    assert result.manifest["bound_record_ids"] == []
+
+
+def test_rejected_records_are_never_bound() -> None:
+    record = quality_bar(QualityStatus.REJECTED, [])
+    result = manifest_for([record], policy=QualityPolicy("rejected"))
+    assert result.bound_records == ()
+    assert result.manifest["bound_record_ids"] == []
+
+
+def test_bind_manifest_cannot_bypass_quality_gate() -> None:
+    record = quality_bar(QualityStatus.REJECTED, [])
+    result = manifest_for([record], policy=QualityPolicy("rejected-bind"))
+    assert bind_manifest([record], result) == ()
+
+
+def test_allowed_suspect_only_binds_downstream_records() -> None:
+    record = bars("valid_regular_est.json")[0]
+    policy = QualityPolicy(
+        "allow-missing",
+        allowed_suspect_issues=frozenset({QualityIssue.MISSING.value}),
+    )
+    result = manifest_for(
+        [record],
+        policy=policy,
+        expected_record_ids=[record.record_id, "missing-record"],
+    )
+    assert [item.record_id for item in result.bound_records] == [record.record_id]
+    assert [item.record_id for item in bind_manifest([record], result)] == [record.record_id]
+
+
+def test_policy_same_id_different_threshold_is_rejected() -> None:
+    records = bars("valid_regular_est.json")
+    source_policy = QualityPolicy("same-id", late_after=timedelta(seconds=1))
+    quality = validate_quality(records, policy=source_policy)
+    with pytest.raises(ManifestValidationError, match="SHA-256"):
+        build_manifest(
+            records,
+            quality_result=quality,
+            quality_policy=QualityPolicy("same-id", late_after=timedelta(seconds=2)),
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+
+
+def test_policy_same_id_different_allowlist_is_rejected() -> None:
+    records = bars("valid_regular_est.json")
+    source_policy = QualityPolicy(
+        "same-allowlist",
+        allowed_suspect_issues=frozenset({QualityIssue.MISSING.value}),
+    )
+    quality = validate_quality(records, policy=source_policy)
+    with pytest.raises(ManifestValidationError, match="SHA-256"):
+        build_manifest(
+            records,
+            quality_result=quality,
+            quality_policy=QualityPolicy(
+                "same-allowlist",
+                allowed_suspect_issues=frozenset({QualityIssue.DUPLICATE.value}),
+            ),
+            source_id="project-synthetic-fixture",
+            license_id="project-owned-synthetic",
+            exchange_timezone="America/New_York",
+            calendar_id="synthetic-controlled-session-v1",
+            input_file_sha256={"valid_regular_est.json": "a" * 64},
+        )
+
+
+def test_manifest_recomputes_data_version() -> None:
+    records = bars("valid_regular_est.json")
+    result = manifest_for(records)
+    verify_manifest(
+        result.manifest,
+        expected_manifest_sha256=result.data_manifest_sha256,
+        records=records,
+    )
+
+
+def test_manifest_rejects_tampered_data_version_with_rehashed_manifest() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered["data_version"] = "2" * 64
+    with pytest.raises(ManifestValidationError, match="data_version"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_tampered_policy_with_rehashed_manifest() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered["quality"]["policy"]["late_after_microseconds"] = 1  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="policy"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_tampered_quality_result_with_rehashed_manifest() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered["quality"]["result"]["deterministic_reason"] = "tampered"  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="data_version"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
+
+
+def test_manifest_rejects_tampered_records_with_rehashed_manifest() -> None:
+    result = manifest_for(bars("valid_regular_est.json"))
+    tampered = deepcopy(result.manifest)
+    tampered["ordered_canonical_records"][0]["close"] = "999.00"  # type: ignore[index]
+    with pytest.raises(ManifestValidationError, match="data_version"):
+        verify_manifest(
+            tampered,
+            expected_manifest_sha256=sha256_bytes(canonical_json_bytes(tampered)),
+        )
 
 
 def test_all_round_fixtures_are_synthetic_and_have_stable_file_hashes() -> None:

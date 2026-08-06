@@ -12,7 +12,14 @@ license = "Apache-2.0"
 dependencies = []
 
 [project.optional-dependencies]
-dev = ["build>=1.2,<2", "mypy>=1.14,<2", "pytest>=8.3,<9", "pytest-cov>=6,<7", "ruff>=0.9,<1"]
+dev = [
+    "build>=1.2,<2",
+    "mypy>=1.14,<2",
+    "pytest>=8.3,<9",
+    "pytest-cov>=6,<7",
+    "ruff>=0.9,<1",
+    "tzdata>=2024.1,<2026; sys_platform == 'win32'",
+]
 
 [project.scripts]
 quant-system = "quant_system.cli:main"

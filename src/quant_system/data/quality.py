@@ -8,10 +8,11 @@ from dataclasses import dataclass
 from datetime import timedelta
 from pathlib import Path
 
-from .canonical import canonical_record_bytes, sha256_file
+from .canonical import canonical_json_bytes, canonical_record_bytes, sha256_bytes, sha256_file
 from .models import Bar, QualityIssue, QualityStatus, ValidationError
 
 SYNTHETIC_POLICY_LABEL = "SYNTHETIC_TEST_ONLY"
+QUALITY_ISSUE_ORDER = tuple(issue.value for issue in QualityIssue)
 
 
 class QualityPolicyError(ValidationError):
@@ -30,6 +31,7 @@ class QualityPolicy:
     late_after: timedelta | None = None
     stale_after: timedelta | None = None
     label: str = SYNTHETIC_POLICY_LABEL
+    allowed_suspect_issues: frozenset[str] = frozenset()
 
     def __post_init__(self) -> None:
         if not isinstance(self.policy_id, str) or not self.policy_id.strip():
@@ -44,6 +46,22 @@ class QualityPolicy:
                 not isinstance(threshold, timedelta) or threshold < timedelta(0)
             ):
                 raise QualityPolicyError(f"{field_name} must be a non-negative timedelta")
+        try:
+            allowed = frozenset(self.allowed_suspect_issues)
+        except TypeError as error:
+            raise QualityPolicyError("allowed_suspect_issues must be an immutable set") from error
+        if any(not isinstance(issue, str) for issue in allowed):
+            raise QualityPolicyError("allowed_suspect_issues must contain strings")
+        unsupported = allowed - set(QUALITY_ISSUE_ORDER)
+        if unsupported:
+            raise QualityPolicyError("allowed_suspect_issues contains an unsupported reason code")
+        if QualityIssue.INVALID.value in allowed:
+            raise QualityPolicyError("INVALID must not be allowed for SUSPECT downstream")
+        if QualityIssue.LATE.value in allowed and self.late_after is None:
+            raise QualityPolicyError("LATE allowance requires late_after")
+        if QualityIssue.STALE.value in allowed and self.stale_after is None:
+            raise QualityPolicyError("STALE allowance requires stale_after")
+        object.__setattr__(self, "allowed_suspect_issues", allowed)
 
     def to_mapping(self) -> dict[str, object]:
         return {
@@ -55,7 +73,43 @@ class QualityPolicy:
             "stale_after_microseconds": (
                 None if self.stale_after is None else self.stale_after // timedelta(microseconds=1)
             ),
+            "allowed_suspect_issues": sorted(
+                self.allowed_suspect_issues,
+                key=lambda issue: QUALITY_ISSUE_ORDER.index(issue),
+            ),
         }
+
+    @property
+    def policy_sha256(self) -> str:
+        return sha256_bytes(canonical_json_bytes(self.to_mapping()))
+
+    @classmethod
+    def from_mapping(cls, mapping: Mapping[str, object]) -> QualityPolicy:
+        required = {
+            "policy_id",
+            "label",
+            "late_after_microseconds",
+            "stale_after_microseconds",
+            "allowed_suspect_issues",
+        }
+        if set(mapping) != required:
+            raise QualityPolicyError("quality policy mapping is incomplete or has unknown fields")
+        late = mapping["late_after_microseconds"]
+        stale = mapping["stale_after_microseconds"]
+        if late is not None and type(late) is not int:
+            raise QualityPolicyError("late_after_microseconds must be an integer or null")
+        if stale is not None and type(stale) is not int:
+            raise QualityPolicyError("stale_after_microseconds must be an integer or null")
+        allowed = mapping["allowed_suspect_issues"]
+        if not isinstance(allowed, list):
+            raise QualityPolicyError("allowed_suspect_issues must be an array")
+        return cls(
+            policy_id=mapping["policy_id"],  # type: ignore[arg-type]
+            label=mapping["label"],  # type: ignore[arg-type]
+            late_after=None if late is None else timedelta(microseconds=late),
+            stale_after=None if stale is None else timedelta(microseconds=stale),
+            allowed_suspect_issues=frozenset(allowed),
+        )
 
 
 @dataclass(frozen=True, slots=True)
@@ -73,6 +127,9 @@ class QualityResult:
     stale_record_ids: tuple[str, ...] = ()
     rejected_record_ids: tuple[str, ...] = ()
     policy_id: str | None = None
+    policy_sha256: str | None = None
+    policy: QualityPolicy | None = None
+    record_quality_issues: tuple[tuple[str, tuple[str, ...]], ...] = ()
     deterministic_reason: str = "valid"
 
     @property
@@ -80,8 +137,24 @@ class QualityResult:
         return QualityIssue.INVALID.value in self.issues
 
     @property
+    def record_issue_map(self) -> dict[str, tuple[str, ...]]:
+        return dict(self.record_quality_issues)
+
+    @property
+    def downstream_allowed(self) -> bool:
+        if self.status is QualityStatus.VALID:
+            return not self.issues and all(not issues for _, issues in self.record_quality_issues)
+        if self.status is not QualityStatus.SUSPECT or not self.issues:
+            return False
+        if self.has_invalid or self.policy is None:
+            return False
+        if self.policy_sha256 != self.policy.policy_sha256:
+            return False
+        return set(self.issues).issubset(self.policy.allowed_suspect_issues)
+
+    @property
     def downstream_records(self) -> tuple[Bar, ...]:
-        if self.status in {QualityStatus.QUARANTINED, QualityStatus.REJECTED}:
+        if not self.downstream_allowed:
             return ()
         return self.accepted_records
 
@@ -98,6 +171,11 @@ class QualityResult:
             "stale_record_ids": list(self.stale_record_ids),
             "rejected_record_ids": list(self.rejected_record_ids),
             "policy_id": self.policy_id,
+            "policy_sha256": self.policy_sha256,
+            "record_quality_issues": {
+                record_id: list(issues) for record_id, issues in self.record_quality_issues
+            },
+            "downstream_allowed": self.downstream_allowed,
             "deterministic_reason": self.deterministic_reason,
         }
 
@@ -106,13 +184,37 @@ def _unique_sorted(values: Iterable[str]) -> tuple[str, ...]:
     return tuple(sorted(set(values)))
 
 
-def _invalid_result(reason: str, record_ids: Iterable[str] = ()) -> QualityResult:
+def _unique_sorted_issues(values: Iterable[str]) -> tuple[str, ...]:
+    unique = set(values)
+    return tuple(sorted(unique, key=lambda issue: QUALITY_ISSUE_ORDER.index(issue)))
+
+
+def _freeze_record_issues(
+    record_issues: Mapping[str, Iterable[str]],
+) -> tuple[tuple[str, tuple[str, ...]], ...]:
+    return tuple(
+        (record_id, _unique_sorted_issues(issues))
+        for record_id, issues in sorted(record_issues.items())
+    )
+
+
+def _invalid_result(
+    reason: str,
+    record_ids: Iterable[str] = (),
+    *,
+    policy: QualityPolicy | None = None,
+    record_quality_issues: Mapping[str, Iterable[str]] | None = None,
+) -> QualityResult:
     identifiers = _unique_sorted(record_ids)
     return QualityResult(
         status=QualityStatus.REJECTED,
         issues=(QualityIssue.INVALID.value,),
         accepted_records=(),
         rejected_record_ids=identifiers,
+        policy_id=None if policy is None else policy.policy_id,
+        policy_sha256=None if policy is None else policy.policy_sha256,
+        policy=policy,
+        record_quality_issues=_freeze_record_issues(record_quality_issues or {}),
         deterministic_reason=reason,
     )
 
@@ -137,13 +239,23 @@ def validate_quality(
             late_after=policy.late_after,
             stale_after=policy.stale_after,
             label=policy.label,
+            allowed_suspect_issues=policy.allowed_suspect_issues,
         )
     except QualityPolicyError as error:
         return _invalid_result(str(error))
 
     materialized = tuple(records)
     if any(not isinstance(record, Bar) for record in materialized):
-        return _invalid_result("quality validation requires validated Bar objects")
+        return _invalid_result("quality validation requires validated Bar objects", policy=policy)
+
+    record_issues: dict[str, set[str]] = {
+        record.record_id: set(record.quality_issues) for record in materialized
+    }
+    existing_suspect = {
+        record.record_id
+        for record in materialized
+        if record.quality_status is QualityStatus.SUSPECT
+    }
 
     ordered = tuple(sorted(materialized, key=lambda item: (*item.identity_key(), item.record_id)))
     out_of_order: tuple[str, ...] = ()
@@ -151,6 +263,8 @@ def validate_quality(
         (*item.identity_key(), item.record_id) for item in ordered
     ):
         out_of_order = _unique_sorted(item.record_id for item in materialized)
+        for record_id in out_of_order:
+            record_issues.setdefault(record_id, set()).add(QualityIssue.INVALID.value)
 
     by_record_id: dict[str, Bar] = {}
     duplicate_ids: set[str] = set()
@@ -162,6 +276,7 @@ def validate_quality(
             by_record_id[record.record_id] = record
             continue
         duplicate_ids.add(record.record_id)
+        record_issues.setdefault(record.record_id, set()).add(QualityIssue.DUPLICATE.value)
         if canonical_record_bytes(previous) == canonical_record_bytes(record):
             idempotent_replays.add(record.record_id)
         else:
@@ -179,6 +294,8 @@ def validate_quality(
         if len(record_ids) > 1
         for record_id in record_ids
     }
+    for record_id in identity_duplicate_ids:
+        record_issues.setdefault(record_id, set()).add(QualityIssue.DUPLICATE.value)
 
     expected = set(expected_record_ids or ())
     missing = _unique_sorted(expected - set(by_record_id))
@@ -188,12 +305,16 @@ def validate_quality(
         if policy.late_after is not None
         and record.ingestion_time - record.availability_time > policy.late_after
     }
+    for record_id in late:
+        record_issues.setdefault(record_id, set()).add(QualityIssue.LATE.value)
     stale = {
         record.record_id
         for record in deduplicated
         if policy.stale_after is not None
         and record.as_of_time - record.availability_time > policy.stale_after
     }
+    for record_id in stale:
+        record_issues.setdefault(record_id, set()).add(QualityIssue.STALE.value)
     existing_invalid = {
         record.record_id
         for record in deduplicated
@@ -205,17 +326,37 @@ def validate_quality(
         for record in deduplicated
         if record.quality_status is QualityStatus.QUARANTINED
     }
+    existing_rejected = {
+        record.record_id
+        for record in deduplicated
+        if record.quality_status is QualityStatus.REJECTED
+    }
 
-    fatal = set(out_of_order) | conflicting_ids | identity_duplicate_ids | existing_invalid
+    fatal = (
+        set(out_of_order)
+        | conflicting_ids
+        | identity_duplicate_ids
+        | existing_invalid
+        | existing_rejected
+    )
     quarantined = late | stale | existing_quarantine
     rejected = fatal | quarantined
+    dataset_issue_set = {
+        issue for issues_for_record in record_issues.values() for issue in issues_for_record
+    }
+    if missing:
+        dataset_issue_set.add(QualityIssue.MISSING.value)
+    if duplicate_ids or identity_duplicate_ids:
+        dataset_issue_set.add(QualityIssue.DUPLICATE.value)
+    if fatal & (set(out_of_order) | conflicting_ids | identity_duplicate_ids | existing_invalid):
+        dataset_issue_set.add(QualityIssue.INVALID.value)
     issues: list[str] = []
     for issue, present in (
-        (QualityIssue.MISSING.value, bool(missing)),
-        (QualityIssue.DUPLICATE.value, bool(duplicate_ids or identity_duplicate_ids)),
-        (QualityIssue.LATE.value, bool(late)),
-        (QualityIssue.STALE.value, bool(stale)),
-        (QualityIssue.INVALID.value, bool(fatal)),
+        (QualityIssue.MISSING.value, QualityIssue.MISSING.value in dataset_issue_set),
+        (QualityIssue.DUPLICATE.value, QualityIssue.DUPLICATE.value in dataset_issue_set),
+        (QualityIssue.LATE.value, QualityIssue.LATE.value in dataset_issue_set),
+        (QualityIssue.STALE.value, QualityIssue.STALE.value in dataset_issue_set),
+        (QualityIssue.INVALID.value, QualityIssue.INVALID.value in dataset_issue_set),
     ):
         if present:
             issues.append(issue)
@@ -225,12 +366,13 @@ def validate_quality(
         status = QualityStatus.REJECTED
     elif quarantined:
         status = QualityStatus.QUARANTINED
-    elif issues:
+    elif issues or existing_suspect:
         status = QualityStatus.SUSPECT
     else:
         status = QualityStatus.VALID
     reason_parts = [
         f"policy={policy.policy_id}",
+        f"policy_sha256={policy.policy_sha256}",
         f"status={status.value}",
         *(f"{issue.lower()}={issue in issues}" for issue in issues),
     ]
@@ -246,6 +388,9 @@ def validate_quality(
         stale_record_ids=_unique_sorted(stale),
         rejected_record_ids=_unique_sorted(rejected),
         policy_id=policy.policy_id,
+        policy_sha256=policy.policy_sha256,
+        policy=policy,
+        record_quality_issues=_freeze_record_issues(record_issues),
         deterministic_reason=";".join(reason_parts),
     )
 
@@ -294,6 +439,14 @@ def parse_and_validate(
         stale_record_ids=result.stale_record_ids,
         rejected_record_ids=all_rejected,
         policy_id=result.policy_id,
+        policy_sha256=result.policy_sha256,
+        policy=result.policy,
+        record_quality_issues=_freeze_record_issues(
+            {
+                **result.record_issue_map,
+                **{record_id: (QualityIssue.INVALID.value,) for record_id in invalid_ids},
+            }
+        ),
         deterministic_reason=f"{result.deterministic_reason};invalid_parse=true",
     )
 
@@ -338,14 +491,14 @@ def quarantine_evidence(
         raise QuarantineWriteError("source fixture SHA-256 is invalid")
     if not isinstance(code_commit, str) or not code_commit:
         raise QuarantineWriteError("code commit or placeholder is required")
-    allowed = {item.value for item in QualityIssue}
+    allowed = set(QUALITY_ISSUE_ORDER)
     if any(issue not in allowed for issue in quality_issues):
         raise QuarantineWriteError("quarantine quality issue is not a contract reason code")
     evidence = {
         "data_version": data_version,
         "record_id": record_id,
         "quality_status": quality_status.value,
-        "quality_issues": list(dict.fromkeys(quality_issues)),
+        "quality_issues": list(_unique_sorted_issues(quality_issues)),
         "deterministic_reason": deterministic_reason,
         "source_fixture_sha256": source_fixture_sha256,
         "code_commit": code_commit,
@@ -374,12 +527,11 @@ def quarantine_result(
 ) -> tuple[Path, ...]:
     """Quarantine all rejected/quarantined records; missing IDs have no fake Bar."""
 
-    by_id = {record.record_id: record for record in (records or result.accepted_records)}
+    record_issues = result.record_issue_map
     source_sha = sha256_file(source_fixture)
     paths: list[Path] = []
     for record_id in result.rejected_record_ids:
-        record = by_id.get(record_id)
-        issues = result.issues if record is None else record.quality_issues or result.issues
+        issues = record_issues.get(record_id, ())
         status = (
             QualityStatus.REJECTED if result.status is QualityStatus.REJECTED else result.status
         )
@@ -389,7 +541,7 @@ def quarantine_result(
                 data_version=data_version,
                 record_id=record_id,
                 quality_status=status,
-                quality_issues=issues or (QualityIssue.INVALID.value,),
+                quality_issues=issues,
                 deterministic_reason=result.deterministic_reason,
                 source_fixture_sha256=source_sha,
                 code_commit=code_commit,

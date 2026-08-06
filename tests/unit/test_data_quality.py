@@ -3,13 +3,17 @@
 from __future__ import annotations
 
 import json
+import tomllib
+from dataclasses import replace
 from datetime import timedelta
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 import pytest
 
 from quant_system.data import (
     Bar,
+    QualityIssue,
     QualityPolicy,
     QualityPolicyError,
     QualityStatus,
@@ -34,6 +38,14 @@ def bars(name: str) -> list[Bar]:
     return [Bar.from_mapping(item) for item in records]  # type: ignore[arg-type]
 
 
+def bar_with_quality(status: QualityStatus, issues: list[str]) -> Bar:
+    payload = fixture_payload("valid_regular_est.json")["records"][0]
+    assert isinstance(payload, dict)
+    payload["quality_status"] = status.value
+    payload["quality_issues"] = issues
+    return Bar.from_mapping(payload)  # type: ignore[arg-type]
+
+
 def test_missing_is_reported_without_fabricating_a_bar() -> None:
     payload = fixture_payload("missing_session_record.json")
     result = validate_dataset(
@@ -51,7 +63,13 @@ def test_missing_is_reported_without_fabricating_a_bar() -> None:
 
 
 def test_identical_duplicate_is_idempotent_but_conflicting_duplicate_rejects() -> None:
-    replay = validate_quality(bars("duplicate_idempotent.json"), policy=POLICY)
+    replay = validate_quality(
+        bars("duplicate_idempotent.json"),
+        policy=QualityPolicy(
+            "synthetic-quality-v1",
+            allowed_suspect_issues=frozenset({QualityIssue.DUPLICATE.value}),
+        ),
+    )
     assert replay.status is QualityStatus.SUSPECT
     assert replay.issues == ("DUPLICATE",)
     assert replay.idempotent_replays == ("record-synth-duplicate-0001",)
@@ -107,6 +125,73 @@ def test_missing_policy_and_unsafe_policy_fail_closed() -> None:
         QualityPolicy("production-default", label="PRODUCTION")
     with pytest.raises(QualityPolicyError):
         QualityPolicy("negative", late_after=timedelta(seconds=-1))
+
+
+def test_policy_identity_round_trips_and_rejects_unsafe_allowlists() -> None:
+    policy = QualityPolicy(
+        "identity",
+        late_after=timedelta(seconds=1),
+        stale_after=timedelta(seconds=2),
+        allowed_suspect_issues=frozenset(
+            {QualityIssue.MISSING.value, QualityIssue.LATE.value, QualityIssue.STALE.value}
+        ),
+    )
+    mapping = policy.to_mapping()
+    assert QualityPolicy.from_mapping(mapping) == policy
+    assert QualityPolicy.from_mapping(mapping).policy_sha256 == policy.policy_sha256
+
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("none", allowed_suspect_issues=None)  # type: ignore[arg-type]
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("non-string", allowed_suspect_issues=frozenset({1}))  # type: ignore[arg-type]
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("unsupported", allowed_suspect_issues=frozenset({"UNKNOWN"}))
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("invalid", allowed_suspect_issues=frozenset({QualityIssue.INVALID.value}))
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("late-without-threshold", allowed_suspect_issues=frozenset({"LATE"}))
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy("stale-without-threshold", allowed_suspect_issues=frozenset({"STALE"}))
+
+    incomplete = dict(mapping)
+    incomplete.pop("allowed_suspect_issues")
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy.from_mapping(incomplete)
+    bad_late = dict(mapping)
+    bad_late["late_after_microseconds"] = True
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy.from_mapping(bad_late)
+    bad_stale = dict(mapping)
+    bad_stale["stale_after_microseconds"] = True
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy.from_mapping(bad_stale)
+    bad_allowlist = dict(mapping)
+    bad_allowlist["allowed_suspect_issues"] = ("MISSING",)
+    with pytest.raises(QualityPolicyError):
+        QualityPolicy.from_mapping(bad_allowlist)
+
+
+def test_quality_result_identity_is_fail_closed_when_tampered() -> None:
+    record = bars("valid_regular_est.json")
+    valid = validate_quality(record, policy=POLICY)
+    assert (
+        replace(
+            valid,
+            record_quality_issues=((record[0].record_id, (QualityIssue.LATE.value,)),),
+        ).downstream_records
+        == ()
+    )
+    suspect = validate_quality(
+        record,
+        expected_record_ids=[record[0].record_id, "missing-record"],
+        policy=QualityPolicy(
+            "missing-allowed",
+            allowed_suspect_issues=frozenset({QualityIssue.MISSING.value}),
+        ),
+    )
+    assert replace(suspect, policy=None).downstream_records == ()
+    assert replace(suspect, issues=(QualityIssue.INVALID.value,)).downstream_records == ()
+    assert replace(suspect, policy_sha256="0" * 64).downstream_records == ()
 
 
 def test_duplicate_interval_with_different_record_ids_is_rejected() -> None:
@@ -175,9 +260,187 @@ def test_quarantine_evidence_is_caller_scoped_and_fail_closed(tmp_path: Path) ->
         )
 
 
+def test_quarantine_evidence_validates_all_identity_fields(tmp_path: Path) -> None:
+    base = {
+        "root": tmp_path,
+        "data_version": "a" * 64,
+        "record_id": "record-synth-late-0001",
+        "quality_status": QualityStatus.QUARANTINED,
+        "quality_issues": [QualityIssue.LATE.value],
+        "deterministic_reason": "test",
+        "source_fixture_sha256": "b" * 64,
+        "code_commit": "placeholder",
+    }
+    invalid_cases = (
+        ("data_version", ".."),
+        ("record_id", "../record"),
+        ("quality_status", "QUARANTINED"),
+        ("deterministic_reason", ""),
+        ("source_fixture_sha256", "bad"),
+        ("code_commit", ""),
+        ("quality_issues", ["UNKNOWN"]),
+    )
+    for field, value in invalid_cases:
+        payload = dict(base)
+        payload[field] = value
+        with pytest.raises(QuarantineWriteError):
+            quarantine_evidence(**payload)  # type: ignore[arg-type]
+
+
 def test_quality_result_mapping_is_deterministic() -> None:
     result = validate_quality(bars("valid_regular_est.json"), policy=POLICY)
     mapping = result.to_mapping()
     assert mapping["status"] == "VALID"
     assert mapping["policy_id"] == "synthetic-quality-v1"
     assert mapping["accepted_record_ids"] == ["record-synth-est-0001"]
+
+
+def test_existing_suspect_late_is_not_reclassified_valid() -> None:
+    result = validate_quality(
+        [bar_with_quality(QualityStatus.SUSPECT, [QualityIssue.LATE.value])],
+        policy=QualityPolicy("suspect-late", late_after=timedelta(seconds=2)),
+    )
+    assert result.status is QualityStatus.SUSPECT
+    assert result.issues == (QualityIssue.LATE.value,)
+    assert result.downstream_records == ()
+
+
+def test_suspect_requires_explicit_policy_allowance() -> None:
+    record = bar_with_quality(QualityStatus.SUSPECT, [QualityIssue.MISSING.value])
+    denied = validate_quality([record], policy=QualityPolicy("suspect-default"))
+    allowed = validate_quality(
+        [record],
+        policy=QualityPolicy(
+            "suspect-allow-missing",
+            allowed_suspect_issues=frozenset({QualityIssue.MISSING.value}),
+        ),
+    )
+    assert denied.status is QualityStatus.SUSPECT
+    assert denied.downstream_records == ()
+    assert allowed.status is QualityStatus.SUSPECT
+    assert [item.record_id for item in allowed.downstream_records] == [record.record_id]
+
+
+def test_suspect_without_issues_fails_closed() -> None:
+    result = validate_quality(
+        [bar_with_quality(QualityStatus.SUSPECT, [])],
+        policy=QualityPolicy("suspect-empty"),
+    )
+    assert result.status is QualityStatus.SUSPECT
+    assert result.issues == ()
+    assert result.downstream_records == ()
+
+
+def test_quarantined_and_rejected_records_never_reach_downstream() -> None:
+    quarantined = validate_quality(
+        [bar_with_quality(QualityStatus.QUARANTINED, [QualityIssue.LATE.value])],
+        policy=QualityPolicy("quarantined", late_after=timedelta(seconds=2)),
+    )
+    rejected = validate_quality(
+        [bar_with_quality(QualityStatus.REJECTED, [])],
+        policy=QualityPolicy("rejected"),
+    )
+    assert quarantined.status is QualityStatus.QUARANTINED
+    assert quarantined.downstream_records == ()
+    assert rejected.status is QualityStatus.REJECTED
+    assert rejected.downstream_records == ()
+
+
+def test_quarantine_issues_are_record_specific(tmp_path: Path) -> None:
+    late = bars("late_synthetic_policy.json")[0]
+    stale = bars("stale_synthetic_policy.json")[0]
+    result = validate_quality(
+        [late, stale],
+        policy=QualityPolicy(
+            "mixed-latency",
+            late_after=timedelta(seconds=1),
+            stale_after=timedelta(seconds=4),
+        ),
+    )
+    assert result.record_issue_map[late.record_id] == (QualityIssue.LATE.value,)
+    assert result.record_issue_map[stale.record_id] == (QualityIssue.STALE.value,)
+    paths = quarantine_result(
+        result,
+        tmp_path / "quarantine",
+        data_version="a" * 64,
+        source_fixture=FIXTURE_ROOT / "late_synthetic_policy.json",
+        code_commit="CANDIDATE-COMMIT-PLACEHOLDER",
+        records=[late, stale],
+    )
+    assert len(paths) == 2
+    evidence = {
+        payload["record_id"]: payload["quality_issues"]
+        for payload in (json.loads(path.read_text(encoding="utf-8")) for path in paths)
+    }
+    assert evidence == {
+        late.record_id: [QualityIssue.LATE.value],
+        stale.record_id: [QualityIssue.STALE.value],
+    }
+
+
+def test_quarantine_reason_matrix_is_record_specific(tmp_path: Path) -> None:
+    cases = (
+        (
+            "duplicate-conflict",
+            parse_and_validate(
+                fixture_payload("duplicate_conflict.json")["records"],  # type: ignore[arg-type]
+                policy=POLICY,
+            ),
+            FIXTURE_ROOT / "duplicate_conflict.json",
+            bars("duplicate_conflict.json"),
+            {"record-synth-conflict-0001": [QualityIssue.DUPLICATE.value]},
+        ),
+        (
+            "out-of-order",
+            validate_quality(bars("out_of_order.json"), policy=POLICY),
+            FIXTURE_ROOT / "out_of_order.json",
+            bars("out_of_order.json"),
+            {
+                "record-synth-order-0001": [QualityIssue.INVALID.value],
+                "record-synth-order-0002": [QualityIssue.INVALID.value],
+            },
+        ),
+        (
+            "existing-invalid",
+            parse_and_validate(
+                fixture_payload("invalid_decimal.json")["records"],  # type: ignore[arg-type]
+                policy=POLICY,
+            ),
+            FIXTURE_ROOT / "invalid_decimal.json",
+            [],
+            {"record-synth-invalid-decimal-0001": [QualityIssue.INVALID.value]},
+        ),
+        (
+            "existing-quarantined",
+            validate_quality(
+                [bar_with_quality(QualityStatus.QUARANTINED, [QualityIssue.LATE.value])],
+                policy=QualityPolicy("existing-quarantine", late_after=timedelta(seconds=2)),
+            ),
+            FIXTURE_ROOT / "late_synthetic_policy.json",
+            [bar_with_quality(QualityStatus.QUARANTINED, [QualityIssue.LATE.value])],
+            {"record-synth-est-0001": [QualityIssue.LATE.value]},
+        ),
+    )
+    for label, result, fixture, records, expected in cases:
+        paths = quarantine_result(
+            result,
+            tmp_path / label,
+            data_version="b" * 64,
+            source_fixture=fixture,
+            code_commit="CANDIDATE-COMMIT-PLACEHOLDER",
+            records=records,
+        )
+        actual = {
+            payload["record_id"]: payload["quality_issues"]
+            for payload in (json.loads(path.read_text(encoding="utf-8")) for path in paths)
+        }
+        assert actual == expected
+
+
+def test_windows_timezone_dependency_is_declared() -> None:
+    project_root = Path(__file__).parents[2]
+    with (project_root / "pyproject.toml").open("rb") as handle:
+        project = tomllib.load(handle)
+    dev_dependencies = project["project"]["optional-dependencies"]["dev"]
+    assert "tzdata>=2024.1,<2026; sys_platform == 'win32'" in dev_dependencies
+    assert ZoneInfo("America/New_York").key == "America/New_York"
