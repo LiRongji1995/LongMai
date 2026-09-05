@@ -1,0 +1,73 @@
+services:
+  # StockFish - A 股分析 + 推演编排
+  stockfish:
+    image: zhuhai123/stockfish-stockfish:latest
+    container_name: stockfish
+    env_file:
+      - .env
+    environment:
+      - OASIS_DEBUG=${OASIS_DEBUG:-false}
+      # Docker-in-Docker: 宿主机路径传给内部 docker run -v 使用
+      - QLIB_HOST_PROJECT_ROOT=${PWD}/qlib-zh
+      - QLIB_HOST_DATA_DIR=${HOME}/.qlib
+      - QLIB_HOST_MLRUNS_DIR=${HOME}/github/qlib-zh/mlruns
+      # qlib 数据下载代理（socks5 代理加速 GitHub 下载）
+      - QLIB_DATA_PROXY=${QLIB_DATA_PROXY:-}
+    ports:
+      - "8000:8000"
+    depends_on:
+      mirofish:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./:/app                      # 项目代码挂载，改代码即时生效
+      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket（qlib 推理需要）
+      - ~/.qlib:/root/.qlib          # qlib 数据
+      - ~/github/qlib-zh/mlruns:/root/github/qlib-zh/mlruns  # MLflow 模型
+    networks:
+      - stockfish-net
+
+  # MiroFish - 群体智能模拟引擎
+  mirofish:
+    image: zhuhai123/stockfish-mirofish:latest
+    container_name: mirofish
+    env_file:
+      - .env
+    ports:
+      - "3000:3000"
+      - "5001:5001"
+    restart: unless-stopped
+    volumes:
+      - ./MiroFish/backend:/app/backend          # 后端代码挂载
+      - mirofish-uploads:/app/backend/uploads
+    networks:
+      - stockfish-net
+
+  # 飞书 Bot（WebSocket 长连接）
+  stockfish-bot:
+    image: zhuhai123/stockfish-stockfish:latest
+    container_name: stockfish-bot
+    env_file:
+      - .env
+    environment:
+      - STOCKFISH_API_URL=http://stockfish:8000
+    command: >
+      sh -c "pip install -r requirements.txt -q && python integration/lark_bot.py"
+    depends_on:
+      stockfish:
+        condition: service_started
+    restart: unless-stopped
+    volumes:
+      - ./:/app                      # 项目代码挂载，方便改代码即时生效
+    networks:
+      - stockfish-net
+    # 开发时可注释掉下面这行以避免启动 bot
+    profiles:
+      - bot
+
+networks:
+  stockfish-net:
+    driver: bridge
+
+volumes:
+  mirofish-uploads:

@@ -1,4 +1,0 @@
-environment: paper
-paper_trading_enabled: false
-live_trading_enabled: false
-live_order_submission_allowed: false

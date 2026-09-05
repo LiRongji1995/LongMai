@@ -1,95 +1,77 @@
-# US Equity Quantitative Trading System
+# StockFish + Qlib Quant System
 
-**A reproducible, auditable foundation for medium/low-frequency US equity and ETF research and controlled trading.**
+面向 Windows 的 A 股量化研究系统：整合 StockFish Web/API、Microsoft Qlib 源码及 CSI300 Alpha158 / LightGBM 原生推理适配。当前重点是使用已发布模型读取真实行情、生成股票评分，并在页面返回候选列表。
 
-## Status and safety
+**已验证核心流程：Web → CSI300 数据 → 300 × 158 特征 → 模型推理 → 300 股评分 → Top 20 回填。** 训练、微调及 LLM 调用尚未验收。
 
-**Phase 0 / Scaffold Only.** This repository has no strategy, LEAN integration, Alpaca integration,
-market data, broker connection, order path, Paper Trading approval, or Live Trading approval.
+## 项目结构
 
-- Not investment advice; profitability is neither promised nor validated.
-- Real trading is denied by default: `PAPER_TRADING_ENABLED=false`, `LIVE_TRADING_ENABLED=false`,
-  and `LIVE_ORDER_SUBMISSION_ALLOWED=false`.
-- LLMs may help development/research/post-trade analysis, never real-time decision or order flow.
-
-## Product scope
-
-The planned first version updates market data every minute, produces primary signals every 60 minutes
-or daily, and targets 2–10 trading-day holding periods. It is limited to liquid US stocks and major
-ETFs, long-only, unlevered, with no options or second-level trading. Historical backtesting precedes
-Paper Trading, which precedes separately approved small-capital live operation.
-
-Not included: a current trading strategy, auto-selection algorithm, parameter optimization, bulk data,
-profit claims, completed LEAN/Alpaca support, or any live/paper order submission.
-
-## Architecture
-
-`Market Data → Ingestion → Raw → Validation/Normalization → Adjusted/Features → Research/Backtesting → Signals → Portfolio → Independent Risk → OMS → Broker Adapter → Paper/Live Broker → Reconciliation/Monitoring/Audit`
-
-Subsystems are separate and strategies cannot bypass/disable risk. See [architecture](docs/ARCHITECTURE.md).
-
-## Layout
-
-`src/quant_system` contains module boundaries; `tests` contains baseline tests; `config/examples`
-contains non-secret examples; `docs` contains governance; `data` is documentation-only; `docker` and
-`.github` hold development/CI scaffolding.
-
-## Requirements and local install
-
-Python **3.12** is required. On PowerShell:
-
-```powershell
-py -3.12 -m venv .venv
-.\.venv\Scripts\python.exe -m pip install --upgrade pip
-.\.venv\Scripts\python.exe -m pip install -e ".[dev]"
-.\.venv\Scripts\python.exe -m quant_system.cli status
+```text
+stock-fish/                      StockFish 源码及 Windows 兼容修改
+  .env.windows.example           无密钥的 Windows 配置样例
+  qlib-zh/native_predict.py      CSI300 Alpha158 原生推理入口
+qlib/                            Microsoft Qlib main 源码快照
+Start-StockFish.ps1               启动并检查服务
+Stop-StockFish.ps1                校验进程身份后停止服务
+Logs-StockFish.ps1                查看日志
+requirements-windows.lock.txt    已验证 Windows 环境依赖快照
+docs/verification/               2026-09-04 预测日的脱敏验收结果
 ```
 
-Run checks with `.\scripts\check.ps1`, or run Ruff, mypy, pytest, build, and the CLI individually.
-The CLI is offline and reports project/version/phase plus both trading switches as `false`.
+运行时使用 `stock-fish/.venv` 中的 **pyqlib 0.9.7 Windows wheel**；旁边的 `qlib/` 为源码参考和后续开发保留，不会自动替代运行时包。模型、完整行情数据、虚拟环境、日志和真实 `.env` 均不随仓库发布。上游随源码提供的小型示例数据保留。
 
-## Clean Review Bundle
+## 安装与运行
 
-After committing a clean review round and its report, create a Git-object-derived external-review ZIP:
-
-```powershell
-python scripts/build_review_bundle.py --round-id "phase-00-clean-review-bundle" --base-commit "<recorded-base-commit>" --output-dir "artifacts/review-bundles" --report-path "docs/reports/phase-00-clean-review-bundle-report.md" --round-start-time "<ISO-8601-UTC>"
-```
-
-The tool refuses a dirty worktree and never archives the working directory directly. It packages only
-committed `HEAD` via `git archive`; review artifacts include the complete diff, evidence, checksums, and
-manifest. The generated ZIP is intentionally ignored by Git.
-
-## Docker
+需要 Windows x64、Python 3.12、PowerShell 7、Git，以及可下载依赖和发布资产的网络。克隆到一个空目录，按 [部署指南](DEPLOYMENT.md) 创建虚拟环境、填写路径并下载模型和数据。
 
 ```powershell
-docker compose build app
-docker compose run --rm app
-docker compose --profile database up -d postgres
+git clone https://github.com/LiRongji1995/stockfish-qlib-quant-system.git
+Set-Location .\stockfish-qlib-quant-system
 ```
 
-The database profile is a future development service only: it does not ingest data or enable trading.
+配置完成后，在仓库根目录运行：
 
-## Configuration and secrets
+```powershell
+pwsh -NoProfile -File .\Start-StockFish.ps1
+pwsh -NoProfile -File .\Logs-StockFish.ps1 -Follow
+pwsh -NoProfile -File .\Stop-StockFish.ps1
+```
 
-Copy `.env.example` to untracked `.env` only when needed. It contains placeholders only. Development,
-paper, and live examples are separate; the live example still denies order submission. Never commit
-keys, logs, data, API responses, database files, caches, or reports.
+打开 [StockFish Web](http://127.0.0.1:8000/)。前后端共用 Flask 服务，无需 Node 构建或外部数据库。三个脚本的 `-Root` 默认为脚本所在目录，也可显式指定部署根目录。
 
-## Documentation
+原本的 `D:\StockRecommendation` 部署与发布用检出目录相互独立；发布代码不会迁移或重启原有服务。新检出目录不要覆盖该运行目录。默认端口同为 8000，同一时刻只能启动一个使用此端口的实例。
 
-- [Charter](docs/PROJECT_CHARTER.md), [24-week roadmap](docs/ROADMAP.md), [architecture](docs/ARCHITECTURE.md)
-- [Risk policy](docs/RISK_POLICY.md), [data governance](docs/DATA_GOVERNANCE.md), [testing](docs/TESTING_STRATEGY.md)
-- [Security](docs/SECURITY.md), [glossary](docs/GLOSSARY.md), [ADR 0001](docs/adr/0001-initial-architecture.md)
-- [Review Bundle policy](docs/REVIEW_BUNDLE_POLICY.md), [Agent constitution](AGENTS.md), [contributing](CONTRIBUTING.md), [reports](docs/reports/README.md)
+## 实际验收
 
-The 24-week plan moves from this baseline through foundation audit, governed data, realistic backtests,
-out-of-sample research, independent risk, Paper Trading execution, shadow operation, and a live-admission
-review. Months 7–12 validate risk-adjusted net results and stability. Next: **Phase 1—LEAN foundation
-audit and minimal clean-source backtest validation**.
+2026-09-05 在 Windows 11 上完成以下检查，预测日为 **2026-09-04**：
 
-## Contribution and license
+| 项目 | 结果 |
+|---|---|
+| Python / pyqlib / LightGBM | 3.12.14 / 0.9.7 / 4.7.0 |
+| Web、配置、健康及模型接口 | HTTP 200；最终健康报告错误数为 0 |
+| 真实行情 | Qlib 与 Baostock 均读取到 10 个交易日行情 |
+| CSI300 Alpha158 | 300 只成分股，158 个特征 |
+| 已发布模型推理 | 约 96 秒完成；特征表达式、顺序及维度核验通过 |
+| 页面交互 | 从 Web 发起推理并回填 20 只股票；控制台无错误或警告 |
+| 进程管理 | 启动、重复启动、停止、重启已验证 |
 
-Read [CONTRIBUTING.md](CONTRIBUTING.md) and [AGENTS.md](AGENTS.md). Run all checks, retain safety
-defaults, report residual risk, and never force-push. Code is [Apache-2.0](LICENSE); this does not grant
-rights to third-party data, dependencies, broker services, or redistribution of market data.
+模型原始排名前五名：
+
+| 排名 | 股票代码 | Score |
+|---:|---|---:|
+| 1 | 688256 | 0.432629 |
+| 2 | 600015 | 0.390850 |
+| 3 | 300274 | 0.388415 |
+| 4 | 601600 | 0.377634 |
+| 5 | 000807 | 0.348765 |
+
+Score 用于该模型内的相对排序，不代表收益率。Strategy B 会进一步筛选候选，因此其结果可能与原始排名不同。结果是本次新执行的推理输出，没有重新训练模型。
+
+- [完整 300 股排名](docs/verification/CSI300-ranking-2026-09-04.csv)
+- [执行清单与模型指纹](docs/verification/inference-execution.json)
+
+## 当前边界
+
+原生路径仅验收 CSI300 Alpha158 已发布 LightGBM 模型推理。训练/微调仍依赖上游 Docker 路径；本机 Docker Desktop 未能启动。Qlib main 源码扩展构建需要额外的 C++ 编译工具，当前使用已验证 wheel。LLM、MiroFish、Bot 等需要各自配置，未进行真实调用验收。上游缺失的分析归档模块仍待补齐。
+
+详细配置、数据范围和已知限制见 [DEPLOYMENT.md](DEPLOYMENT.md)。源码来源、嵌入组件和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；本整合仓库包含不同许可证的组件。

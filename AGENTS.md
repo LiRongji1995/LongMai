@@ -1,40 +1,10 @@
-# Agent Development Constitution
+# 项目协作说明
 
-## Mandatory task-start reading
-
-Before any write, every Agent must read: `AGENTS.md`, `README.md`,
-`docs/PROJECT_CHARTER.md`, `docs/ROADMAP.md`, `docs/ARCHITECTURE.md`,
-`docs/RISK_POLICY.md`, `docs/REVIEW_BUNDLE_POLICY.md`, the current Phase's
-latest formal report, and the current user prompt's baseline and boundary.
-Then report Phase, Round, branch, Base commit, `origin/main`, worktree status,
-the single objective, and whether a Review Bundle is mandatory. Missing policy
-material is a stop-and-report condition, not permission to skip it.
-
-When documents conflict, precedence is: explicit current user instruction,
-then `AGENTS.md`, then Charter/Risk Policy, then Review Bundle Policy, then
-Roadmap, current report, and README.
-
-1. Each work round has one explicit primary objective; do not expand scope or silently lower acceptance.
-2. Establish Git/tool/test baseline before edits. Preserve user work; never delete tests to pass, fake a
-   test/API result, or claim unverified capability.
-3. High-risk data, timestamp, risk, execution, reconciliation, config, and live-gate logic is test-first.
-4. After edits run `python -m ruff check .`, `python -m ruff format --check .`, `python -m mypy src`,
-   `python -m pytest`, `git diff --check`, and clean-source validation. Report any blocked check exactly.
-5. Every backtest binds Git commit, configuration, data manifest, interval, cost model, strategy/risk version;
-   financial metrics identify interval, costs, and benchmark.
-6. Live and Paper Trading default to off. Strategies cannot bypass risk; only independent controls own the
-   kill switch. LLMs never participate in real-time signals, risk, or order submission.
-7. Never request, expose, commit, log, or put real secrets in prompts. Never connect an account or send an order
-   without explicit phase approval.
-8. One independent Git commit per completed work round. Do not auto-push `main`, force-push, rewrite history,
-   delete user commits, or migrate data without tested backup/recovery.
-9. Do not commit data, caches, logs, DB files, restricted reports, build output, or machine-specific settings.
-10. Each report states completed/incomplete work, files, actual checks, residual risks, commit, and next action
-    using only `PASS`, `PASS WITH LIMITATIONS`, `BLOCKED`, or `FAIL`.
-
-## Mandatory task-end decision
-
-Every Round must explicitly report `Review Bundle: REQUIRED`, `OPTIONAL`, or
-`NOT REQUIRED` and why. When REQUIRED, an ungenerated or unvalidated bundle
-prevents formal completion and entry to the next Round; screenshots alone are
-not acceptance evidence.
+- 当前主要目标是 Windows 本地 StockFish Web/API 与 CSI300 Alpha158 / LightGBM 预训练推理。先阅读根 `README.md` 和 `DEPLOYMENT.md`，区分已验收功能与后续计划。
+- `stock-fish/` 与 `qlib/` 是上游源码快照。运行使用 `stock-fish/.venv` 中的 pyqlib 0.9.7 wheel；不要未经验证改为旁边 Qlib main 的 editable install。
+- 路径通过环境变量或管理脚本的 `-Root` 传入，根目录默认使用脚本位置。不要硬编码个人用户目录、代理地址或机器私有路径。
+- 真实密钥只放在忽略的 `.env`。不得提交虚拟环境、下载模型、完整行情数据、日志、进程状态或缓存；保留上游随源码跟踪的小型示例数据。
+- 保留上游版权、各目录许可证与根 `THIRD_PARTY_NOTICES.md`。MiroFish 组件适用 AGPL-3.0，不能把整个仓库称为纯 MIT 项目。
+- 修改推理时保持特征表达式、顺序、维度与有限值校验，失败时明确报错，不用历史文件或模拟结果冒充新推理。
+- 按改动范围验证 Python 语法、依赖、相关 API 或实际推理；区分源码检查、真实运行与未执行的训练。修改运行行为时同步更新部署文档。
+- 不通过清空运行目录、修改全局 Python 或终止所有 Python 进程来解决部署问题。进程操作应验证目标身份；运行数据与源码发布目录分开管理。

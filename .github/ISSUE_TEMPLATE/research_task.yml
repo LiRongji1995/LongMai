@@ -1,7 +1,0 @@
-name: Research task
-description: Propose reproducible research without investment claims.
-body:
-  - type: textarea
-    attributes: {label: Hypothesis, interval, benchmark, and cost assumptions}
-  - type: textarea
-    attributes: {label: Data manifest and anti-bias tests}

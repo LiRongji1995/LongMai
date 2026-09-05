@@ -1,7 +1,0 @@
-name: Bug report
-description: Report a reproducible defect without secrets or market data.
-body:
-  - type: textarea
-    attributes: {label: Reproduction and expected behavior}
-  - type: textarea
-    attributes: {label: Risk and evidence}

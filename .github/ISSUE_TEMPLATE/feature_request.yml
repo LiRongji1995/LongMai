@@ -1,7 +1,0 @@
-name: Feature request
-description: Propose a scoped, gated capability.
-body:
-  - type: textarea
-    attributes: {label: Problem, phase, and acceptance criteria}
-  - type: textarea
-    attributes: {label: Risks and tests}

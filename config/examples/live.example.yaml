@@ -1,5 +1,0 @@
-# WARNING: this is not authorization for live trading.
-environment: live
-paper_trading_enabled: false
-live_trading_enabled: false
-live_order_submission_allowed: false

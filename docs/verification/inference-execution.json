@@ -1,0 +1,18 @@
+{
+  "executed_at": "2026-09-05T04:17:15.732783+00:00",
+  "model_dir": "stock-fish/qlib-zh/DATA/analysis_outputs/2026-06-21-csi300-alpha158",
+  "checkpoint": "stock-fish/qlib-zh/DATA/analysis_outputs/2026-06-21-csi300-alpha158/model_predict/walk_forward/2024-06-12/model_runs/lightgbm/mlflow_run/artifacts/params.pkl",
+  "checkpoint_sha256": "bc5480d90dbefc1d7611c3391b3c0d165f0b9bfdc99c7a3be4a066966c9268de",
+  "fold": "2024-06-12",
+  "train_start": "2020-06-12",
+  "train_end": "2023-06-09",
+  "pred_date": "2026-09-04",
+  "universe": "csi300",
+  "rows": 300,
+  "features": 158,
+  "qlib_version": "0.9.7",
+  "data_dir": "data/cn_data",
+  "strict_feature_names": true,
+  "strict_feature_expressions": true,
+  "trained": false
+}
