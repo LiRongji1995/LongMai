@@ -9,7 +9,13 @@ Qlib 数据更新执行器 — 从 GitHub 下载最新的 qlib_bin.tar.gz 并解
 
 from __future__ import annotations
 
-import io
+import hashlib
+import math
+import re
+import struct
+import time
+from datetime import date
+from pathlib import PurePosixPath
 import json
 import os
 import shutil
@@ -29,7 +35,7 @@ ASSET_NAME = "qlib_bin.tar.gz"
 QLIB_DATA_DIR = Path(os.environ.get("QLIB_DATA_DIR", Path.home() / ".qlib" / "qlib_data" / "cn_data"))
 
 # 下载超时（秒）
-DOWNLOAD_TIMEOUT = 600
+DOWNLOAD_TIMEOUT = (10, 30)
 # 每下载 chunk 后推送间隔（秒）
 PROGRESS_INTERVAL = 1.0
 
@@ -71,6 +77,7 @@ def _get_latest_release_info() -> dict:
                 "download_url": asset["url"],
                 "tag": tag,
                 "size": asset.get("size", 0),
+                "digest": asset.get("digest"),
             }
 
     raise FileNotFoundError(
@@ -110,6 +117,7 @@ def _download_file(
     dest_path.parent.mkdir(parents=True, exist_ok=True)
 
     downloaded = 0
+    deadline = time.monotonic() + 180
     last_log_time = 0.0
     import time as _time
 
@@ -118,6 +126,10 @@ def _download_file(
             if chunk:
                 f.write(chunk)
                 downloaded += len(chunk)
+                if time.monotonic() > deadline:
+                    raise ValueError("ARCHIVE_DOWNLOAD_DEADLINE")
+                if downloaded > 2 * 1024 ** 3:
+                    raise ValueError("ARCHIVE_DOWNLOAD_SIZE_LIMIT")
                 now = _time.time()
                 if content_length > 0 and (now - last_log_time) >= PROGRESS_INTERVAL:
                     pct = downloaded / content_length * 100
@@ -130,208 +142,164 @@ def _download_file(
                     )
                     last_log_time = now
 
+    if content_length and downloaded != content_length:
+        raise ValueError("DOWNLOAD_LENGTH_MISMATCH")
+    if total_size and downloaded != total_size:
+        raise ValueError("RELEASE_ASSET_LENGTH_MISMATCH")
     _log(progress_callback, f"下载完成: {downloaded / 1024 / 1024:.1f} MB")
 
 
-def _extract_tar_gz(
-    archive_path: Path,
-    extract_to: Path,
-    progress_callback: Callable | None = None,
-) -> None:
-    """解压 tar.gz 到目标目录."""
-    _log(progress_callback, f"开始解压: {archive_path}")
-    _log(progress_callback, f"解压到: {extract_to}")
+def _extract_tar_gz(archive_path: Path, extract_to: Path, progress_callback: Callable | None = None) -> None:
+    """Extract only to a new/empty directory after validating every member.
 
+    No archive paths, symlinks, hardlinks or special files can escape staging.
+    Existing datasets are never cleared or overwritten.
+    """
+    extract_to = Path(extract_to).resolve()
+    if extract_to.exists() and any(extract_to.iterdir()):
+        raise ValueError("NONEMPTY_EXTRACTION_TARGET")
     extract_to.mkdir(parents=True, exist_ok=True)
-
-    # 先清空目标目录（保留目录本身）
-    for item in extract_to.iterdir():
-        if item.is_dir():
-            shutil.rmtree(item)
-        else:
-            item.unlink()
-
-    # 解压
-    import time as _time
-
-    with tarfile.open(archive_path, "r:gz") as tar:
-        members = tar.getmembers()
-        total_members = len(members)
-        _log(progress_callback, f"共 {total_members} 个文件/目录")
-
-        # 找到公共前缀以 strip-components=1
-        # qlib_bin.tar.gz 内部结构通常为 cn_data/xxx
-        common_prefix = None
-        for m in members:
-            name = m.name
-            if "/" in name:
-                prefix = name.split("/")[0]
-                if common_prefix is None:
-                    common_prefix = prefix
-                elif prefix != common_prefix:
-                    common_prefix = None
-                    break
-            else:
-                common_prefix = None
-                break
-
-        # strip-components=1
-        last_log_time = 0.0
-        for i, member in enumerate(members):
-            # 调整路径：去掉第一级目录
-            if common_prefix and member.name.startswith(common_prefix + "/"):
-                member.name = member.name[len(common_prefix) + 1:]
-            elif common_prefix and member.name == common_prefix:
-                # 跳过顶级目录本身
+    with tarfile.open(archive_path, "r:gz") as archive:
+        members = archive.getmembers()
+        if not members or len(members) > 200000:
+            raise ValueError("ARCHIVE_MEMBER_LIMIT")
+        paths = []
+        total = 0
+        for member in members:
+            raw = member.name
+            relative = PurePosixPath(raw)
+            if "\\" in raw or ":" in raw or relative.is_absolute() or ".." in relative.parts:
+                raise ValueError("UNSAFE_ARCHIVE_PATH")
+            if not (member.isfile() or member.isdir()):
+                raise ValueError("UNSAFE_ARCHIVE_MEMBER_TYPE")
+            total += member.size
+            if member.size > 1024**3 or total > 4*1024**3:
+                raise ValueError("ARCHIVE_EXPANSION_LIMIT")
+            parts = tuple(part for part in relative.parts if part != ".")
+            paths.append(parts)
+        # Strip a genuine shared wrapper (including its directory entry).
+        prefix = ()
+        files = [parts for member, parts in zip(members, paths) if member.isfile()]
+        while files and all(len(parts) > len(prefix)+1 and parts[len(prefix)] == files[0][len(prefix)] for parts in files):
+            prefix = files[0][:len(prefix)+1]
+        planned, seen = [], set()
+        for member, parts in zip(members, paths):
+            if prefix and parts[:len(prefix)] == prefix:
+                parts = parts[len(prefix):]
+            elif prefix and member.isdir() and prefix[:len(parts)] == parts:
                 continue
-
-            if member.name:  # 空路径跳过
-                tar.extract(member, path=extract_to)
-
-            now = _time.time()
-            if (now - last_log_time) >= PROGRESS_INTERVAL:
-                pct = (i + 1) / total_members * 100
-                _log(
-                    progress_callback,
-                    f"解压中... {i + 1}/{total_members} ({pct:.0f}%)",
-                    progress=round(0.5 + pct / 200, 4),  # 进度映射 0.5~1.0
-                )
-                last_log_time = now
-
-    _log(progress_callback, "解压完成，正在整理目录结构...")
-
-    # 修复：如果数据被解压到了一个子目录中（如 qlib_bin/ 或 cn_data/），
-    # 把内容移到 extract_to 顶层
-    for _ in range(3):  # 最多处理 3 层嵌套
-        subdirs = [d for d in extract_to.iterdir() if d.is_dir()]
-        files = [f for f in extract_to.iterdir() if f.is_file()]
-        # 如果只有一个子目录且没有文件，把子目录内容移到顶层
-        if len(subdirs) == 1 and len(files) == 0:
-            nested = subdirs[0]
-            _log(progress_callback, f"检测到嵌套目录 {nested.name}，上移内容...")
-            for item in nested.iterdir():
-                target = extract_to / item.name
-                if target.exists():
-                    if target.is_dir():
-                        shutil.rmtree(target)
-                    else:
-                        target.unlink()
-                shutil.move(str(item), str(target))
-            nested.rmdir()
-        else:
-            break
-    _log(progress_callback, "目录整理完成")
+            if not parts:
+                continue
+            target = extract_to.joinpath(*parts).resolve()
+            if not target.is_relative_to(extract_to) or target == extract_to:
+                raise ValueError("ARCHIVE_PATH_ESCAPE")
+            key = str(target).casefold()
+            if key in seen:
+                raise ValueError("ARCHIVE_DUPLICATE_PATH")
+            seen.add(key)
+            planned.append((member, target))
+        for member, target in planned:
+            if member.isdir():
+                target.mkdir(parents=True, exist_ok=True)
+            else:
+                target.parent.mkdir(parents=True, exist_ok=True)
+                with archive.extractfile(member) as source, target.open("xb") as output:
+                    shutil.copyfileobj(source, output, length=1024*1024)
+                if target.stat().st_size != member.size:
+                    raise ValueError("EXTRACTION_SIZE_MISMATCH")
+    _log(progress_callback, "新快照解压完成，旧活动数据保持可读")
 
 
-def _verify_data_dir(progress_callback: Callable | None = None) -> list[str]:
-    """验证解压后的数据目录是否完整，返回存在的关键文件列表."""
-    checks = [
-        QLIB_DATA_DIR / "calendars" / "day.txt",
-        QLIB_DATA_DIR / "instruments" / "csi300.txt",
-        QLIB_DATA_DIR / "instruments" / "all.txt",
-    ]
-    found = []
-    missing = []
-    for p in checks:
-        if p.exists():
-            found.append(str(p.relative_to(QLIB_DATA_DIR)))
-        else:
-            missing.append(str(p.relative_to(QLIB_DATA_DIR)))
+def _verify_data_dir(progress_callback: Callable | None = None, data_dir: Path | None = None) -> list[str]:
+    target = Path(data_dir or QLIB_DATA_DIR).resolve()
+    checks = ["calendars/day.txt", "instruments/csi300.txt", "instruments/all.txt"]
+    if any(not (target/name).is_file() for name in checks):
+        raise ValueError("QLIB_REQUIRED_FILE_MISSING")
+    sessions = [date.fromisoformat(v.strip()) for v in (target/checks[0]).read_text(encoding="utf-8-sig").splitlines() if v.strip()]
+    if not sessions or sessions != sorted(set(sessions)):
+        raise ValueError("QLIB_CALENDAR_INVALID")
+    for name in checks[1:]:
+        lines = (target/name).read_text(encoding="utf-8-sig").splitlines()
+        if not lines:
+            raise ValueError("QLIB_UNIVERSE_EMPTY")
+        for line in lines:
+            parts = line.split()
+            if len(parts) != 3 or not re.fullmatch(r"(?:SH|SZ|BJ)[0-9]{6}", parts[0], re.I):
+                raise ValueError("QLIB_UNIVERSE_INVALID")
+            if date.fromisoformat(parts[1]) > date.fromisoformat(parts[2]):
+                raise ValueError("QLIB_UNIVERSE_RANGE_INVALID")
+    features = list((target/"features").rglob("*.day.bin"))
+    if not features or not any(p.name == "close.day.bin" for p in features):
+        raise ValueError("QLIB_FEATURES_MISSING")
+    for feature in features:
+        size = feature.stat().st_size
+        if size < 8 or size % 4:
+            raise ValueError("QLIB_FEATURE_SIZE_INVALID")
+        with feature.open("rb") as handle:
+            index = struct.unpack("<f", handle.read(4))[0]
+        if not math.isfinite(index) or index < 0 or index != int(index) or int(index)+(size//4-1) > len(sessions):
+            raise ValueError("QLIB_FEATURE_INDEX_INVALID")
+    _log(progress_callback, "日历、证券区间与全部日线二进制边界验证通过")
+    return checks + ["features/*.day.bin"]
 
-    _log(progress_callback, f"数据验证: 找到 {len(found)}/{len(checks)} 关键文件")
-    if missing:
-        _log(progress_callback, f"缺失文件: {', '.join(missing)}")
 
-    return found
+def run_data_update(progress_callback: Callable | None = None, *, expected_sha256: str | None = None) -> dict:
+    """Publish an immutable validated snapshot; never mutate active QLIB_DATA_DIR.
 
-
-def run_data_update(
-    progress_callback: Callable | None = None,
-) -> dict:
+    SHA256 must come from GitHub's release asset digest or an explicitly pinned
+    caller value. Successful staging requires explicit later activation through
+    QLIB_DATA_DIR, avoiding Windows non-atomic directory replacement races.
     """
-    下载最新 qlib_bin.tar.gz 并解压到 ~/.qlib/qlib_data/cn_data。
-
-    Args:
-        progress_callback: 可选回调，接收 dict(status, message, progress, ...)
-
-    Returns:
-        {"success": True/False, "message": "...", "tag": "...", "verified_files": [...]}
-    """
-    import time as _time
-    start_time = _time.time()
-
+    started = time.monotonic()
     try:
-        # Step 1: 获取 release 信息
-        _log(progress_callback, "正在获取最新 release 信息...", progress=0.0)
-        release_info = _get_latest_release_info()
-        tag = release_info["tag"]
-        download_url = release_info["download_url"]
-        size = release_info["size"]
-
-        _log(
-            progress_callback,
-            f"最新 release: {tag} | {size / 1024 / 1024:.1f} MB",
-            progress=0.05,
-        )
-
-        # Step 2: 下载
-        _log(progress_callback, f"下载链接: {download_url}", progress=0.05)
-
-        with tempfile.NamedTemporaryFile(suffix=".tar.gz", delete=False) as tmp:
-            tmp_path = Path(tmp.name)
-
-        try:
-            _download_file(download_url, tmp_path, total_size=size, progress_callback=progress_callback)
-
-            # Step 3: 解压
-            _extract_tar_gz(tmp_path, QLIB_DATA_DIR, progress_callback=progress_callback)
-        finally:
-            # 清理临时文件
-            if tmp_path.exists():
-                tmp_path.unlink()
-                _log(progress_callback, "已清理临时文件")
-
-        # Step 4: 验证
-        verified = _verify_data_dir(progress_callback)
-
-        elapsed = _time.time() - start_time
-        msg = (
-            f"✅ qlib 数据更新完成！"
-            f" 版本: {tag}, 耗时: {elapsed:.0f}s, "
-            f"验证通过: {len(verified)} 文件"
-        )
-        _log(progress_callback, msg, progress=1.0, status="completed")
-
-        return {
-            "success": True,
-            "message": msg,
-            "tag": tag,
-            "verified_files": verified,
-            "elapsed_seconds": round(elapsed, 1),
-        }
-
-    except Exception as e:
-        error_msg = f"❌ 数据更新失败: {e}"
-        _log(progress_callback, error_msg, status="failed", error=str(e))
-        return {
-            "success": False,
-            "message": error_msg,
-            "error": str(e),
-        }
+        info = _get_latest_release_info()
+        expected = expected_sha256 or str(info.get("digest") or "").removeprefix("sha256:")
+        if not re.fullmatch(r"[a-fA-F0-9]{64}", expected):
+            raise ValueError("TRUSTED_ARCHIVE_SHA256_REQUIRED")
+        snapshot_parent = QLIB_DATA_DIR.resolve().parent / ".snapshots"
+        snapshot_parent.mkdir(parents=True, exist_ok=True)
+        with tempfile.TemporaryDirectory(prefix=".stage-", dir=snapshot_parent) as staging:
+            stage = Path(staging).resolve()
+            if not stage.is_relative_to(snapshot_parent.resolve()):
+                raise ValueError("STAGING_PATH_ESCAPE")
+            archive = stage / ASSET_NAME
+            _download_file(info["download_url"], archive, total_size=info["size"], progress_callback=progress_callback)
+            h = hashlib.sha256()
+            with archive.open("rb") as handle:
+                for chunk in iter(lambda: handle.read(1024*1024), b""):
+                    h.update(chunk)
+            if h.hexdigest() != expected.lower():
+                raise ValueError("ARCHIVE_SHA256_MISMATCH")
+            candidate = stage/"dataset"
+            _extract_tar_gz(archive, candidate, progress_callback)
+            verified = _verify_data_dir(progress_callback, candidate)
+            # data_runner is also executable directly from qlib-zh.
+            core_root = str(Path(__file__).resolve().parent.parent)
+            if core_root not in sys.path:
+                sys.path.insert(0, core_root)
+            from stockfish_core.data import LocalQlibDataAdapter
+            manifest = LocalQlibDataAdapter(candidate).manifest()
+            destination = snapshot_parent/manifest.digest
+            if destination.exists():
+                if LocalQlibDataAdapter(destination).manifest().digest != manifest.digest:
+                    raise ValueError("IMMUTABLE_SNAPSHOT_COLLISION")
+            else:
+                candidate.rename(destination)
+            message = "新数据快照已验证并保存；通过 QLIB_DATA_DIR 显式切换后生效"
+            _log(progress_callback, message, progress=1.0, status="completed", activation_required=True)
+            return dict(success=True, message=message, tag=info["tag"], verified_files=verified,
+                        elapsed_seconds=round(time.monotonic()-started, 1), data_dir=str(destination),
+                        data_version=manifest.digest, archive_sha256=h.hexdigest(), activation_required=True)
+    except Exception as exc:
+        reason = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
+        _log(progress_callback, "数据更新失败；原活动快照未修改", status="failed", error=reason)
+        return {"success": False, "message": "数据更新失败；原活动快照未修改", "error": reason}
 
 
 def _print_progress(data):
-    """CLI 进度回调."""
-    msg = data.get("message", "")
-    status = data.get("status", "")
-    pct = data.get("progress", 0)
-    if pct:
-        print(f"[{pct*100:.0f}%] {msg}", file=sys.stderr)
-    else:
-        print(f"[data] {msg}", file=sys.stderr)
+    print(data.get("message", ""), file=sys.stderr)
 
 
-# ---- CLI 入口 ----
 if __name__ == "__main__":
     result = run_data_update(progress_callback=_print_progress)
     print(json.dumps(result, ensure_ascii=False, indent=2))

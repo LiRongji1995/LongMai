@@ -167,7 +167,7 @@ FACTOR_EXPRESSIONS: dict[str, list[tuple[str, int, float]]] = {
 _ALL_EXPRESSIONS: list[str] = sorted(set(
     expr for dim_factors in FACTOR_EXPRESSIONS.values()
     for expr, _, _ in dim_factors
-))
+) | {"$close", "Mean($close, 126)", "$close / Min($close, 252) - 1", "$volume / Mean($volume, 63)"})
 
 # ── Window extraction cache (avoid re-parsing expressions) ───────────────
 _EXPR_WINDOW_CACHE: dict[str, int] = {}
@@ -718,7 +718,9 @@ def build_master_signal(
         print(f"[master] Strategy mode override (env): {strategy_mode}")
 
     # ── Step 1: Shift raw signal to trade dates ─────────────────────────
-    shifted = _shift_signal_to_trade_dates(raw_signal_df[["score"]], cal, freq=freq)
+    # Keep the decision date. The caller samples once and Qlib consumes the
+    # previous step; pre-shifting here both delayed fills and sampled monthly twice.
+    shifted = raw_signal_df[["score"]].copy()
     if shifted.empty:
         return pd.DataFrame(columns=["score", "weight", "master_score"])
 

@@ -426,14 +426,7 @@ def first_screen(pred_dir: str, output_dir: str, pred_date: str, top_n: int = 20
         return candidate
 
     # 先走严格版；如果被过度过滤清空，则逐级放宽，但不会影响原本已经可用的结果。
-    attempts = [
-        (True, True, True),
-        (True, True, False),
-        (True, False, True),
-        (True, False, False),
-        (False, False, True),
-        (False, False, False),
-    ]
+    attempts = [(True, True, True)]  # An empty eligible pool remains empty.
     pool = pd.DataFrame()
     for apply_limit, apply_turnover, apply_price_cap in attempts:
         candidate = _screen(apply_limit, apply_turnover, apply_price_cap)

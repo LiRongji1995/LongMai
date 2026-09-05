@@ -64,11 +64,10 @@ class TushareBackend(BaseStockBackend):
 
     def _get_api(self):
         if self._api is None:
-            import sxsc_tushare as sx
             if not self.token:
-                raise ValueError("TUSHARE_TOKEN 未配置")
-            sx.set_token(self.token)
-            self._api = sx.get_api(env="prd")
+                raise ValueError('TUSHARE_TOKEN 未配置')
+            from market_data.data_fetchers.tushare_fetcher import _TushareHttpClient
+            self._api = _TushareHttpClient(self.token)
         return self._api
 
     def _query(self, api_name: str, **kwargs) -> pd.DataFrame:

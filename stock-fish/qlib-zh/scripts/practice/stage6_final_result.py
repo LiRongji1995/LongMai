@@ -109,6 +109,8 @@ def final_result(second_screen_csv: str, pred_dir: str,
                  output_dir: str, hold_num: int = 5,
                  bottom_pct: float = 0.50,
                  previous_holdings: set | None = None):
+    if import_env("ALLOW_EXPERIMENTAL_LEGACY_QUANT", "") != "1":
+        raise RuntimeError("EXPERIMENTAL_DISABLED: use the canonical RecommendationEngine")
     if not (0 < bottom_pct < 1):
         raise ValueError("bottom_pct must be in (0, 1)")
     if previous_holdings is None:
@@ -123,29 +125,12 @@ def final_result(second_screen_csv: str, pred_dir: str,
     fallback_candidate_df = None
 
     if ss_df.empty:
-        print(f"⚠ second_screen.csv 为空，回退使用 scores.csv 生成最终结果: {ss_path}")
-        scores_csv = _resolve_scores_csv(pred_dir)
-        scores_df = _load_csv(scores_csv, "scores.csv")
-        if scores_df.empty:
-            empty_result = out_path / "result.csv"
-            empty_update = out_path / "result_update.csv"
-            pd.DataFrame().to_csv(empty_result, index=False, encoding="utf-8-sig")
-            pd.DataFrame().to_csv(empty_update, index=False, encoding="utf-8-sig")
-            print(f"⚠ scores.csv 也为空，已输出空结果: {empty_result}, {empty_update}")
-            return
-        if "code" not in scores_df.columns and "instrument" in scores_df.columns:
-            scores_df["code"] = _normalize_code(scores_df["instrument"])
-        if "code" not in scores_df.columns:
-            raise ValueError("scores.csv 中缺少 code/instrument 列，无法生成最终结果")
-        scores_df["code"] = _normalize_code(scores_df["code"])
-        if "stock" not in scores_df.columns:
-            scores_df["stock"] = scores_df["code"]
-        if "score" not in scores_df.columns:
-            raise ValueError("scores.csv 中缺少 score 列，无法按分数排序")
-        scores_df = scores_df.sort_values("score", ascending=False, na_position="last").reset_index(drop=True)
-        ss_df = scores_df.head(hold_num).copy()
-        fallback_candidate_df = scores_df.copy()
-        print(f"✓ 以 scores.csv 顶替空的二筛结果，取前 {len(ss_df)} 只股票进入最终结果")
+        # A fully rejected screen is a valid empty portfolio, never permission
+        # to bypass screening and refill from model scores.
+        empty = pd.DataFrame(columns=["code", "instrument", "score", "portfolio_weight"])
+        empty.to_csv(out_path / "result.csv", index=False, encoding="utf-8-sig")
+        empty.to_csv(out_path / "result_update.csv", index=False, encoding="utf-8-sig")
+        return
 
     if "code" not in ss_df.columns and "instrument" in ss_df.columns:
         ss_df["code"] = _normalize_code(ss_df["instrument"])

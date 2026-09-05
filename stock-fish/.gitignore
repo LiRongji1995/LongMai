@@ -1,6 +1,7 @@
 # 环境变量 / 密钥
 .env
 *.env
+.env.*
 !.env.example
 
 # Python
@@ -17,6 +18,7 @@ build/
 # Qlib 推理缓存
 qlib-zh/DATA/
 qlib-zh/models/
+data/core/
 
 # 批量分析缓存
 batch_results/
@@ -50,6 +52,10 @@ logs/
 # 临时文件
 *.tmp
 *.bak
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.jobs.lock
 *.csv
 !requirements.txt
 
@@ -81,7 +87,8 @@ wget-log*
 # Memory system (runtime data, regeneratable)
 memory/cache/data/
 memory/stocks/
-memory/analysis/
+memory/analysis/*
+!memory/analysis/*.py
 memory/masters/records/
 
 # Claude Code

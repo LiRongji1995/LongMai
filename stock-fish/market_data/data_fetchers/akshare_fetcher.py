@@ -590,6 +590,7 @@ class AkshareFetcher(BaseFetcher):
                     'close': '收盘', 'volume': '成交量', 'amount': '成交额'
                 }
                 df = df.rename(columns=rename_map)
+                df.attrs['volume_unit'] = 'SHARE'
 
                 # 计算涨跌幅（新浪接口可能不返回）
                 if '收盘' in df.columns:
@@ -611,6 +612,13 @@ class AkshareFetcher(BaseFetcher):
 
         # 转换代码格式：sh600000, sz000001, bj920748
         symbol = _to_sina_tx_symbol(stock_code)
+
+        # Installed AKShare's stock_hist_tx.py exempts sz000* from lots->shares
+        # conversion as if they were indices. Public sz000001 2026-09-04 field5
+        # was 814373 lots while Baostock reported 81437295 shares. Reject this
+        # unreliable branch until the SDK contract is corrected and reverified.
+        if symbol.startswith('sz000'):
+            raise DataFetchError('AKSHARE_TX_SZ000_VOLUME_CONTRACT_REJECTED')
 
         self._enforce_rate_limit()
 
@@ -634,6 +642,7 @@ class AkshareFetcher(BaseFetcher):
                     'amount': '成交额'
                 }
                 df = df.rename(columns=rename_map)
+                df.attrs['volume_unit'] = 'SHARE'
 
                 # 腾讯数据通常包含 '涨跌幅'，如果没有则计算
                 if 'pct_chg' in df.columns:
@@ -894,6 +903,12 @@ class AkshareFetcher(BaseFetcher):
         
         # 重命名列
         df = df.rename(columns=column_mapping)
+        if 'volume' in df.columns:
+            # Eastmoney A-share/ETF history is in lots; Sina/Tencent branches
+            # explicitly tag shares before entering this common normalizer.
+            scale = 1 if df.attrs.get('volume_unit') == 'SHARE' or _is_hk_code(stock_code) else 100
+            df['volume'] = pd.to_numeric(df['volume'], errors='raise') * scale
+            df.attrs['volume_unit'] = 'SHARE'
         
         # 添加股票代码列
         df['code'] = stock_code

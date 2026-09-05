@@ -1,16 +1,6 @@
-import os
-
-TOKEN_FILE = os.path.expanduser('~/jsdata_tk.csv')
-
-
+"""The legacy home-directory token store is disabled; credentials stay external."""
+from stockfish_core.common import UnavailableError
 def get_token():
-    if os.path.exists(TOKEN_FILE):
-        with open(TOKEN_FILE) as f:
-            return f.read().strip()
-    return os.environ.get('TUSHARE', '')
-
-
+    raise UnavailableError("SXSC_TOKEN_STORE_DISABLED", "data")
 def set_token(token):
-    with open(TOKEN_FILE, 'w') as f:
-        f.write(token)
-    os.environ['TUSHARE'] = token
+    raise UnavailableError("SXSC_TOKEN_STORE_DISABLED", "data")

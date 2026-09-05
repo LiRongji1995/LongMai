@@ -293,80 +293,16 @@ def _compute_daily_ic(pred_df: pd.DataFrame, label_df: pd.DataFrame) -> tuple[pd
 
 
 def _compute_strategy_metrics(pred_df: pd.DataFrame, label_df: pd.DataFrame, hold_num: int) -> dict[str, float]:
-    """Compute fold-level strategy metrics using buffered equal-weight simulation.
+    """Prediction quality only. Processed labels are never investable returns.
 
-    Uses the same dropout buffer logic as the full backtest (_build_buffered_equal_weight_signal),
-    so fold-level metrics are consistent with the full backtest report.
+    Strategy NAV metrics are produced solely by the order/cash backtest engine.
+    Legacy return columns stay unavailable instead of fabricated from labels.
     """
-    joined = pred_df.join(label_df, how="inner").dropna()
-    if joined.empty:
-        return {
-            "annualized_return": float("nan"),
-            "max_drawdown": float("nan"),
-            "sharpe_ratio": float("nan"),
-            "monthly_win_rate": float("nan"),
-            "IC_mean": float("nan"),
-            "ICIR": float("nan"),
-            "win_rate": float("nan"),
-        }
-
     daily_ic, ic_mean, icir = _compute_daily_ic(pred_df, label_df)
-    dropout_buffer_pct = float(os.environ.get("FULL_BACKTEST_BUFFER_PCT", "0.5") or 0.5)
-
-    # Stateful buffered selection (same logic as _build_buffered_equal_weight_signal)
-    prev_holdings: set[str] = set()
-    daily_rets: list[float] = []
-    dates: list[pd.Timestamp] = []
-
-    for dt, grp in (
-        joined.reset_index()
-        .sort_values(["datetime", "score"], ascending=[True, False], na_position="last")
-        .groupby("datetime", sort=True)
-    ):
-        if grp.empty:
-            continue
-        n = len(grp)
-        keep_rank_cutoff = max(int(hold_num), int(np.ceil(n * max(float(dropout_buffer_pct), 0.0))))
-        grp = grp.reset_index(drop=True)
-        grp["rank"] = np.arange(1, n + 1)
-
-        rank_map = grp.set_index("instrument")["rank"].to_dict()
-        kept = [code for code in prev_holdings if code in rank_map and int(rank_map[code]) <= keep_rank_cutoff]
-        additions = [code for code in grp["instrument"].tolist() if code not in kept]
-        target_codes = (kept + additions)[:hold_num]
-        if not target_codes:
-            prev_holdings = set()
-            continue
-
-        selected = grp[grp["instrument"].isin(target_codes)]
-        port_ret = selected["label"].mean()
-        daily_rets.append(float(port_ret))
-        dates.append(pd.Timestamp(dt))
-        prev_holdings = set(target_codes)
-
-    daily_ret = pd.Series(daily_rets, index=pd.to_datetime(dates))
-    if daily_ret.empty:
-        ann_ret = mdd = sharpe = monthly_win = win_rate = float("nan")
-    else:
-        ann_ret = float((1 + daily_ret).prod() ** (252 / max(len(daily_ret), 1)) - 1)
-        equity = (1 + daily_ret).cumprod()
-        mdd = float((equity / equity.cummax() - 1).min())
-        std = float(daily_ret.std(ddof=1)) if len(daily_ret) > 1 else float("nan")
-        sharpe = float(daily_ret.mean() / std * np.sqrt(252)) if pd.notna(std) and std > 0 else float("nan")
-        monthly = (1 + daily_ret).resample("ME").prod() - 1
-        monthly_win = float((monthly > 0).mean()) if not monthly.empty else float("nan")
-        win_rate = float((daily_ret > 0).mean()) if not daily_ret.empty else float("nan")
-
-    return {
-        "annualized_return": ann_ret,
-        "max_drawdown": mdd,
-        "sharpe_ratio": sharpe,
-        "monthly_win_rate": monthly_win,
-        "IC_mean": ic_mean,
-        "ICIR": icir,
-        "win_rate": win_rate,
-        "ic_days": float(len(daily_ic)),
-    }
+    return {"annualized_return": float("nan"), "max_drawdown": float("nan"),
+            "sharpe_ratio": float("nan"), "monthly_win_rate": float("nan"),
+            "win_rate": float("nan"), "IC_mean": ic_mean, "ICIR": icir,
+            "ic_days": float(len(daily_ic))}
 
 
 def _compute_ensemble_weights(validation_ics: dict[str, float]) -> dict[str, float]:
@@ -776,7 +712,22 @@ def _build_fold_dates(
         # Reverse weekly mode folds to chronological order (backward → forward)
         items.reverse()
 
-    return items
+    # Purge by the furthest possible label endpoint in trading sessions.
+    # For the default T21 label, t+22 must be strictly before the next split.
+    max_lookahead = max(int(h.strip()) for h in os.environ.get("LABEL_HORIZONS", "1,5,10,21").split(",")) + 1
+    purged_items = []
+    for item in items:
+        valid_start_idx = int(calendar.searchsorted(pd.Timestamp(item["valid_start"])))
+        test_start_idx = int(calendar.searchsorted(pd.Timestamp(item["test_start"])))
+        train_last = valid_start_idx - max_lookahead - 1
+        valid_last = test_start_idx - max_lookahead - 1
+        if train_last < 0 or valid_last < valid_start_idx:
+            continue
+        item["train_end"] = _fmt(min(pd.Timestamp(item["train_end"]), calendar[train_last]))
+        item["valid_end"] = _fmt(min(pd.Timestamp(item["valid_end"]), calendar[valid_last]))
+        if pd.Timestamp(item["train_start"]) <= pd.Timestamp(item["train_end"]):
+            purged_items.append(item)
+    return purged_items
 
 
 def _group_folds_by_year(folds: list[dict[str, str]], segment_years: int) -> list[tuple[str, list[dict[str, str]]]]:
@@ -2175,17 +2126,10 @@ def _shift_signal_to_next_trade_dates(
     if df.empty:
         return signal_df.iloc[0:0]
 
-    trade_dates = []
-    for dt in pd.to_datetime(df["datetime"]):
-        pos = int(cal.searchsorted(dt, side="right"))
-        trade_dates.append(pd.Timestamp(cal[pos]) if pos < len(cal) else pd.NaT)
+    # These are decision timestamps, not execution timestamps. Qlib's
+    # WeightStrategy reads the previous step and supplies the only shift.
+    df = df[df["datetime"].isin(cal)]
 
-    df["trade_datetime"] = trade_dates
-    df = df.dropna(subset=["trade_datetime"])
-    if df.empty:
-        return signal_df.iloc[0:0]
-
-    df = df.drop(columns=["datetime"]).rename(columns={"trade_datetime": "datetime"})
     df = df.drop_duplicates(subset=["datetime", "instrument"], keep="last")
     df = df.sort_values(["datetime", "instrument"])
     shifted = df.set_index(["datetime", "instrument"])[keep_cols]
@@ -2454,7 +2398,13 @@ class PrecomputedWeightStrategy:
                     if pd.notna(weight) and float(weight) > 0
                 }
                 if not clean_target:
-                    return []
+                    # None means no rebalance; {} means liquidate all tradable
+                    # holdings. Preserve that public Qlib distinction.
+                    return super().generate_order_list_from_target_weight_position(
+                        current=current, trade_exchange=trade_exchange,
+                        target_weight_position={}, risk_degree=risk_degree,
+                        pred_start_time=pred_start_time, pred_end_time=pred_end_time,
+                        trade_start_time=trade_start_time, trade_end_time=trade_end_time)
 
                 # Preserve the input total weight to support cash buffers
                 _input_total = float(sum(clean_target.values()))
@@ -2610,6 +2560,8 @@ def _write_full_backtest_report(
     uri_folder: str,
     hold_num: int,
 ) -> None:
+    if os.environ.get("ALLOW_EXPERIMENTAL_LEGACY_QUANT") != "1":
+        raise RuntimeError("EXPERIMENTAL_DISABLED: use stockfish_core.BacktestEngine with the live policy")
     from qlib.contrib.evaluate import backtest_daily
     from qlib.config import C
     import qlib
@@ -3762,18 +3714,7 @@ def _predict_only_main(args, template_path, output_root, wf_root) -> None:
         else:
             model = saved_model
 
-        # Allow shape mismatch for finetuned models (predict-only YAML may
-        # differ slightly from training YAML, especially for handler start_time)
-        try:
-            booster = getattr(model, "model", None)
-            if booster is not None:
-                _orig_predict = booster.predict
-                booster.predict = lambda data, *a, **kw: _orig_predict(
-                    data, *a, predict_disable_shape_check=True, **kw
-                )
-        except Exception:
-            pass
-
+        # Shape mismatch is a hard error; do not monkeypatch the booster.
         # Predict on test segment
         print(f"  Predicting on test segment ({pred_date})...")
         try:
@@ -3831,6 +3772,8 @@ def _predict_only_main(args, template_path, output_root, wf_root) -> None:
 
 
 def main() -> None:
+    if os.environ.get("ALLOW_EXPERIMENTAL_LEGACY_QUANT") != "1":
+        raise RuntimeError("EXPERIMENTAL_DISABLED: use the versioned QuantEngine service")
     ap = argparse.ArgumentParser()
     ap.add_argument("--template", required=True, help="Base workflow YAML template")
     ap.add_argument("--output-root", required=True, help="Root output dir, usually .../model_predict")
@@ -3872,6 +3815,9 @@ def main() -> None:
     ap.add_argument("--cache-workers", type=int, default=1,
                     help="Number of parallel workers for cache precompute (default: 1 = serial)")
     args = ap.parse_args()
+    for spec in MODEL_SPECS:
+        if spec["name"] == "lightgbm":
+            spec["model_mode"] = args.model_mode
 
     template_path = Path(args.template)
     if not template_path.exists():

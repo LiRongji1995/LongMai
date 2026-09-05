@@ -10,6 +10,7 @@ A 股数据提供者
   - MockBackend: 模拟数据（开发/演示用）
 """
 import json
+import math
 import os
 import random
 from abc import ABC, abstractmethod
@@ -19,6 +20,7 @@ from dataclasses import dataclass, field, asdict
 from pathlib import Path
 
 from loguru import logger
+from stockfish_core.common import UnavailableError
 
 
 # ========== 统一数据结构 ==========
@@ -43,6 +45,12 @@ class Quote:
     market_cap: Optional[float] = None
     dividend: Optional[float] = None  # 每股分红（税后，元/股）
     timestamp: str = ""
+    source: str = "unknown"
+    quality: str = "RESEARCH_ONLY"
+    source_timestamp: Optional[str] = None
+    missing_fields: tuple = ()
+    price_adjustment: str = "UNKNOWN"
+    available_at: Optional[str] = None
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -66,6 +74,8 @@ class FinancialSummary:
     dividend_per_share: Optional[float] = None    # 每股股息（TTM，税前）
     dividend_yield: Optional[float] = None        # 股息率 %
     report_date: str = ""
+    quality: str = "PIT_UNAVAILABLE"
+    source: str = "unknown"
 
     def to_dict(self) -> dict:
         return asdict(self)
@@ -416,51 +426,32 @@ class BaoStockBackend(BaseStockBackend):
         return 'sh.' + code if code.startswith(('6', '9')) else 'sz.' + code
 
     def get_quote(self, symbol: str) -> Optional[Quote]:
-        try:
-            self._login()
-            prefix = self._bs_prefix(symbol)
-            code = symbol.strip().zfill(6)
-            # 日K线最新一条作为行情
-            rs = self._bs.query_history_k_data_plus(prefix,
-                'date,open,high,low,close,volume,amount,peTTM,pbMRQ,turn',
-                frequency='d', adjustflag='2')
-            rows = []
-            while rs.next():
-                rows.append(rs.get_row_data())
-            if not rows:
-                return None
-            r = rows[-1]
-            price = float(r[3]) if r[3] else 0
-            prev_close = float(r[3]) if len(rows) > 1 and rows[-2][3] else price
-            change_pct = (price - prev_close) / prev_close * 100 if prev_close else 0
+        """Compatibility read through the verified RAW observation adapter.
 
-            # 股票名称
-            name = code
-            try:
-                rs_name = self._bs.query_stock_basic(code=prefix)
-                if rs_name.error_code == '0':
-                    while rs_name.next():
-                        name = rs_name.get_row_data()[1]
-            except Exception:
-                pass
-
-            pe = float(r[6]) if r[6] else None
-            pb = float(r[7]) if r[7] else None
-            turnover = float(r[8]) if r[8] else None
-
-            return Quote(
-                symbol=code, name=name, price=round(price, 2),
-                change=round(price - prev_close, 2), change_pct=round(change_pct, 2),
-                volume=float(r[4]) if r[4] else 0, amount=float(r[5]) if r[5] else 0,
-                high=float(r[1]) if r[1] else 0, low=float(r[2]) if r[2] else 0,
-                open_=float(r[0]) if r[0] else 0, prev_close=round(prev_close, 2),
-                turnover_rate=round(turnover, 2) if turnover else None,
-                pe=round(pe, 2) if pe else None, pb=round(pb, 2) if pb else None,
-                market_cap=None, timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
-            )
-        except Exception as e:
-            logger.error(f"BaoStock 行情失败 [{symbol}]: {e}")
-            return None
+        This replaces positional parsing that previously used low as close and
+        attempted float(date). No historical quote is labelled realtime.
+        """
+        from stockfish_core.observed_data import BaostockRawDataAdapter, exchange_calendar_2026
+        from stockfish_core.data import SHANGHAI, canonical_instrument
+        from datetime import time as clock_time
+        identity = canonical_instrument(self._bs_prefix(symbol))
+        now = datetime.now(SHANGHAI)
+        calendar = exchange_calendar_2026()
+        calendar.is_session(now.date())
+        days = [day for day in calendar.sessions if day < now.date() or (day == now.date() and now.time() >= clock_time(18))]
+        if not days:
+            raise UnavailableError('CLOSED_SESSION_UNAVAILABLE', 'data')
+        observation = BaostockRawDataAdapter().fetch(days[-1], [identity])
+        bar = observation.bars[0]
+        payload = json.loads(observation.source_payloads[0].payload_json)['records'][0]
+        prior = payload['daily'][0].get('preclose')
+        prior = float(prior) if prior else None
+        change = bar.close-prior if prior is not None else None
+        return Quote(symbol=identity[:6], name=payload['basic'][0].get('code_name') or identity[:6],
+            price=bar.close, change=change, change_pct=change/prior*100 if prior and change is not None else None,
+            volume=bar.volume, amount=bar.turnover, high=bar.high, low=bar.low, open_=bar.open, prev_close=prior,
+            timestamp=bar.timestamp.isoformat(), source='baostock', source_timestamp=bar.source_timestamp.isoformat(),
+            quality='RESEARCH_ONLY', price_adjustment='RAW', available_at=bar.available_at.isoformat())
 
     def get_historical(self, symbol: str, days: int = 365) -> Optional[List[dict]]:
         try:
@@ -693,7 +684,7 @@ class AStockProvider:
     1.5 AdvancedBackend（多源策略：efinance/akshare/tushare/pytdx/baostock/yfinance + 搜索/社交情感）
     2. AkShareBackend（东方财富，需中国大陆网络）
     3. BaoStockBackend（免费，无需token）
-    4. MockBackend（内置模拟数据，保底）
+    MockBackend 仅限显式 mock；真实数据失败返回不可用。
     """
 
     def __init__(self, backend: Optional[str] = None, proxy: Optional[str] = None,
@@ -712,73 +703,34 @@ class AStockProvider:
 
     @property
     def backend(self) -> BaseStockBackend:
+        """Lazy provider selection. Mock is available only by explicit request."""
         if self._backend is not None:
             return self._backend
-
-        if self._requested_backend == 'mock':
-            self._backend = MockBackend()
-            self._active_backend_name = 'mock'
-            logger.info("使用 MockBackend（模拟数据）")
-            return self._backend
-
-        # 1. Tushare（优先）
-        if self._requested_backend in ('tushare', 'auto') and self.tushare_token:
-            try:
-                from .tushare_provider import TushareBackend
-                bk = TushareBackend(token=self.tushare_token)
-                test = bk.get_quote("600519")
-                if test is not None and test.price > 0:
-                    self._backend = bk
-                    self._active_backend_name = 'tushare'
-                    logger.info("使用 TushareBackend（Tushare Pro）")
-                    return self._backend
-            except Exception as e:
-                logger.warning(f"TushareBackend 不可用: {e}")
-
-        # 1.5 Advanced（DataFetcherManager 多源策略，11 个数据源自动切换）
-        if self._requested_backend in ('advanced', 'auto'):
-            try:
+        selected = self._requested_backend.lower()
+        if selected == 'auto':
+            selected = 'advanced'
+        try:
+            if selected == 'mock':
+                self._backend = MockBackend()
+            elif selected == 'advanced':
                 from .provider_adapter import AdvancedBackend
-                bk = AdvancedBackend()
-                test = bk.get_quote("600519")
-                if test is not None and test.price > 0:
-                    self._backend = bk
-                    self._active_backend_name = 'advanced'
-                    logger.info("使用 AdvancedBackend（多源策略：efinance/akshare/tushare/pytdx/baostock/yfinance + 搜索/社交情感）")
-                    return self._backend
-            except Exception as e:
-                logger.warning(f"AdvancedBackend 不可用: {e}")
-
-        # 2. AkShare
-        if self._requested_backend in ('akshare', 'auto'):
-            try:
-                bk = AkShareBackend(proxy=self.proxy)
-                test = bk.get_quote("600519")
-                if test is not None and test.price > 0:
-                    self._backend = bk
-                    self._active_backend_name = 'akshare'
-                    logger.info("使用 AkShareBackend（东方财富）")
-                    return self._backend
-            except Exception as e:
-                logger.warning(f"AkShareBackend 不可用: {e}")
-
-        # 3. BaoStock（免费兜底）
-        if self._requested_backend in ('baostock', 'auto'):
-            try:
-                bk = BaoStockBackend()
-                test = bk.get_quote("600519")
-                if test is not None and test.price > 0:
-                    self._backend = bk
-                    self._active_backend_name = 'baostock'
-                    logger.info("使用 BaoStockBackend（免费数据）")
-                    return self._backend
-            except Exception as e:
-                logger.warning(f"BaoStockBackend 不可用: {e}")
-
-        # 4. Mock（最终保底）
-        logger.info("回退到 MockBackend（模拟数据）")
-        self._backend = MockBackend()
-        self._active_backend_name = 'mock'
+                self._backend = AdvancedBackend()
+            elif selected == 'tushare':
+                if not self.tushare_token:
+                    raise UnavailableError('TUSHARE_TOKEN_UNCONFIGURED', 'data')
+                from .tushare_provider import TushareBackend
+                self._backend = TushareBackend(token=self.tushare_token)
+            elif selected == 'akshare':
+                self._backend = AkShareBackend(proxy=self.proxy)
+            elif selected == 'baostock':
+                self._backend = BaoStockBackend()
+            else:
+                raise ValueError('unknown STOCK_BACKEND')
+        except UnavailableError:
+            raise
+        except Exception as exc:
+            raise UnavailableError('PROVIDER_INITIALIZATION_FAILED', 'data') from exc
+        self._active_backend_name = selected
         return self._backend
 
     @property
@@ -800,7 +752,20 @@ class AStockProvider:
             return None
 
     def get_quote(self, symbol: str) -> Optional[Quote]:
-        return self.backend.get_quote(symbol)
+        try:
+            quote = self.backend.get_quote(symbol)
+            if quote is None or quote.price is None or not math.isfinite(quote.price) or quote.price <= 0:
+                raise UnavailableError('QUOTE_UNAVAILABLE', 'data')
+            if self.backend_name == 'mock':
+                quote.source, quote.quality = 'mock', 'MOCK'
+            elif quote.source == 'unknown':
+                quote.source = self.backend_name
+                quote.quality = 'RESEARCH_ONLY'
+            return quote
+        except UnavailableError:
+            raise
+        except Exception as exc:
+            raise UnavailableError('QUOTE_PROVIDER_FAILED', 'data') from exc
 
     def get_historical(self, symbol: str, days: int = 120) -> Optional[List[dict]]:
         return self.backend.get_historical(symbol, days)
@@ -813,7 +778,13 @@ class AStockProvider:
         return None
 
     def get_financial_summary(self, symbol: str) -> Optional[FinancialSummary]:
-        return self.backend.get_financials(symbol)
+        if self.backend_name == 'mock':
+            result = self.backend.get_financials(symbol)
+            if result is not None:
+                result.source, result.quality = 'mock', 'MOCK'
+            return result
+        # Old annual/current-quarter DTOs have no PIT or accounting-unit contract.
+        return FinancialSummary(symbol=symbol, name=symbol, quality='PIT_UNAVAILABLE', source='legacy_disabled')
 
     def get_news(self, symbol: str) -> List[NewsItem]:
         news = self.backend.get_news(symbol)

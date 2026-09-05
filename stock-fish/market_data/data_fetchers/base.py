@@ -456,6 +456,12 @@ class BaseFetcher(ABC):
             
             # Step 4: 计算技术指标
             df = self._calculate_indicators(df)
+            adjustment = {'EfinanceFetcher':'QFQ', 'AkshareFetcher':'QFQ',
+                          'BaostockFetcher':'QFQ', 'TushareFetcher':'RAW',
+                          'PytdxFetcher':'RAW', 'YfinanceFetcher':'AUTO_ADJUSTED'}
+            df.attrs.update(provider=self.name, price_adjustment=adjustment.get(self.name, 'UNKNOWN'),
+                            volume_unit='SHARE', quality='RESEARCH_ONLY',
+                            available_at=datetime.now().astimezone().isoformat())
 
             elapsed = time.time() - request_start
             logger.info(
@@ -474,34 +480,25 @@ class BaseFetcher(ABC):
             raise DataFetchError(f"[{self.name}] {stock_code}: {error_reason}") from e
     
     def _clean_data(self, df: pd.DataFrame) -> pd.DataFrame:
-        """
-        数据清洗
-        
-        处理：
-        1. 确保日期列格式正确
-        2. 数值类型转换
-        3. 去除空值行
-        4. 按日期排序
-        """
+        """Reject corrupt/missing prices instead of fabricating or silently dropping."""
+        import math
         df = df.copy()
-        
-        # 确保日期列为 datetime 类型
-        if 'date' in df.columns:
-            df['date'] = pd.to_datetime(df['date'])
-        
-        # 数值列类型转换
-        numeric_cols = ['open', 'high', 'low', 'close', 'volume', 'amount', 'pct_chg']
-        for col in numeric_cols:
+        required = ['date', 'open', 'high', 'low', 'close', 'volume']
+        if any(n not in df.columns for n in required):
+            raise DataFetchError('REQUIRED_MARKET_FIELDS_MISSING')
+        df['date'] = pd.to_datetime(df['date'], errors='raise')
+        if df['date'].isna().any() or df['date'].duplicated().any():
+            raise DataFetchError('INVALID_OR_DUPLICATE_MARKET_DATE')
+        for col in ['open', 'high', 'low', 'close', 'volume', 'amount']:
             if col in df.columns:
-                df[col] = pd.to_numeric(df[col], errors='coerce')
-        
-        # 去除关键列为空的行
-        df = df.dropna(subset=['close', 'volume'])
-        
-        # 按日期升序排序
-        df = df.sort_values('date', ascending=True).reset_index(drop=True)
-        
-        return df
+                df[col] = pd.to_numeric(df[col], errors='raise')
+                if not df[col].map(lambda n: math.isfinite(n) and n >= 0).all():
+                    raise DataFetchError('NONFINITE_OR_NEGATIVE_MARKET_VALUE')
+        if (df[['open','high','low','close']] <= 0).any().any():
+            raise DataFetchError('NONPOSITIVE_PRICE')
+        if ((df['high'] < df[['open','close','low']].max(axis=1)) | (df['low'] > df[['open','close','high']].min(axis=1))).any():
+            raise DataFetchError('INVALID_OHLC_ENVELOPE')
+        return df.sort_values('date', ascending=True).reset_index(drop=True)
     
     def _calculate_indicators(self, df: pd.DataFrame) -> pd.DataFrame:
         """
@@ -524,7 +521,8 @@ class BaseFetcher(ABC):
         # 该行为目前保留（按需求不改逻辑）。
         avg_volume_5 = df['volume'].rolling(window=5, min_periods=1).mean()
         df['volume_ratio'] = df['volume'] / avg_volume_5.shift(1)
-        df['volume_ratio'] = df['volume_ratio'].fillna(1.0)
+        # No prior volume baseline remains unavailable, never a fabricated 1.0.
+        df['volume_ratio'] = df['volume_ratio'].replace([float('inf'), -float('inf')], float('nan'))
         
         # 保留2位小数
         for col in ['ma5', 'ma10', 'ma20', 'volume_ratio']:

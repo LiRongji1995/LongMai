@@ -16,6 +16,7 @@ import os
 import subprocess
 import sys
 import tempfile
+import uuid
 from datetime import datetime, timedelta
 from pathlib import Path
 
@@ -184,7 +185,7 @@ def run_inference(
         "--hold-num", "20",
     ]
 
-    native_output = model_dir / "model_predict" / f"native_predict_only_{pred_date.replace('-', '')}"
+    native_output = model_dir / "model_predict" / f"native_predict_only_{pred_date.replace('-', '')}_{uuid.uuid4().hex}"
     if native:
         if cfg["market"] != "csi300":
             raise ValueError("本地模式目前验证并支持 CSI300 Alpha158 模型")
@@ -328,9 +329,11 @@ def run_inference(
             _log(f"Strategy B: vetoed={len(strategy_b_result.get('vetoed',[]))}, "
                  f"buy={len(strategy_b_result.get('buy',[]))}")
         else:
-            _log(f"Strategy B analysis failed: {sb_process.stderr[:200]}")
+            raise RuntimeError("RISK_UNAVAILABLE: Strategy B process failed")
     except Exception as e:
-        _log(f"Strategy B analysis error: {e}")
+        raise RuntimeError("RISK_UNAVAILABLE: Strategy B analysis failed") from e
+    if strategy_b_result.get("error") or not all(isinstance(strategy_b_result.get(k), list) for k in ("buy", "vetoed")):
+        raise RuntimeError("RISK_UNAVAILABLE: invalid Strategy B result")
 
     # ── Dropout Buffer 调仓（对齐回测逻辑） ────────────────────────
     if strategy_b_result and holdings:
@@ -371,8 +374,9 @@ def run_inference(
         buy_candidates = [r for r in all_rows
                           if r["code"] not in held_set
                           and r["code"] not in vetoed_codes]
+        slots = max(0, hold_num - len(keep_list))
         buy_list = [{"stock": r["code"], "score": round(r["score"], 4)}
-                    for r in buy_candidates[:5]]
+                    for r in buy_candidates[:slots]]
 
         strategy_b_result["keep"] = keep_list
         strategy_b_result["sell"] = sell_list

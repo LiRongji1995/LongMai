@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import argparse
 import inspect
+import json
 import os
 import pickle
 from pathlib import Path
@@ -453,6 +454,7 @@ def main() -> None:
     ap.add_argument("--half-life", type=int, default=252)
     ap.add_argument("--floor", type=float, default=0.2)
     ap.add_argument("--warm-start", default=None, help="Previous fold params.pkl checkpoint for warm start")
+    ap.add_argument("--run-manifest", default=None, help="Exclusive output describing this exact successful recorder")
     args = ap.parse_args()
 
     cfg = _load_yaml(Path(args.config))
@@ -471,6 +473,14 @@ def main() -> None:
     with R.start(experiment_name=args.experiment_name):
         _log_task_info(task)
         _exe_task(task, reweighter=reweighter, warm_start_path=args.warm_start)
+        if args.run_manifest:
+            recorder = R.get_recorder()
+            artifacts = Path(recorder.get_local_dir()) / "artifacts"
+            if not (artifacts / "params.pkl").is_file() or not (artifacts / "dataset").is_file():
+                raise RuntimeError("Training finished without model/dataset artifacts")
+            with Path(args.run_manifest).open("x", encoding="utf-8") as out:
+                json.dump({"run_id": recorder.id, "experiment_name": args.experiment_name,
+                           "artifacts_dir": str(artifacts.resolve())}, out)
 
 
 if __name__ == "__main__":

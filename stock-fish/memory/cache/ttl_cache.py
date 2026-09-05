@@ -4,6 +4,7 @@
 提供内存缓存 + 可选磁盘持久化，支持 LRU 淘汰。
 """
 import json
+import hashlib
 import threading
 import time
 from dataclasses import dataclass, asdict
@@ -11,6 +12,7 @@ from pathlib import Path
 from typing import Any, Optional, Callable, Dict, List
 
 from loguru import logger
+from memory.atomic_io import atomic_write_json
 
 
 @dataclass
@@ -30,7 +32,9 @@ class TtlCache:
     def __init__(self, name: str, persist_dir: Optional[Path] = None,
                  default_ttl: int = 300, max_entries: int = 10000):
         self.name = name
-        self.persist_dir = persist_dir
+        self.persist_dir = Path(persist_dir) if persist_dir else None
+        if default_ttl < 0 or max_entries < 1:
+            raise ValueError("invalid cache capacity or ttl")
         self.default_ttl = default_ttl
         self.max_entries = max_entries
 
@@ -40,6 +44,7 @@ class TtlCache:
         self._hits = 0
         self._misses = 0
         self._expired = 0
+        self._persisted_paths: Dict[str, Path] = {}
 
         # 如果 persist_dir 存在，尝试恢复
         if persist_dir:
@@ -58,7 +63,7 @@ class TtlCache:
                 return None
 
             age = time.time() - entry.cached_at
-            if age > entry.ttl:
+            if age >= entry.ttl:
                 self._evict(key)
                 self._expired += 1
                 self._misses += 1
@@ -72,16 +77,27 @@ class TtlCache:
             data_type: str = "", symbol: str = "") -> None:
         """写入缓存"""
         with self._lock:
+            effective_ttl = self.default_ttl if ttl is None else ttl
+            if effective_ttl < 0:
+                raise ValueError("ttl cannot be negative")
             if len(self._cache) >= self.max_entries and key not in self._cache:
                 self._evict_lru()
 
+            previous = self._cache.get(key)
             self._cache[key] = CacheEntry(
                 key=key, data=data, cached_at=time.time(),
-                ttl=ttl or self.default_ttl,
+                ttl=effective_ttl,
                 data_type=data_type, symbol=symbol,
             )
+            try:
+                self._persist(key)
+            except BaseException:
+                if previous is None:
+                    self._cache.pop(key, None)
+                else:
+                    self._cache[key] = previous
+                raise
             self._touch(key)
-            self._persist(key)
 
     def get_or_fetch(self, key: str, fetch_fn: Callable[[], Any],
                      ttl: Optional[int] = None,
@@ -112,6 +128,15 @@ class TtlCache:
     def clear(self) -> None:
         """清空所有缓存"""
         with self._lock:
+            for key in list(self._cache):
+                self._remove_persisted(key)
+            if self.persist_dir:
+                for path in self.persist_dir.glob("*.json"):
+                    try:
+                        CacheEntry(**json.loads(path.read_text(encoding="utf-8")))
+                    except (ValueError, TypeError):
+                        continue  # Preserve unrelated/corrupt files.
+                    path.unlink()
             self._cache.clear()
             self._access_order.clear()
             self._hits = 0
@@ -174,7 +199,7 @@ class TtlCache:
         if not self.persist_dir:
             return None
         # 对 key 做安全文件名处理
-        safe = key.replace(":", "_").replace("/", "_").replace("\\", "_")
+        safe = hashlib.sha256(key.encode("utf-8")).hexdigest()
         return self.persist_dir / f"{safe}.json"
 
     def _persist(self, key: str) -> None:
@@ -182,27 +207,21 @@ class TtlCache:
         path = self._persist_key_path(key)
         if not path:
             return
-        try:
-            path.parent.mkdir(parents=True, exist_ok=True)
-            entry = self._cache.get(key)
-            if not entry:
-                return
-            # 写入临时文件后原子重命名
-            tmp = path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(asdict(entry), f, ensure_ascii=False, default=str)
-            tmp.rename(path)
-        except Exception as e:
-            logger.debug(f"TtlCache 持久化失败 [{self.name}:{key}]: {e}")
+        entry = self._cache.get(key)
+        if not entry:
+            return
+        atomic_write_json(path, asdict(entry))
+        old_path = self._persisted_paths.get(key)
+        if old_path and old_path != path:
+            old_path.unlink(missing_ok=True)
+        self._persisted_paths[key] = path
 
     def _remove_persisted(self, key: str) -> None:
         """删除磁盘上的持久化文件"""
-        path = self._persist_key_path(key)
-        if path and path.exists():
-            try:
-                path.unlink(missing_ok=True)
-            except Exception:
-                pass
+        paths = {self._persist_key_path(key), self._persisted_paths.get(key)} - {None}
+        for path in paths:
+            path.unlink(missing_ok=True)
+        self._persisted_paths.pop(key, None)
 
     def load_persisted(self) -> int:
         """启动时从磁盘恢复有效条目，返回恢复数量"""
@@ -218,17 +237,15 @@ class TtlCache:
                 entry = CacheEntry(**raw)
                 # 跳过已过期的
                 if now - entry.cached_at > entry.ttl:
-                    f.unlink(missing_ok=True)
                     continue
+                if count >= self.max_entries:
+                    break
                 self._cache[entry.key] = entry
+                self._persisted_paths[entry.key] = f
                 self._access_order.append(entry.key)
                 count += 1
-            except Exception:
-                # 损坏的文件，删除重来
-                try:
-                    f.unlink(missing_ok=True)
-                except Exception:
-                    pass
+            except (ValueError, TypeError, OSError):
+                logger.warning(f"TtlCache [{self.name}] 无法恢复文件 {f.name}; preserved for inspection")
 
         if count > 0:
             logger.info(f"TtlCache [{self.name}] 从磁盘恢复 {count} 条目")

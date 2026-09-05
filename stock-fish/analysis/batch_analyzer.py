@@ -134,39 +134,14 @@ class BatchAnalyzer:
         batch_summary = None
         quality_pick = None
 
-        if len(success_results) >= 2:
-            if progress_callback:
-                progress_callback('progress', {
-                    'current': total, 'total': total,
-                    'message': '正在生成批量分析总结...',
-                })
-
-            batch_summary = self._summarize(success_results, master, total_assets, available_cash)
-
-            if progress_callback:
-                progress_callback('progress', {
-                    'current': total, 'total': total,
-                    'message': '正在筛选优质股票...',
-                })
-
-            quality_pick = self._pick_best(success_results, master, total_assets, available_cash)
-
-        elif len(success_results) == 1:
-            # 只有一只成功，无需批量总结
-            batch_summary = {
-                'summary_text': f"仅成功分析 {success_results[0]['symbol']}，无足够数据做批量对比。",
-                'ranking': [],
-                'overall_assessment': '只有一只股票完成分析，建议返回单股模式查看更多。',
-            }
-            quality_pick = {
-                'best_stock': {
-                    'symbol': success_results[0]['symbol'],
-                    'name': success_results[0]['data'].get('stock_name', ''),
-                    'reasons': ['唯一成功分析的股票'],
-                    'suggested_action': '参考该股单独分析结果',
-                },
-                'runner_up': None,
-            }
+        # This legacy component assembles research only. All actionable ordering
+        # is supplied by stockfish_core.RecommendationEngine through the API.
+        batch_summary = {
+            'summary_text': f'{len(success_results)} research reports; final policy not evaluated here.',
+            'ranking': [], 'overall_assessment': 'RESEARCH_ONLY',
+        }
+        quality_pick = {'best_stock': None, 'runner_up': None,
+                        'reason': 'CANONICAL_RECOMMENDATION_REQUIRED'}
 
         if progress_callback:
             progress_callback('batch_summary', {

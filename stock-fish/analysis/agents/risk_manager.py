@@ -130,10 +130,17 @@ class RiskManager(BaseAgent):
                               department=self.department, outlook=outlook,
                               confidence=conf,
                               score=normalized_score,
-                              key_points=points, risks=risks)
+                              key_points=points, risks=risks,
+                              risk_score=risk_score, veto=veto, veto_reason=veto_reason)
 
     def _build_report(self, result: dict) -> EmployeeReport:
+        if not result or not isinstance(result.get('risk_score'), (int, float)):
+            return EmployeeReport(employee_id=self.employee_id, role=self.role,
+                                  error="INVALID_RISK_OUTPUT", status="INVALID")
         risk_score = float(result.get('risk_score', 5))
+        if not 1 <= risk_score <= 10 or not isinstance(result.get('veto'), bool):
+            return EmployeeReport(employee_id=self.employee_id, role=self.role,
+                                  error="INVALID_RISK_OUTPUT", status="INVALID")
         return EmployeeReport(employee_id=self.employee_id, role=self.role,
                               department=self.department,
                               outlook=result.get('outlook', '中性'),
@@ -141,4 +148,7 @@ class RiskManager(BaseAgent):
                               score=float(result.get('score', 0)),
                               key_points=result.get('key_points', []),
                               risks=result.get('risks', []),
-                              raw_output=str(result))
+                              raw_output=str(result), risk_score=risk_score,
+                              veto=result['veto'] or risk_score >= self.veto_threshold,
+                              veto_reason=str(result.get('veto_reason') or
+                                              ('RISK_THRESHOLD' if risk_score >= self.veto_threshold else '')))

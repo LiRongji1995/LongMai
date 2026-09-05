@@ -4,6 +4,8 @@
 
 # StockFish — A 股智能分析 + 股价推演系统
 
+> 工程基线更新：当前统一推荐、风控、持久历史与离线测试入口见 [ENGINEERING_BASELINE.md](ENGINEERING_BASELINE.md)。开发环境请安装 `requirements-dev.txt`；后文保留的旧研究/推演功能不代表当前已启用或经过投资验证。
+
 ### 完整决策链路
 
 <p align="center">

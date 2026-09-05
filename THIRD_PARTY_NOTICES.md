@@ -12,15 +12,15 @@ MiroFish 的原嵌入副本在 `backend/pyproject.toml` 声明 AGPL-3.0，但缺
 
 ## 本仓库的兼容修改
 
-StockFish 在原快照基础上增加 Windows 原生 CSI300 推理入口，支持配置数据路径，修复评分 SSE 输出及 Quote 对象健康检查，并将缺失分析归档模块的导入延迟到归档分支。根目录增加进程管理脚本、Windows 配置样例、依赖快照和部署说明。Microsoft Qlib 主体源码保留上游内容；实际运行使用 PyPI 的 `pyqlib==0.9.7` wheel。
+StockFish 在原快照基础上增加 Windows 原生 CSI300 推理入口、可配置数据路径及兼容修复，随后新增 `stockfish_core`，统一可信数据、模型登记、量化、确定性推荐与风控、持久任务和不可变历史；缺失的分析归档模块已补齐。当前源码同步自本地 StockFish 提交 `e7e8d51`，该提交标识本地修改版本，不是上游版本或运行验收声明。架构及边界见 [工程基线](stock-fish/ENGINEERING_BASELINE.md)。根目录增加进程管理脚本、Windows 配置样例、依赖快照和部署说明。Microsoft Qlib 主体源码保留上游内容；实际运行使用 PyPI 的 `pyqlib==0.9.7` wheel。
 
 发布时排除本地 `.env`、虚拟环境、下载模型、行情数据缓存、日志和运行状态，亦排除 StockFish 上游已生成的 `batch_results/*.json`、`data/sentiment_history/600519.json` 与 `.claude` 工具规则。上游跟踪的小型示例 CSV / pickle 数据仍随源码保留，其原有许可及说明继续适用。
 
 ## 外部模型、数据和依赖
 
-- 已验证模型来自 [StockFish CSI300 Alpha158 发布](https://github.com/freenowill/stock-fish/releases/tag/csi300-alpha158)，实际目录名为 `2026-06-21-csi300-alpha158`。模型下载包不随仓库发布。
-- 已验证 Qlib binary 行情来自第三方 [chenditc/investment_data 的 2026-09-04 发布](https://github.com/chenditc/investment_data/releases/tag/2026-09-04)。完整行情下载包和解压数据不随仓库发布；数据来源不等同于 Microsoft 官方数据。
-- `docs/verification/` 仅保存本次执行清单与模型输出评分，用于复核 2026-09-04 预测日的运行结果。它们不是模型权重或原始行情包。
+- 历史原生推理验收所用模型来自 [StockFish CSI300 Alpha158 发布](https://github.com/freenowill/stock-fish/releases/tag/csi300-alpha158)，实际目录名为 `2026-06-21-csi300-alpha158`。模型下载包不随仓库发布；当前核心需显式登记，登记后保持 `RESEARCH_ONLY`。
+- 历史原生推理验收所用 Qlib binary 行情来自第三方 [chenditc/investment_data 的 2026-09-04 发布](https://github.com/chenditc/investment_data/releases/tag/2026-09-04)。完整行情下载包和解压数据不随仓库发布；数据来源不等同于 Microsoft 官方数据。
+- `docs/verification/` 仅保存历史执行清单与模型输出评分，用于复核 2026-09-04 预测日的旧流程运行结果。它们不是模型权重或原始行情包，也不代表当前核心的部署验收。
 - Python 及其他依赖各自适用其许可证。`requirements-windows.lock.txt` 是已安装版本快照，不替代依赖项目的版权和许可文本。
 
 模型和行情的下载、使用或再分发应遵循其发布源对应条款；本文件不为第三方资产另行授予权利。

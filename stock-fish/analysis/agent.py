@@ -341,7 +341,8 @@ class StockAnalysisAgent:
 
                 logger.info(f"[{symbol}] 记忆系统保存完成")
             except Exception as mem_err:
-                logger.warning(f"[{symbol}] 记忆系统保存失败 (非关键): {mem_err}")
+                logger.error(f"[{symbol}] ARCHIVE_PERSISTENCE_FAILED")
+                state.mark_error("ARCHIVE_PERSISTENCE_FAILED")
 
         except Exception as e:
             logger.error(f"[{symbol}] 分析失败: {e}")

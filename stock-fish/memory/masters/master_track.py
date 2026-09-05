@@ -12,7 +12,7 @@ actual_outcome / was_correct 初始为 None，由验证脚本在
 短/中/长期后更新。
 """
 import json
-import threading
+import math
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Dict, List, Optional
@@ -21,15 +21,16 @@ from uuid import uuid4
 from loguru import logger
 
 from memory import MASTERS_DIR
+from memory.atomic_io import atomic_write_json, safe_component, shared_directory_lock
 
 
 class MasterTrackDB:
-    """大师追踪数据库 — 基于文件的 append-only 存储"""
+    """Legacy mutable directional diagnostics; canonical history is RecommendationTracker."""
 
     def __init__(self, base_dir: Optional[Path] = None):
-        self.base_dir = base_dir or MASTERS_DIR
+        self.base_dir = Path(base_dir or MASTERS_DIR)
         self.base_dir.mkdir(parents=True, exist_ok=True)
-        self._lock = threading.RLock()
+        self._lock = shared_directory_lock(self.base_dir)
 
     # ── 记录 ──
 
@@ -63,7 +64,7 @@ class MasterTrackDB:
             "price_at_analysis": price,
 
             # 决策摘要
-            "decision_summary": (prediction_summary or {}).get("outlook", ""),
+            "decision_summary": prediction_summary or {},
             "decision_outlook": (prediction_summary or {}).get("outlook", ""),
 
             # 多周期预测
@@ -84,7 +85,9 @@ class MasterTrackDB:
             } if long_pred else None,
 
             # CIO 额外字段
-            "cio_rationale": cio_decision.get("rationale", "")[:200] if cio_decision else "",
+            "cio_rationale": cio_decision.get("rationale", "") if cio_decision else "",
+            "evaluation_basis": "LEGACY_DIRECTIONAL_DIAGNOSTIC_NOT_EXECUTABLE_RETURN",
+            "horizon_days": {"short": 14, "mid": 90, "long": 365},
             "base_case_target": (
                 cio_decision.get("base_case", {}).get("target")
                 if cio_decision and isinstance(cio_decision.get("base_case"), dict)
@@ -181,14 +184,14 @@ class MasterTrackDB:
 
     def get_unverified_records(self) -> List[Dict]:
         """
-        获取所有待验证的记录（was_correct_short == None）
+        获取任一周期尚未验证的记录，独立重访短/中/长期
         用于验证脚本定期检查
         """
         result = []
         for master_file in self.base_dir.glob("*.json"):
             records = self._load_records(master_file.stem)
             for r in records:
-                if r.get("was_correct_short") is None:
+                if any(r.get(f"was_correct_{horizon}") is None for horizon in ("short", "mid", "long")):
                     result.append(r)
         return result
 
@@ -199,10 +202,10 @@ class MasterTrackDB:
 
         total = len(verified)
         short_correct = sum(1 for r in verified if r.get("was_correct_short"))
-        mid_correct = sum(1 for r in verified if r.get("was_correct_mid"))
-        mid_count = sum(1 for r in verified if r.get("was_correct_mid") is not None)
-        long_correct = sum(1 for r in verified if r.get("was_correct_long"))
-        long_count = sum(1 for r in verified if r.get("was_correct_long") is not None)
+        mid_correct = sum(1 for r in records if r.get("was_correct_mid"))
+        mid_count = sum(1 for r in records if r.get("was_correct_mid") is not None)
+        long_correct = sum(1 for r in records if r.get("was_correct_long"))
+        long_count = sum(1 for r in records if r.get("was_correct_long") is not None)
 
         return {
             "master_key": master_key,
@@ -228,12 +231,18 @@ class MasterTrackDB:
             actual_change_pct: 实际涨跌幅百分比
             was_correct: 预测方向是否正确
         """
+        if field not in {"short", "mid", "long"} or not isinstance(was_correct, bool) or not math.isfinite(actual_change_pct):
+            raise ValueError("invalid legacy outcome")
         with self._lock:
             for master_file in self.base_dir.glob("*.json"):
                 records = self._load_records(master_file.stem, acquire_lock=False)
                 updated = False
                 for r in records:
                     if r.get("id") == record_id:
+                        if r.get(f"was_correct_{field}") is not None:
+                            if r[f"was_correct_{field}"] != was_correct or r.get(f"actual_change_pct_{field}") != actual_change_pct:
+                                raise ValueError("existing diagnostic outcome cannot be silently revised")
+                            return
                         r[f"actual_change_pct_{field}"] = actual_change_pct
                         r[f"was_correct_{field}"] = was_correct
                         r["actual_outcome_" + field] = "上涨" if actual_change_pct > 0 else "下跌" if actual_change_pct < 0 else "震荡"
@@ -246,12 +255,12 @@ class MasterTrackDB:
                     logger.info(f"MasterTrack 已更新 [{record_id}] {field}: {'✓' if was_correct else '✗'} ({actual_change_pct:+.1f}%)")
                     return
 
-        logger.warning(f"MasterTrack 更新失败: 未找到记录 {record_id}")
+        raise KeyError(record_id)
 
     # ── 内部方法 ──
 
     def _records_path(self, master_key: str) -> Path:
-        return self.base_dir / f"{master_key}.json"
+        return self.base_dir / f"{safe_component(master_key)}.json"
 
     def _append_record(self, master_key: str, record: Dict) -> None:
         """追加一条记录到文件"""
@@ -270,12 +279,10 @@ class MasterTrackDB:
             if not path.exists():
                 return []
             with open(path, "r", encoding="utf-8") as f:
-                return json.load(f)
-        except (json.JSONDecodeError, FileNotFoundError):
-            return []
-        except Exception as e:
-            logger.warning(f"MasterTrack 加载失败 [{master_key}]: {e}")
-            return []
+                result = json.load(f)
+            if not isinstance(result, list) or any(not isinstance(record, dict) for record in result):
+                raise ValueError("invalid legacy master history")
+            return result
         finally:
             if acquire_lock:
                 self._lock.release()
@@ -287,13 +294,7 @@ class MasterTrackDB:
             self._lock.acquire()
         try:
             path = self._records_path(master_key)
-            path.parent.mkdir(parents=True, exist_ok=True)
-            tmp = path.with_suffix(".tmp")
-            with open(tmp, "w", encoding="utf-8") as f:
-                json.dump(records, f, ensure_ascii=False, default=str, indent=2)
-            tmp.rename(path)
-        except Exception as e:
-            logger.warning(f"MasterTrack 保存失败 [{master_key}]: {e}")
+            atomic_write_json(path, records)
         finally:
             if acquire_lock:
                 self._lock.release()

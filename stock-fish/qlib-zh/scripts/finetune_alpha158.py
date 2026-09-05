@@ -107,8 +107,6 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
     candidates = [
         artifacts_dir / "test_pred_snapshot.pkl",
         artifacts_dir / "pred.pkl",
-        artifacts_dir / "valid_pred_snapshot.pkl",
-        artifacts_dir / "valid_pred.pkl",
     ]
     pred_path = None
     for p in candidates:
@@ -117,8 +115,7 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
             break
 
     if pred_path is None:
-        print(f"[finetune] 未找到预测文件，检查: {[str(p) for p in candidates]}")
-        return {}
+        raise RuntimeError("Test prediction artifact unavailable")
 
     import pickle
     with open(pred_path, "rb") as f:
@@ -129,14 +126,13 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
     elif isinstance(pred_data, pd.DataFrame):
         scores_df = pred_data.reset_index()
     else:
-        print(f"[finetune] 未知预测数据类型: {type(pred_data)}")
-        return {}
+        raise TypeError("Unsupported prediction artifact type")
 
     # 识别 instrument 列和 score 列
     score_col = None
     inst_col = None
     for col in scores_df.columns:
-        if "score" in col.lower():
+        if "score" in str(col).lower():
             score_col = col
         sample = str(scores_df[col].iloc[0]) if len(scores_df) > 0 else ""
         if sample.startswith(("SZ", "SH", "BJ")) or (sample.isdigit() and len(sample) == 6):
@@ -147,8 +143,16 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
     if inst_col is not None:
         scores_df["instrument"] = scores_df[inst_col]
     elif "instrument" not in scores_df.columns:
-        scores_df["instrument"] = scores_df.index.astype(str)
+        raise ValueError("Prediction artifact has no instrument identity")
 
+    if "datetime" not in scores_df.columns:
+        raise ValueError("Prediction artifact has no actual datetime column")
+    actual_dates = pd.to_datetime(scores_df["datetime"], errors="raise")
+    scores_df = scores_df[actual_dates.dt.normalize() == pd.Timestamp(pred_date).normalize()].copy()
+    if scores_df.empty:
+        raise ValueError("No prediction exists for the requested date; dates cannot be rewritten")
+    if scores_df["instrument"].duplicated().any():
+        raise ValueError("Duplicate instrument/date predictions")
     result_df = pd.DataFrame()
     result_df["instrument"] = scores_df["instrument"]
     result_df["code"] = scores_df["instrument"].apply(
@@ -157,6 +161,9 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
     result_df["date"] = pred_date
     result_df["pred_date"] = pred_date
     result_df["score"] = scores_df[score_col]
+    import numpy as np
+    if not np.isfinite(pd.to_numeric(result_df['score'], errors='coerce')).all():
+        raise ValueError("Nonfinite prediction artifact")
     result_df = result_df.sort_values("score", ascending=False)
     result_df["rank"] = range(1, len(result_df) + 1)
     n = len(result_df)
@@ -196,62 +203,14 @@ def _export_scores(artifacts_dir: Path, output_dir: Path, pred_date: str):
     return metrics
 
 
-def _run_backtest(scores_csv: Path, output_dir: Path, pred_date: str,
-                  benchmark: str = "SH000300", topk: int = 20) -> dict:
-    """运行简化回测."""
-    print(f"[finetune] 运行回测 benchmark={benchmark} topk={topk}...")
-    try:
-        pred_df = pd.read_csv(scores_csv)
-        if "instrument" not in pred_df.columns:
-            print("[finetune] scores.csv 缺少 instrument 列")
-            return {}
-
-        pred_df["datetime"] = pd.to_datetime(pred_df["date"])
-        score_series = pred_df.set_index(["datetime", "instrument"])["score"]
-
-        strategy = TopkDropoutStrategy(signal=score_series, topk=topk, n_drop=5)
-        pred_dt = pd.Timestamp(pred_date)
-        cfg = {
-            "start_time": str(pred_dt - timedelta(days=30)),
-            "end_time": pred_date,
-            "account": 100000,
-            "benchmark": benchmark,
-            "exchange_kwargs": {
-                "limit_threshold": 0.095, "deal_price": "close",
-                "open_cost": 0.0005, "close_cost": 0.0015, "min_cost": 5,
-            },
-        }
-
-        portfolio_metric_dict, indicator_dict = backtest_daily(strategy=strategy, **cfg)
-        analysis = risk_analysis(portfolio_metric_dict["portfolio"])
-        report = dict(indicator_dict)
-        report.update({k: round(float(v), 6) for k, v in analysis.items()})
-
-        lines = [
-            "=" * 60,
-            f"Finetune Backtest Report",
-            f"Model: {output_dir.parent.name}",
-            f"Pred Date: {pred_date}",
-            f"Benchmark: {benchmark}",
-            f"TopK: {topk}",
-            "=" * 60,
-        ]
-        for k, v in report.items():
-            lines.append(f"{k:>30s}: {v}")
-        (output_dir / "report_of_backtest.txt").write_text("\n".join(lines), encoding="utf-8")
-
-        print(f"[finetune] 夏普: {report.get('sharpe_ratio', 'N/A')}, "
-              f"年化: {report.get('annualized_return', 'N/A')}")
-        return report
-
-    except Exception as e:
-        print(f"[finetune] 回测失败: {e}")
-        import traceback
-        traceback.print_exc()
-        return {}
+def _run_backtest(*args, **kwargs) -> dict:
+    """Historical single-day score relabeling is not an admissible backtest."""
+    return {"status": "NOT_EVALUATED", "reason": "Use stockfish_core.BacktestEngine with the canonical live policy"}
 
 
 def main():
+    if os.environ.get("ALLOW_EXPERIMENTAL_LEGACY_QUANT") != "1":
+        raise RuntimeError("EXPERIMENTAL_DISABLED: use QuantEngine.train / finetune")
     ap = argparse.ArgumentParser(description="Qlib 模型微调")
     ap.add_argument("--base-model-dir", required=True)
     ap.add_argument("--output-name", required=True)
@@ -284,9 +243,13 @@ def main():
     print(f"[finetune] 最近交易日: {last_trade}")
 
     valid_start = _get_trade_date_offset(last_trade, args.valid_years)
-    valid_end = last_trade
+    calendar = [pd.Timestamp(c) for c in D.calendar()]
+    test_index = calendar.index(pd.Timestamp(last_trade))
+    lookahead = max(int(h) for h in os.environ.get("LABEL_HORIZONS", "1,5,10,21").split(",")) + 1
+    valid_end = calendar[test_index - lookahead - 1].strftime("%Y-%m-%d")
 
-    train_end = _get_prev_trade_date(valid_start)
+    valid_index = calendar.index(pd.Timestamp(valid_start))
+    train_end = calendar[valid_index - lookahead - 1].strftime("%Y-%m-%d")
     train_start = _get_trade_date_offset(train_end, args.train_years)
 
     print(f"[finetune] 训练: {train_start} ~ {train_end} ({args.train_years}年)")
@@ -301,8 +264,8 @@ def main():
         "train_end": train_end,
         "valid_start": valid_start,
         "valid_end": valid_end,
-        "test_start": valid_start,
-        "test_end": valid_end,
+        "test_start": last_trade,
+        "test_end": last_trade,
     }
 
     os.environ["HOLD_NUM"] = str(args.hold_num)
@@ -313,7 +276,7 @@ def main():
         output_path=str(config_path),
         dates=dates,
         model_mode=args.model_mode,
-        practice_mode=True,  # finetune 模式：valid 和 test 可用同一窗口
+        practice_mode=False,
     )
     print(f"[finetune] 配置已生成: {config_path}")
 
@@ -327,12 +290,16 @@ def main():
     # ---- Step 5: 执行训练（通过 run_stage2_practice.py 子进程） ----
     print(f"[finetune] 开始微调训练...")
 
+    run_manifest = output_predict / "training_run_manifest.json"
+    if run_manifest.exists():
+        raise FileExistsError("Finetune run already exists; choose a new output directory")
     stage2_script = str(ROOT / "scripts" / "practice" / "run_stage2_practice.py")
     cmd = [
         sys.executable, stage2_script,
         "--config", str(config_path),
         "--experiment-name", experiment_name,
         "--uri-folder", "mlruns",
+        "--run-manifest", str(run_manifest),
     ]
     if checkpoint:
         cmd += ["--warm-start", checkpoint]
@@ -349,25 +316,21 @@ def main():
             print(f"  stderr: {result.stderr[:1000]}")
         # 输出 JSON 失败结果
         print(json.dumps({"success": False, "error": f"训练失败, 退出码 {result.returncode}"}))
-        return
+        raise RuntimeError(f"Training child failed: {result.returncode}")
 
     print(f"[finetune] 训练完成")
 
     # ---- Step 6: 查找 MLflow artifacts ----
     print(f"[finetune] 导出预测结果...")
-    mlruns_dir = ROOT / "mlruns"
-    run_dirs = sorted(mlruns_dir.rglob("*/artifacts"), reverse=True)
-    artifacts_dir = None
-    for ad in run_dirs:
-        if (ad / "params.pkl").exists():
-            artifacts_dir = ad
-            break
-
-    if not artifacts_dir and run_dirs:
-        artifacts_dir = run_dirs[0]
+    manifest = json.loads(run_manifest.read_text(encoding="utf-8"))
+    if manifest["experiment_name"] != experiment_name:
+        raise RuntimeError("Training manifest experiment mismatch")
+    artifacts_dir = Path(manifest["artifacts_dir"])
+    if not (artifacts_dir / "params.pkl").is_file() or not (artifacts_dir / "dataset").is_file():
+        raise RuntimeError("Training manifest artifacts are missing")
 
     if artifacts_dir:
-        metrics = _export_scores(artifacts_dir, output_predict, valid_end)
+        metrics = _export_scores(artifacts_dir, output_predict, last_trade)
         # 复制 artifacts 到 fold 结构
         fold_artifacts = output_predict / "walk_forward" / valid_start / "model_runs" / "lightgbm" / "mlflow_run" / "artifacts"
         fold_artifacts.mkdir(parents=True, exist_ok=True)
@@ -392,8 +355,8 @@ def main():
         "train_end": train_end,
         "valid_start": valid_start,
         "valid_end": valid_end,
-        "test_start": valid_start,
-        "test_end": valid_end,
+        "test_start": last_trade,
+        "test_end": last_trade,
     }])
     seg_df.to_csv(seg_csv, index=False, encoding="utf-8-sig")
     print(f"[finetune] segments 已创建: segments/{seg_key}/segment_folds.csv")
@@ -405,7 +368,7 @@ def main():
     backtest_report = {}
     if scores_csv.exists():
         backtest_report = _run_backtest(
-            scores_csv, output_predict, valid_end,
+            scores_csv, output_predict, last_trade,
             benchmark=os.environ.get("TARGET_BENCHMARK", "SH000300"),
             topk=args.hold_num,
         )
@@ -417,7 +380,7 @@ def main():
         "output_name": args.output_name,
         "train_period": f"{train_start} ~ {train_end}",
         "valid_period": f"{valid_start} ~ {valid_end}",
-        "pred_date": valid_end,
+        "pred_date": last_trade,
         "metrics": metrics,
         "backtest": backtest_report,
     }

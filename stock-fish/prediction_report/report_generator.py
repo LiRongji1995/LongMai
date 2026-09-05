@@ -180,6 +180,17 @@ class PredictionReportGenerator:
 
     def to_html(self, report: Dict[str, Any]) -> str:
         """将报告渲染为 HTML"""
+        # Escape every untrusted string before interpolating it into this legacy template.
+        from html import escape
+        def escaped(value):
+            if isinstance(value, str):
+                return escape(value, quote=True)
+            if isinstance(value, dict):
+                return {k: escaped(v) for k, v in value.items()}
+            if isinstance(value, list):
+                return [escaped(v) for v in value]
+            return value
+        report = escaped(report)
         s = report.get('summary', {})
         md = report.get('market_data', {})
         mq = md.get('quote', {}) if isinstance(md, dict) else {}
@@ -512,7 +523,7 @@ class PredictionReportGenerator:
     <div style="text-align: center; font-size: 14px; color: #6b8db5; margin-top: 8px;">
       信号: <span style="color:{color};font-weight:600;">{s.get('overall_signal', 'neutral')}</span>
       | 综合评分: {s.get('signal_score', '-')}
-      | 置信度: {s.get('confidence', '-')} ({s.get('confidence_score', 0)}%)
+      | 研究判断: {s.get('confidence', '-')}（概率未校准）
       | 生成: {report['generated_at'][:16]}
     </div>
   </div>
@@ -590,25 +601,6 @@ class PredictionReportGenerator:
         return html_path
 
     @staticmethod
-    def _calc_confidence(analysis: dict, simulation: Optional[dict] = None) -> float:
-        """计算综合置信度 0-100"""
-        score = 50  # base
-
-        signals = analysis.get('signals', {}) or {}
-        ps = analysis.get('prediction_summary', {}) or {}
-
-        # 信号强度加分
-        abs_score = abs(signals.get('score', 0) or 0)
-        score += min(abs_score * 5, 20)
-
-        # 舆情数据量加分
-        sn = analysis.get('sentiment_news', {}) or {}
-        sg = analysis.get('sentiment_guba', {}) or {}
-        total = (sn.get('total_count', 0) or 0) + (sg.get('total_count', 0) or 0)
-        score += min(total * 2, 15)
-
-        # 有模拟结果加分
-        if simulation and simulation.get('status') == 'simulated':
-            score += 15
-
-        return min(max(score, 0), 100)
+    def _calc_confidence(analysis: dict, simulation: Optional[dict] = None) -> None:
+        """No calibrated probability exists for these research reports."""
+        return None

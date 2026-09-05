@@ -44,6 +44,19 @@ _DIVIDEND_KEYWORD_MAP: Dict[str, List[str]] = {
 }
 
 
+def _currency_to_cny(value, *, bare_unit=None):
+    """Normalize explicit Chinese currency units; unlabelled unknown units fail closed."""
+    import re
+    if value is None:
+        return None
+    match = re.fullmatch(r"\s*([+-]?(?:\d+(?:\.\d*)?|\.\d+))\s*(亿元|亿|万元|万|元)?\s*", str(value).replace(',', ''))
+    if not match:
+        return None
+    unit = match.group(2) or bare_unit
+    scales = {'亿元': 100000000, '亿': 100000000, '万元': 10000, '万': 10000, '元': 1}
+    return float(match.group(1)) * scales[unit] if unit in scales else None
+
+
 def _safe_float(value: Any) -> Optional[float]:
     """Best-effort float conversion."""
     if value is None:
@@ -338,9 +351,9 @@ class AkshareFundamentalAdapter:
                 fcf = None
                 if operating_cash_flow is not None:
                     if capex is not None:
-                        fcf = operating_cash_flow + capex  # capex 为负值（现金流出）
+                        fcf = operating_cash_flow - abs(capex)
                     else:
-                        fcf = operating_cash_flow  # 回退为经营现金流近似
+                        fcf = None  # Unknown capex is not zero capex
 
                 financial_report_payload = {
                     "report_date": report_date,
@@ -368,16 +381,16 @@ class AkshareFundamentalAdapter:
                                                           "经营活动产生的现金流量净额", "经营现金流"])
                 _capex_raw = _pick_by_keywords(cf_row, ["购建固定资产、无形资产和其他长期资产支付的现金",
                                                         "购建固定资产支付的现金", "资本支出"])
-                oper_cf = _safe_float(str(_oper_cf_raw).replace("亿", "").replace("万", "").replace("元", "")) if _oper_cf_raw is not None else None
-                capex = _safe_float(str(_capex_raw).replace("亿", "").replace("万", "").replace("元", "")) if _capex_raw is not None else None
+                oper_cf = _currency_to_cny(_oper_cf_raw, bare_unit="元" if cf_source == "stock_cash_flow_sheet_by_yearly_em" else None)
+                capex = _currency_to_cny(_capex_raw, bare_unit="元" if cf_source == "stock_cash_flow_sheet_by_yearly_em" else None)
                 # 更新 financial_report 中的现金流字段
                 if oper_cf is not None:
                     fin_report = result["earnings"].get("financial_report", {})
                     fin_report["operating_cash_flow"] = oper_cf
                     if capex is not None:
-                        fin_report["free_cash_flow"] = oper_cf - capex
+                        fin_report["free_cash_flow"] = oper_cf - abs(capex)
                     else:
-                        fin_report["free_cash_flow"] = oper_cf  # 回退近似
+                        fin_report["free_cash_flow"] = None
                     result["earnings"]["financial_report"] = fin_report
                     result["source_chain"].append(f"cash_flow:{cf_source}")
 

@@ -290,12 +290,22 @@ class CIOAgent(BaseAgent):
             evidence_chain = evidence_chain[:EXPECTED_EMPLOYEES]
 
         # ── 校验 2: scenario probability 之和必须为 1.0 ──
+        probabilities = []
         for case_key in ('base_case', 'bull_case', 'bear_case'):
             case = result.get(case_key)
             if case and isinstance(case, dict):
                 prob = case.get('probability')
-                if prob is not None and (prob < 0 or prob > 1):
-                    logger.warning(f"CIO {case_key}.probability={prob} 超出 [0,1] 范围")
+                if not isinstance(prob, (int, float)) or not 0 <= prob <= 1:
+                    return CIODecision(master_key=master_info['key'], error="INVALID_SCENARIO_PROBABILITY")
+                probabilities.append(prob)
+        if probabilities and (len(probabilities) != 3 or abs(sum(probabilities) - 1) > 1e-6):
+            return CIODecision(master_key=master_info['key'], error="INVALID_SCENARIO_PROBABILITY_SUM")
+        order = result.get('order') or {}
+        if not isinstance(order, dict):
+            return CIODecision(master_key=master_info['key'], error="INVALID_ORDER")
+        position_pct = order.get('position_size_pct', 0)
+        if not isinstance(position_pct, (int, float)) or not 0 <= position_pct <= 100:
+            return CIODecision(master_key=master_info['key'], error="INVALID_POSITION_SIZE")
 
         return CIODecision(
             master_name=master_info['name'],
@@ -340,6 +350,8 @@ class CIOAgent(BaseAgent):
             weighted_bearish = 0.0
             weighted_neutral = 0.0
             for r in valid_reports:
+                if r.employee_id == 'overseer':
+                    continue
                 w = confidence_map.get(r.confidence, 0.5)
                 if r.outlook in ('看多', '偏多'):
                     weighted_bullish += w
@@ -395,10 +407,18 @@ class CIOAgent(BaseAgent):
             price = q.get('price', 0) if isinstance(q, dict) else 0
 
             # ── 基本情景分析基于波动率 ──
-            var_95 = state.get('var_95', 3.0) or 3.0
+            import math
+            from stockfish_core.risk import protective_prices
+            try:
+                var_95 = abs(float(state.get('var_95', 3.0) or 3.0))
+                valid_magnitude = math.isfinite(var_95) and 0 < var_95 < (100 / 1.5)
+            except (ValueError, TypeError):
+                var_95, valid_magnitude = 0, False
+            if not valid_magnitude:
+                var_95 = 0
             max_dd = state.get('max_drawdown', 20.0) or 20.0
             vol = state.get('annualized_volatility', 20.0) or 20.0
-            change_pct = round(price * var_95 / 100, 2) if price > 0 else 0
+            change_pct = var_95 if outlook in ('看多', '偏多') else -var_95 if outlook in ('看空', '偏空') else 0
 
             summary = f"(规则降级·增强) 置信度加权投票→{outlook}，评分信号{score_outlook or 'N/A'}({score_val}) {score_note}".strip()
 
@@ -417,7 +437,7 @@ class CIOAgent(BaseAgent):
             # 构建详细 rationale
             rationale_parts = [
                 f"(LLM不可用·规则降级·增强模式) 基于{len(valid_reports)}份员工报告置信度加权投票: "
-                f"看多权重{bull_pct:.0%} / 看空权重{bear_pct:.0%} / 中性权重{weighted_neutral/total_w:.0%}",
+                f"看多权重{bull_pct:.0%} / 看空权重{bear_pct:.0%} / 中性权重{weighted_neutral/total_w if total_w else 0:.0%}",
                 f"→ {outlook}（置信度{confidence}）",
                 f"评分引擎: {score_outlook or 'N/A'}（{score_val}）",
             ]
@@ -432,13 +452,17 @@ class CIOAgent(BaseAgent):
             if outlook == "看多":
                 action = "买入"
                 pos_pct = 10
-                sl = round(price * (1 - var_95 / 100 * 1.5), 2) if price > 0 else 0
-                tp = round(price * (1 + var_95 / 100 * 2), 2) if price > 0 else 0
+                try:
+                    sl, tp = protective_prices(price, var_95)
+                except (TypeError, ValueError):
+                    action, pos_pct, sl, tp = '观望', 0, 0, 0
             elif outlook == "偏多":
                 action = "加仓"
                 pos_pct = 5
-                sl = round(price * (1 - var_95 / 100 * 1.5), 2) if price > 0 else 0
-                tp = round(price * (1 + var_95 / 100 * 1.5), 2) if price > 0 else 0
+                try:
+                    sl, tp = protective_prices(price, var_95, profit_multiple=1.5)
+                except (TypeError, ValueError):
+                    action, pos_pct, sl, tp = '观望', 0, 0, 0
             elif outlook in ("看空", "偏空"):
                 action = "卖出"
                 pos_pct = 0
@@ -449,6 +473,9 @@ class CIOAgent(BaseAgent):
                 pos_pct = 0
                 sl = 0
                 tp = 0
+
+            if any(r.veto for r in valid_reports):
+                action, pos_pct, sl, tp = '观望', 0, 0, 0
 
             # 有监察员极端风险时预警
             risk_monitoring = []
@@ -478,7 +505,7 @@ class CIOAgent(BaseAgent):
                 ],
                 decision_quality={'confidence': '低', 'key_uncertainties': ['LLM不可用，决策精度下降'],
                                  'next_review': '1个交易日后'},
-                veto_response='规则降级模式下自动跳过风险否决评估',
+                veto_response='保留已有风险否决；研究输出无最终交易权',
             )
 
         # 无有效报告时的兜底

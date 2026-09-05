@@ -28,7 +28,7 @@ class Settings(BaseSettings):
     model_config = {"env_file": str(PROJECT_ROOT / ".env"), "extra": "allow"}
 
     # Flask
-    HOST: str = "0.0.0.0"
+    HOST: str = "127.0.0.1"
     PORT: int = 8000
     DEBUG: bool = False
 
@@ -40,7 +40,7 @@ class Settings(BaseSettings):
     # ===== 数据源 =====
     AKSHARE_PROXY: Optional[str] = None
     TUSHARE_TOKEN: Optional[str] = None
-    STOCK_BACKEND: str = "mock"
+    STOCK_BACKEND: str = "advanced"
 
     # ---- 多源数据渠道 Token ----
     LONGBRIDGE_APP_KEY: Optional[str] = None
@@ -68,7 +68,7 @@ class Settings(BaseSettings):
     MINIMAX_API_KEYS: Optional[str] = None
     SEARXNG_BASE_URL: Optional[str] = None
     SEARXNG_BASE_URLS: Optional[str] = None
-    SEARXNG_PUBLIC_INSTANCES_ENABLED: bool = True
+    SEARXNG_PUBLIC_INSTANCES_ENABLED: bool = False
 
     # ---- 实时行情优先级 ----
     REALTIME_SOURCE_PRIORITY: str = "tencent,akshare_sina,efinance,akshare_em"

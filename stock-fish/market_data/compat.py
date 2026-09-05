@@ -65,7 +65,12 @@ def record_provider_run(
     fallback_to: str = "",
     **kwargs: Any,
 ) -> None:
-    """No-op stub for diagnostics tracking (not used in StockFish)."""
+    """Emit allowlisted diagnostic fields, never credentials or raw payloads."""
+    import json
+    fields = dict(data_type=data_type, provider=provider, operation=operation,
+                  success=bool(success), latency_ms=max(0.0, float(latency_ms)),
+                  error_type=error_type, fallback_from=fallback_from, fallback_to=fallback_to)
+    logger.info("provider_run %s", json.dumps(fields, ensure_ascii=False, default=str))
 
 
 # ---- Config adapter ----

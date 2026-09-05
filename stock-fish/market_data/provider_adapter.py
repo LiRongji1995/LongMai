@@ -95,64 +95,31 @@ class AdvancedBackend(BaseStockBackend):
                 symbol=unified.code,
                 name=unified.name or symbol,
                 price=float(unified.price),
-                change=float(unified.change_amount or 0),
-                change_pct=float(unified.change_pct or 0),
-                volume=float(unified.volume or 0),
-                amount=float(unified.amount or 0),
-                high=float(unified.high or 0),
-                low=float(unified.low or 0),
-                open_=float(unified.open_price or 0),
-                prev_close=float(unified.pre_close or 0),
+                change=float(unified.change_amount) if unified.change_amount is not None else None,
+                change_pct=float(unified.change_pct) if unified.change_pct is not None else None,
+                volume=float(unified.volume) if unified.volume is not None else None,
+                amount=float(unified.amount) if unified.amount is not None else None,
+                high=float(unified.high) if unified.high is not None else None,
+                low=float(unified.low) if unified.low is not None else None,
+                open_=float(unified.open_price) if unified.open_price is not None else None,
+                prev_close=float(unified.pre_close) if unified.pre_close is not None else None,
                 turnover_rate=unified.turnover_rate,
                 pe=unified.pe_ratio,
                 pb=unified.pb_ratio,
                 market_cap=round(unified.total_mv / 1e8, 2) if unified.total_mv else None,
                 dividend=dividend,
-                timestamp=datetime.now().strftime('%Y-%m-%d %H:%M:%S'),
+                timestamp=datetime.now().astimezone().isoformat(),
+                source=str(getattr(unified.source, 'value', unified.source)),
+                quality='RESEARCH_ONLY',
+                missing_fields=tuple(n for n in ('volume', 'amount', 'high', 'low', 'open_price', 'pre_close') if getattr(unified, n) is None),
             )
         except Exception as e:
             logger.warning(f"AdvancedBackend.get_quote({symbol}) failed: {e}")
             return None
 
     def _get_dividend(self, symbol: str) -> Optional[float]:
-        """查询最近一次每股分红（税后，元/股）"""
-        # 1. 先尝试 Tushare（A 股精确数据）
-        div = self._get_tushare_dividend(symbol)
-        if div is not None:
-            return div
-
-        # 2. Tushare 无结果，尝试 yfinance（港股/美股/A 股通用）
-        try:
-            import yfinance as yf
-            code = symbol.strip().upper()
-            if code.startswith('HK'):
-                digits = code[2:].lstrip('0') or '0'
-                yf_symbol = f"{digits}.HK"
-            elif code in ('TSLA', 'AAPL', 'MSFT') or not code.isdigit():
-                yf_symbol = code
-            elif len(code) == 6:
-                suffix = 'SS' if code.startswith(('6', '9', '5')) else 'SZ'
-                yf_symbol = f"{code}.{suffix}"
-            else:
-                return None
-
-            ticker = yf.Ticker(yf_symbol)
-            import pandas as _pd
-            div_series = ticker.dividends
-            if div_series is not None and not div_series.empty:
-                cutoff = _pd.Timestamp.now(tz=div_series.index.tz) - _pd.Timedelta(days=365)
-                ttm_divs = [v for ts, v in div_series.items() if _pd.Timestamp(ts) >= cutoff]
-                if ttm_divs:
-                    total = sum(_yf_safe_float(v) or 0 for v in ttm_divs)
-                    if total > 0:
-                        logger.info(f"AdvancedBackend: yfinance 每股分红 {symbol}={total:.4f}")
-                        return round(total, 4)
-                last_div = _yf_safe_float(div_series.iloc[-1])
-                if last_div is not None and last_div > 0:
-                    return round(last_div, 4)
-        except Exception as e:
-            logger.debug(f"yfinance 分红查询失败 {symbol}: {e}")
-
+        # Latest payout, TTM payout and pre/post-tax amounts were mixed here.
+        # No common documented basis: leave unavailable until a PIT adapter exists.
         return None
 
     def _get_tushare_dividend(self, symbol: str) -> Optional[float]:
@@ -226,6 +193,9 @@ class AdvancedBackend(BaseStockBackend):
                     if hasattr(val, 'item'):
                         val = val.item()
                     rec[col] = val
+                rec.update(provider=source, price_adjustment=df.attrs.get("price_adjustment", "UNKNOWN"),
+                           volume_unit=df.attrs.get("volume_unit", "UNKNOWN"), quality="RESEARCH_ONLY",
+                           available_at=datetime.now().astimezone().isoformat())
                 rows.append(rec)
             return rows
         except Exception as e:
@@ -233,105 +203,12 @@ class AdvancedBackend(BaseStockBackend):
             return None
 
     def get_financials(self, symbol: str) -> Optional[FinancialSummary]:
-        if not self._is_available():
-            return None
-        name = self._resolve_name(symbol)
+        """Legacy mixed-period/unknown-unit fundamentals are intentionally disabled.
 
-        # 尝试多个数据源，构建 FinancialSummary
-        fin = None
-
-        # 1. 尝试 DataFetcherManager 基本面管道（akshare/yfinance 多源）
-        try:
-            ctx = self.manager.get_fundamental_context(symbol)
-            if ctx and ctx.get('status') not in ('failed', 'not_supported'):
-                earnings = ctx.get('earnings', {})
-                earn_payload = earnings.get('payload', {}) or {}
-                fin_report = earn_payload.get('financial_report', {}) or {}
-                growth = ctx.get('growth', {})
-                growth_payload = growth.get('payload', {}) or {}
-
-                def _safe_float(v, default=None):
-                    try:
-                        if v is None:
-                            return default
-                        return float(v)
-                    except (TypeError, ValueError):
-                        return default
-
-                dividend_payload = earnings.get('dividend', {}) or {}
-                div_per_share = dividend_payload.get('ttm_cash_dividend_per_share')
-                div_yield = None
-                price = _safe_float(ctx.get('quote', {}).get('price') or fin_report.get('price'))
-                if div_per_share and price and price > 0:
-                    div_yield = round(div_per_share / price * 100, 2)
-
-                fin = FinancialSummary(
-                    symbol=symbol, name=name,
-                    revenue=_safe_float(fin_report.get('revenue')),
-                    revenue_yoy=_safe_float(growth_payload.get('revenue_yoy')),
-                    net_profit=_safe_float(fin_report.get('net_profit_parent')),
-                    net_profit_yoy=_safe_float(growth_payload.get('net_profit_yoy')),
-                    eps=_safe_float(fin_report.get('eps')),
-                    roe=_safe_float(growth_payload.get('roe')),
-                    gross_margin=_safe_float(growth_payload.get('gross_margin')),
-                    debt_ratio=_safe_float(growth_payload.get('debt_ratio')),
-                    operating_cash_flow=_safe_float(fin_report.get('operating_cash_flow')),
-                    free_cash_flow=_safe_float(fin_report.get('free_cash_flow')),
-                    dividend_per_share=_safe_float(div_per_share),
-                    dividend_yield=div_yield,
-                    report_date=str(fin_report.get('report_date', '')),
-                )
-
-                # AkShare 现金流数据可能存在于不同路径
-                _cf_report = earn_payload.get('financial_report') or earnings.get('financial_report') or {}
-                if _cf_report and fin.operating_cash_flow is None:
-                    _ocf = _safe_float(_cf_report.get('operating_cash_flow'))
-                    _fcf = _safe_float(_cf_report.get('free_cash_flow'))
-                    if _ocf is not None:
-                        object.__setattr__(fin, 'operating_cash_flow', _ocf)
-                    if _fcf is not None:
-                        object.__setattr__(fin, 'free_cash_flow', _fcf)
-        except Exception as e:
-            logger.debug(f"AdvancedBackend: 基本面适配器不可用 ({e})")
-
-        # 2. Tushare 直接查询兜底（仅 A 股）
-        if not (fin and (fin.eps or fin.roe)):
-            try:
-                fin = self._get_tushare_financials(symbol, name)
-            except Exception as e:
-                logger.debug(f"AdvancedBackend: Tushare 基本面兜底失败 ({e})")
-
-        # 3. yfinance 直接兜底
-        if not (fin and (fin.eps or fin.roe or fin.revenue)):
-            try:
-                fin = self._get_yfinance_financials(symbol, name)
-                if fin and (fin.eps or fin.roe or fin.revenue):
-                    logger.info(f"AdvancedBackend: yfinance 基本面兜底成功 {symbol}")
-            except Exception as e:
-                logger.debug(f"AdvancedBackend: yfinance 基本面兜底失败 ({e})")
-
-        # 4. 统一补充现金流数据（从 AkShare adapter 单独查询）
-        if fin and (fin.eps or fin.roe or fin.revenue) and fin.operating_cash_flow is None:
-            try:
-                from market_data.data_fetchers.fundamental_adapter import AkshareFundamentalAdapter
-                _adapter = AkshareFundamentalAdapter()
-                _bundle = _adapter.get_fundamental_bundle(symbol)
-                _cf_report = _bundle.get('earnings', {}).get('financial_report', {})
-                if _cf_report:
-                    _ocf = _safe_float(_cf_report.get('operating_cash_flow'))
-                    _fcf = _safe_float(_cf_report.get('free_cash_flow'))
-                    if _ocf is not None:
-                        object.__setattr__(fin, 'operating_cash_flow', _ocf)
-                    if _fcf is not None:
-                        object.__setattr__(fin, 'free_cash_flow', _fcf)
-                        logger.info(f"AdvancedBackend: 现金流补充成功 {symbol} OCF={_ocf:.2f}亿 FCF={_fcf:.2f}亿")
-            except Exception as e:
-                logger.debug(f"AdvancedBackend: 现金流补充失败 ({e})")
-
-        if fin and (fin.eps or fin.roe or fin.revenue):
-            return fin
-
-        return FinancialSummary(symbol=symbol, name=name)
+        Use stockfish_core.data.PITFundamentals with publication and ingestion
+        timestamps. Returning plausible annual/quarterly mixes is unsafe.
+        """
+        return FinancialSummary(symbol=symbol, name=symbol, quality='PIT_UNAVAILABLE', source='unverified_legacy')
 
     def _get_yfinance_financials(self, symbol: str, name: str) -> Optional[FinancialSummary]:
         """通过 yfinance 获取基本面数据（港股/美股/A 股通用）"""

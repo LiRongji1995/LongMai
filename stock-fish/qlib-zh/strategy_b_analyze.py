@@ -41,9 +41,10 @@ def main():
     as_of_date = pd.Timestamp(args.date)
     top_n = args.top_n
 
+    if len(stocks) != len(scores) or len(stocks) != len(set(stocks)) or not np.isfinite(scores).all():
+        raise ValueError('RISK_UNAVAILABLE: invalid stock/score identities')
     if len(stocks) < 3:
-        print(json.dumps({"error": "Need at least 3 stocks", "buy": [], "sell": [], "keep": []}))
-        return
+        raise ValueError("RISK_UNAVAILABLE: Need at least 3 stocks")
 
     # ── Initialize Qlib ────────────────────────────────────────────
     import qlib
@@ -67,8 +68,7 @@ def main():
     factor_df = D.features(stocks, _ALL_EXPRESSIONS, start_time=start_time, end_time=end_time)
 
     if factor_df is None or factor_df.empty:
-        print(json.dumps({"error": "Factor query returned empty", "buy": stocks[:top_n], "sell": [], "keep": []}))
-        return
+        raise RuntimeError("RISK_UNAVAILABLE: Factor query returned empty")
 
     # Normalize index
     if not isinstance(factor_df.index, pd.MultiIndex):
@@ -88,8 +88,11 @@ def main():
     # Extract no-leakage factor snapshot
     fs = _extract_no_leakage_factors(factor_df, stocks, as_of_date)
     if fs.empty or len(fs) < 3:
-        print(json.dumps({"error": "Insufficient factor data", "buy": stocks[:top_n], "sell": [], "keep": []}))
-        return
+        raise RuntimeError("RISK_UNAVAILABLE: Insufficient factor data")
+    if set(stocks) != set(fs.index) or not set(_ALL_EXPRESSIONS).issubset(fs.columns):
+        raise RuntimeError('RISK_UNAVAILABLE: incomplete stock/factor coverage')
+    if not np.isfinite(fs.loc[stocks, _ALL_EXPRESSIONS].to_numpy(dtype=float)).all():
+        raise RuntimeError('RISK_UNAVAILABLE: nonfinite factors cannot pass hard vetoes')
 
     # Compute dimension scores
     dim_factors = {}

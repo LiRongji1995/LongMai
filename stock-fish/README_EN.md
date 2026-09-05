@@ -4,6 +4,8 @@
 
 # StockFish — A-Share Intelligent Analysis & Price Simulation System
 
+> Engineering baseline update: see [ENGINEERING_BASELINE.md](ENGINEERING_BASELINE.md) for the canonical recommendation/risk pipeline, durable history, setup and offline tests. Install `requirements-dev.txt` for development. Legacy research/simulation descriptions below do not imply those optional paths are enabled or investment-validated.
+
 ### Full Decision Pipeline
 
 <p align="center">

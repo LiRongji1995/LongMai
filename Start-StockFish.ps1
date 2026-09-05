@@ -13,7 +13,7 @@ $App = Join-Path $Repository 'app.py'
 $LogDirectory = Join-Path $Root 'logs'
 $WorkDirectory = Join-Path $Root 'work'
 $StateFile = Join-Path $WorkDirectory 'stockfish-process.json'
-$HealthUrl = 'http://127.0.0.1:8000/api/config'
+$HealthUrl = 'http://127.0.0.1:8000/api/health'
 $VenvConfiguration = Join-Path $Repository '.venv\pyvenv.cfg'
 $BasePython = $null
 if (Test-Path -LiteralPath $VenvConfiguration -PathType Leaf) {
@@ -60,8 +60,22 @@ function Get-Listeners {
 
 function Test-Health {
     try {
-        $configuration = Invoke-RestMethod -Method Get -Uri $HealthUrl -TimeoutSec 5
-        return ($null -ne $configuration -and $null -ne $configuration.PSObject.Properties['backend'] -and $null -ne $configuration.PSObject.Properties['llm_configured'])
+        $healthHeaders = @{}
+        $readinessKey = $env:STOCKFISH_API_KEY
+        if (-not $readinessKey) {
+            foreach ($environmentLine in (Get-Content -LiteralPath (Join-Path $Repository '.env'))) {
+                if ($environmentLine -match '^\s*STOCKFISH_API_KEY\s*=\s*(.*?)\s*$') {
+                    $readinessKey = $Matches[1].Trim().Trim('"').Trim("'")
+                    break
+                }
+            }
+        }
+        if ($readinessKey) { $healthHeaders['Authorization'] = 'Bearer ' + $readinessKey }
+        $health = Invoke-RestMethod -Method Get -Uri $HealthUrl -Headers $healthHeaders -TimeoutSec 5
+        foreach ($component in @('application', 'tracker', 'jobs')) {
+            if ($health.components.$component.status -ne 'healthy') { return $false }
+        }
+        return $true
     } catch { return $false }
 }
 

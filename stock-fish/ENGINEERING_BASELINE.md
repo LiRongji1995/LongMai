@@ -1,0 +1,60 @@
+# StockFish 可验证工程基线
+
+当前核心保留 StockFish Web/API/SSE 外壳，由 `stockfish_core` 统一处理可信数据、量化、确定性推荐与风险、持久任务和不可变历史。当前默认是研究模式；模型分数不表示已校准的概率或预期收益。
+
+```text
+Versioned RAW data / feature snapshots / security master / calendar
+    -> QuantEngine / QlibQuantEngine
+    -> ResearchEngine evidence and typed LLM audit (no final vote)
+    -> RecommendationEngine + deterministic RiskEngine + portfolio constraints
+    -> one FinalRecommendation -> Top20 / Top5 / best / UI / report
+    -> SQLite Tracker -> append-only outcome evaluation
+
+The same recommendation policy -> next-open fills -> cash / fees / NAV
+```
+
+## 开发与离线测试
+
+使用 Python 3.12 和 Node.js 24；Node 仅用于检查保留页面的 JavaScript 语法。Qlib 使用安装的 `pyqlib==0.9.7`，不依赖相邻 Microsoft Qlib main checkout。
+
+```shell
+python -m venv .venv
+# 激活虚拟环境后：
+python -m pip install -r requirements-dev.txt
+python scripts/run_core_tests.py tests -q
+python -m pip check
+```
+
+核心离线套件已验收 207 项；LLM 与供应商故障注入使用显式 Mock，不需网络或密钥。生产数据、模型、数据库和本机验收证据不随代码提交。测试运行器可兼容原本机 `../review/test-tools`，新环境通过 `requirements-dev.txt` 安装 pytest 即可。
+
+## 本地服务
+
+从 `.env.example` 建立本地 `.env`，保持 `HOST=127.0.0.1`，然后运行 `python app.py`。应用入口为 `/`；`/api/health` 分别报告 application、market_data、quant、model_registry、research、llm、tracker、jobs。
+
+没有已登记模型、可信数据快照或 LLM transport 时，相应组件会明确不可用，不生成假行情或正常推荐。非回环绑定要求 `STOCKFISH_API_KEY`；还应明确配置 `STOCKFISH_ALLOWED_HOSTS`。HTTP 使用 Bearer 身份验证，不能上传信任声明、任意模型路径或伪造收益。单个 SQLite 数据库只运行一个应用任务服务，不启用调试重载或多 worker。
+
+## 状态与输入
+
+| 项目 | 默认位置 / 配置 |
+|---|---|
+| SQLite | `data/stockfish.sqlite3` / `STOCKFISH_DB_PATH` |
+| Core artifacts | `data/core` / `STOCKFISH_STATE_DIR` |
+| Registry | `<core>/model_registry` |
+| Quant runs/snapshots | `<core>/quant` |
+| Qlib data | `../data/cn_data` / `QLIB_DATA_DIR` |
+| RAW observation pointer | `<core>/active_snapshot.txt` |
+
+可信输入见 [DATA_CONTRACT.md](stockfish_core/DATA_CONTRACT.md)。本地管理员通过 `scripts/core_admin.py --help` 登记已核验的 observation/snapshot/model；HTTP 请求只能引用已有 ID。数据更新发布独立快照，需要显式切换路径；不覆盖活跃数据。
+
+默认推荐策略 `quant-hard-risk-v2`、风险 `risk-v2`；风险检查包含真实 RAW 标价、新鲜度、可卖股份、现金、持仓数、个股/行业敞口及手数。空目标 `{}` 可清仓；不可用目标 `null` 不调仓。回测执行还按当时已知开盘价和费用后 NAV 限制买入，不能让跳空突破硬约束。
+
+历史记录及修订不可覆盖，评价单独追加并从已保存的 RAW 路径重新计算。支持 7/30/90 日观察；未到期不填收益。任务发布与成功终态原子保存；中断恢复为 INTERRUPTED，重试创建新 ID。
+
+## 使用边界
+
+- 原生 Alpha158 适配范围是已安装的 CSI300 特征与成员历史，不等于完整全 A 股 RAW/可交易性覆盖。
+- 已审阅的历史作者模型保持 RESEARCH_ONLY；clean CPU train/refit/purged walk-forward 的工程正确性不等于投资 OOS 验证通过。
+- 免费来源无法保证的财务 PIT、公司行动、交易状态保持不可用；数据商业权利需另行确认，见 [provider_classification.json](stockfish_core/provider_classification.json)。
+- Docker 默认权限已收紧，但当前已执行的部署验收是 Windows；不宣称 Linux 容器已运行认证。MiroFish、旧 Bot 和独立最终排名阶段保持实验隔离。
+- `scripts/capture_acceptance.py`、`verify_runtime.py`、`native_quant_smoke.py` 是原工作站验收工具，引用当地审阅目录/模型和历史记录；不作为新 clone 的通用测试入口。使用上面的离线测试命令。
+- SQLite/产物备份、公共部署的 TLS/用户权限/负载验证及真实 LLM transport 配置由部署环境负责。没有实盘下单或收益承诺。

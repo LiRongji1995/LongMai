@@ -1,73 +1,58 @@
 services:
-  # StockFish - A 股分析 + 推演编排
   stockfish:
-    image: zhuhai123/stockfish-stockfish:latest
-    container_name: stockfish
-    env_file:
-      - .env
+    build:
+      context: .
+      dockerfile: Dockerfile
+    image: stockfish-core:local
+    init: true
+    user: "10001:10001"
     environment:
-      - OASIS_DEBUG=${OASIS_DEBUG:-false}
-      # Docker-in-Docker: 宿主机路径传给内部 docker run -v 使用
-      - QLIB_HOST_PROJECT_ROOT=${PWD}/qlib-zh
-      - QLIB_HOST_DATA_DIR=${HOME}/.qlib
-      - QLIB_HOST_MLRUNS_DIR=${HOME}/github/qlib-zh/mlruns
-      # qlib 数据下载代理（socks5 代理加速 GitHub 下载）
-      - QLIB_DATA_PROXY=${QLIB_DATA_PROXY:-}
+      HOST: "0.0.0.0"
+      PORT: "8000"
+      STOCK_BACKEND: "advanced"
+      STOCKFISH_API_KEY: "${STOCKFISH_API_KEY:?Set a private STOCKFISH_API_KEY before starting the container}"
+      STOCKFISH_ALLOWED_HOSTS: "${STOCKFISH_ALLOWED_HOSTS:-localhost,127.0.0.1}"
+      STOCKFISH_STATE_DIR: "/app/data/core"
+      STOCKFISH_DB_PATH: "/app/data/stockfish.sqlite3"
+      QLIB_DATA_DIR: "/app/qlib-data/cn_data"
+      QLIB_DATA_PROXY: "${QLIB_DATA_PROXY:-}"
     ports:
-      - "8000:8000"
-    depends_on:
-      mirofish:
-        condition: service_started
-    restart: unless-stopped
+      - "127.0.0.1:${STOCKFISH_PORT:-8000}:8000"
     volumes:
-      - ./:/app                      # 项目代码挂载，改代码即时生效
-      - /var/run/docker.sock:/var/run/docker.sock  # Docker socket（qlib 推理需要）
-      - ~/.qlib:/root/.qlib          # qlib 数据
-      - ~/github/qlib-zh/mlruns:/root/github/qlib-zh/mlruns  # MLflow 模型
-    networks:
-      - stockfish-net
+      - stockfish-state:/app/data
+      - stockfish-qlib:/app/qlib-data
+    read_only: true
+    tmpfs:
+      - /tmp:rw,nosuid,noexec,size=256m,mode=1777
+    cap_drop:
+      - ALL
+    security_opt:
+      - no-new-privileges:true
+    pids_limit: 256
+    mem_limit: 4g
+    cpus: 2.0
+    restart: unless-stopped
 
-  # MiroFish - 群体智能模拟引擎
+  # Explicit experimental profile only. Not a dependency of the core; this
+  # external image and AGPL/data/service rights are not production-cleared.
   mirofish:
+    profiles: ["experimental-mirofish"]
     image: zhuhai123/stockfish-mirofish:latest
-    container_name: mirofish
-    env_file:
-      - .env
-    ports:
-      - "3000:3000"
-      - "5001:5001"
-    restart: unless-stopped
-    volumes:
-      - ./MiroFish/backend:/app/backend          # 后端代码挂载
-      - mirofish-uploads:/app/backend/uploads
-    networks:
-      - stockfish-net
-
-  # 飞书 Bot（WebSocket 长连接）
-  stockfish-bot:
-    image: zhuhai123/stockfish-stockfish:latest
-    container_name: stockfish-bot
-    env_file:
-      - .env
     environment:
-      - STOCKFISH_API_URL=http://stockfish:8000
-    command: >
-      sh -c "pip install -r requirements.txt -q && python integration/lark_bot.py"
-    depends_on:
-      stockfish:
-        condition: service_started
-    restart: unless-stopped
+      OPENAI_API_KEY: "${MIROFISH_OPENAI_API_KEY:-}"
+      ZEP_API_KEY: "${MIROFISH_ZEP_API_KEY:-}"
+    ports:
+      - "127.0.0.1:3000:3000"
+      - "127.0.0.1:5001:5001"
     volumes:
-      - ./:/app                      # 项目代码挂载，方便改代码即时生效
-    networks:
-      - stockfish-net
-    # 开发时可注释掉下面这行以避免启动 bot
-    profiles:
-      - bot
+      - mirofish-uploads:/app/backend/uploads
+    cap_drop: ["ALL"]
+    security_opt: ["no-new-privileges:true"]
+    restart: "no"
 
-networks:
-  stockfish-net:
-    driver: bridge
-
+# The legacy bot service has no canonical authenticated publishing adapter.
+# Its previous configuration is preserved in review/astra-master/security-starting.
 volumes:
+  stockfish-state:
+  stockfish-qlib:
   mirofish-uploads:

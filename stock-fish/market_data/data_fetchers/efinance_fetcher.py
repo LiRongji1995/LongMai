@@ -565,17 +565,12 @@ class EfinanceFetcher(BaseFetcher):
         # 重命名列
         df = df.rename(columns=column_mapping)
         
-        # Fallback: if OHLC columns are missing (e.g. very old data path), fill from close
-        if 'close' in df.columns and 'open' not in df.columns:
-            df['open'] = df['close']
-            df['high'] = df['close']
-            df['low'] = df['close']
-            
-        # Fill volume and amount if missing
-        if 'volume' not in df.columns:
-            df['volume'] = 0
-        if 'amount' not in df.columns:
-            df['amount'] = 0
+        required = {'date', 'open', 'high', 'low', 'close', 'volume', 'amount'}
+        missing = required.difference(df.columns)
+        if missing:
+            raise DataFetchError(f"efinance missing fields: {','.join(sorted(missing))}")
+        # Eastmoney history volume is lots of 100 shares; canonical unit is shares.
+        df['volume'] = pd.to_numeric(df['volume'], errors='raise') * 100
 
         
         # 如果没有 code 列，手动添加

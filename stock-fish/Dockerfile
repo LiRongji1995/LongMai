@@ -1,31 +1,34 @@
-FROM python:3.11-slim
+# Research core only. No Docker daemon/socket or prototype message integrations.
+FROM python:3.12-slim
+
+ENV PYTHONDONTWRITEBYTECODE=1 \
+    PYTHONUNBUFFERED=1 \
+    PIP_DISABLE_PIP_VERSION_CHECK=1 \
+    STOCKFISH_STATE_DIR=/app/data/core \
+    STOCKFISH_DB_PATH=/app/data/stockfish.sqlite3 \
+    QLIB_DATA_DIR=/app/qlib-data/cn_data \
+    OMP_NUM_THREADS=1 \
+    OPENBLAS_NUM_THREADS=1
 
 WORKDIR /app
-
-# 基础依赖（gcc + Docker CLI 用于 qlib 推理容器编排）
 RUN apt-get update && apt-get install -y --no-install-recommends \
-    gcc \
-    curl \
-    ca-certificates \
-    && rm -rf /var/lib/apt/lists/*
+    ca-certificates libgomp1 tzdata \
+    && rm -rf /var/lib/apt/lists/* \
+    && groupadd --gid 10001 stockfish \
+    && useradd --uid 10001 --gid 10001 --no-create-home stockfish
 
-# 安装 Docker CLI（仅客户端，无需 daemon）
-RUN curl -fsSL https://download.docker.com/linux/static/stable/x86_64/docker-27.3.1.tgz \
-    | tar xzv -C /usr/local/bin --strip-components=1 docker/docker \
-    && chmod +x /usr/local/bin/docker
+COPY requirements-core.txt ./
+RUN pip install --no-cache-dir -r requirements-core.txt && pip check
 
-COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Explicit source allowlist prevents copying .env variants, private portfolios,
+# credential stores, local virtualenvs, model releases or third-party prototypes.
+COPY app.py config.py ./
+COPY stockfish_core/ ./stockfish_core/
+COPY static/ ./static/
+COPY qlib-zh/data_runner.py ./qlib-zh/data_runner.py
+RUN mkdir -p /app/data/core /app/qlib-data /home/stockfish \
+    && chown -R 10001:10001 /app/data /app/qlib-data /home/stockfish
 
-# 从本地复制 sxsc_tushare（私有包，无法从 PyPI 安装）
-COPY sxsc_tushare /app/sxsc_tushare/
-COPY sxsc_tushare.dist-info /app/sxsc_tushare.dist-info/
-RUN pip install /app/sxsc_tushare/ 2>/dev/null || echo "sxsc_tushare 安装跳过"
-
-COPY . .
-
+USER 10001:10001
 EXPOSE 8000
-
-# 默认：仅启动 Flask API
-# 飞书 Bot: 通过 docker-compose 的 command 覆盖 或添加 bot 服务
 CMD ["python", "app.py"]

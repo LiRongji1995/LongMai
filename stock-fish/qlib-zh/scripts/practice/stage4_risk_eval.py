@@ -17,6 +17,7 @@ stage4_risk_eval.py
 from __future__ import annotations
 
 import argparse
+import os
 import importlib
 import re
 import time
@@ -80,8 +81,10 @@ def _score_bucket(value: float, thresholds: list[tuple[float, int]], reverse: bo
     if pd.isna(value):
         return 50
     val = float(value)
+    # Lower-is-better thresholds are evaluated from the smallest bound upward.
+    # Reversing them made low liabilities receive the worst score and vice versa.
     if reverse:
-        thresholds = list(reversed(thresholds))
+        thresholds = sorted(thresholds, key=lambda item: item[0])
     for bound, score in thresholds:
         if (not reverse and val >= bound) or (reverse and val <= bound):
             return score
@@ -640,6 +643,8 @@ def _build_fallback_result(pool: pd.DataFrame, pred_date: str) -> pd.DataFrame:
 
 
 def risk_eval(input_csv: str, output_dir: str, pred_date: str):
+    if os.environ.get("ALLOW_EXPERIMENTAL_LEGACY_QUANT") != "1":
+        raise RuntimeError("EXPERIMENTAL_DISABLED: legacy financial queries do not prove PIT; use RiskEngine")
     global _LOGIN_FAILURE
     login_error = None
     if _LOGIN_FAILURE is not None:
@@ -668,13 +673,7 @@ def risk_eval(input_csv: str, output_dir: str, pred_date: str):
         print(f"✓ 加载初筛结果: {len(pool)} 只股票")
 
         if login_error is not None:
-            print("  baostock 不可用, 使用 qlib 数据源计算风险评分...")
-            result = _build_qlib_fallback_result(pool, pred_date)
-            out_csv = out_path / "risk_eval.csv"
-            result.to_csv(out_csv, index=False, encoding="utf-8-sig")
-            print("✓ 已输出 stage4 qlib 数据源风险评分结果")
-            print(f"✓ 风险评估保存: {out_csv}")
-            return
+            raise RuntimeError("RISK_UNAVAILABLE: financial provider failed") from login_error
 
         q = _quarter_of_date(pred_date)
         rows = []

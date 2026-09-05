@@ -19,8 +19,7 @@ def validate_date_order(dates: dict, practice_mode: bool = False) -> None:
     train/valid boundaries are strictly ordered; test_start <= test_end is
     allowed so that a single-day prediction window works in predict_only mode.
 
-    When practice_mode=True (finetune/practice), test window may share the
-    same period as valid window.
+    practice_mode is retained for CLI compatibility; overlap is never allowed.
     """
     keys = ["train_start", "train_end", "valid_start", "valid_end", "test_start", "test_end"]
     missing = [k for k in keys if k not in dates]
@@ -29,9 +28,6 @@ def validate_date_order(dates: dict, practice_mode: bool = False) -> None:
 
     parsed = {k: pd.Timestamp(dates[k]) for k in keys}
     for left, right in zip(keys, keys[1:]):
-        # Allow valid_end == test_start in practice mode (same window)
-        if practice_mode and left == "valid_end" and right == "test_start":
-            continue
         # Allow test_start == test_end for single-day prediction windows
         if left == "test_start" and right == "test_end":
             if parsed[left] > parsed[right]:
@@ -50,7 +46,7 @@ def _apply_model_mode(doc: dict, model_mode: str, sample_weight_half_life: int |
         return
 
     model = doc.setdefault("task", {}).setdefault("model", {}).setdefault("kwargs", {})
-    if model_mode == "robust":
+    if model_mode in ("robust", "multihorizon"):
         # Based on stage2 analysis: positive IC but low IR / high drawdown.
         # Use stronger regularization and lower tree complexity to improve stability.
         # num_threads=8 avoids OOM during warm-start finetune (default 20 threads).
@@ -107,11 +103,15 @@ def patch_yaml(
     dh["fit_end_time"]   = dates["train_end"]
 
     _apply_model_mode(doc, model_mode, sample_weight_half_life=sample_weight_half_life)
+    if model_mode == "multihorizon":
+        target_handler = doc["task"]["dataset"]["kwargs"]["handler"]
+        target_handler["class"] = "MultiHorizonAlpha158"
+        target_handler["module_path"] = "scripts.practice.multi_horizon_label_handler"
 
-    # Ensure LightGBM model can predict even if feature count differs
-    # (e.g. predict-only regenerates YAML from template, which may differ from training)
+
+    # Feature mismatch is a hard error; callers must reproduce the trained schema.
     model_kwargs = doc.setdefault("task", {}).setdefault("model", {}).setdefault("kwargs", {})
-    model_kwargs.setdefault("predict_disable_shape_check", True)
+    model_kwargs["predict_disable_shape_check"] = False
 
     # ──────────────────────────────────────────
     # 2. 更新 dataset segments

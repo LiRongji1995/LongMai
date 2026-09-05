@@ -28,6 +28,22 @@ class EmployeeReport:
     risks: list = field(default_factory=list)
     raw_output: str = ""
     error: Optional[str] = None    # 非空表示此员工报告生成失败
+    risk_score: Optional[float] = None
+    veto: bool = False
+    veto_reason: str = ""
+    status: str = "VALID"
+
+    def __post_init__(self):
+        import math
+        valid = (isinstance(self.score, (int, float)) and math.isfinite(self.score)
+                 and -10 <= self.score <= 10 and self.outlook in ('看多', '偏多', '看空', '偏空', '中性')
+                 and self.confidence in ('高', '中', '低')
+                 and isinstance(self.key_points, list) and isinstance(self.risks, list))
+        if self.raw_output in ('{}', 'None') or not valid:
+            self.status = "INVALID"
+            self.error = self.error or "INVALID_STRUCTURED_OUTPUT"
+        if self.error:
+            self.status = "INVALID"
 
 
 @dataclass
@@ -72,6 +88,8 @@ class CIODecision:
 
     def to_dict(self) -> dict:
         return {
+            'authority': 'RESEARCH_ONLY',
+            'calibrated_probability': False,
             'master_name': self.master_name,
             'master_key': self.master_key,
             'decision_summary': self.decision_summary,
@@ -121,7 +139,8 @@ class BaseAgent:
         """
         if not self.has_llm:
             logger.warning("LLM API key 未配置，跳过 LLM 调用")
-            return {}
+            from stockfish_core.common import UnavailableError
+            raise UnavailableError("LLM_NOT_CONFIGURED", "research")
 
         from openai import OpenAI
 
@@ -146,12 +165,13 @@ class BaseAgent:
                 return self._parse_json(raw)
 
             except Exception as e:
-                logger.warning(f"LLM 调用失败 (attempt {attempt+1}/{self.max_retries+1}): {e}")
+                logger.warning(f"LLM 调用失败 (attempt {attempt+1}/{self.max_retries+1}): {type(e).__name__}")
                 if attempt < self.max_retries:
                     time.sleep(1.5 * (attempt + 1))  # 递增退避
 
         logger.error("LLM 调用全部重试失败")
-        return {}
+        from stockfish_core.common import UnavailableError
+        raise UnavailableError("LLM_CALL_FAILED", "research")
 
     # ── JSON 解析 ──
 

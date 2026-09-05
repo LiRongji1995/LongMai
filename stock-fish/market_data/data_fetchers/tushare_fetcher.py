@@ -75,7 +75,9 @@ def _is_us_code(stock_code: str) -> bool:
 class _TushareHttpClient:
     """Lightweight Tushare Pro client that does not require the tushare SDK."""
 
-    def __init__(self, token: str, timeout: int = 30, api_url: str = "http://api.tushare.pro") -> None:
+    def __init__(self, token: str, timeout: int = 30, api_url: str = "https://api.tushare.pro") -> None:
+        if api_url.rstrip("/") != "https://api.tushare.pro":
+            raise ValueError("Only the official HTTPS Tushare endpoint is allowed")
         self._token = token
         self._timeout = timeout
         self._api_url = api_url
@@ -93,7 +95,7 @@ class _TushareHttpClient:
 
         result = _json.loads(res.text)
         if result.get("code") != 0:
-            raise Exception(result.get("msg") or f"Tushare API error code {result.get('code')}")
+            raise Exception(f"Tushare API error code {result.get('code')}")
 
         data = result.get("data") or {}
         columns = data.get("fields") or []
@@ -172,22 +174,8 @@ class TushareFetcher(BaseFetcher):
             self._api = None
 
     def _build_api_client(self, token: str):
-        """
-        Build a Tushare Pro client using sxsc_tushare SDK (proxied API).
-        Falls back to direct HTTP client if SDK is unavailable.
-        """
-        try:
-            import sxsc_tushare as sx
-            sx.set_token(token)
-            api = sx.get_api(env="prd")
-            # Quick test to verify connectivity
-            api.daily(ts_code="000001.SZ", start_date="20260528", end_date="20260528")
-            logger.info("Tushare API client configured via sxsc_tushare SDK")
-            return api
-        except Exception:
-            logger.debug("sxsc_tushare unavailable, falling back to direct HTTP")
-            client = _TushareHttpClient(token=token)
-            return client
+        """No network probe, token persistence, or third-party credential relay."""
+        return _TushareHttpClient(token=token)
 
     def _determine_priority(self) -> int:
         """
