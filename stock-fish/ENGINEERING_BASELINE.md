@@ -1,4 +1,16 @@
-# R05 当前入口
+# R05 本次整改入口（2026-09-06）
+
+本节优先于下方保留的历史记录。当前精确规则、历史重建与复现入口见 [R05 规格整改与真实历史重建](docs/R05_RECTIFICATION_AND_REPLAY.md) 和 [原规格追踪表](strategy_spec_traceability.md)。保持 R05；旧 V2 的 0.40/0.30/0.30 权重及名次截断属于本次已纠正的不合规实现，不能继续作为策略定义。
+
+当前 PV 使用原 0.45/0.35/0.20 权重，焦点使用 A≥2、R≥0.10、C≥O、CLV≥0.70 且没有名额限制。DAILY 原配置保持冻结。原错误版本运行、失败日志与审计历史保留，合规复盘按实现/规格身份隔离。
+
+本次真实采集及回放证据在本机 `../review/r05-rectification/`；主窗口为 2026-08-31 至 2026-09-04，20 日尝试自 2026-08-10 起。原始下载时钟保留，历史资格受来源覆盖限制，不声称存档 PIT 或完整历史全市场。工程、供给、Docker、价格观察和投资优势分别见统一验收报告，原下方测试数量与 Docker daemon 状态是历史记录，不能当作本次结果。
+
+本次最终核心回归实际为 752 passed、1 skipped；全仓收集仍因旧 MiroFish 缺少 locales/languages.json 失败。Docker runtime-09 的 23 条执行记录成功，镜像内 71 个关键文件与冻结宿主源码字节一致，隔离容器已停止，用户原服务未切换。随后仅为详情增加 SQLite 派生索引，相关 34 项回归和真实 API 复测通过。工程结果与真实行情及投资验证分别报告。
+
+---
+
+# R05 历史不合规实现与旧验收记录（仅供审计）
 
 默认无账户候选仍保留原五族 `DAILY_V1`，不改名、不降级；参数状态仍为 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`。R05 新增完整实验与研究反馈面：`GET /api/strategy-experiments/specs`、`POST /api/strategy-experiments/run`、分页 `GET /api/strategy-experiments/<run_id>/summary`、详情 `GET /api/strategy-experiments/<run_id>/items/<instrument_id>`、完整 JSON/CSV 导出、`/outcomes`、`/tracking`、`/review`、`GET /api/research-feedback/latest` 与 `GET /api/strategy-comparison/latest`。首页“R05实验策略”区域展示动态 PV 全样本、焦点名单、详情、导出、后验和研究周期按钮。
 

@@ -73,6 +73,7 @@ node_modules/
 
 # Docker
 .docker/
+.docker-backups/
 
 # 大文件/数据文件
 *.h5

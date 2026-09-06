@@ -1,5 +1,6 @@
 # Research core only. No Docker daemon/socket or prototype message integrations.
-FROM python:3.12-slim
+ARG BASE_IMAGE=python:3.12-slim
+FROM ${BASE_IMAGE}
 
 ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
@@ -27,6 +28,7 @@ COPY stockfish_core/ ./stockfish_core/
 COPY config/ ./config/
 COPY static/ ./static/
 COPY qlib-zh/data_runner.py ./qlib-zh/data_runner.py
+COPY scripts/backup_restore_state.py ./scripts/backup_restore_state.py
 RUN mkdir -p /app/data/core /app/qlib-data /home/stockfish \
     && chown -R 10001:10001 /app/data /app/qlib-data /home/stockfish
 

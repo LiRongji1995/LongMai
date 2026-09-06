@@ -9,6 +9,7 @@ import json
 from pathlib import Path
 import shutil
 import sqlite3
+from contextlib import ExitStack
 
 from .common import canonical_json, utc_now
 from .model_registry import file_hash, write_once
@@ -60,6 +61,18 @@ def backup_state(database: str | Path, destination: str | Path, *, artifact_root
         before = file_hash(source)
         target = destination / relative
         target.parent.mkdir(parents=True, exist_ok=True)
+        with source.open('rb') as check:
+            sqlite_file=check.read(16)==b'SQLite format 3\x00'
+        if sqlite_file:
+            # Queue/transport SQLite databases also carry committed WAL. The
+            # app DB write guard alone does not snapshot their main files.
+            with sqlite3.connect(source.as_uri()+'?mode=ro',uri=True) as src:
+                with sqlite3.connect(target) as dst:
+                    src.backup(dst)
+                    if dst.execute('PRAGMA integrity_check').fetchone()[0]!='ok':raise ValueError('BACKUP_SQLITE_INTEGRITY_FAILED')
+            records.append({'path':relative.as_posix(),'size':target.stat().st_size,'sha256':file_hash(target),'method':'SQLITE_ONLINE_BACKUP'})
+            path_map.append({'original':str(source),'backup':relative.as_posix()})
+            return
         with source.open('rb') as inp, target.open('xb') as out:
             shutil.copyfileobj(inp, out)
         if before != file_hash(source) or before != file_hash(target):
@@ -68,7 +81,14 @@ def backup_state(database: str | Path, destination: str | Path, *, artifact_root
         path_map.append({'original': str(source), 'backup': relative.as_posix()})
     # A reserved write lock serializes application DB writes. SQLite's backup
     # API includes committed WAL pages; copying only the .sqlite3 file does not.
-    with sqlite3.connect(str(database), isolation_level=None, timeout=15) as guard:
+    with ExitStack() as stack:
+        from .jobs import _ServiceLock
+        # CLI capture can run without an app job. Refuse an active queue and
+        # hold every discovered OS lock through artifact + database snapshot.
+        for root in roots:
+            for lock_path in sorted(root.rglob('request-queue.lock')):
+                lock=_ServiceLock(lock_path);stack.callback(lock.close)
+        guard=stack.enter_context(sqlite3.connect(str(database), isolation_level=None, timeout=15))
         guard.execute('BEGIN IMMEDIATE')
         try:
             active = guard.execute("SELECT COUNT(*) FROM jobs WHERE state IN ('RUNNING','CANCEL_REQUESTED')").fetchone()[0]
@@ -77,7 +97,7 @@ def backup_state(database: str | Path, destination: str | Path, *, artifact_root
             for index, source_root in enumerate(roots):
                 for source in sorted(source_root.rglob('*')):
                     if source.is_file():
-                        if source.name.endswith(('.jobs.lock', '.sqlite3-wal', '.sqlite3-shm')):
+                        if source.name.endswith(('.lock', '-wal', '-shm')):
                             continue
                         copy(source, Path('artifacts') / str(index) / source.relative_to(source_root))
             with sqlite3.connect(str(database), timeout=15) as source_conn:

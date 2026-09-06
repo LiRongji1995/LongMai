@@ -34,7 +34,7 @@ def register_candidate_routes(app, service):
 
     @app.get('/api/strategy-experiments')
     def strategy_experiment_runs():
-        return jsonify(service.list_strategy_experiments(int(request.args.get('limit', 20))))
+        return jsonify(service.list_strategy_experiments(int(request.args.get('limit', 20)), int(request.args.get('offset', 0))))
 
     @app.post('/api/strategy-experiments/run')
     def start_strategy_experiment_run():
@@ -58,16 +58,16 @@ def register_candidate_routes(app, service):
     @app.get('/api/strategy-experiments/<run_id>/export')
     def strategy_experiment_export(run_id):
         if request.args.get('format', 'json') == 'csv':
-            return Response('\ufeff' + service.export_strategy_experiment_csv(run_id),
+            return Response('\ufeff' + service.export_strategy_experiment_csv(run_id, strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection')),
                             mimetype='text/csv; charset=utf-8',
                             headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.csv'})
-        return Response(service.export_strategy_experiment_json(run_id), mimetype='application/json',
+        return Response(service.export_strategy_experiment_json(run_id, strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection')), mimetype='application/json',
                         headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.json'})
 
     def parse_horizons(value):
         if value in (None, '', []):
             return None
-        if not isinstance(value, list) or any(not isinstance(item, int) for item in value):
+        if not isinstance(value, list) or any(type(item) is not int or item <= 0 for item in value):
             raise ValueError('horizons must be an integer list')
         return value
 
@@ -95,7 +95,14 @@ def register_candidate_routes(app, service):
 
     @app.get('/api/strategy-experiments/<run_id>/review')
     def strategy_experiment_review(run_id):
-        return jsonify(service.strategy_review(run_id))
+        return jsonify(service.strategy_review(run_id, full=request.args.get('full') in {'1','true'}))
+
+    @app.post('/api/research-episodes/<episode_id>/archive')
+    def archive_research_episode(episode_id):
+        value = body()
+        if set(value) != {'reason'}:
+            raise ValueError('archive requires reason only')
+        return jsonify(service.archive_strategy_episode(episode_id, value['reason']))
 
     @app.get('/api/strategy-comparison/latest')
     def latest_strategy_comparison():

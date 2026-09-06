@@ -258,38 +258,46 @@ class CandidateScheduler:
             input_id, bundle = self.service.strategy_input()
         except UnavailableError:
             return []
-        if bundle.observation_date != day:
-            return []
-        rows = self.service.store.list_document_metadata('strategy_experiment_runs', limit=100, descending=True)
+        # A weekend refresh can still advance the latest completed session.
+        rows = self.service.pending_strategy_research()
         submitted, results = 0, []
         for row in rows:
-            run = self.service.strategy_experiment(row['document_id'])
-            observation = date.fromisoformat(str(run['observation_date'])[:10])
-            if observation >= day:
+            observation = date.fromisoformat(str(row['observation_date'])[:10])
+            if observation > bundle.observation_date:
                 continue
-            for kind, submitter in (
-                ('STRATEGY_OUTCOME_OBSERVATION', self.service.submit_strategy_outcomes),
-                ('STRATEGY_RESEARCH_TRACKING', self.service.submit_strategy_tracking),
-            ):
-                job_id = kind.lower() + '_' + digest({'run_id':run['run_id'],'day':day.isoformat(),'input_id':input_id})
-                if self.service.jobs.get(job_id) is not None or self.service.store.get_document('candidate_schedule_events',job_id) is not None:
-                    continue
-                if submitted >= self.MAX_OUTCOME_SUBMISSIONS_PER_TICK:
-                    return results
-                try:
-                    job = submitter(run['run_id'], input_id, job_id=job_id)
-                except JobConflict:
-                    return results
-                value = {'event_id':job_id,'job_id':job['job_id'],'run_id':run['run_id'],'input_id':input_id,
-                         'evaluation_session':day.isoformat(),'observed_at':now.isoformat(),
-                         'market_session':kind,'status':'SUBMITTED','snapshot_created':False,
-                         'coverage_type':bundle.coverage_type,
-                         'research_horizons':[1,2,3,4,5,10,20],
-                         'missing_policy':'NULL_CENSORED_OR_UNAVAILABLE_NEVER_SYNTHETIC_PRICE',
-                         'market_edge':'NOT_ESTABLISHED'}
-                self._event(job_id,value)
-                results.append(value)
-                submitted += 1
+            run_id = row['run_id']
+            kind = 'STRATEGY_RESEARCH_TRACKING'
+            base_id = kind.lower() + '_' + digest({'run_id':run_id,'day':day.isoformat(),'input_id':input_id})
+            job_id, attempt = base_id, 0
+            while self.service.jobs.get(job_id) is not None:
+                old = self.service.jobs.get(job_id)
+                if old['state'] not in {'FAILED','CANCELLED','INTERRUPTED'}:
+                    break
+                old_event = self.service.store.get_document('candidate_schedule_events',job_id) or {}
+                last = datetime.fromisoformat(old_event['observed_at']) if old_event.get('observed_at') else now
+                if (now-last).total_seconds() < min(3600, 60 * 2**min(attempt,6)):
+                    break
+                attempt += 1
+                job_id = base_id + '_retry_' + str(attempt)
+            if self.service.jobs.get(job_id) is not None:
+                continue
+            if submitted >= self.MAX_OUTCOME_SUBMISSIONS_PER_TICK:
+                return results
+            try:
+                job = self.service.submit_strategy_tracking(run_id, input_id, horizons=row['horizons'], job_id=job_id)
+            except JobConflict:
+                return results
+            value = {'event_id':job_id,'job_id':job['job_id'],'run_id':run_id,'input_id':input_id,
+                     'evaluation_session':day.isoformat(),'observed_at':now.isoformat(),
+                     'market_session':kind,'status':'SUBMITTED','snapshot_created':False,
+                     'coverage_type':bundle.coverage_type,'attempt':attempt,
+                     'research_horizons':[1,2,3,4,5,10,20],
+                     'dependency_order':'PRICE_AND_EVENT_LABELS_THEN_TRACKING_THEN_FEEDBACK',
+                     'missing_policy':'NULL_CENSORED_OR_UNAVAILABLE_NEVER_SYNTHETIC_PRICE',
+                     'market_edge':'NOT_ESTABLISHED'}
+            self._event(job_id,value)
+            results.append(value)
+            submitted += 1
         return results
 
     def _capture_job(self, ctx):

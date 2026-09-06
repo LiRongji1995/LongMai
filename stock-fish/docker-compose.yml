@@ -16,6 +16,8 @@ services:
       STOCKFISH_DB_PATH: "/app/data/stockfish.sqlite3"
       QLIB_DATA_DIR: "/app/qlib-data/cn_data"
       QLIB_DATA_PROXY: "${QLIB_DATA_PROXY:-}"
+      TUSHARE_TOKEN: "${TUSHARE_TOKEN:-}"
+      TUSHARE_PRO_TOKEN: "${TUSHARE_PRO_TOKEN:-}"
     ports:
       - "127.0.0.1:${STOCKFISH_PORT:-8000}:8000"
     volumes:

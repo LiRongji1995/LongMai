@@ -1,0 +1,127 @@
+# R05完整收口增补配置；不替换原R05实验YAML及冻结五族配置。
+spec_version: R05_COMPLETION_REQUIREMENTS_V1
+parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+purpose: MAINBOARD_RESEARCH_ONLY
+account_required: false
+execution_enabled: false
+preserve_original_r05_strategy_specs: true
+preserve_all_published_runs: true
+
+delivery_governance:
+  task_id: R05
+  mode: SINGLE_COMPLETE_DELIVERY
+  include_all_original_unclosed_requirements: true
+  include_all_review_findings: true
+  implementation_work_items_allowed: true
+  require_user_reauthorization_per_module: false
+  split_into_new_delivery_rounds: false
+  defer_enhanced_strategies_or_feedback_or_docker: false
+  external_blockers_require_evidence: true
+  unperformed_runtime_checks_are_not_pass: true
+  immature_market_results_remain_unmatured: true
+  independent_acceptance_required: true
+
+selection_policy:
+  id: PV_FOCUS_PREVIEW_V0.1
+  base_strategy_id: PV_OBSERVATION_V1
+  quota_min: null
+  quota_max: null
+  fill_vacancies: false
+  thresholds:
+    amount_ratio_prior_5_excluding_today_min_inclusive: '2.0'
+    comparable_return_5_sessions_min_inclusive: '0.10'
+    raw_close_location_min_inclusive: '0.70'
+    raw_close_greater_equal_raw_open: true
+  close_location:
+    formula_id: RAW_CLOSE_MINUS_LOW_DIV_HIGH_MINUS_LOW
+    zero_range: NOT_APPLICABLE_ZERO_RANGE
+    not_applicable_blocks_all_research: false
+  missing_required: EXCLUDE_FROM_FOCUS_AND_REPORT
+  arithmetic: EXACT_DECIMAL_OR_DOCUMENTED_CONTROLLED_PRECISION
+  preserve_parent_rank_order: true
+  recompute_percentiles_within_focus: false
+  page_size_is_not_quota: true
+  risk_review_independent_of_numeric_gate: true
+  no_risk_check_is_not_risk_clearance: true
+
+tracking_policy:
+  id: TRACKING_POLICY_PILOT_V0.1
+  parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  applies_to: NEW_FOCUS_POLICY_EPISODES_ONLY
+  max_active_sessions: null
+  observe_each_exchange_session: true
+  repeated_signal_resets_episode: false
+  retain_signal_level_records: true
+  distinct_strategy_signals_preserved: true
+  reentry_creates_linked_episode: true
+  data_state_separate_from_research_state: true
+  research_states: [ACTIVE, COOLING, THESIS_INVALIDATED, ARCHIVED]
+  data_states: [CURRENT, PARTIAL, PAUSED_NETWORK, SUSPENDED, UNAVAILABLE, UNKNOWN]
+  volume_cooling:
+    metric: COMPARABLE_VOLUME_SHARES
+    peak_window: EPISODE_START_THROUGH_CURRENT_SESSION_ONLY
+    max_ratio_inclusive: '0.30'
+    consecutive_evaluable_exchange_sessions: 3
+    require_comparable_ret5_lte: '0.0'
+    unknown_breaks_verified_streak: true
+    effect: COOLING_WARNING_NOT_TERMINATION
+    amount_is_not_substitute_for_volume: true
+    unknown_corporate_action_volume_basis: METRIC_UNAVAILABLE
+  thesis_invalidation:
+    metric: COMPARABLE_CLOSE_BELOW_OWN_SESSION_MA20
+    ma_sessions: 20
+    min_valid_comparable_closes: 20
+    consecutive_exchange_sessions: 2
+    unknown_breaks_verified_streak: true
+    effect: REMOVE_FROM_DEFAULT_ACTIVE_VIEW_KEEP_ALL_RECORDS
+  new_hot_theme_alone_terminates_old_episode: false
+  theme_rotation_without_dated_data: UNAVAILABLE
+  manual_archive_deletes_outcomes: false
+  fixed_outcome_horizons_exchange_sessions: [1, 2, 3, 4, 5, 10, 20]
+  original_comparison_horizons_preserved: [1, 2, 3, 5, 10]
+  custom_positive_integer_horizons_supported: true
+  post_exit_shadow_horizons_exchange_sessions: [5, 10]
+  complete_pending_outcomes_after_exit: true
+  outcome_updates: APPEND_ONLY
+  not_yet_mature: NOT_MATURED
+  claimed_execution_profit: false
+
+research_feedback:
+  daily_diagnostics: true
+  review_every_new_exchange_sessions: 5
+  rolling_review_windows_exchange_sessions: [20, 60]
+  require_mature_labels: true
+  same_date_common_eligibility_comparison: true
+  each_strategy_actual_coverage_comparison: true
+  intersection_of_selected_winners_only: false
+  include_zero_signal_and_failed_dates: true
+  dynamic_list_evaluation: ALL_QUALIFIED_NOT_FORCED_TOP_K
+  top_k_diagnostics_only: [5, 10, 20]
+  preserve_signal_and_episode_denominators: true
+  uncertainty_sampling_unit: DATE_BLOCK_WITH_EPISODE_DEPENDENCE_DISCLOSED
+  temporal_label_overlap_guard: PURGE_OR_GAP_MATCHING_LABEL_HORIZON
+  auto_parameter_optimization: false
+  auto_champion_replacement: false
+  configuration_promotion_requires_user_approval: true
+  retain_all_trials: true
+  market_edge_default: NOT_ESTABLISHED
+
+deployment:
+  target: DOCKER_COMPOSE_RESEARCH_CORE
+  reuse_existing_docker_artifacts: true
+  windows_entrypoint_target: Start-StockRecommendation-Docker.ps1
+  linux_equivalent_required: true
+  auto_install_admin_software: false
+  overwrite_existing_env: false
+  generate_private_key_if_absent: true
+  print_secrets_to_logs: false
+  bind_host_default: '127.0.0.1'
+  production_wsgi_required: true
+  single_scheduler_required: true
+  no_docker_socket: true
+  non_root: true
+  persistent_database_cache_queue_tracking: true
+  health_separate_from_data_readiness: true
+  real_build_start_restart_restore_evidence_required: true
+  git_commit_authorized_by_this_file: false
+  git_push_authorized_by_this_file: false

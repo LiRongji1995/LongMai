@@ -1,0 +1,25 @@
+{
+  "lock_version": "R05_SOURCE_LOCK_V1",
+  "spec_files": {
+    "r05_strategy_experiments.yaml": "8cd729cab31f80ec84d6486c733165360ba264fc3efb2d70c0c69f5a78148462",
+    "r05_completion_requirements.yaml": "203325cad6cde76ca9399353af163e9b122b73b1ab2d3c8ecbfd1878fb3f5e11"
+  },
+  "upstream_research": {
+    "DNA_RERANK_V1": {
+      "repository": "https://github.com/guoyaohua/limit-up-sniper",
+      "commit": "98edc5efcfe65f71e69f7bfca60e6dee88ee612e",
+      "source_path": "core/gene_calculator.py",
+      "source_sha256": "8dd4fd8efcac711eb5e7764e8e8f6ac82c9dc492f7514812277329aa2512f9ce",
+      "license": "MIT",
+      "adaptation": "INDEPENDENT_IMPLEMENTATION_OF_APPROVED_R05_FORMULAS_NO_UPSTREAM_RUNTIME_CODE"
+    },
+    "THEME_CONTEXT_V1": {
+      "repository": "https://github.com/simonlin1212/vibe-astock",
+      "commit": "5764a22b4ec6cfdade0f35bd1d6fe66b3ef5e92c",
+      "source_path": "duanxian/emotion_metrics.py",
+      "source_sha256": "88c8b5d02cd3f0aece892c237e8fd609fde10d6dda43597c07321ecaf5f0219b",
+      "license": "Apache-2.0",
+      "adaptation": "CONTEXT_IDEAS_ONLY_APPROVED_R05_THEME_RANKING_IS_PROJECT_HYPOTHESIS"
+    }
+  }
+}

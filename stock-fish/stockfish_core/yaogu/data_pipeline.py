@@ -123,7 +123,28 @@ def published_outcome_demand(service, observation_date, sessions):
                                'pending_fields':pending,
                                'start_date': str(run.observation_date), 'end_date': str(observation_date),
                                'selection_reason': 'AUTHORITATIVE_PUBLISHED_CANDIDATE_PENDING_OUTCOME'})
+    if hasattr(service,'experiment_outcome_demand'):
+        for item in service.experiment_outcome_demand(observation_date,sessions):
+            demand.append({**item,'start_date':str(item.get('start_date') or item.get('required_start') or item['observation_date']),
+                'end_date':str(item.get('end_date') or item.get('required_end') or observation_date),
+                'selection_reason':item.get('selection_reason') or item.get('reason','EXPERIMENT_PENDING_OUTCOME_OR_EPISODE')})
     return demand
+
+
+def tushare_request_plan(day, sessions):
+    """Registered optional enrichment; no token is ever a PV dependency."""
+    selected=[s for s in sessions if s<=day][-22:]
+    plan=[('tushare_stock_basic',{'list_status':'L'}),
+          ('tushare_trade_cal',{'start_date':str(sessions[0]),'end_date':str(day),'is_open':'1'})]
+    for session in selected:
+        plan.extend((endpoint,{'trade_date':str(session)}) for endpoint in
+                    ('tushare_daily','tushare_adj_factor','tushare_daily_basic','tushare_stk_limit','tushare_stock_st'))
+    plan.extend((endpoint,{'trade_date':str(day)}) for endpoint in
+                ('tushare_limit_list_d','tushare_top_list','tushare_top_inst','tushare_moneyflow',
+                 'tushare_dc_member','tushare_stk_auction','tushare_stk_auction_o'))
+    plan.append(('tushare_dc_index',{'trade_date':str(day),'idx_type':'概念板块'}))
+    plan.append(('tushare_suspend_d',{'trade_date':str(day)}))
+    return plan
 
 
 class MainboardPipeline:
@@ -154,12 +175,13 @@ class MainboardPipeline:
                                      cache_epoch=epoch if current else None)
 
             def drain(stage, ids):
-                before = queue.calls
+                before = queue.calls;http_before=queue.transport_counts().get('HTTP',0)
                 queue.drain(self.executor, ids=ids, checkpoint=checkpoint, progress=progress)
                 rows = queue.rows(ids)
                 stages.append({'stage': stage, 'request_ids': list(ids), 'requested': len(rows),
                                'complete': sum(r['state'] == 'COMPLETE' for r in rows),
-                               'network_calls': queue.calls-before,
+                               'task_attempts': queue.calls-before,
+                               'http_attempts':queue.transport_counts().get('HTTP',0)-http_before,
                                'status': 'COMPLETE' if rows and all(r['state']=='COMPLETE' for r in rows) else 'PARTIAL'})
 
             masters = [add(ep, {}, 'MainBoardMasterCapture', current=True) for ep in ('mainboard_sse', 'master_szse')]
@@ -203,6 +225,7 @@ class MainboardPipeline:
                         'candidate_history_requests': 'DETERMINED_AFTER_ALL_POOL_STRUCTURE_DISCOVERY',
                         'theme_member_requests': 'DETERMINED_BY_REGISTERED_PROVIDER_THEME_DIRECTORY'},
                     'budget': vars(self.budget), 'published_outcome_demand': demand,
+                    'optional_tushare_requests':[{'endpoint':ep,'parameters':params} for ep,params in tushare_request_plan(day,sessions)],
                     'scope_policy': 'ALL_DIRECTORY_MEMBERS_BEFORE_SCORE_NO_LIMIT_UP_POOL_OR_CODE_QUOTA'}
             _write_once(output / 'plan.json', plan)
             basics = [add('stock_basic', {'codes': missing_listing[i:i+100]}, 'MainBoardMasterCapture', current=True)
@@ -278,7 +301,6 @@ class MainboardPipeline:
             current_limit = add('limit_up_pool', {'date':str(day)}, 'MarketBreadthLimitEvidence', current=True)
             direct_limits = [add('daily_limits_eastmoney', {'date':str(day), 'codes':ids[i:i+20]},
                 'MarketBreadthDirectLimitEvidence', current=True) for i in range(0,len(ids),20)]
-            drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
             outcome_requests = [rid for item in demand for endpoint in ('history','history_adjusted')
                                 for rid in history(item['instrument_id'], date.fromisoformat(item['start_date']), day,
                                                    'PublishedCandidateOutcomeCapture', endpoint)]
@@ -289,6 +311,18 @@ class MainboardPipeline:
             # do not wait for inclusion in today's discovery pool.
             drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
             drain('StructureHistoryCapture', structures)
+            # Price/amount completeness is independent of optional board-event
+            # evidence; quote-by-quote calls cannot consume PV's initial budget.
+            import os
+            token_configured=bool(os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'))
+            ts_plan=tushare_request_plan(day,sessions)
+            if not token_configured:
+                # One explicit request per endpoint records AUTH_REQUIRED with
+                # zero HTTP, instead of hundreds of identical auth failures.
+                ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
+            ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
+            drain('TushareOptionalEnrichment',ts_ids)
+            drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
             directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
             theme_requests = []
             for theme in directory:

@@ -1,3 +1,13 @@
+# R05 本次统一整改与历史回放（2026-09-06）
+
+本节优先于下方历史记录。本次在同一业务目录完成 F01—F13 规格整改，保持 R05。当前入口见 [R05 说明](stock-fish/docs/R05_RECTIFICATION_AND_REPLAY.md)、[业务基线](stock-fish/ENGINEERING_BASELINE.md)、[数据及 Docker 核验](stock-fish/docs/R05_DATA_AND_DOCKER_RECTIFICATION.md)。旧报告的统计数、公式和 daemon 状态只反映旧运行。
+
+统一真实执行证据位于本机 `review/r05-rectification/`，主五日及 20 日逐日名单和后验报告在 `replay/`；原始全市场资料仅保留本机精确路径与 hash，不提交 Git。Git 按当前授权核对远端后同步发布目录 main，中文提交，不切换用户现有运行服务。
+
+本次最终核心回归实际为 752 passed、1 skipped；全仓收集仍因旧 MiroFish 缺少 locales/languages.json 失败。Docker runtime-09 的 23 条执行记录成功，镜像内 71 个关键文件与冻结宿主源码字节一致，隔离容器已停止，用户原服务未切换。随后仅为详情增加 SQLite 派生索引，相关 34 项回归和真实 API 复测通过。工程结果与真实行情及投资验证分别报告。
+
+---
+
 # R05 工程基线
 
 当前默认产品仍是沪深主板无账户规则候选研究。R05 新增独立实验层和数据供给 adapter，不改变 `DAILY_V1` 的名称、角色、五族语义或参数状态；`PV_OBSERVATION_V1`、`DNA_RERANK_V1`、`THEME_CONTEXT_V1` 均为 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`。

@@ -28,6 +28,9 @@
   let currentConfig = null;
   let latestCoverage = null;
   let latestExperiment = null;
+  let experimentPage = 1;
+  let experimentHistoryOffset = 0;
+  let experimentRuns = [];
 
   const textNode = (tag, text, cls) => {
     const el = document.createElement(tag);
@@ -298,7 +301,9 @@
     button.disabled = true;
     try {
       const full = await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/items/' + encodeURIComponent(item.instrument_id));
-      slot.replaceChildren(
+      const latest = (full.tracking || []).slice().sort((a,b) => (a.session + (a.evaluated_at || '')).localeCompare(b.session + (b.evaluated_at || ''))).at(-1);
+      const state = textNode('p', latest ? `研究状态 ${latest.research_state || latest.state} · 数据 ${latest.data_state || latest.status} · ${latest.session}` : '尚未创建研究周期；更新研究周期可计算逐日状态。', 'caption');
+      slot.replaceChildren(state,
         details('PV / DNA / Theme 实验证据', full.strategy_results),
         details('焦点名单规则与原因', full.focus_selection),
         details('实验后验观察', full.outcomes),
@@ -324,16 +329,19 @@
       const card = textNode('article', undefined, 'candidate');
       const head = textNode('div', undefined, 'card-heading');
       const identity = textNode('div');
-      identity.append(textNode('div', item.instrument_id, 'security-id'), textNode('h3', 'PV 第 ' + (item.rank ?? '—') + ' 名'));
+      identity.append(textNode('div', item.instrument_id, 'security-id'), textNode('h3', (item.name || summary.strategy_id) + ' · 第 ' + (item.rank ?? '—') + ' 名'));
       identity.append(
         textNode('span', focusIds.has(item.instrument_id) ? '焦点跟踪' : '未入焦点', 'badge ' + (focusIds.has(item.instrument_id) ? 'focus' : '')),
         textNode('span', summary.status || 'UNKNOWN', 'badge'),
+        textNode('span', item.board_state === 'VERIFIED' ? '板事件已核验' : '板事件未核验', 'badge'),
       );
       const score = textNode('div', undefined, 'score');
-      score.append(textNode('small', 'S_PV'), textNode('span', display(item.S_PV)));
+      const scoreKey = summary.strategy_id === 'DNA_RERANK_V1' ? 'S_DNA' : summary.strategy_id === 'THEME_CONTEXT_V1' ? 'S_THEME' : 'S_PV';
+      score.append(textNode('small', scoreKey), textNode('span', display(item[scoreKey])));
       head.append(identity, score);
       card.append(head);
       card.append(textNode('p', `A ${display(item.A)} · R ${display(item.R)} · H ${display(item.H)} · ${summary.parameter_status}`));
+      card.append(textNode('p', '研究风险：' + (item.risk_flags || []).join(' / ') + ' · 人工风险复核尚未完成', 'caption'));
       const comps = textNode('div', undefined, 'components');
       for (const key of ['A', 'R', 'H']) {
         const el = textNode('div', key, 'component');
@@ -509,28 +517,89 @@
     }
   };
 
-  async function refreshExperiments() {
-    const [specs, comparison, runs] = await Promise.all([
-      api('/api/strategy-experiments/specs'),
-      api('/api/strategy-comparison/latest'),
-      api('/api/strategy-experiments?limit=1'),
-    ]);
-    $('strategySpecsJson').textContent = JSON.stringify(specs, null, 2);
-    latestExperiment = runs[0] || null;
-    for (const id of ['experimentExportJson', 'experimentExportCsv', 'experimentOutcomes', 'experimentTracking']) $(id).disabled = !latestExperiment;
-    const summary = latestExperiment
-      ? await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/summary?page_size=30&strategy_id=PV_OBSERVATION_V1')
-      : null;
-    const review = latestExperiment
-      ? await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/review')
-      : null;
-    $('experimentJson').textContent = JSON.stringify({ latest_comparison: comparison, latest_summary: summary, latest_review: review }, null, 2);
-    drawExperimentCandidates(summary);
-    const pv = summary?.results?.PV_OBSERVATION_V1;
-    $('experimentStatus').textContent = pv
-      ? `${summary.observation_date} · ${pv.status} · PV样本 ${pv.counts?.evaluated ?? 0} · 焦点 ${summary.focus_ids?.length ?? 0}`
-      : '尚未保存 R05 实验运行。';
+  function experimentViewQuery() {
+    return new URLSearchParams({strategy_id: $('experimentStrategy').value, selection: $('experimentSelection').value});
   }
+
+  async function loadExperimentView() {
+    if (!latestExperiment) return;
+    const query = experimentViewQuery();
+    query.set('page', experimentPage);
+    query.set('page_size', $('experimentPageSize').value);
+    const [summary, review] = await Promise.all([
+      api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/summary?' + query),
+      api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/review'),
+    ]);
+    drawExperimentCandidates(summary);
+    $('experimentPrev').disabled = experimentPage <= 1;
+    $('experimentNext').disabled = !summary.has_next;
+    $('experimentPageInfo').textContent = `第 ${summary.page} 页 · 共 ${summary.filtered_total} 只 · 每页 ${summary.page_size}`;
+    $('experimentStatus').textContent = `${summary.observation_date} · ${summary.strategy_id} · ${summary.status} · 本范围 ${summary.filtered_total} · 全部焦点 ${summary.focus_ids?.length ?? 0}`;
+    $('experimentIdentity').textContent = `保存运行 ${summary.run_id} · 生成 ${summary.generated_at || '未记录'} · 数据截止 ${summary.decision_cutoff || summary.cutoff || '见详情'} · ${summary.coverage_type || '见详情'} · ${summary.implementation_version || ''}`;
+    $('experimentJson').textContent = JSON.stringify({summary, review}, null, 2);
+    const cards = $('experimentReviewSummary');
+    cards.replaceChildren();
+    const window = review.rolling_windows?.['5'];
+    const selection = $('experimentSelection').value;
+    const metricStrategy = selection === 'focus' && summary.strategy_id === 'PV_OBSERVATION_V1' ? 'PV_FOCUS_PREVIEW_V0.1' : summary.strategy_id;
+    const stats = selection === 'unselected' ? [] : window?.statistics?.filter(r => r.strategy_id === metricStrategy) || [];
+    if (stats.length) {
+      const days = window.observed_run_dates || [];
+      cards.append(textNode('p', `最近 ${window.requested_exchange_sessions} 个交易日复盘 · ${days[0] || '未知'} 至 ${days[days.length - 1] || '未知'} · ${days.length} 个已观察信号日 · ${metricStrategy} · 跨运行合并信号，非当前单日 · 评估截止 ${review.evaluated_at}`, 'caption experiment-review-context'));
+    }
+    for (const row of stats) {
+      const card = textNode('article');
+      const data = row.pooled_signals;
+      card.append(textNode('span', `${row.horizon} 交易日价格后验`), textNode('strong', data.up_rate == null ? '未成熟 / 缺数' : (data.up_rate * 100).toFixed(2) + '% 上涨'),
+        textNode('p', `有效 ${data.mature_valid} / 信号 ${data.signals} · 待成熟 ${data.not_matured} · 缺数 ${data.missing_or_incomparable}`));
+      cards.append(card);
+    }
+    if (!stats.length) cards.append(textNode('p', selection === 'unselected' ? '未入焦点分组没有独立复盘汇总；切换全部名单或焦点名单查看对应统计，逐条标签保留在完整导出中。' : '当前截止尚无可用复盘标签；更新研究周期会先计算后验，再生成复盘。', 'caption experiment-review-context'));
+  }
+
+  async function refreshExperiments(keepSelection = true) {
+    const previous = keepSelection ? latestExperiment?.run_id : null;
+    const [specs, runs] = await Promise.all([api('/api/strategy-experiments/specs'), api('/api/strategy-experiments?limit=50')]);
+    $('strategySpecsJson').textContent = JSON.stringify(specs, null, 2);
+    experimentRuns = runs;
+    experimentHistoryOffset = runs.length;
+    const history = $('experimentHistory');
+    history.replaceChildren();
+    for (const run of runs) {
+      const option = textNode('option', `${run.observation_date || '历史'} · ${run.run_id.slice(-12)} · ${run.implementation_version || run.status || ''}`);
+      option.value = run.run_id;
+      history.append(option);
+    }
+    latestExperiment = runs.find(r => r.run_id === previous) || runs[0] || null;
+    if (latestExperiment) history.value = latestExperiment.run_id;
+    for (const id of ['experimentExportJson', 'experimentExportCsv', 'experimentOutcomes', 'experimentTracking']) $(id).disabled = !latestExperiment;
+    $('experimentOlder').disabled = runs.length < 50;
+    if (latestExperiment) await loadExperimentView();
+    else drawExperimentCandidates(null);
+  }
+
+  $('experimentHistory').onchange = async () => {
+    latestExperiment = experimentRuns.find(r => r.run_id === $('experimentHistory').value);
+    experimentPage = 1;
+    try { await loadExperimentView(); } catch (e) { message(e.message, true); }
+  };
+  for (const id of ['experimentStrategy', 'experimentSelection', 'experimentPageSize']) $(id).onchange = async () => {
+    experimentPage = 1;
+    try { await loadExperimentView(); } catch (e) { message(e.message, true); }
+  };
+  $('experimentPrev').onclick = async () => { experimentPage = Math.max(1, experimentPage - 1); try { await loadExperimentView(); } catch(e) {message(e.message,true);} };
+  $('experimentNext').onclick = async () => { experimentPage += 1; try { await loadExperimentView(); } catch(e) {message(e.message,true);} };
+  $('experimentOlder').onclick = async () => {
+    try {
+      const runs = await api('/api/strategy-experiments?limit=50&offset=' + experimentHistoryOffset);
+      for (const run of runs) {
+        const option = textNode('option', `${run.observation_date || '历史'} · ${run.run_id.slice(-12)} · ${run.implementation_version || ''}`);
+        option.value = run.run_id; $('experimentHistory').append(option);
+      }
+      experimentRuns.push(...runs); experimentHistoryOffset += runs.length;
+      $('experimentOlder').disabled = runs.length < 50;
+    } catch(e) {message(e.message,true);}
+  };
 
   $('runExperiment').onclick = async () => {
     const button = $('runExperiment');
@@ -540,7 +609,8 @@
       if ($('observationDate').value) value.observation_date = $('observationDate').value;
       if ($('inputId').value.trim()) value.input_id = $('inputId').value.trim();
       const result = await follow(await api('/api/strategy-experiments/run', value));
-      await refreshExperiments();
+      experimentPage = 1;
+      await refreshExperiments(false);
       message('R05 实验已保存：' + result.run_id);
     } catch (e) {
       message(e.message, true);
@@ -552,7 +622,7 @@
   async function downloadExperiment(format) {
     if (!latestExperiment) return;
     try {
-      const response = await fetch('/api/strategy-experiments/' + latestExperiment.run_id + '/export?format=' + format, { headers: headers() });
+      const response = await fetch('/api/strategy-experiments/' + latestExperiment.run_id + '/export?format=' + format + '&' + experimentViewQuery(), { headers: headers() });
       if (!response.ok) throw new Error('实验记录不可导出');
       const url = URL.createObjectURL(await response.blob());
       const a = textNode('a');

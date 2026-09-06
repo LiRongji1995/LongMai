@@ -1,347 +1,543 @@
-"""Append-only outcome and research-cycle records for R05 experiments."""
-
+"""R05 append-only price labels, stable research episodes and date-block reviews."""
 from __future__ import annotations
-
+from dataclasses import dataclass
 from datetime import date, datetime, time
 from decimal import Decimal
-from typing import Any
+from statistics import median
+from types import MappingProxyType
+from typing import Any, Mapping
 from zoneinfo import ZoneInfo
-
-from .contracts import MarketInput, digest
+from .contracts import DailyBar, MarketInput, digest
 from .events import TRUE, limit_event
 from .visibility import EvidenceResolver
 
-SH = ZoneInfo("Asia/Shanghai")
+SH = ZoneInfo('Asia/Shanghai')
 DEFAULT_RESEARCH_HORIZONS = (1, 2, 3, 4, 5, 10, 20)
 POST_EXIT_HORIZONS = (5, 10)
-OUTCOME_VERSION = "R05_STRATEGY_OUTCOME_OBSERVATION_V1"
-TRACKING_VERSION = "R05_RESEARCH_EPISODE_TRACKING_V1"
-REVIEW_VERSION = "R05_RESEARCH_FEEDBACK_V1"
+OUTCOME_VERSION = 'R05_STRATEGY_OUTCOME_OBSERVATION_V3'
+METRIC_POLICY_ID = 'R05_COMPARABLE_PRICE_AND_LIMIT_EVENT_LABEL_V1'
+TRACKING_VERSION = 'R05_RESEARCH_EPISODE_TRACKING_V2'
+REVIEW_VERSION = 'R05_RESEARCH_FEEDBACK_V2'
+FOCUS = 'PV_FOCUS_PREVIEW_V0.1'
 
 
-def _day(value: Any) -> date:
-    if isinstance(value, date):
-        return value
-    return date.fromisoformat(str(value)[:10])
+def _day(value):
+    return value.date() if isinstance(value, datetime) else value if isinstance(value, date) else date.fromisoformat(str(value)[:10])
 
 
-def _dt(value: Any) -> datetime:
-    if isinstance(value, datetime):
-        return value
-    return datetime.fromisoformat(str(value))
+def _dt(value):
+    return value if isinstance(value, datetime) else datetime.fromisoformat(str(value))
 
 
-def _dec(value: Any) -> Decimal | None:
-    if value is None:
-        return None
+def _dec(value):
     try:
         result = Decimal(str(value))
+        return result if result.is_finite() else None
     except Exception:
         return None
-    return result if result.is_finite() else None
 
 
-def _num(value: Decimal | None) -> float | None:
-    if value is None:
-        return None
-    return float(value.quantize(Decimal("0.000001")))
+def _num(value):
+    return float(value.quantize(Decimal('0.000001'))) if value is not None else None
 
 
-def _sessions(bundle: MarketInput) -> list[date]:
-    return [_day(session) for session in bundle.sessions]
+def validate_horizons(horizons):
+    if not horizons or any(type(h) is not int or h <= 0 for h in horizons):
+        raise ValueError('research horizons must be positive integers')
+    return tuple(dict.fromkeys(horizons))
 
 
-def _visible_bars(bundle: MarketInput, evaluated_at: datetime) -> dict[tuple[str, date], Any]:
+def _sessions(bundle):
+    return sorted(set(_day(day) for day in bundle.sessions))
+
+
+def _visible_bars(bundle, evaluated_at):
     resolver = EvidenceResolver(bundle.receipts, cutoff=evaluated_at, coverage_type=bundle.coverage_type, sessions=bundle.sessions)
-    bars: dict[tuple[str, date], Any] = {}
-    for bar in sorted(bundle.bars, key=lambda item: item.ingested_at):
-        day = _day(bar.session)
-        if not resolver.is_visible(bar, instrument_id=bar.instrument_id, session=day, require_session=True):
-            continue
-        bars[(bar.instrument_id, day)] = bar
-    return bars
-
-
-def _strategy_items(run: dict[str, Any], strategy_id: str = "PV_OBSERVATION_V1") -> list[dict[str, Any]]:
-    return list(((run.get("results") or {}).get(strategy_id) or {}).get("items") or [])
-
-
-def _focus_ids(run: dict[str, Any]) -> set[str]:
-    focus = (run.get("selection_results") or {}).get("PV_FOCUS_PREVIEW_V0.1") or {}
-    return set(focus.get("selected_ids") or [])
-
-
-def _reference_close(item: dict[str, Any]) -> Decimal | None:
-    return _dec(item.get("comparable_close")) or _dec(item.get("close"))
-
-
-def evaluate_strategy_experiment_outcomes(
-    run: dict[str, Any],
-    bundle: MarketInput,
-    evaluated_at: datetime,
-    *,
-    horizons: tuple[int, ...] = DEFAULT_RESEARCH_HORIZONS,
-) -> list[dict[str, Any]]:
-    if evaluated_at.tzinfo is None:
-        raise ValueError("evaluated_at requires timezone")
-    if any(h <= 0 or h > 60 for h in horizons):
-        raise ValueError("unsupported research horizon")
-    observation_date = _day(run["observation_date"])
-    calendar = _sessions(bundle)
-    if observation_date not in calendar:
-        raise ValueError("experiment observation date missing from outcome calendar")
-    future = calendar[calendar.index(observation_date) + 1:]
-    bars = _visible_bars(bundle, evaluated_at)
-    focus_ids = _focus_ids(run)
-    values: list[dict[str, Any]] = []
-    for item in _strategy_items(run):
-        iid = item["instrument_id"]
-        reference_close = _reference_close(item)
-        reference_basis = item.get("comparable_basis")
-        reference_missing = reference_close is None or reference_close <= 0
-        for horizon in tuple(dict.fromkeys(horizons)):
-            days = future[:horizon]
-            end = days[-1] if len(days) == horizon else None
-            mature = end is not None and datetime.combine(end, time(15), SH) <= evaluated_at.astimezone(SH)
-            states: list[dict[str, Any]] = []
-            reasons: list[str] = []
-            observed = []
-            for day in days:
-                bar = bars.get((iid, day))
-                if datetime.combine(day, time(15), SH) > evaluated_at.astimezone(SH):
-                    states.append({"session": day.isoformat(), "status": "NOT_MATURED", "close_limit_up": None})
-                    reasons.append("NOT_MATURED")
-                    continue
-                if bar is None or bar.close is None or bar.quality != "VALID":
-                    states.append({"session": day.isoformat(), "status": "MISSING_PRICE", "close_limit_up": None})
-                    reasons.append("MISSING_PRICE")
-                    continue
-                event = limit_event(bar)
-                if reference_basis and bar.comparable_basis != reference_basis:
-                    status = "COMPANY_ACTION_OR_COMPARABILITY_UNSUPPORTED"
-                    reasons.append(status)
-                elif event.close_limit_up not in {TRUE, "FALSE"}:
-                    status = "LIMIT_EVENT_UNVERIFIED"
-                    reasons.append(status)
-                else:
-                    status = "OBSERVED"
-                    observed.append(bar)
-                states.append(
-                    {
-                        "session": day.isoformat(),
-                        "status": status,
-                        "close": str(bar.close) if bar.close is not None else None,
-                        "comparable_close": str(bar.comparable_close) if bar.comparable_close is not None else None,
-                        "close_limit_up": True if event.close_limit_up == TRUE else False if event.close_limit_up == "FALSE" else None,
-                        "close_limit_down": True if event.close_limit_down == TRUE else False if event.close_limit_down == "FALSE" else None,
-                    }
-                )
-            metrics = {
-                "close_reference_change": None,
-                "next_open_gap": None,
-                "mfe_bound": None,
-                "mae_bound": None,
-                "any_close_limit_up": None,
-                "any_close_limit_down": None,
-            }
-            if reference_missing:
-                reasons.append("REFERENCE_CLOSE_UNAVAILABLE")
-            if mature and not reference_missing and len(observed) == horizon:
-                last = observed[-1]
-                first = observed[0]
-                if last.comparable_close is not None:
-                    metrics["close_reference_change"] = _num(last.comparable_close / reference_close - Decimal("1"))
-                if first.comparable_open is not None:
-                    metrics["next_open_gap"] = _num(first.comparable_open / reference_close - Decimal("1"))
-                if all(bar.comparable_high is not None and bar.comparable_low is not None for bar in observed):
-                    metrics["mfe_bound"] = _num(max(bar.comparable_high for bar in observed) / reference_close - Decimal("1"))
-                    metrics["mae_bound"] = _num(min(bar.comparable_low for bar in observed) / reference_close - Decimal("1"))
-            if mature and states:
-                ups = [row["close_limit_up"] for row in states]
-                downs = [row["close_limit_down"] for row in states]
-                metrics["any_close_limit_up"] = True if True in ups else False if all(v is False for v in ups) else None
-                metrics["any_close_limit_down"] = True if True in downs else False if all(v is False for v in downs) else None
-            status = "NOT_MATURED" if not mature else "MATURE" if not reasons else "CENSORED"
-            if mature and states and all(row["status"] == "MISSING_PRICE" for row in states):
-                status = "UNAVAILABLE"
-            value = {
-                "schema_version": OUTCOME_VERSION,
-                "run_id": run["run_id"],
-                "input_id": getattr(bundle, "input_id", None) or run.get("input_id"),
-                "strategy_id": "PV_OBSERVATION_V1",
-                "selection_policy_id": run.get("results", {}).get("PV_OBSERVATION_V1", {}).get("selection_policy_id"),
-                "instrument_id": iid,
-                "selected_focus": iid in focus_ids,
-                "parent_rank": item.get("rank"),
-                "parent_score": item.get("S_PV"),
-                "horizon": horizon,
-                "horizon_unit": "exchange_trading_sessions",
-                "observation_date": observation_date.isoformat(),
-                "label_end": end.isoformat() if end else None,
-                "evaluated_at": evaluated_at.isoformat(),
-                "coverage_type": bundle.coverage_type,
-                "status": status,
-                "metrics": metrics,
-                "session_states": states,
-                "reason_codes": sorted(set(reasons)),
-                "input_hash": digest(bundle),
-                "market_edge": "NOT_ESTABLISHED",
-                "reference_method": "COMPARABLE_MARKED_PRICES_NOT_ASSUMED_FILLS",
-            }
-            value["observation_id"] = "strategy_outcome_" + digest(value)
-            values.append(value)
+    grouped = {}
+    for bar in bundle.bars:
+        if bar.quality != 'INVALID' and resolver.is_visible(bar, instrument_id=bar.instrument_id, session=bar.session, require_session=True):
+            grouped.setdefault((bar.instrument_id, bar.session), []).append(bar)
+    values = {}
+    for key, rows in grouped.items():
+        priority = lambda row: (row.source_published_at, row.ingested_at, row.first_seen_at)
+        latest = max(priority(row) for row in rows)
+        choices = [row for row in rows if priority(row) == latest]
+        if len({digest(row) for row in choices}) == 1:
+            values[key] = choices[0]
     return values
 
 
-def build_strategy_tracking(
-    run: dict[str, Any],
-    bundle: MarketInput,
-    evaluated_at: datetime,
-    *,
-    horizons: tuple[int, ...] = DEFAULT_RESEARCH_HORIZONS,
-) -> dict[str, Any]:
-    observation_date = _day(run["observation_date"])
-    calendar = _sessions(bundle)
-    bars = _visible_bars(bundle, evaluated_at)
-    focus_ids = _focus_ids(run)
-    items = [item for item in _strategy_items(run) if item["instrument_id"] in focus_ids]
-    episodes: list[dict[str, Any]] = []
-    observations: list[dict[str, Any]] = []
-    for item in items:
-        iid = item["instrument_id"]
-        episode_payload = {
-            "schema_version": TRACKING_VERSION,
-            "run_id": run["run_id"],
-            "instrument_id": iid,
-            "strategy_id": "PV_OBSERVATION_V1",
-            "selection_policy_id": run.get("results", {}).get("PV_OBSERVATION_V1", {}).get("selection_policy_id"),
-            "tracking_policy_id": "R05_FOCUS_VARIABLE_RESEARCH_CYCLE_V1",
-            "observation_date": observation_date.isoformat(),
-            "pending_horizons": list(horizons),
-            "post_exit_horizons": list(POST_EXIT_HORIZONS),
-            "started_at": evaluated_at.isoformat(),
-            "market_edge": "NOT_ESTABLISHED",
-        }
-        episode_id = "research_episode_" + digest(episode_payload)
-        episode_payload["episode_id"] = episode_id
-        episodes.append(episode_payload)
-        reference_close = _reference_close(item)
-        seen_sessions = [day for day in calendar if day >= observation_date and datetime.combine(day, time(15), SH) <= evaluated_at.astimezone(SH)]
-        close_series: list[Decimal] = []
-        volume_peak: Decimal | None = None
-        last_three: list[dict[str, Any]] = []
-        below_ma20_streak = 0
-        state = "ACTIVE"
-        reasons: list[str] = []
-        for day in seen_sessions:
-            bar = bars.get((iid, day))
-            if bar is None or bar.close is None or bar.quality != "VALID":
-                record = {"session": day.isoformat(), "status": "MISSING_PRICE", "state": state}
-                observations.append({"episode_id": episode_id, "run_id": run["run_id"], "instrument_id": iid, **record})
+@dataclass(frozen=True, slots=True, init=False)
+class OutcomeContext:
+    """Immutable, explicitly scoped reuse of one input's cutoff-visible prices."""
+    _bundle: MarketInput
+    evaluated_at: datetime
+    sessions: tuple[date, ...]
+    bars: Mapping[tuple[str, date], DailyBar]
+    input_hash: str
+
+    def __init__(self, bundle, evaluated_at):
+        if evaluated_at.tzinfo is None or evaluated_at.utcoffset() is None:
+            raise ValueError('evaluated_at requires timezone')
+        object.__setattr__(self, '_bundle', bundle)
+        object.__setattr__(self, 'evaluated_at', evaluated_at)
+        object.__setattr__(self, 'sessions', tuple(_sessions(bundle)))
+        object.__setattr__(self, 'bars', MappingProxyType(_visible_bars(bundle, evaluated_at)))
+        object.__setattr__(self, 'input_hash', digest(bundle))
+
+    def validate_binding(self, bundle, evaluated_at):
+        if bundle is not self._bundle:
+            raise ValueError('outcome context requires the same bundle object')
+        if evaluated_at != self.evaluated_at or evaluated_at.isoformat() != self.evaluated_at.isoformat():
+            raise ValueError('outcome context evaluated_at mismatch')
+
+
+def _outcome_context(bundle, evaluated_at, context):
+    if context is None:
+        return OutcomeContext(bundle, evaluated_at)
+    if not isinstance(context, OutcomeContext):
+        raise ValueError('invalid outcome context')
+    context.validate_binding(bundle, evaluated_at)
+    return context
+
+
+def authoritative_strategy_items(run):
+    """One actual ranked set per canonical strategy; no display fallback or aliases."""
+    results = {**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}
+    pv = {row['instrument_id']: row for row in (results.get('PV_OBSERVATION_V1') or {}).get('items', [])}
+    seen = set()
+    for key, result in results.items():
+        sid = result.get('canonical_strategy_id') or result.get('strategy_id') or key
+        if sid in seen:
+            continue
+        seen.add(sid)
+        items = []
+        ids = set()
+        for row in result.get('items', []):
+            if not row.get('instrument_id') or row['instrument_id'] in ids:
                 continue
-            close = bar.comparable_close or bar.close
-            volume = bar.volume_shares
-            close_series.append(close)
-            volume_peak = volume if volume is not None and (volume_peak is None or volume > volume_peak) else volume_peak
-            volume_ratio = volume / volume_peak if volume is not None and volume_peak and volume_peak > 0 else None
-            r5 = None
-            if len(close_series) >= 6:
-                base = close_series[-6]
-                if base > 0:
-                    r5 = close / base - Decimal("1")
-            ma20 = sum(close_series[-20:], Decimal("0")) / Decimal(20) if len(close_series) >= 20 else None
-            if ma20 is not None and close < ma20:
-                below_ma20_streak += 1
-            else:
-                below_ma20_streak = 0
-            if below_ma20_streak >= 2:
-                state = "THESIS_INVALIDATED"
-                reasons.append("TWO_CONSECUTIVE_CLOSES_BELOW_OWN_MA20")
-            last_three.append({"volume_ratio": volume_ratio, "r5": r5})
-            last_three = last_three[-3:]
-            if (
-                state == "ACTIVE"
-                and len(last_three) == 3
-                and all(row["volume_ratio"] is not None and row["volume_ratio"] <= Decimal("0.30") for row in last_three)
-                and all(row["r5"] is not None and row["r5"] <= 0 for row in last_three)
-            ):
-                state = "COOLING"
-                reasons.append("THREE_SESSION_VOLUME_SHRINK_AND_R5_NON_POSITIVE")
-            observations.append(
-                {
-                    "episode_id": episode_id,
-                    "run_id": run["run_id"],
-                    "instrument_id": iid,
-                    "session": day.isoformat(),
-                    "status": "OBSERVED",
-                    "state": state,
-                    "close": str(bar.close),
-                    "comparable_close": str(close),
-                    "reference_change": _num(close / reference_close - Decimal("1")) if reference_close and reference_close > 0 else None,
-                    "volume_ratio_since_signal_peak": _num(volume_ratio),
-                    "r5": _num(r5),
-                    "ma20": _num(ma20),
-                    "reason_codes": sorted(set(reasons)),
-                }
-            )
-    tracking = {
-        "tracking_run_id": "strategy_tracking_" + digest(
-            {"run_id": run["run_id"], "input_hash": digest(bundle), "evaluated_at": evaluated_at.isoformat(), "horizons": horizons}
-        ),
-        "schema_version": TRACKING_VERSION,
-        "run_id": run["run_id"],
-        "input_id": run.get("input_id"),
-        "evaluated_at": evaluated_at.isoformat(),
-        "observation_date": observation_date.isoformat(),
-        "episode_count": len(episodes),
-        "observation_count": len(observations),
-        "episodes": episodes,
-        "observations": observations,
-        "horizons": list(horizons),
-        "market_edge": "NOT_ESTABLISHED",
-        "status": "TRACKED" if episodes else "NO_FOCUS_SELECTIONS",
-    }
-    return tracking
+            if sid in {'DNA_RERANK_V1', 'THEME_CONTEXT_V1', 'DNA_REVERSAL_V1', 'THEME_LIMITUP_V1'} and row.get('status') not in {None, 'EVALUATED', 'COMPLETE'}:
+                continue
+            if row.get('rank') is None:
+                continue
+            ids.add(row['instrument_id'])
+            items.append({**pv.get(row['instrument_id'], {}), **row})
+        yield sid, items
 
 
-def build_strategy_feedback_report(
-    run: dict[str, Any],
-    outcomes: list[dict[str, Any]],
-    tracking_runs: list[dict[str, Any]],
-    evaluated_at: datetime,
-) -> dict[str, Any]:
-    matured = [row for row in outcomes if row.get("status") == "MATURE"]
-    censored = [row for row in outcomes if row.get("status") in {"CENSORED", "UNAVAILABLE"}]
-    pending = [row for row in outcomes if row.get("status") == "NOT_MATURED"]
-    by_horizon: dict[str, dict[str, int]] = {}
+def _strategy_items(run, strategy_id='PV_OBSERVATION_V1'):
+    return next((items for sid, items in authoritative_strategy_items(run) if sid == strategy_id), [])
+
+
+def _focus_ids(run):
+    return set(((run.get('selection_results') or {}).get(FOCUS) or {}).get('selected_ids') or [])
+
+
+def _reference_close(item):
+    return _dec((item.get('exact_prices') or {}).get('comparable_close', item.get('comparable_close')))
+
+
+def _metric(value, mature, reason=None):
+    return {'status': 'NOT_MATURED' if not mature else 'MATURE_VALID' if value is not None else 'UNAVAILABLE',
+            'valid': mature and value is not None, 'reason_codes': [reason] if mature and value is None and reason else []}
+
+
+def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons=DEFAULT_RESEARCH_HORIZONS, _context=None):
+    if evaluated_at.tzinfo is None:
+        raise ValueError('evaluated_at requires timezone')
+    horizons = validate_horizons(horizons)
+    observation_date = _day(run['observation_date'])
+    context = _outcome_context(bundle, evaluated_at, _context)
+    calendar = context.sessions
+    if observation_date not in calendar:
+        raise ValueError('experiment observation date missing from outcome calendar')
+    future = calendar[calendar.index(observation_date) + 1:]
+    bars = context.bars
+    focus_ids = _focus_ids(run)
+    input_hash = context.input_hash
+    values = []
+    for sid, items in authoritative_strategy_items(run):
+        for item in items:
+            iid = item['instrument_id']
+            signal_bar = bars.get((iid, observation_date))
+            reference = _reference_close(item)
+            basis = item.get('comparable_basis')
+            if reference is None and signal_bar is not None:
+                reference, basis = signal_bar.comparable_close, signal_bar.comparable_basis
+            for horizon in horizons:
+                days = future[:horizon]
+                end = days[-1] if len(days) == horizon else None
+                mature = end is not None and datetime.combine(end, time(15), SH) <= evaluated_at.astimezone(SH)
+                states, valid_bars, reasons = [], {}, []
+                for day in days:
+                    state = {'session': str(day), 'close_limit_up': None, 'close_limit_down': None}
+                    bar = bars.get((iid, day))
+                    if datetime.combine(day, time(15), SH) > evaluated_at.astimezone(SH):
+                        state['status'] = 'NOT_MATURED'
+                    elif bar is None or bar.comparable_close is None:
+                        state['status'] = 'MISSING_PRICE'
+                    elif not basis or bar.comparable_basis != basis:
+                        state['status'] = 'COMPANY_ACTION_OR_COMPARABILITY_UNSUPPORTED'
+                    else:
+                        valid_bars[day] = bar
+                        state.update(status='OBSERVED', close=str(bar.close), comparable_close=str(bar.comparable_close))
+                        event = limit_event(bar)
+                        for field in ('close_limit_up', 'close_limit_down'):
+                            event_value = getattr(event, field)
+                            state[field] = True if event_value == TRUE else False if event_value == 'FALSE' else None
+                        state['event_status'] = 'VERIFIED' if all(state[f] is not None for f in ('close_limit_up', 'close_limit_down')) else 'LIMIT_EVENT_UNVERIFIED'
+                    if state['status'] != 'OBSERVED':
+                        reasons.append(state['status'])
+                    states.append(state)
+                metrics = dict.fromkeys(('close_reference_change', 'next_open_gap', 'mfe_bound', 'mae_bound', 'any_close_limit_up', 'any_close_limit_down'))
+                reference_ok = reference is not None and reference > 0 and bool(basis)
+                if not reference_ok:
+                    reasons.append('REFERENCE_COMPARABLE_CLOSE_UNAVAILABLE')
+                return_exact = None
+                if mature and reference_ok:
+                    last = valid_bars.get(end)
+                    first = valid_bars.get(days[0]) if days else None
+                    # Endpoint return is independent of intermediate gaps and board events.
+                    if last is not None:
+                        return_exact = last.comparable_close / reference - 1
+                        metrics['close_reference_change'] = float(return_exact)
+                    if first is not None and first.comparable_open is not None:
+                        metrics['next_open_gap'] = _num(first.comparable_open / reference - 1)
+                    if len(valid_bars) == horizon and all(b.comparable_high is not None and b.comparable_low is not None for b in valid_bars.values()):
+                        metrics['mfe_bound'] = _num(max(b.comparable_high for b in valid_bars.values()) / reference - 1)
+                        metrics['mae_bound'] = _num(min(b.comparable_low for b in valid_bars.values()) / reference - 1)
+                if mature and len(states) == horizon:
+                    for field in ('close_limit_up', 'close_limit_down'):
+                        events = [row.get(field) for row in states]
+                        metrics['any_' + field] = True if True in events else False if all(v is False for v in events) else None
+                metric_states = {key: _metric(value, mature, 'REQUIRED_PRICE_OR_EVENT_EVIDENCE_UNAVAILABLE') for key, value in metrics.items()}
+                status = 'NOT_MATURED' if not mature else 'MATURE' if not reasons and metrics['close_reference_change'] is not None else 'CENSORED'
+                if mature and not valid_bars:
+                    status = 'UNAVAILABLE'
+                logical = {'run_id': run['run_id'], 'strategy_id': sid, 'instrument_id': iid, 'observation_date': str(observation_date),
+                           'horizon': horizon, 'spec_hash': run.get('spec_hash') or run.get('strategy_spec_hash'),
+                           'config_hash': run.get('config_hash'),
+                           'parameter_version': run.get('parameter_version') or run.get('config_hash') or run.get('spec_hash') or run.get('strategy_spec_hash'),
+                           'implementation_version': run.get('implementation_version'), 'implementation_source_hash': run.get('source_hash'),
+                           'metric_policy_id': METRIC_POLICY_ID, 'label_kind': run.get('label_kind', 'SIGNAL')}
+                value = {'schema_version': OUTCOME_VERSION, **logical, 'run_id': run['run_id'],
+                         'signal_input_id': run.get('input_id'), 'input_id': 'market_' + input_hash, 'input_hash': input_hash,
+                         'selection_policy_id': FOCUS if iid in focus_ids else None, 'selected_focus': iid in focus_ids,
+                         'parent_rank': item.get('rank'), 'parent_score': item.get('S_PV'), 'horizon_unit': 'exchange_trading_sessions',
+                         'label_end': str(end) if end else None, 'evaluated_at': evaluated_at.isoformat(),
+                         'coverage_type': bundle.coverage_type, 'status': status, 'metrics': metrics, 'metric_states': metric_states,
+                         'price_label_status': metric_states['close_reference_change']['status'],
+                         'return_exact': str(return_exact) if return_exact is not None else None,
+                         'price_direction': 'UP' if return_exact is not None and return_exact > 0 else 'DOWN' if return_exact is not None and return_exact < 0 else 'FLAT' if return_exact is not None else None, 'session_states': states,
+                         'reason_codes': sorted(set(reasons)), 'market_edge': 'NOT_ESTABLISHED',
+                         'reference_method': 'COMPARABLE_MARKED_PRICES_NOT_ASSUMED_FILLS',
+                         'logical_label_id': 'strategy_label_' + digest(logical),
+                         'signal_id': 'strategy_signal_' + digest({k: v for k, v in logical.items() if k != 'horizon'})}
+                value['observation_id'] = 'strategy_outcome_' + digest(value)
+                values.append(value)
+    return values
+
+
+def build_strategy_tracking(run, bundle, evaluated_at, *, horizons=DEFAULT_RESEARCH_HORIZONS,
+                            existing_episodes=(), prior_observations=(), episode_events=(), _context=None):
+    horizons = validate_horizons(horizons)
+    signal_day = _day(run['observation_date'])
+    context = _outcome_context(bundle, evaluated_at, _context)
+    calendar = context.sessions
+    bars = context.bars
+    archive_records = []
+    for record in (*prior_observations, *episode_events):
+        if record.get('state') != 'ARCHIVED':
+            continue
+        recorded_at = record.get('recorded_at') or record.get('evaluated_at')
+        archive_day = _day(record.get('session') or record['effective_session'])
+        if recorded_at and _dt(recorded_at) > evaluated_at:
+            continue
+        if datetime.combine(archive_day, time(15), SH) <= evaluated_at.astimezone(SH):
+            archive_records.append(record)
+    episodes, observations, signals, shadows = [], [], [], []
+    for item in _strategy_items(run):
+        iid = item['instrument_id']
+        if iid not in _focus_ids(run):
+            continue
+        choices = [e for e in existing_episodes if e['instrument_id'] == iid and e.get('selection_policy_id') == FOCUS and e.get('tracking_policy_id') == 'TRACKING_POLICY_PILOT_V0.1' and _day(e['observation_date']) <= signal_day]
+        choices.sort(key=lambda e: (e['observation_date'], e['episode_id']))
+        previous = choices[-1] if choices else None
+        exit_day = None
+        if previous:
+            exits = [r for r in prior_observations if r.get('episode_id') == previous['episode_id'] and r.get('state') == 'THESIS_INVALIDATED']
+            exits += [r for r in archive_records if r.get('episode_id') == previous['episode_id']]
+            if exits:
+                exit_day = min(_day(r.get('session') or r['effective_session']) for r in exits)
+        if previous and (exit_day is None or signal_day <= exit_day):
+            episode = previous
+        else:
+            key = {'instrument_id': iid, 'selection_policy_id': FOCUS, 'observation_date': str(signal_day),
+                   'tracking_policy_id': 'TRACKING_POLICY_PILOT_V0.1', 'previous_episode_id': previous['episode_id'] if previous else None}
+            episode = {'schema_version': TRACKING_VERSION, **key, 'episode_id': 'research_episode_' + digest(key),
+                       'run_id': run['run_id'], 'strategy_id': 'PV_OBSERVATION_V1', 'pending_horizons': list(horizons),
+                       'post_exit_horizons': list(POST_EXIT_HORIZONS), 'started_at': datetime.combine(signal_day, time(15), SH).isoformat(),
+                       'market_edge': 'NOT_ESTABLISHED'}
+        episodes.append(episode)
+        eid = episode['episode_id']
+        start = _day(episode['observation_date'])
+        signal = {'run_id': run['run_id'], 'instrument_id': iid, 'strategy_id': 'PV_OBSERVATION_V1', 'episode_id': eid,
+                  'observation_date': str(signal_day), 'selection_policy_id': FOCUS}
+        signals.append({**signal, 'signal_record_id': 'episode_signal_' + digest(signal)})
+        volume_peak, below_streak, cooling_streak, state, actual_exit = None, 0, 0, 'ACTIVE', None
+        episode_volume_basis = None
+        confirmed_exits = [r for r in prior_observations if r.get('episode_id') == eid and r.get('state') == 'THESIS_INVALIDATED']
+        confirmed_exit = min((_day(r['session']) for r in confirmed_exits), default=None)
+        archives = [_day(r.get('session') or r['effective_session']) for r in archive_records if r.get('episode_id') == eid]
+        for index, day in enumerate(calendar):
+            if day < start or datetime.combine(day, time(15), SH) > evaluated_at.astimezone(SH):
+                continue
+            bar = bars.get((iid, day))
+            basis = bar.comparable_basis if bar else None
+            close = bar.comparable_close if bar and basis else None
+            reason = []
+            previous20 = [bars.get((iid, d)) for d in calendar[max(0, index - 19):index + 1]]
+            comparable20 = len(previous20) == 20 and all(b is not None and b.comparable_close is not None and b.comparable_basis == basis and basis for b in previous20)
+            ma20 = sum((b.comparable_close for b in previous20), Decimal(0)) / 20 if comparable20 else None
+            base = bars.get((iid, calendar[index - 5])) if index >= 5 else None
+            r5 = close / base.comparable_close - 1 if close is not None and base and base.comparable_close and base.comparable_basis == basis else None
+            # Volume needs its own certified no-action/adjusted basis; prices alone do not certify it.
+            volume_basis = getattr(bar, 'comparable_volume_basis', None) if bar else None
+            if not volume_basis and basis and 'NO_ACTION' in basis:
+                volume_basis = basis
+            if episode_volume_basis is None and volume_basis is not None:
+                episode_volume_basis = volume_basis
+            volume = bar.volume_shares if bar and volume_basis and volume_basis == episode_volume_basis else None
+            if volume is not None:
+                volume_peak = max(volume_peak or Decimal(0), volume)
+            ratio = volume / volume_peak if volume is not None and volume_peak else None
+            below_streak = below_streak + 1 if close is not None and ma20 is not None and close < ma20 else 0
+            cooling_streak = cooling_streak + 1 if ratio is not None and ratio <= Decimal('.30') and r5 is not None and close is not None else 0
+            if actual_exit is None:
+                if archives and day >= min(archives):
+                    state, actual_exit = 'ARCHIVED', day
+                    reason.append('MANUAL_ARCHIVE')
+                elif below_streak >= 2 or confirmed_exit is not None and day >= confirmed_exit:
+                    state, actual_exit = 'THESIS_INVALIDATED', day
+                    reason.append('TWO_CONSECUTIVE_CLOSES_BELOW_OWN_MA20')
+                elif cooling_streak >= 3 and r5 is not None and r5 <= 0:
+                    state = 'COOLING'
+                    reason.append('THREE_SESSION_VOLUME_SHRINK_AND_R5_NON_POSITIVE')
+                elif state == 'COOLING' and ratio is not None and r5 is not None:
+                    state = 'ACTIVE'
+            if close is None:
+                reason.append('MISSING_COMPARABLE_PRICE')
+            if ma20 is None:
+                reason.append('MA20_CONTIGUOUS_HISTORY_UNAVAILABLE')
+            if volume is None:
+                reason.append('COMPARABLE_VOLUME_BASIS_UNAVAILABLE')
+            row = {'episode_id': eid, 'run_id': run['run_id'], 'instrument_id': iid, 'session': str(day),
+                   'evaluated_at': evaluated_at.isoformat(), 'state': state, 'research_state': state,
+                   'data_state': 'UNAVAILABLE' if close is None else 'PARTIAL' if ma20 is None or volume is None else 'CURRENT',
+                   'status': 'MISSING_PRICE' if close is None else 'OBSERVED', 'close': str(bar.close) if bar and bar.close else None,
+                   'comparable_close': str(close) if close else None, 'ma20': _num(ma20), 'r5': _num(r5),
+                   'volume_ratio_since_signal_peak': _num(ratio), 'below_ma20_verified_streak': below_streak,
+                   'cooling_verified_streak': cooling_streak, 'reason_codes': reason, 'exit_session': str(actual_exit) if actual_exit else None}
+            row['observation_id'] = 'research_episode_observation_' + digest(row)
+            observations.append(row)
+        if actual_exit:
+            exit_bar = bars.get((iid, actual_exit))
+            shadow_run = {**{key: run.get(key) for key in ('parameter_version', 'config_hash', 'spec_hash', 'strategy_spec_hash', 'implementation_version', 'source_hash')},
+                          'run_id': 'shadow_' + eid, 'input_id': run.get('input_id'), 'observation_date': str(actual_exit),
+                          'label_kind': 'POST_EXIT_SHADOW', 'results': {'PV_OBSERVATION_V1': {'items': [{
+                              'instrument_id': iid, 'rank': 1, 'comparable_close': str(exit_bar.comparable_close) if exit_bar and exit_bar.comparable_close else None,
+                              'comparable_basis': exit_bar.comparable_basis if exit_bar else None}]}}}
+            for label in evaluate_strategy_experiment_outcomes(shadow_run, bundle, evaluated_at, horizons=POST_EXIT_HORIZONS, _context=context):
+                label['episode_id'] = eid
+                label['observation_id'] = 'strategy_outcome_' + digest({k:v for k,v in label.items() if k != 'observation_id'})
+                shadows.append(label)
+    value = {'schema_version': TRACKING_VERSION, 'run_id': run['run_id'], 'input_id': 'market_' + context.input_hash,
+             'signal_input_id': run.get('input_id'), 'evaluated_at': evaluated_at.isoformat(), 'observation_date': str(signal_day),
+             'episode_count': len(episodes), 'observation_count': len(observations), 'episodes': episodes, 'observations': observations,
+             'signals': signals, 'shadow_outcomes': shadows, 'horizons': list(horizons), 'market_edge': 'NOT_ESTABLISHED',
+             'status': 'TRACKED' if episodes else 'NO_FOCUS_SELECTIONS'}
+    value['tracking_run_id'] = 'strategy_tracking_' + digest(value)
+    return value
+
+
+def select_label_revisions(outcomes, evaluated_at, metric='close_reference_change'):
+    """The latest valid revision for each logical metric as of report cutoff."""
+    grouped = {}
     for row in outcomes:
-        key = str(row.get("horizon"))
-        bucket = by_horizon.setdefault(key, {"MATURE": 0, "CENSORED": 0, "UNAVAILABLE": 0, "NOT_MATURED": 0})
-        bucket[row.get("status", "UNAVAILABLE")] = bucket.get(row.get("status", "UNAVAILABLE"), 0) + 1
-    latest_tracking = tracking_runs[-1] if tracking_runs else None
-    value = {
-        "review_id": "strategy_review_" + digest(
-            {"run_id": run["run_id"], "evaluated_at": evaluated_at.isoformat(), "outcomes": len(outcomes), "tracking": len(tracking_runs)}
-        ),
-        "schema_version": REVIEW_VERSION,
-        "run_id": run["run_id"],
-        "observation_date": run.get("observation_date"),
-        "evaluated_at": evaluated_at.isoformat(),
-        "status": "PENDING_MARKET_VALIDATION" if not matured else "HAS_MATURED_OBSERVATIONS",
-        "market_edge": "NOT_ESTABLISHED",
-        "counts": {
-            "outcome_observations": len(outcomes),
-            "mature": len(matured),
-            "censored_or_unavailable": len(censored),
-            "not_matured": len(pending),
-            "focus_episode_count": latest_tracking.get("episode_count") if latest_tracking else 0,
-        },
-        "by_horizon": by_horizon,
-        "latest_tracking_run_id": latest_tracking.get("tracking_run_id") if latest_tracking else None,
-        "interpretation": {
-            "market_validation": "NOT_ESTABLISHED",
-            "daily_review": "Future or missing observations are excluded from mature denominators.",
-            "periodic_review": "Use matured, uncensored horizons only; this report does not claim edge.",
-        },
-    }
+        if _dt(row['evaluated_at']) > evaluated_at:
+            continue
+        key = row.get('logical_label_id') or digest({k: row.get(k) for k in ('run_id', 'strategy_id', 'instrument_id', 'observation_date', 'horizon', 'parameter_version', 'config_hash', 'implementation_version', 'implementation_source_hash', 'spec_hash', 'metric_policy_id', 'label_kind')})
+        grouped.setdefault(key, []).append(row)
+    selected = []
+    for revisions in grouped.values():
+        valid = [r for r in revisions if r.get('metrics', {}).get(metric) is not None and r.get('status') != 'NOT_MATURED']
+        selected.append(max(enumerate(valid or revisions), key=lambda pair: (pair[1]['evaluated_at'], pair[0]))[1])
+    return selected
+
+
+def _statistics(rows):
+    valid = [r for r in rows if r.get('metrics', {}).get('close_reference_change') is not None and r.get('status') != 'NOT_MATURED']
+    returns = sorted(r['metrics']['close_reference_change'] for r in valid)
+    positive = sum(r > 0 for r in returns)
+    dates = {}
+    for row in valid:
+        dates.setdefault(row['observation_date'], []).append(row['metrics']['close_reference_change'])
+    return {'signals': len(rows), 'unique_instruments': len({r['instrument_id'] for r in rows}), 'signal_dates': len({r['observation_date'] for r in rows}),
+            'mature_valid': len(valid), 'not_matured': sum(r['status'] == 'NOT_MATURED' for r in rows),
+            'missing_or_incomparable': len(rows) - len(valid) - sum(r['status'] == 'NOT_MATURED' for r in rows),
+            'positive': positive, 'zero': sum(r == 0 for r in returns), 'negative': sum(r < 0 for r in returns),
+            'up_rate': positive / len(returns) if returns else None, 'mean_return': sum(returns) / len(returns) if returns else None,
+            'median_return': median(returns) if returns else None, 'p10_return': returns[int((len(returns)-1)*.1)] if returns else None,
+            'date_equal_up_rate': sum(sum(r > 0 for r in rs)/len(rs) for rs in dates.values())/len(dates) if dates else None,
+            'date_equal_mean_return': sum(sum(rs)/len(rs) for rs in dates.values())/len(dates) if dates else None}
+
+
+def _episode_signal_index(labels, tracking_runs, runs):
+    """Find formal first signals across supplied history before slicing any window."""
+    run_index = {run['run_id']: run for run in runs}
+    by_signal, starts, first_signal, first_labels = {}, {}, {}, {}
+
+    def order(run_id, day):
+        run = run_index.get(run_id, {})
+        return (str(day), str(run.get('decision_cutoff') or run.get('cutoff') or run.get('generated_at') or ''), run_id)
+
+    for tracking in tracking_runs:
+        for episode in tracking.get('episodes', []):
+            eid, day = episode['episode_id'], episode.get('observation_date')
+            if day:
+                starts[eid] = min(starts.get(eid, str(day)), str(day))
+                if episode.get('run_id') and episode.get('instrument_id'):
+                    run_id = episode['run_id']
+                    by_signal[(run_id, episode['instrument_id'])] = eid
+                    first_signal[eid] = min(first_signal.get(eid, order(run_id, day)), order(run_id, day))
+        for signal in tracking.get('signals', []):
+            eid, run_id = signal['episode_id'], signal['run_id']
+            by_signal[(run_id, signal['instrument_id'])] = eid
+            day = signal.get('observation_date') or run_index.get(run_id, {}).get('observation_date')
+            if day:
+                starts[eid] = min(starts.get(eid, str(day)), str(day))
+                first_signal[eid] = min(first_signal.get(eid, order(run_id, day)), order(run_id, day))
+    for label in labels:
+        if label.get('label_kind', 'SIGNAL') != 'SIGNAL' or label.get('strategy_id') != 'PV_OBSERVATION_V1':
+            continue
+        eid = by_signal.get((label['run_id'], label['instrument_id']))
+        if eid is None:
+            continue
+        # Episode metadata may prove an earlier start for which no label was supplied.
+        day, key = str(label['observation_date']), order(label['run_id'], label['observation_date'])
+        if day != starts.get(eid) or key != first_signal.get(eid):
+            continue
+        first_labels[(eid, label['horizon'])] = label
+    return {'by_signal': by_signal, 'starts': starts, 'first_labels': first_labels}
+
+
+def _episode_window_cohorts(rows, strategy_id, horizon, dates, index):
+    window_first, unlinked = {}, 0
+    for row in sorted(rows, key=lambda r: (r['observation_date'], r['run_id'])):
+        eid = index['by_signal'].get((row['run_id'], row['instrument_id'])) if strategy_id in {'PV_OBSERVATION_V1', FOCUS} else None
+        if eid is None:
+            unlinked += 1
+        else:
+            window_first.setdefault(eid, row)
+    first, missing = [], 0
+    for eid in window_first:
+        label = index['first_labels'].get((eid, horizon))
+        if label is None or strategy_id == FOCUS and not label.get('selected_focus'):
+            missing += 1
+        elif label['observation_date'] in dates:
+            first.append(label)
+    start = min(dates) if dates else None
+    before = sum(index['starts'].get(eid, start) < start for eid in window_first) if start else 0
+    return {'first': first, 'window_first': list(window_first.values()),
+            'episode_count': len(window_first), 'signals_without_episode': unlinked,
+            'continuing_episode_count': before, 'started_before_window_episode_count': before,
+            'started_in_window_episode_count': sum(index['starts'].get(eid) in dates for eid in window_first),
+            'episode_first_label_unavailable_count': missing}
+
+
+def build_strategy_feedback_report(run, outcomes, tracking_runs, evaluated_at, *, runs=None, sessions=None):
+    runs = list(runs or [run])
+    conformant = [r for r in runs if r.get('spec_conformance') != 'SPEC_NONCONFORMANT' and r.get('status') != 'SPEC_NONCONFORMANT' and r.get('implementation_version') != 'R05_STRATEGY_EXPERIMENTS_V2']
+    allowed = {r['run_id'] for r in conformant}
+    labels = select_label_revisions([r for r in outcomes if r.get('run_id') in allowed or r.get('label_kind') == 'POST_EXIT_SHADOW'], evaluated_at)
+    signals = [r for r in labels if r.get('label_kind', 'SIGNAL') == 'SIGNAL']
+    mature = [r for r in signals if r.get('metrics', {}).get('close_reference_change') is not None and r['status'] != 'NOT_MATURED']
+    pending = [r for r in signals if r['status'] == 'NOT_MATURED']
+    mature_ids = {r['observation_id'] for r in mature}
+    by_horizon = {}
+    for row in signals:
+        bucket = by_horizon.setdefault(str(row['horizon']), {'MATURE': 0, 'CENSORED': 0, 'UNAVAILABLE': 0, 'NOT_MATURED': 0})
+        status = 'MATURE' if row['observation_id'] in mature_ids else row['status']
+        bucket[status] = bucket.get(status, 0) + 1
+    end_days = sorted(set(_day(d) for d in (sessions or [r['observation_date'] for r in runs]) if _day(d) <= evaluated_at.astimezone(SH).date()))
+    episode_index = _episode_signal_index(signals, tracking_runs, runs)
+    run_index = {r['run_id']: r for r in runs}
+    windows = {}
+    for length in (5, 20, 60):
+        days = set(str(d) for d in end_days[-length:])
+        selected_runs = [r for r in runs if str(r['observation_date']) in days]
+        selected = [r for r in signals if r['observation_date'] in days]
+        groups = {}
+        for row in selected:
+            groups.setdefault((row['strategy_id'], row['horizon']), []).append(row)
+            if row.get('selected_focus') and row['strategy_id'] == 'PV_OBSERVATION_V1':
+                groups.setdefault((FOCUS, row['horizon']), []).append(row)
+        baseline_id = 'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC'
+        benchmark = {}
+        for row in selected:
+            value = row.get('metrics', {}).get('close_reference_change')
+            if row['strategy_id'] == baseline_id and value is not None and row['status'] != 'NOT_MATURED':
+                benchmark.setdefault((row['observation_date'], row['horizon']), []).append(value)
+        stats = []
+        for (sid, horizon), rows in groups.items():
+            cohorts = _episode_window_cohorts(rows, sid, horizon, days, episode_index)
+            dates = {}
+            states = {}
+            for row in rows:
+                states.setdefault((run_index.get(row['run_id'], {}).get('market_state') or {}).get('state', 'UNKNOWN'), []).append(row)
+                if row.get('metrics', {}).get('close_reference_change') is not None and row['status'] != 'NOT_MATURED':
+                    dates.setdefault(row['observation_date'], []).append(row['metrics']['close_reference_change'])
+            relative = [{'observation_date': day, 'strategy_mean':sum(values)/len(values),
+                         'benchmark_mean':sum(benchmark[(day,horizon)])/len(benchmark[(day,horizon)]),
+                         'strategy_valid':len(values),'benchmark_valid':len(benchmark[(day,horizon)]),
+                         'excess_mean':sum(values)/len(values)-sum(benchmark[(day,horizon)])/len(benchmark[(day,horizon)])}
+                        for day,values in dates.items() if (day,horizon) in benchmark]
+            stats.append({'strategy_id': sid, 'horizon': horizon, 'pooled_signals': _statistics(rows),
+                          'episode_first_signal': {**_statistics(cohorts['first']), 'status':'EVALUATED' if cohorts['first'] else 'UNAVAILABLE',
+                              'scope':'TRUE_EPISODE_FIRST_SIGNAL_DATE_WITHIN_WINDOW' if sid in {'PV_OBSERVATION_V1',FOCUS} else 'NO_INDEPENDENT_STRATEGY_EPISODE_POLICY'},
+                          'episode_window_first_signal': {**_statistics(cohorts['window_first']),
+                              'scope':'FIRST_SIGNAL_OBSERVED_INSIDE_THIS_WINDOW_INCLUDES_CONTINUING_EPISODES'},
+                          **{key:value for key,value in cohorts.items() if key not in {'first','window_first'}},
+                          'relative_eligible_universe_price_benchmark': {'status':'EVALUATED' if relative else 'UNAVAILABLE',
+                              'policy':'SAME_SIGNAL_DATE_HORIZON_AND_FROZEN_ELIGIBILITY_PRICE_BASIS', 'by_date':relative,
+                              'date_equal_excess_mean':sum(r['excess_mean'] for r in relative)/len(relative) if relative else None},
+                          'market_state_strata': {state:_statistics(values) for state,values in states.items()}})
+        windows[str(length)] = {'requested_exchange_sessions': length, 'available_calendar_sessions': len(days),
+                               'observed_run_dates': sorted({r['observation_date'] for r in selected_runs}),
+                               'missing_run_dates': sorted(days - {r['observation_date'] for r in selected_runs}),
+                               'date_diagnostics': [{'run_id': r['run_id'], 'observation_date': r['observation_date'],
+                                  'strategies': {sid: {'actual_count': len(items), 'status': (r.get('results', {}).get(sid) or {}).get('status')} for sid, items in authoritative_strategy_items(r)},
+                                  'focus_count': len(_focus_ids(r)), 'comparison': r.get('comparison')} for r in selected_runs],
+                               'statistics': stats, 'same_date_common_eligibility': [{'run_id':r['run_id'], 'observation_date':r['observation_date'],
+                                   'frozen_eligible_ids':r.get('qualification',{}).get('eligible_ids'),
+                                   'strategy_actual_coverage':{sid:result.get('qualified_ids') for sid,result in r.get('results',{}).items() if not result.get('compatibility_alias')},
+                                   'selected_intersection_used_as_benchmark':False} for r in selected_runs],
+                               'market_state_stratification': {'status':'EVALUATED' if any(r.get('market_state') for r in selected_runs) else 'UNAVAILABLE',
+                                  'unknown_state_kept_separate':True},
+                               'relative_benchmark': {'status':'EVALUATED' if benchmark else 'UNAVAILABLE',
+                                   'reason':None if benchmark else 'MATCHED_ELIGIBLE_UNIVERSE_LABELS_REQUIRED'}}
+    shadow = [r for r in labels if r.get('label_kind') == 'POST_EXIT_SHADOW']
+    value = {'schema_version': REVIEW_VERSION, 'run_id': run['run_id'], 'observation_date': run.get('observation_date'),
+             'evaluated_at': evaluated_at.isoformat(), 'status': 'HAS_MATURED_OBSERVATIONS' if mature else 'PENDING_MARKET_VALIDATION',
+             'market_edge': 'NOT_ESTABLISHED', 'counts': {'outcome_observations': len(signals), 'stored_revisions': len(outcomes),
+             'mature': len(mature), 'censored_or_unavailable': len(signals)-len(mature)-len(pending), 'not_matured': len(pending),
+             'focus_episode_count': len({e['episode_id'] for t in tracking_runs for e in t.get('episodes', [])})},
+             'by_horizon': by_horizon, 'rolling_windows': windows,
+             'revision_selection': [{'logical_label_id': r.get('logical_label_id'), 'observation_id': r['observation_id']} for r in labels],
+             'post_exit_analysis': {'5': _statistics([r for r in shadow if r['horizon'] == 5]), '10': _statistics([r for r in shadow if r['horizon'] == 10])},
+             'uncertainty': {'unit': 'DATE_BLOCK_WITH_EPISODE_DEPENDENCE_DISCLOSED', 'status': 'INSUFFICIENT_DATES_FOR_STABLE_INFERENCE',
+                             'validation_gap': 'PURGE_OR_GAP_AT_LEAST_EACH_LABEL_HORIZON'},
+             'interpretation': {'periodic_review': '以逻辑价格标签的有效修订计算；零收益计入分母，不计上涨。',
+                               'next_hypothesis': '只在另一个未看过的日期窗口预注册和验证焦点相对同条件PV的差异；保持现行参数。'}}
+    value['review_id'] = 'strategy_review_' + digest(value)
     return value

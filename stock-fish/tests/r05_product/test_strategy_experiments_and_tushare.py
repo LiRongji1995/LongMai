@@ -81,7 +81,9 @@ def test_strategy_experiment_bundle_keeps_s2_s3_from_rewriting_s1():
     assert pv["top_ids"]
     assert dna["base_strategy_id"] == "PV_OBSERVATION_V1"
     assert theme["base_strategy_id"] == "PV_OBSERVATION_V1"
-    assert result["comparison"]["strategies"][1]["top_ids"] == pv["top_ids"]
+    # F10: missing DNA must retain its actual empty set, never borrow PV names.
+    assert result["comparison"]["strategies"][1]["top_ids"] == dna["top_ids"]
+    assert result["comparison"]["strategies"][1]["top_ids_source"] == "ACTUAL_STRATEGY"
     assert result["parameter_status"] == "INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED"
 
 
@@ -126,7 +128,7 @@ def test_strategy_experiment_api_uses_registered_market_input(tmp_path, monkeypa
         assert review.json["market_edge"] == "NOT_ESTABLISHED"
         latest_feedback = client.get("/api/research-feedback/latest")
         assert latest_feedback.status_code == 200
-        assert latest_feedback.json["schema_version"] == "R05_RESEARCH_FEEDBACK_V1"
+        assert latest_feedback.json["schema_version"] == "R05_RESEARCH_FEEDBACK_V2"
         comparison = client.get("/api/strategy-comparison/latest")
         assert comparison.status_code == 200
         assert comparison.json["comparison_version"] == "R05_STRATEGY_COMPARISON_V1"

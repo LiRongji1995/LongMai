@@ -12,6 +12,7 @@ import json
 from pathlib import Path
 import sqlite3
 import time
+import inspect
 from typing import Callable
 
 from ..jobs import _ServiceLock
@@ -66,6 +67,11 @@ class RequestQueue:
         self.connection.commit()
         self.started = monotonic()
         self.calls = self.cache_hits = 0
+        self.pages = self.retry_attempts = 0
+        from .provider_budget import initialize
+        self.budget_path = self.root / 'transport-budget.sqlite3'
+        self.budget_id = initialize(self.budget_path, self.budget.max_requests,
+                                    minimum_interval=self.budget.minimum_interval_seconds)
         self.last_call = {}
         self.requested_ids = set()
 
@@ -95,6 +101,15 @@ class RequestQueue:
             self.connection.execute('INSERT INTO requests(request_id,payload,state,updated_at) VALUES(?,?,?,?)',
                                     (request_id, json.dumps(payload, sort_keys=True), 'PENDING', self.timestamp()))
             self.connection.commit()
+        elif endpoint.startswith('tushare_') and existing['failure_category']=='AUTH':
+            import os
+            if os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'):
+                # A previously missing credential is a changed prerequisite.
+                # Preserve every attempt/index; permit the first authorized
+                # attempt without rewriting or duplicating prior receipts.
+                self.connection.execute("UPDATE requests SET state='PENDING',failure_category='AUTH_RECOVERED',updated_at=? WHERE request_id=?",
+                                        (self.timestamp(),request_id))
+                self.connection.commit()
         elif existing['state'] == 'COMPLETE' and request_id not in self.requested_ids:
             self.read_result(existing)  # Verify bytes before counting a cache hit.
             self.cache_hits += 1
@@ -220,7 +235,7 @@ class RequestQueue:
         for row in self.rows(selected):
             if row['state'] in ('COMPLETE', 'BLOCKED'):
                 continue
-            if row['attempts'] >= self.budget.max_attempts:
+            if row['attempts'] >= self.budget.max_attempts and row['failure_category'] not in ('BUDGET','INTERRUPTED','AUTH_RECOVERED'):
                 self.connection.execute("UPDATE requests SET state='BLOCKED' WHERE request_id=?", (row['request_id'],))
                 self.connection.commit()
                 continue
@@ -232,7 +247,7 @@ class RequestQueue:
                     self.connection.commit()
                 continue
             remaining = self.budget.max_seconds - (self.monotonic() - self.started)
-            if self.calls >= self.budget.max_requests or remaining <= 0:
+            if self.calls >= self.budget.max_requests or self.transport_counts().get('HTTP',0) >= self.budget.max_requests or remaining <= 0:
                 break
             checkpoint()
             payload = json.loads(row['payload'])
@@ -245,23 +260,31 @@ class RequestQueue:
             # not start an upstream request using the pre-wait remaining time.
             checkpoint()
             remaining=self.budget.max_seconds-(self.monotonic()-self.started)
-            if self.calls>=self.budget.max_requests or remaining<=0:
+            if self.calls>=self.budget.max_requests or self.transport_counts().get('HTTP',0)>=self.budget.max_requests or remaining<=0:
                 break
             self.connection.execute("UPDATE requests SET state='RUNNING',attempts=attempts+1,updated_at=? WHERE request_id=?",
                                     (self.timestamp(), row['request_id']))
             self.connection.commit()
             self.calls += 1
+            self.retry_attempts += bool(row['attempts'])
             self.last_call[provider] = self.monotonic()
             archive = self.root / 'raw' / row['request_id'] / str(row['attempts'] + 1)
             try:
-                result = executor(payload['endpoint'], payload['parameters'], archive,
-                                  timeout=min(self.budget.timeout_seconds, remaining))
+                options = {'timeout':min(self.budget.timeout_seconds, remaining)}
+                # Legacy injected offline executors remain usable, but their
+                # invocations are never reported as observed HTTP requests.
+                if 'budget_path' in inspect.signature(executor).parameters:
+                    options.update(budget_path=str(self.budget_path),budget_id=self.budget_id,
+                        queue_request_id=row['request_id'],max_http_requests=self.budget.max_requests,
+                        checkpoint_dir=str(self.root/'checkpoints'/row['request_id']))
+                result = executor(payload['endpoint'], payload['parameters'], archive, **options)
             except TimeoutError:
                 result = {'status': 'FETCH_FAILED', 'failure_category': 'NETWORK', 'error_code': 'TIMEOUT', 'rows': [], 'receipts': []}
             except Exception as exc:
                 # Exception text may contain URLs/tokens; retain type only.
                 result = {'status': 'FETCH_FAILED', 'failure_category': 'ENGINEERING', 'error_code': type(exc).__name__, 'rows': [], 'receipts': []}
             result = dict(result, queue_request_id=row['request_id'], request_definition_version=payload['definition_version'])
+            self.pages += result.get('coverage',{}).get('pages_this_run',0)
             complete = result.get('status') == 'COMPLETE'
             if result.get('coverage', {}).get('pagination_complete') is False or result.get('pagination_complete') is False:
                 complete = False
@@ -284,12 +307,22 @@ class RequestQueue:
             progress(self.summary())
         return self.summary()
 
+    def transport_counts(self):
+        from .provider_budget import counts
+        return counts(self.budget_path,self.budget_id)
+
     def summary(self):
         rows = self.rows()
         counts = {s: sum(r['state'] == s for r in rows) for s in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
         return {'queue_version': QUEUE_VERSION, 'requested': len(rows), 'states': counts,
-                'network_requests_this_run': self.calls, 'cache_hits_this_run': self.cache_hits,
+                'task_attempts_this_run': self.calls,
+                'http_attempts_this_run': self.transport_counts().get('HTTP',0),
+                'network_requests_this_run': self.transport_counts().get('HTTP',0),
+                'sdk_operations_this_run': self.transport_counts().get('SDK',0),
+                'pages_this_run':self.pages,'task_retries_this_run':self.retry_attempts,
+                'cache_hits_this_run': self.cache_hits,
+                'count_semantics':'HTTP_ADMISSION_BEFORE_IO; SDK_OPERATIONS_SEPARATE; TASK_SAFETY_CAP_EQUALS_MAX_REQUESTS',
                 'elapsed_seconds': self.monotonic() - self.started, 'budget': vars(self.budget),
-                'budget_exhausted': self.calls >= self.budget.max_requests or self.monotonic()-self.started >= self.budget.max_seconds,
+                'budget_exhausted': self.calls >= self.budget.max_requests or self.transport_counts().get('HTTP',0)>=self.budget.max_requests or self.monotonic()-self.started >= self.budget.max_seconds,
                 'status': 'COMPLETE' if rows and counts['COMPLETE'] == len(rows) else 'PARTIAL',
                 'pending_request_ids': [r['request_id'] for r in rows if r['state'] != 'COMPLETE']}

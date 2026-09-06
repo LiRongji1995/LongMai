@@ -17,12 +17,21 @@ from .provider_funds import summary_preview
 TZ=ZoneInfo('Asia/Shanghai')
 SZSE_DELISTING_NAME_RULE='https://docs.static.szse.cn/www/lawrules/rule/stock/W020260424747613955674.pdf'
 def _date(value):
-    try:return date.fromisoformat(str(value)[:10])
+    try:
+        text=str(value)
+        if re.fullmatch(r'\d{8}',text):text=text[:4]+'-'+text[4:6]+'-'+text[6:]
+        return date.fromisoformat(text[:10])
     except (ValueError,TypeError):return None
 def _number(value,positive=False):
     try:
         n=Decimal(str(value))
         return n if n.is_finite() and (n>0 if positive else n>=0) else None
+    except (InvalidOperation,ValueError,TypeError):return None
+
+def _signed_number(value):
+    try:
+        n=Decimal(str(value))
+        return n if n.is_finite() else None
     except (InvalidOperation,ValueError,TypeError):return None
 def _bool(value):return True if str(value)=='1' else False if str(value)=='0' else None
 def _iid(code):
@@ -63,7 +72,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         if not source:continue
         if datetime.fromisoformat(source['ingested_at'])>now:raise ValueError('CUTOFF_PRECEDES_ACTUAL_CAPTURE_COMPLETION')
         source_by[rid]=source
-        params=result.get('parameters',{});end=_date(params.get('end_date') or params.get('date'))
+        params=result.get('parameters',{});end=_date(params.get('end_date') or params.get('date') or params.get('trade_date'))
         clock=_clock(source,end)
         coverage=result.get('coverage',{})
         instrument_ids=tuple(sorted(str(v) for v in coverage.get('returned_instrument_ids',()) if v))
@@ -77,6 +86,39 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
     usable.sort(key=lambda r:datetime.fromisoformat(source_by[r['request_receipt_id']]['ingested_at']))
     masters={};master_refs=[];master_endpoints=set();history={};adjusted={};basic={};market_states={};theme_names={};theme_results=[]
     factor_captures=defaultdict(list); limit_pool={}; direct_limits={}; malformed_master_count=0; master_latest={};sse_delisting=None
+    ts_factors={};ts_basics={};ts_limits={};ts_st={};ts_suspensions={};ts_theme_names={};ts_theme_members=[];ts_basic_rows={};ts_current_master_complete=False
+    for result in usable:
+        ep=result['endpoint'];rid=result['request_receipt_id']
+        if ep=='tushare_adj_factor':
+            for row in result['rows']:
+                iid=_iid(row.get('ts_code'));session=_date(row.get('trade_date'));factor=_number(row.get('adj_factor'),positive=True)
+                if iid and session in sessions and factor is not None:ts_factors[(iid,session)]=(factor,rid)
+        elif ep=='tushare_daily_basic':
+            for row in result['rows']:
+                if (iid:=_iid(row.get('ts_code'))) and (session:=_date(row.get('trade_date'))) in sessions:ts_basics[(iid,session)]=(row,rid)
+        elif ep=='tushare_stk_limit':
+            for row in result['rows']:
+                if (iid:=_iid(row.get('ts_code'))) and (session:=_date(row.get('trade_date'))) in sessions:ts_limits[(iid,session)]=(row,rid)
+        elif ep=='tushare_stock_st':
+            session=_date(result['parameters'].get('trade_date'))
+            if session in sessions and not result['parameters'].get('ts_code'):
+                ts_st.pop(session,None)
+                if result['status']=='COMPLETE' and result.get('pagination_complete'):ts_st[session]=({str(r.get('ts_code')) for r in result['rows']},rid)
+        elif ep=='tushare_stock_basic':
+            if result['parameters'].get('list_status')=='L' and not result['parameters'].get('ts_code'):
+                ts_basic_rows={}
+                ts_current_master_complete=result['status']=='COMPLETE' and result.get('pagination_complete') and not any(result['parameters'].get(field) for field in ('name','market','exchange','is_hs'))
+            for row in result['rows']:
+                if (iid:=_iid(row.get('ts_code'))):ts_basic_rows[iid]=(row,rid)
+        elif ep=='tushare_suspend_d':
+            for row in result['rows']:
+                if row.get('suspend_type')=='S' and not row.get('suspend_timing'):
+                    iid=_iid(row.get('ts_code'));session=_date(row.get('trade_date'))
+                    if iid and session in sessions:ts_suspensions[(iid,session)]=rid
+        elif ep=='tushare_dc_index':
+            for row in result['rows']:
+                if _date(row.get('trade_date'))==day:ts_theme_names[str(row.get('ts_code'))]=(str(row.get('name') or ''),rid)
+        elif ep=='tushare_dc_member':ts_theme_members.append(result)
     for result in usable:
         if result['endpoint'] in ('mainboard_sse','master_szse'):master_latest[result['endpoint']]=result['request_receipt_id']
     for result in usable:
@@ -104,6 +146,19 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
                 iid=_iid(row.get('code'));session=_date(row.get('date'))
                 expected_flag='1' if endpoint=='history_adjusted' else '3'
                 if iid and session in sessions and str(row.get('adjustflag'))==expected_flag:target[(iid,session)]=(row,rid)
+        elif endpoint=='tushare_daily':
+            for row in result['rows']:
+                iid=_iid(row.get('ts_code'));session=_date(row.get('trade_date'))
+                if not iid or session not in sessions:continue
+                amount=_number(row.get('amount'));volume=_number(row.get('vol'))
+                # Documented daily units: hands -> shares, thousand CNY -> CNY.
+                mapped={**row,'code':iid,'date':str(session),'preclose':row.get('pre_close'),
+                    'amount':str(amount*1000) if amount is not None else None,
+                    'volume':str(volume*100) if volume is not None else None,'adjustflag':'3',
+                    'tradestatus':'1' if volume is not None and volume>0 else None,
+                    'isST':str(int(iid in ts_st[session][0])) if session in ts_st else None,
+                    '_provider':'TUSHARE'}
+                history[(iid,session)]=(mapped,rid)
         elif endpoint=='adjustment_factors':
             groups=defaultdict(list)
             for row in result['rows']:
@@ -142,7 +197,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         elif endpoint=='delisting_sse' and result['status']=='COMPLETE' and result['pagination_complete']:
             codes={str(row.get('INSTRUMENT_ID','')) for row in result['rows']}
             if all(re.fullmatch(r'\d{6}',code) for code in codes):sse_delisting=(codes,rid)
-        elif endpoint=='stock_basic':
+        elif endpoint in ('stock_basic','stock_basic_all'):
             for row in result['rows']:
                 if (iid:=_iid(row.get('code'))):basic[iid]=(row,rid)
         elif endpoint=='master_all':
@@ -153,6 +208,12 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
                 code=row.get('板块代码') or row.get('label');name=row.get('板块名称') or row.get('板块')
                 if code:theme_names[(endpoint,str(code))]=(str(name or ''),rid)
         elif endpoint in ('concept_members','concept_members_sina','industry_members'):theme_results.append(result)
+    for iid,(row,rid) in ts_basic_rows.items():
+        basic.setdefault(iid,({'ipoDate':str(_date(row.get('list_date')) or ''),'outDate':str(_date(row.get('delist_date')) or ''),'code_name':row.get('name')},rid))
+        if iid not in masters and row.get('market')=='主板' and iid[-2:] in ('SH','SZ'):
+            masters[iid]=dict(instrument_id=iid,exchange='SSE' if iid.endswith('.SH') else 'SZSE',board='MAIN',
+                security_type='A_COMMON',listed_on=_date(row.get('list_date')),name=str(row.get('name') or ''),source=rid)
+            master_refs.append(rid)
     by_instrument=defaultdict(list);adjusted_by_instrument=defaultdict(dict)
     for (iid,session),pair in sorted(history.items()):by_instrument[iid].append((session,pair))
     for (iid,session),pair in adjusted.items():adjusted_by_instrument[iid][session]=pair
@@ -190,13 +251,25 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
                 identity_proofs.append(dict(instrument_id=iid,field='delisting_period',value=current_delisting,method='INFERENCE_FROM_OFFICIAL_CURRENT_SHORT_NAME_AND_MANDATORY_MARKER_RULE',source_refs=[master['source']],rule_url=SZSE_DELISTING_NAME_RULE,rule_section='9.6.1',rule_sha256='958a07598a1919fe7fed7695c9e778dd029d72a38cf48faeba54cfefdb7c581c'))
         adj_rows=adjusted_by_instrument[iid]
         converted,comparison_status=comparable_rows(iid,by_instrument[iid],adj_rows,factor_captures[iid])
+        ts_series=[(str(s),str(v[0])) for (security,s),v in sorted(ts_factors.items()) if security==iid]
+        ts_basis='TUSHARE_RAW_X_ADJ_FACTOR_R05_V1:'+iid+':'+digest(ts_series)[:20]
+        for session,(row,rid) in by_instrument[iid]:
+            factor=ts_factors.get((iid,session))
+            if row.get('_provider')=='TUSHARE' and factor:
+                values={f'comparable_{f}':_number(row.get(f),positive=True) for f in ('open','high','low','close')}
+                if all(v is not None for v in values.values()):
+                    converted[session]=({**{k:v*factor[0] for k,v in values.items()},'comparable_basis':ts_basis},(rid,factor[1]))
+        if converted and len(converted)==len(by_instrument[iid]):comparison_status='VERIFIED_PROVIDER_FACTOR_DEFINITION'
         if comparison_status not in ('VERIFIED_PROVIDER_FACTOR_DEFINITION','DIRECT_HFQ_CAPTURE_ONLY'):
             gaps.append(dict(instrument_id=iid,field='comparable_price_basis',status='UNAVAILABLE' if not converted else 'PARTIAL',reason=comparison_status,impact='V_L_G_RETURNS_AND_OUTCOMES'))
         all_state=market_states.get(iid);suspended=None
         if all_state and _date(next((r['parameters'].get('date') for r in usable if r['request_receipt_id']==all_state[1]),None))==day:
             trading=_bool(all_state[0].get('tradeStatus'));suspended=not trading if trading is not None else None
+        suspension_ref=ts_suspensions.get((iid,day))
+        if suspension_ref:suspended=True
         if (iid,day) not in history:
             state_refs=tuple(dict.fromkeys((master['source'],*identity_refs,*((basic_pair[1],) if basic_pair else ()),*((all_state[1],) if all_state and suspended is not None else ()))))
+            if suspension_ref:state_refs=(*state_refs,suspension_ref)
             securities.append(SecurityRecord(**base,effective_from=day,effective_to=day+timedelta(days=1),st=None,suspended=suspended,
                 delisting_period=current_delisting,source_refs=state_refs,risk_flags=extra_flags+('CURRENT_EXCHANGE_ROSTER_NOT_FULL_HISTORICAL_IDENTITY',),**_derived_clock(source_by,state_refs)))
         for session,(row,rid) in by_instrument[iid]:
@@ -207,15 +280,28 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             # Current board labels are not silently certified as historical PIT.
             if session!=day:historical_base['board']='UNKNOWN'
             state_refs=tuple(dict.fromkeys((master['source'],rid,*((basic_pair[1],) if basic_pair else ()),*(identity_refs if session==day else ()))))
+            if row.get('_provider')=='TUSHARE' and session in ts_st:state_refs=(*state_refs,ts_st[session][1])
             securities.append(SecurityRecord(**historical_base,effective_from=session,effective_to=session+timedelta(days=1),st=st,suspended=susp,
                 delisting_period=current_delisting if session==day else None,source_refs=state_refs,risk_flags=extra_flags+('HISTORICAL_BOARD_AND_RULE_EXCEPTION_STATUS_UNVERIFIED',),**_derived_clock(source_by,state_refs,session)))
             values={k:_number(row.get(f),positive=k not in ('amount_cny','volume_shares')) for k,f in [('open','open'),('high','high'),('low','low'),('close','close'),('reference_prev_close','preclose'),('volume_shares','volume'),('amount_cny','amount')]}
             turn=_number(row.get('turn'));turn=float(turn/100) if turn is not None and turn<=1000 else None
+            turnover_basis='BAOSTOCK_TURN_PERCENT_FLOAT_SHARES' if turn is not None else None
+            if row.get('_provider')=='TUSHARE' and (ts_basic:=ts_basics.get((iid,session))):
+                value=_number(ts_basic[0].get('turnover_rate'));turn=float(value/100) if value is not None else None
+                turnover_basis='TUSHARE_TURNOVER_RATE_PERCENT' if turn is not None else None
             fields['reference_prev_close']+=values['reference_prev_close'] is not None;fields['turnover_fraction']+=turn is not None
             comparable={};refs=[rid]
+            if row.get('_provider')=='TUSHARE' and (ts_basic:=ts_basics.get((iid,session))):refs.append(ts_basic[1])
             if session in converted:
                 comparable,cmprefs=converted[session];refs.extend(cmprefs);fields['adjusted_comparable_rows']+=1
             limit_values=dict(limit_applicable=None,limit_verified=False)
+            ts_limit=ts_limits.get((iid,session))
+            if ts_limit:
+                up=_number(ts_limit[0].get('up_limit'),positive=True);down=_number(ts_limit[0].get('down_limit'),positive=True)
+                if up is not None and down is not None and down<up and values['low'] is not None and values['high'] is not None and down<=values['low']<=values['high']<=up:
+                    limit_values=dict(limit_applicable=True,limit_verified=True,limit_up=up,limit_down=down,rule_id='DIRECT_PUBLISHED_TUSHARE_STK_LIMIT_R05_V1')
+                    refs.append(ts_limit[1]);fields['direct_published_limit_rows']+=1
+                    limit_proofs.append(dict(instrument_id=iid,session=str(session),verification='DIRECT_PUBLISHED_TUSHARE_STK_LIMIT',source_refs=[rid,ts_limit[1]],limit_up=str(up),limit_down=str(down)))
             direct=direct_limits.get((iid,session)) if session==day and iid in masters and master['board']=='MAIN' else None
             if direct and values['close'] is not None:
                 row,limit_ref=direct
@@ -244,9 +330,20 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             valid=all(values[x] is not None for x in ('open','high','low','close'))
             if master['board']=='MAIN':fields['raw_mainboard_rows']+=1
             if iid in outcome_only:fields['outcome_only_raw_rows']+=1
-            bars.append(DailyBar(instrument_id=iid,session=session,**values,turnover_fraction=turn,turnover_basis='BAOSTOCK_TURN_PERCENT_FLOAT_SHARES' if turn is not None else None,
+            bars.append(DailyBar(instrument_id=iid,session=session,**values,turnover_fraction=turn,turnover_basis=turnover_basis,
                 source_refs=tuple(dict.fromkeys(refs)),quality='VALID' if valid else 'PARTIAL',**limit_values,**comparable,**_derived_clock(source_by,refs,session)))
     code_to_iid={i[:6]:i for i in masters};themes=[]
+    for result in ts_theme_members:
+        rid=result['request_receipt_id'];session=_date(result['parameters'].get('trade_date'))
+        if session!=day or not result.get('pagination_complete'):continue
+        groups=defaultdict(set)
+        for row in result['rows']:
+            if _date(row.get('trade_date'))==day and (iid:=_iid(row.get('con_code'))):groups[str(row.get('ts_code'))].add(iid)
+        for symbol,members in groups.items():
+            if symbol not in ts_theme_names:continue
+            name,definition_ref=ts_theme_names[symbol]
+            themes.append(ThemeSnapshot(theme_id='tushare_dc:'+symbol,name=name,theme_type=_theme_type(name,'concept'),member_ids=tuple(sorted(members)),
+                effective_from=day,effective_to=day+timedelta(days=1),definition_version='TUSHARE_DC_DATED_MEMBERS_R05_V1',source_refs=(rid,definition_ref),**_derived_clock(source_by,(rid,definition_ref),day)))
     for result in theme_results:
         endpoint=result['endpoint'];rid=result['request_receipt_id'];symbol=result['parameters']['symbol']
         registry='concept_list_sina' if endpoint=='concept_members_sina' else 'industry_list' if endpoint=='industry_members' else 'concept_list'
@@ -273,7 +370,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
     securities=coalesced
     refs=tuple(sorted(set(master_refs)));universe_clock=dict(event_time=now,source_published_at=now,first_seen_at=now,ingested_at=now)
     universe=UniverseSnapshot(snapshot_id='R03_MASTER_'+digest(masters)[:24],securities=tuple(securities),source_refs=refs,
-        complete=master_endpoints=={'mainboard_sse','master_szse'} and malformed_master_count==0,expected_count=len(masters)+malformed_master_count,**universe_clock)
+        complete=(master_endpoints=={'mainboard_sse','master_szse'} or ts_current_master_complete) and malformed_master_count==0,expected_count=len(masters)+malformed_master_count,**universe_clock)
     gaps.extend([dict(field='verified_daily_limit_and_exception_status',status='UNAVAILABLE',reason='RAW_PROVIDER_HAS_NO_OFFICIAL_DAILY_LIMIT_OR_VERIFIED_NORMAL_EXCEPTION_FLAG',impact='B_G_M_STRUCTURE_DISCOVERY_NOT_COMPLETE'),
         dict(field='historical_delisting_period',status='UNKNOWN',reason='CURRENT_OFFICIAL_EXCLUSION_SET_AND_CURRENT_SHORT_NAME_RULE_NOT_BACKFILLED',impact='HISTORICAL_QUALIFICATION_UNKNOWN'),
         dict(field='historical_board_identity',status='PARTIAL',reason='CURRENT_EXCHANGE_ROSTER_AND_LISTING_DATE_RETAINED_HISTORICAL_ISST_TRADESTATUS_RETAINED_BOARD_PIT_NOT_CERTIFIED',impact='HISTORICAL_QUALIFICATION'),
@@ -306,6 +403,47 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             disclosure_status='WINDOW_UNVERIFIED' if records else 'UNAVAILABLE',disclosure_complete=False,
             money_error_code=money.get('error_code') if money else None,public_summary_records=records,
             source_refs=refs,reason_codes=['PUBLIC_SUMMARY_IS_NOT_SEAT_OR_WINDOW_AUTHORITY','NO_COMPARABLE_THREE_SESSION_MONEY_SOURCE'],**_clock(latest,day)))
+    additional_evidence=[];ts_funds=defaultdict(list)
+    for result in usable:
+        endpoint=result['endpoint'];rid=result['request_receipt_id']
+        if endpoint not in ('tushare_moneyflow','tushare_top_list','tushare_top_inst','tushare_suspend_d','tushare_limit_list_d','tushare_stk_auction','tushare_stk_auction_o'):continue
+        for row in result['rows']:
+            iid=_iid(row.get('ts_code'));session=_date(row.get('trade_date'))
+            if not iid or session not in sessions:continue
+            record={'instrument_id':iid,'session':str(session),'provider':'TUSHARE','dataset':endpoint,
+                'source_refs':[rid],'definition_version':'TUSHARE_EVIDENCE_R05_V1',**_clock(source_by[rid],session)}
+            if endpoint=='tushare_moneyflow':
+                # Source defines active order size, not participant identity.
+                record.update(money_definition='TUSHARE_ACTIVE_LARGE_AND_EXTRA_LARGE_ORDERS_GE_200K_CNY_R05_V1',currency='CNY',amount_unit='CNY')
+                values={name:_signed_number(row.get(name)) for name in ('buy_lg_amount','buy_elg_amount','sell_lg_amount','sell_elg_amount','net_mf_amount')}
+                record['net_large_cny']=str((values['buy_lg_amount']+values['buy_elg_amount']-values['sell_lg_amount']-values['sell_elg_amount'])*10000) if all(values[k] is not None for k in values if k!='net_mf_amount') else None
+                record['source_net_flow_cny']=str(values['net_mf_amount']*10000) if values['net_mf_amount'] is not None else None
+                record['source_net_flow_is_separate_measurement']=True
+                ts_funds[iid].append(record)
+            elif endpoint=='tushare_top_inst':
+                record.update(seat_name=row.get('exalter'),side=row.get('side'),reason=row.get('reason'),
+                    buy_cny=str(_number(row.get('buy'))) if _number(row.get('buy')) is not None else None,
+                    sell_cny=str(_number(row.get('sell'))) if _number(row.get('sell')) is not None else None,
+                    currency='CNY',amount_unit='CNY',window_status='UNVERIFIED_ONE_OR_THREE_SESSION_WINDOW',identity_note='SEAT_LABEL_NOT_NATURAL_PERSON')
+                ts_funds[iid].append(record)
+            elif endpoint=='tushare_top_list':
+                record.update(reason=row.get('reason'),window_status='UNVERIFIED',amount_unit='SOURCE_DOCUMENT_DOES_NOT_EXPLICITLY_DECLARE_UNIT')
+                ts_funds[iid].append(record)
+            elif endpoint.startswith('tushare_stk_auction'):
+                record.update(auction_price=row.get('price') if endpoint=='tushare_stk_auction' else row.get('close'),
+                    volume_shares=row.get('vol'),amount_cny=row.get('amount'),
+                    time_semantics='AVAILABLE_0926_TO_0929_NEVER_0925' if endpoint=='tushare_stk_auction' else '0930_AUCTION_PUBLISHED_AFTER_CLOSE',
+                    use_status='RESEARCH_EVIDENCE_NOT_0925_DECISION_INPUT')
+            elif endpoint=='tushare_suspend_d':record.update(suspend_type=row.get('suspend_type'),suspend_timing=row.get('suspend_timing'))
+            else:record.update(limit_event=row.get('limit'),open_times=row.get('open_times'),limit_times=row.get('limit_times'))
+            additional_evidence.append(record)
+    existing_fund_ids={v['instrument_id'] for v in funds}
+    for iid,records in ts_funds.items():
+        if iid in existing_fund_ids:continue
+        refs=tuple(sorted({ref for r in records for ref in r['source_refs']}))
+        funds.append(dict(instrument_id=iid,provider='TUSHARE',money_definition='TUSHARE_ACTIVE_LARGE_AND_EXTRA_LARGE_ORDERS_GE_200K_CNY_R05_V1',
+            definition_version='FUNDS_EVIDENCE_V1',money_status='UNAVAILABLE',disclosure_status='WINDOW_UNVERIFIED',disclosure_complete=False,
+            source_refs=refs,public_summary_records=records,reason_codes=['DISCLOSURE_WINDOW_AND_COMMON_THREE_SESSION_AUTHORITY_REQUIRED'],**_derived_clock(source_by,refs,day)))
     bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type='PROSPECTIVE_CAPTURED')
     report=dict(normalization_version='R03_SOURCE_ASSEMBLY_V1',fields_retained=fields,master_identity_count=len(masters),
         mainboard_identity_count=sum(m['board']=='MAIN' for m in masters.values()),current_master_complete=universe.complete,
@@ -313,6 +451,22 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         outcome_only_instrument_ids=sorted(outcome_only),malformed_master_rows=malformed_master_count,funds_public_summary_rows=sum(map(len,fund_records.values())),funds_score_authorized_families=0,
         legitimate_empty_permitted=False,empty_block_reason='UNVERIFIED_REQUIRED_EVENTS_OR_SHARED_COMPONENTS',
         actual_capture_cutoff=now.isoformat(),historical_download_not_historical_publication=True)
+    from .provider_requests import TUSHARE_ENDPOINTS
+    consumers={'tushare_stock_basic':'UniverseSnapshot','tushare_trade_cal':'CALENDAR_CROSSCHECK_REPORT',
+        'tushare_daily':'DailyBar/PV/DNA/THEME/OUTCOMES','tushare_daily_basic':'DailyBar.turnover_fraction',
+        'tushare_adj_factor':'DailyBar.comparable_OHLC','tushare_stk_limit':'DailyBar.limit_up/limit_down',
+        'tushare_stock_st':'SecurityRecord.st','tushare_suspend_d':'SecurityRecord.suspended/dated_source_evidence','tushare_dc_index':'ThemeSnapshot.definition',
+        'tushare_dc_member':'ThemeSnapshot.dated_members'}
+    report['additional_source_evidence']=additional_evidence
+    report['tushare_calendar_crosscheck']=[{'source_receipt_id':r['request_receipt_id'],
+        'sessions':sorted(str(_date(x.get('cal_date'))) for x in r['rows'] if str(x.get('is_open'))=='1'),
+        'role':'CROSSCHECK_NOT_SILENT_CALENDAR_REPLACEMENT'} for r in usable if r['endpoint']=='tushare_trade_cal']
+    report['provider_endpoint_status']=[{'endpoint':ep,'official_document':definition['doc_url'],'document_review_date':'2026-09-06',
+        'canonical_consumer':consumers.get(ep,'DATED_SOURCE_EVIDENCE_ONLY_NO_AUTOMATIC_SCORING_AUTHORITY'),
+        'attempts':[{'status':r.get('error_code') or ('EMPTY_VALID' if r['status']=='COMPLETE' and not r['rows'] else r['status']),
+            'rows':len(r.get('rows',[])),'request_receipt_id':r.get('request_receipt_id'),'http_attempts':r.get('coverage',{}).get('http_attempts'),
+            'parameters':r.get('parameters')} for r in results if r['endpoint']==ep],
+        'status_if_no_attempt':'NOT_ATTEMPTED'} for ep,definition in TUSHARE_ENDPOINTS.items()]
     return bundle,report
 
 def normalize_capture(results,observation_date,now,sessions):

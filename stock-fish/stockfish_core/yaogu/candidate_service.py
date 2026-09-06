@@ -75,6 +75,16 @@ class CandidateService:
                 migration={'config_hash':registered['config_hash'],'activated_at':utc_now().isoformat(),
                     'reason':'R03_SEMANTICS_MIGRATION','previous_config_hash':previous.config_hash}
                 self.store.put_document('strategy_config_activations','config_activation_'+digest(migration),migration)
+        # One-time append-only projection migration keeps existing saved history usable.
+        self._ensure_strategy_observation_indexes()
+        self.rebuild_strategy_projections()
+
+    def _ensure_strategy_observation_indexes(self):
+        # SQLite maintains this derived lookup automatically for every new revision.
+        with self.store.transaction() as connection:
+            connection.execute("CREATE INDEX IF NOT EXISTS strategy_item_observation_lookup "
+                               "ON documents(namespace,json_extract(payload,'$.run_id'),"
+                               "json_extract(payload,'$.instrument_id'),created_at,document_id)")
 
     def _all(self, namespace):
         rows, offset = [], 0
@@ -133,6 +143,8 @@ class CandidateService:
             raise ValueError('test fixtures require an explicitly isolated service')
         input_id = 'market_' + digest(bundle)
         self.store.put_document('candidate_inputs', input_id, bundle.model_dump(mode='json'))
+        self.store.put_document('candidate_input_indexes', input_id, {'input_id': input_id, 'observation_date': str(bundle.observation_date),
+            'coverage_type': bundle.coverage_type, 'max_session': str(max(bundle.sessions)) if bundle.sessions else None})
         if activate:
             from .engine import run
             validation = run(bundle, self.current_config(), cutoff=utc_now(), profile='DAILY_V1')
@@ -177,25 +189,29 @@ class CandidateService:
         """
         if input_id is not None:
             return self.input(input_id, observation_date)
-        try:
-            return self.input(None, observation_date)
-        except UnavailableError:
-            wanted = observation_date.isoformat() if observation_date is not None else None
-            offset = 0
-            selected = None
-            while True:
-                rows = self.store.list_document_metadata('candidate_inputs', limit=1000, offset=offset, descending=True)
-                for row in rows:
+        wanted = observation_date.isoformat() if observation_date is not None else None
+        candidates = []
+        offset = 0
+        while True:
+            rows = self.store.list_document_metadata('candidate_inputs', limit=1000, offset=offset, descending=True)
+            for row in rows:
+                index = self.store.get_document('candidate_input_indexes', row['document_id'])
+                if index is None:
                     value = self.store.get_document('candidate_inputs', row['document_id'])
-                    if value and (wanted is None or value.get('observation_date') == wanted):
-                        selected = row['document_id']
-                        break
-                if selected or len(rows) < 1000:
-                    break
-                offset += len(rows)
-            if selected is None:
-                raise
-            return self.input(selected, observation_date)
+                    if value is None:
+                        continue
+                    index = {'input_id': row['document_id'], 'observation_date': value['observation_date'],
+                             'coverage_type': value.get('coverage_type'), 'max_session': max(value.get('sessions') or [''])}
+                    self.store.put_document('candidate_input_indexes', row['document_id'], index)
+                if (wanted is None or index['observation_date'] == wanted) and (self.allow_test_fixture or index.get('coverage_type') != 'TEST_FIXTURE'):
+                    candidates.append((index['observation_date'], -len(candidates), row['document_id']))
+            if len(rows) < 1000:
+                break
+            offset += len(rows)
+        if not candidates:
+            raise UnavailableError('VERIFIED_RESEARCH_INPUT_NOT_REGISTERED', 'candidate')
+        selected = max(candidates)[2]
+        return self.input(selected, observation_date)
 
     def submit(self, request: CandidateRequest, *, job_id=None, market_session='ON_DEMAND', cutoff=None):
         input_id, bundle = self.input(request.input_id, request.observation_date)
@@ -477,75 +493,142 @@ class CandidateService:
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
         result['input_id']=payload['input_id']
+        result['generated_at']=utc_now().isoformat()
         latest=self._latest_input_publication(payload['input_id'])
         daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
         result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
-            result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'])
+            result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'],
+            result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'))
+        from .strategy_tracking import _visible_bars
+        frozen_bars = _visible_bars(bundle, cutoff)
+        if latest is not None:
+            result['market_state'] = latest.emotion.model_dump(mode='json')
+            daily_items = []
+            for item in latest.items:
+                bar = frozen_bars.get((item.instrument_id, bundle.observation_date))
+                daily_items.append({**item.model_dump(mode='json'), 'rank': item.family_rank,
+                    'comparable_close': str(bar.comparable_close) if bar and bar.comparable_close else None,
+                    'comparable_basis': bar.comparable_basis if bar else None})
+            result['results'][latest.strategy_id] = {'strategy_id': latest.strategy_id, 'status': latest.status,
+                'items': daily_items, 'source_run_id': latest.run_id}
+        baseline_items = []
+        for iid in result.get('qualification', {}).get('eligible_ids', []):
+            bar = frozen_bars.get((iid, bundle.observation_date))
+            if bar and bar.comparable_close is not None and bar.comparable_basis:
+                baseline_items.append({'instrument_id':iid, 'rank':len(baseline_items)+1,
+                    'comparable_close':str(bar.comparable_close), 'comparable_basis':bar.comparable_basis,
+                    'source_refs':list(bar.source_refs)})
+        result['evaluation_baselines'] = {'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC': {
+            'strategy_id':'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC', 'status':'COMPLETE' if baseline_items else 'UNAVAILABLE',
+            'rank_semantics':'INSTRUMENT_ID_ORDER_NOT_SELECTION_RANK', 'items':baseline_items,
+            'cohort_rule':'FROZEN_DATED_ELIGIBLE_UNIVERSE_WITH_SIGNAL_COMPARABLE_CLOSE',
+            'input_id':payload['input_id'], 'decision_cutoff':cutoff.isoformat()}}
         result['content_hash']=digest({k:v for k,v in result.items() if k!='content_hash'})
         terminal={'strategy_experiment_run_id':result['run_id'],'run_id':result['run_id'],
             'status':'complete','quality':result['results']['PV_OBSERVATION_V1']['status'],
             'pv_count':len(result['results']['PV_OBSERVATION_V1'].get('items',()))}
-        return ctx.complete(terminal,lambda connection:self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result))
+        def write(connection):
+            self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
+            self._write_strategy_projection(connection, result)
+            self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
+                {'run_id': result['run_id'], 'observation_date': result['observation_date'], 'horizons': [1,2,3,4,5,10,20],
+                 'created_at': payload['cutoff'], 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1'})
+        return ctx.complete(terminal, write)
 
-    def list_strategy_experiments(self, limit=20):
-        if not 1<=limit<=1000:
+    def _write_strategy_projection(self, connection, run):
+        from .strategy_tracking import authoritative_strategy_items
+        from .strategy_experiments import implementation_conformance
+        assessment = implementation_conformance(run)
+        self.store._put_document(connection, 'strategy_implementation_assessments', run['run_id'], assessment)
+        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        focus_ids = set(focus.get('selected_ids') or [])
+        scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','A','R','H','status','close','open','high','low','comparable_close','comparable_basis','risk_flags','risk_review_status','board_state','limit_event_status','reason_codes'}
+        header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance')}
+        header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
+                      focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})
+        for sid, rows in authoritative_strategy_items(run):
+            result = ({**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}).get(sid) or {}
+            header['results'][sid] = {k: result.get(k) for k in ('strategy_id','status','counts','scope_label','reason_codes','spec_hash','top_ids')}
+            header['results'][sid]['item_count'] = len(rows)
+            header['selections'][sid] = {}
+            for selection in ('all', 'focus', 'unselected'):
+                selected = self._selected_strategy_rows(rows, focus_ids, selection)
+                header['selections'][sid][selection] = len(selected)
+                for start in range(0, len(selected), 50):
+                    page_id = run['run_id'] + '_' + digest({'strategy_id': sid, 'selection': selection, 'chunk': start//50})
+                    self.store._put_document(connection, 'strategy_experiment_summary_pages', page_id,
+                        {'run_id': run['run_id'], 'source_run_hash': header['source_run_hash'],
+                         'items': [{k:v for k,v in row.items() if k in scalar_fields} for row in selected[start:start+50]]})
+        self.store._put_document(connection, 'strategy_experiment_summaries', run['run_id'], header)
+
+    def rebuild_strategy_projections(self):
+        """Explicit local migration; normal list/summary never loads full rankings."""
+        total, offset = 0, 0
+        while True:
+            rows = self.store.list_document_metadata('strategy_experiment_runs', limit=1000, offset=offset)
+            for row in rows:
+                if self.store.get_document('strategy_experiment_summaries', row['document_id']) is None:
+                    run = self.strategy_experiment(row['document_id'])
+                    with self.store.transaction() as connection:
+                        self._write_strategy_projection(connection, run)
+                    total += 1
+            if len(rows) < 1000:
+                break
+            offset += len(rows)
+        offset = 0
+        while True:
+            rows = self.store.list_document_metadata('strategy_research_reviews',limit=1000,offset=offset)
+            for row in rows:
+                if self.store.get_document('strategy_research_review_indexes',row['document_id']) is None:
+                    value = self.store.get_document('strategy_research_reviews',row['document_id'])
+                    with self.store.transaction() as connection:
+                        self._write_research_review(connection,value)
+            if len(rows)<1000:
+                break
+            offset += len(rows)
+        return {'rebuilt': total}
+
+    def list_strategy_experiments(self, limit=20, offset=0):
+        if not 1 <= limit <= 1000 or offset < 0:
             raise ValueError('invalid result page size')
-        rows=self.store.list_document_metadata('strategy_experiment_runs',limit=limit,descending=True)
-        return [self.strategy_experiment(row['document_id']) for row in rows]
+        rows = self.store.list_document_metadata('strategy_experiment_runs', limit=limit, offset=offset, descending=True)
+        return [self.store.get_document('strategy_experiment_summaries', row['document_id']) or
+                {'run_id': row['document_id'], 'status': 'PROJECTION_REBUILD_REQUIRED'} for row in rows]
 
     def strategy_experiment(self, run_id):
-        value=self.store.get_document('strategy_experiment_runs',run_id)
+        value = self.store.get_document('strategy_experiment_runs',run_id)
         if value is None:
             raise KeyError(run_id)
         return value
 
     def _strategy_result_summaries(self, run):
-        summaries = {}
-        for strategy_id, result in (run.get('results') or {}).items():
-            if strategy_id in {'DNA_RERANK_V1', 'THEME_CONTEXT_V1'}:
-                continue
-            summaries[strategy_id] = {k: v for k, v in result.items()
-                                      if k not in {'items', 'incomplete', 'missing'}}
-        return summaries
+        return {sid: {k:v for k,v in result.items() if k not in {'items','incomplete','missing'}}
+                for sid,result in (run.get('results') or {}).items()}
 
     def strategy_experiment_summary(self, run_id, *, page=1, page_size=50, strategy_id='PV_OBSERVATION_V1', selection=None):
         if not 1 <= page_size <= 500 or page < 1:
             raise ValueError('summary 分页大小必须为 1..500')
-        run = self.strategy_experiment(run_id)
-        result = (run.get('results') or {}).get(strategy_id)
-        if result is None:
-            raise KeyError(strategy_id)
-        items = list(result.get('items') or [])
-        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
-        focus_ids = set(focus.get('selected_ids') or [])
-        if selection == 'focus':
-            items = [row for row in items if row.get('instrument_id') in focus_ids]
-        elif selection == 'unselected':
-            items = [row for row in items if row.get('instrument_id') not in focus_ids]
-        elif selection not in (None, '', 'all'):
+        selection = selection or 'all'
+        if selection not in {'all','focus','unselected'}:
             raise ValueError('unknown strategy experiment selection')
-        total = len(items)
-        start = (page - 1) * page_size
-        return {
-            'run_id': run_id,
-            'input_id': run.get('input_id'),
-            'observation_date': run.get('observation_date'),
-            'implementation_version': run.get('implementation_version'),
-            'parameter_status': run.get('parameter_status'),
-            'strategy_id': strategy_id,
-            'status': result.get('status'),
-            'counts': result.get('counts'),
-            'top_ids': result.get('top_ids'),
-            'focus_ids': list(focus_ids),
-            'selection_policy': focus.get('selection_policy'),
-            'results': self._strategy_result_summaries(run),
-            'comparison': run.get('comparison'),
-            'filtered_total': total,
-            'page': page,
-            'page_size': page_size,
-            'has_next': start + page_size < total,
-            'items': items[start:start + page_size],
-        }
+        projection = self.store.get_document('strategy_experiment_summaries', run_id)
+        if projection is None:
+            raise UnavailableError('STRATEGY_SUMMARY_PROJECTION_REBUILD_REQUIRED', 'candidate')
+        if strategy_id not in projection['results']:
+            raise KeyError(strategy_id)
+        total = projection['selections'][strategy_id][selection]
+        start, stop = (page-1)*page_size, min(page*page_size, total)
+        items = []
+        if start < stop:
+            for chunk in range(start//50, (stop-1)//50+1):
+                key = run_id + '_' + digest({'strategy_id': strategy_id, 'selection': selection, 'chunk': chunk})
+                data = self.store.get_document('strategy_experiment_summary_pages', key)
+                if data is None or data['source_run_hash'] != projection['source_run_hash']:
+                    raise UnavailableError('STRATEGY_SUMMARY_PROJECTION_MISMATCH', 'candidate')
+                items.extend(data['items'][max(0,start-chunk*50):min(50,stop-chunk*50)])
+        return {**projection, 'strategy_id': strategy_id, 'selection': selection,
+                'status': projection['results'][strategy_id].get('status'), 'counts': projection['results'][strategy_id].get('counts'),
+                'filtered_total': total, 'page': page, 'page_size': page_size, 'has_next': stop < total, 'items': items}
 
     def strategy_experiment_item_detail(self, run_id, instrument_id):
         run = self.strategy_experiment(run_id)
@@ -565,53 +648,116 @@ class CandidateService:
             'strategy_results': matches,
             'focus_selection': focus_matches[0] if focus_matches else None,
             'selection_policy': focus.get('selection_policy'),
-            'outcomes': [row for row in self._all('strategy_trading_session_observations')
-                         if row.get('run_id') == run_id and row.get('instrument_id') == instrument_id],
-            'tracking': [row for row in self._all('research_episode_observations')
-                         if row.get('run_id') == run_id and row.get('instrument_id') == instrument_id][-100:],
+            'outcomes': self._strategy_item_observations('strategy_trading_session_observations', run_id, instrument_id),
+            'tracking': self._strategy_item_observations('research_episode_observations', run_id, instrument_id, latest=100),
             'market_edge': 'NOT_ESTABLISHED',
         }
 
-    def export_strategy_experiment_csv(self, run_id):
-        run = self.strategy_experiment(run_id)
-        pv = (run.get('results') or {}).get('PV_OBSERVATION_V1') or {}
+    def _strategy_item_observations(self, namespace, run_id, instrument_id, *, latest=None):
+        # Filter before deserializing; unrelated historical labels never enter memory.
+        order = 'DESC' if latest is not None else 'ASC'
+        sql = ('SELECT * FROM documents WHERE namespace=? '
+               "AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.instrument_id')=? "
+               f'ORDER BY created_at {order}, document_id {order}')
+        parameters = [namespace, run_id, instrument_id]
+        if latest is not None:
+            sql += ' LIMIT ?'
+            parameters.append(latest)
+        with self.store.transaction(write=False) as connection:
+            rows = [checked_payload(row) for row in connection.execute(sql, parameters)]
+        return list(reversed(rows)) if latest is not None else rows
+
+    @staticmethod
+    def _selected_strategy_rows(rows, focus_ids, selection):
+        selection = selection or 'all'
+        if selection not in {'all', 'focus', 'unselected'}:
+            raise ValueError('unknown strategy experiment selection')
+        return [row for row in rows if selection == 'all' or
+                (row['instrument_id'] in focus_ids) == (selection == 'focus')]
+
+    def _strategy_export_rows(self, run, strategy_id, selection):
+        from .strategy_tracking import authoritative_strategy_items
+        ranked = dict(authoritative_strategy_items(run))
+        if strategy_id not in ranked:
+            raise KeyError(strategy_id)
         focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        focus_ids = set(focus.get('selected_ids') or [])
+        rows = self._selected_strategy_rows(ranked[strategy_id], focus_ids, selection)
+        results = {**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}
+        result = results.get(strategy_id)
+        if result is None:
+            result = next(value for key, value in results.items()
+                          if (value.get('canonical_strategy_id') or value.get('strategy_id') or key) == strategy_id)
+        return result, rows, ranked[strategy_id], focus, focus_ids
+
+    def export_strategy_experiment_csv(self, run_id, *, strategy_id=None, selection=None):
+        run = self.strategy_experiment(run_id)
+        strategy_id = strategy_id or 'PV_OBSERVATION_V1'
+        result, items, _, focus, focus_ids = self._strategy_export_rows(run, strategy_id, selection)
         focus_by_id = {row['instrument_id']: row for row in focus.get('items', [])}
         stream = io.StringIO(newline='')
-        fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'A', 'R', 'H',
-                  'selected_focus', 'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status']
+        fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'S_DNA', 'S_THEME', 'A', 'R', 'H',
+                  'status', 'reason', 'reason_codes', 'selected_focus', 'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status']
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
-        for item in pv.get('items', []):
+        for item in items:
             focus_row = focus_by_id.get(item['instrument_id'], {})
             row = {
                 'run_id': run_id,
                 'observation_date': run.get('observation_date'),
-                'strategy_id': 'PV_OBSERVATION_V1',
+                'strategy_id': strategy_id,
                 'instrument_id': item.get('instrument_id'),
                 'rank': item.get('rank'),
                 'S_PV': item.get('S_PV'),
+                'S_DNA': item.get('S_DNA'),
+                'S_THEME': item.get('S_THEME'),
                 'A': item.get('A'),
                 'R': item.get('R'),
                 'H': item.get('H'),
-                'selected_focus': focus_row.get('selected'),
+                'status': item.get('status'),
+                'reason': item.get('reason'),
+                'reason_codes': '|'.join(item.get('reason_codes') or []),
+                'selected_focus': item['instrument_id'] in focus_ids,
                 'focus_reason_codes': '|'.join(focus_row.get('reason_codes') or []),
                 'close_location': focus_row.get('close_location'),
-                'scope_label': pv.get('scope_label'),
+                'scope_label': result.get('scope_label'),
                 'parameter_status': run.get('parameter_status'),
             }
             writer.writerow({k: "'" + v if isinstance(v, str) and v[:1] in '=+-@' else v for k, v in row.items()})
         return stream.getvalue()
 
-    def export_strategy_experiment_json(self, run_id):
-        return json.dumps(self.strategy_experiment(run_id), ensure_ascii=False, indent=2, allow_nan=False)
+    def export_strategy_experiment_json(self, run_id, *, strategy_id=None, selection=None):
+        run = self.strategy_experiment(run_id)
+        if strategy_id is not None or selection is not None:
+            import copy
+            strategy_id = strategy_id or 'PV_OBSERVATION_V1'
+            original_result, items, ranked, _, focus_ids = self._strategy_export_rows(run, strategy_id, selection)
+            source_content_hash = run.get('content_hash') or digest(run)
+            run = copy.deepcopy(run)
+            result = copy.deepcopy(original_result)
+            ranked_ids = {row['instrument_id'] for row in ranked}
+            diagnostics = [row for row in original_result.get('items', [])
+                           if row.get('instrument_id') not in ranked_ids]
+            result['coverage_diagnostics'] = copy.deepcopy(self._selected_strategy_rows(diagnostics, focus_ids, selection))
+            result['items'] = copy.deepcopy(items)
+            run['results'] = {strategy_id: result}
+            run.pop('evaluation_baselines', None)
+            run.pop('content_hash', None)
+            run['export_view'] = {'strategy_id': strategy_id, 'selection': selection or 'all',
+                                  'source_content_hash': source_content_hash,
+                                  'payload_role': 'SAVED_RANKING_SELECTION_VIEW',
+                                  'ranked_total': len(ranked), 'filtered_total': len(items)}
+            run['view_content_hash'] = digest(run)
+        return json.dumps(run, ensure_ascii=False, indent=2, allow_nan=False)
 
     def submit_strategy_outcomes(self, run_id, input_id=None, *, horizons=None, job_id=None):
         run = self.strategy_experiment(run_id)
-        resolved, _ = self.strategy_input(input_id or run.get('input_id'))
+        resolved, _ = self.strategy_input(input_id)
         horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
-        if any(not isinstance(h, int) or h <= 0 or h > 60 for h in horizons):
+        if any(type(h) is not int or h <= 0 for h in horizons):
             raise ValueError('unsupported research horizon')
+        self.store.put_document('strategy_research_horizon_requests', run_id + '_' + digest(horizons),
+            {'run_id':run_id, 'horizons':list(horizons)})
         return self.jobs.submit('strategy_outcomes', {'run_id': run_id, 'input_id': resolved,
             'horizons': list(horizons), 'evaluated_at': utc_now().isoformat()}, job_id=job_id)
 
@@ -619,12 +765,16 @@ class CandidateService:
         payload = ctx.payload
         run = self.strategy_experiment(payload['run_id'])
         _, bundle = self.input(payload['input_id'])
-        from .strategy_tracking import evaluate_strategy_experiment_outcomes
+        from .strategy_tracking import evaluate_strategy_experiment_outcomes, build_strategy_feedback_report
         values = evaluate_strategy_experiment_outcomes(run, bundle, datetime.fromisoformat(payload['evaluated_at']),
                                                        horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)))
+        report = build_strategy_feedback_report(run, self._all('strategy_trading_session_observations') + values,
+            self._all('strategy_tracking_runs'), datetime.fromisoformat(payload['evaluated_at']),
+            runs=self._all('strategy_experiment_runs'), sessions=bundle.sessions)
         def write(connection):
             for value in values:
                 self.store._put_document(connection, 'strategy_trading_session_observations', value['observation_id'], value)
+            self._write_research_review(connection, report)
         return ctx.complete({'run_id': run['run_id'], 'observations': len(values),
                              'horizon_unit': 'exchange_trading_sessions'}, write)
 
@@ -634,10 +784,12 @@ class CandidateService:
 
     def submit_strategy_tracking(self, run_id, input_id=None, *, horizons=None, job_id=None):
         run = self.strategy_experiment(run_id)
-        resolved, _ = self.strategy_input(input_id or run.get('input_id'))
+        resolved, _ = self.strategy_input(input_id)
         horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
-        if any(not isinstance(h, int) or h <= 0 or h > 60 for h in horizons):
+        if any(type(h) is not int or h <= 0 for h in horizons):
             raise ValueError('unsupported research horizon')
+        self.store.put_document('strategy_research_horizon_requests', run_id + '_' + digest(horizons),
+            {'run_id':run_id, 'horizons':list(horizons)})
         return self.jobs.submit('strategy_tracking', {'run_id': run_id, 'input_id': resolved,
             'horizons': list(horizons), 'evaluated_at': utc_now().isoformat()}, job_id=job_id)
 
@@ -645,21 +797,34 @@ class CandidateService:
         payload = ctx.payload
         run = self.strategy_experiment(payload['run_id'])
         _, bundle = self.input(payload['input_id'])
-        from .strategy_tracking import build_strategy_feedback_report, build_strategy_tracking
-        tracking = build_strategy_tracking(run, bundle, datetime.fromisoformat(payload['evaluated_at']),
-                                           horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)))
-        outcomes = self.strategy_outcomes(run['run_id'])
-        review = build_strategy_feedback_report(run, outcomes, [*self.strategy_tracking(run['run_id']), tracking],
-                                                datetime.fromisoformat(payload['evaluated_at']))
+        from .strategy_tracking import OutcomeContext, build_strategy_feedback_report, build_strategy_tracking
+        evaluated_at = datetime.fromisoformat(payload['evaluated_at'])
+        context = OutcomeContext(bundle, evaluated_at)
+        tracking = build_strategy_tracking(run, bundle, evaluated_at,
+                                           horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)),
+                                           existing_episodes=self._all('research_episodes'),
+                                           prior_observations=self._all('research_episode_observations'),
+                                           episode_events=self._all('research_episode_events'), _context=context)
+        # One tracking task computes labels first; feedback cannot race an earlier outcome task.
+        from .strategy_tracking import evaluate_strategy_experiment_outcomes
+        new_outcomes = evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at,
+                                                           horizons=tuple(payload.get('horizons') or (1,2,3,4,5,10,20)), _context=context)
+        outcomes = self._all('strategy_trading_session_observations') + new_outcomes + tracking['shadow_outcomes']
+        review = build_strategy_feedback_report(run, outcomes, self._all('strategy_tracking_runs') + [tracking],
+                                                datetime.fromisoformat(payload['evaluated_at']),
+                                                runs=self._all('strategy_experiment_runs'), sessions=bundle.sessions)
         def write(connection):
+            for value in new_outcomes + tracking['shadow_outcomes']:
+                self.store._put_document(connection, 'strategy_trading_session_observations', value['observation_id'], value)
+            for value in tracking['signals']:
+                self.store._put_document(connection, 'research_episode_signals', value['signal_record_id'], value)
             for value in tracking['episodes']:
                 self.store._put_document(connection, 'research_episodes', value['episode_id'], value)
             for value in tracking['observations']:
-                obs_id = 'research_episode_observation_' + digest(value)
-                value = {**value, 'observation_id': obs_id}
+                obs_id = value['observation_id']
                 self.store._put_document(connection, 'research_episode_observations', obs_id, value)
             self.store._put_document(connection, 'strategy_tracking_runs', tracking['tracking_run_id'], tracking)
-            self.store._put_document(connection, 'strategy_research_reviews', review['review_id'], review)
+            self._write_research_review(connection, review)
         return ctx.complete({'run_id': run['run_id'], 'tracking_run_id': tracking['tracking_run_id'],
                              'episodes': tracking['episode_count'], 'observations': tracking['observation_count'],
                              'review_id': review['review_id']}, write)
@@ -668,23 +833,39 @@ class CandidateService:
         self.strategy_experiment(run_id)
         return [v for v in self._all('strategy_tracking_runs') if v.get('run_id') == run_id]
 
-    def strategy_review(self, run_id):
-        run = self.strategy_experiment(run_id)
-        reviews = [v for v in self._all('strategy_research_reviews') if v.get('run_id') == run_id]
-        if reviews:
-            return reviews[-1]
-        from .strategy_tracking import build_strategy_feedback_report
-        return build_strategy_feedback_report(run, self.strategy_outcomes(run_id), self.strategy_tracking(run_id), utc_now())
+    def _write_research_review(self, connection, review):
+        self.store._put_document(connection, 'strategy_research_reviews', review['review_id'], review)
+        projection = {k:v for k,v in review.items() if k not in {'revision_selection','rolling_windows'}}
+        projection['rolling_windows'] = {key:{k:v for k,v in window.items() if k not in {'date_diagnostics','same_date_common_eligibility'}}
+                                         for key,window in review.get('rolling_windows',{}).items()}
+        projection['full_report_available'] = True
+        self.store._put_document(connection, 'strategy_research_review_summaries', review['review_id'], projection)
+        self.store._put_document(connection, 'strategy_research_review_indexes', review['review_id'],
+            {'review_id':review['review_id'],'run_id':review['run_id'],'evaluated_at':review['evaluated_at']})
+
+    def strategy_review(self, run_id, *, full=False):
+        projection = self.store.get_document('strategy_experiment_summaries', run_id)
+        if projection is None:
+            raise KeyError(run_id)
+        indexes = [r for r in self._all('strategy_research_review_indexes') if r['run_id']==run_id]
+        if indexes:
+            latest = max(enumerate(indexes),key=lambda pair:(pair[1]['evaluated_at'],pair[0]))[1]
+            namespace = 'strategy_research_reviews' if full else 'strategy_research_review_summaries'
+            return self.store.get_document(namespace,latest['review_id'])
+        return {'schema_version':'R05_RESEARCH_FEEDBACK_V2','run_id':run_id,
+                'observation_date':projection.get('observation_date'),'status':'PENDING_MARKET_VALIDATION',
+                'market_edge':'NOT_ESTABLISHED','rolling_windows':{},'counts':{'mature':0,'outcome_observations':0},
+                'reason_codes':['OUTCOME_OR_TRACKING_REVIEW_NOT_RUN'], 'full_report_available':False}
 
     def latest_research_feedback(self):
-        rows = self.store.list_document_metadata('strategy_research_reviews', limit=1, descending=True)
-        if not rows:
-            latest = self.store.list_document_metadata('strategy_experiment_runs', limit=1, descending=True)
-            if latest:
-                return self.strategy_review(latest[0]['document_id'])
-            return {'schema_version': 'R05_RESEARCH_FEEDBACK_V1', 'status': 'UNAVAILABLE',
-                    'reason_codes': ['NO_STRATEGY_EXPERIMENT_RUN_SAVED'], 'market_edge': 'NOT_ESTABLISHED'}
-        return self.store.get_document('strategy_research_reviews', rows[0]['document_id'])
+        rows = self.store.list_document_metadata('strategy_research_review_indexes',limit=1,descending=True)
+        if rows:
+            return self.store.get_document('strategy_research_review_summaries',rows[0]['document_id'])
+        latest = self.store.list_document_metadata('strategy_experiment_summaries', limit=1, descending=True)
+        if latest:
+            return self.strategy_review(latest[0]['document_id'])
+        return {'schema_version':'R05_RESEARCH_FEEDBACK_V2','status':'UNAVAILABLE',
+                'reason_codes':['NO_STRATEGY_EXPERIMENT_RUN_SAVED'],'market_edge':'NOT_ESTABLISHED'}
 
     def latest_strategy_comparison(self):
         rows=self.store.list_document_metadata('strategy_experiment_runs',limit=1,descending=True)
@@ -692,7 +873,91 @@ class CandidateService:
             return {'comparison_version':'R05_STRATEGY_COMPARISON_V1','status':'UNAVAILABLE',
                 'reason_codes':['NO_STRATEGY_EXPERIMENT_RUN_SAVED'],
                 'parameter_status':'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED'}
-        return self.strategy_experiment(rows[0]['document_id'])['comparison']
+        return (self.store.get_document('strategy_experiment_summaries',rows[0]['document_id']) or {}).get('comparison', {'status':'PROJECTION_REBUILD_REQUIRED'})
+
+    def pending_strategy_research(self):
+        """Durable work inventory, including pre-index runs; no latest-N cutoff."""
+        rows, offset = [], 0
+        requests = self._all('strategy_research_horizon_requests')
+        while True:
+            page = self.store.list_document_metadata('strategy_experiment_runs', limit=1000, offset=offset)
+            for item in page:
+                pending = self.store.get_document('strategy_research_pending', item['document_id'])
+                if pending is None:
+                    run = self.strategy_experiment(item['document_id'])
+                    pending = {'run_id': run['run_id'], 'observation_date': run['observation_date'],
+                               'horizons': [1,2,3,4,5,10,20], 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1'}
+                    self.store.put_document('strategy_research_pending', run['run_id'], pending)
+                custom = {h for r in requests if r['run_id'] == pending['run_id'] for h in r['horizons']}
+                rows.append({**pending, 'horizons': sorted(set(pending['horizons']) | custom)})
+            if len(page) < 1000:
+                return sorted(rows, key=lambda r: (r['observation_date'],r['run_id']))
+            offset += len(page)
+
+    def experiment_outcome_demand(self, observation_date, sessions):
+        from .strategy_tracking import authoritative_strategy_items, select_label_revisions
+        labels = select_label_revisions(self._all('strategy_trading_session_observations'), utc_now())
+        indexed = {}
+        for label in labels:
+            indexed.setdefault((label['run_id'], label['instrument_id']), []).append(label)
+        demand = []
+        days = sorted(sessions)
+        for pending in self.pending_strategy_research():
+            if date.fromisoformat(pending['observation_date']) > observation_date:
+                continue
+            run = self.strategy_experiment(pending['run_id'])
+            ids = {item['instrument_id'] for _,items in authoritative_strategy_items(run) for item in items}
+            for iid in sorted(ids):
+                saved = indexed.get((run['run_id'],iid), [])
+                fields = {}
+                for horizon in pending['horizons']:
+                    candidates = [r for r in saved if r['horizon'] == horizon]
+                    missing = []
+                    for field in ('close_reference_change','next_open_gap','mfe_bound','mae_bound','any_close_limit_up','any_close_limit_down'):
+                        if not candidates or any(r.get('metrics',{}).get(field) is None for r in candidates):
+                            missing.append('metrics.' + field)
+                    if missing:
+                        fields[str(horizon)] = missing
+                focus = iid in set(((run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}).get('selected_ids') or [])
+                if fields or focus:
+                    start = date.fromisoformat(run['observation_date'])
+                    prior = [d for d in days if d <= start]
+                    demand.append({'run_id': run['run_id'], 'instrument_id': iid, 'observation_date': str(start),
+                                   'horizons': [int(h) for h in fields], 'pending_fields': fields,
+                                   'start_date': str(prior[-20]) if focus and len(prior)>=20 else str(start),
+                                   'end_date': str(observation_date), 'selection_reason': 'R05_PENDING_LABEL_OR_EPISODE_INCLUDING_EXIT_SHADOW'})
+        # Episodes survive discovery changes and keep actual-exit shadow requirements.
+        for episode in self._all('research_episodes'):
+            iid = episode['instrument_id']
+            history = [r for r in self._all('research_episode_observations') if r['episode_id'] == episode['episode_id']]
+            exits = [r['session'] for r in history if r.get('state') in {'THESIS_INVALIDATED','ARCHIVED'}]
+            exits += [r['effective_session'] for r in self._all('research_episode_events') if r['episode_id'] == episode['episode_id'] and r.get('state') == 'ARCHIVED']
+            start = min(exits) if exits else episode['observation_date']
+            saved = [r for r in labels if r.get('episode_id') == episode['episode_id'] and r.get('label_kind') == 'POST_EXIT_SHADOW']
+            horizons = [h for h in (5,10) if not any(r['horizon']==h and r.get('metrics',{}).get('close_reference_change') is not None for r in saved)] if exits else [5,10]
+            if not exits or horizons:
+                demand.append({'run_id': episode['run_id'], 'episode_id': episode['episode_id'], 'instrument_id':iid,
+                               'observation_date':start, 'horizons':horizons, 'pending_fields':{str(h):['EPISODE_OR_EXIT_SHADOW_PENDING'] for h in horizons},
+                               'start_date':start, 'end_date':str(observation_date), 'selection_reason':'R05_PERSISTED_EPISODE_OR_ACTUAL_EXIT_SHADOW'})
+        return demand
+
+    def archive_strategy_episode(self, episode_id, reason):
+        episode = self.store.get_document('research_episodes', episode_id)
+        if episode is None:
+            raise KeyError(episode_id)
+        if not isinstance(reason, str) or not reason.strip() or len(reason) > 500:
+            raise ValueError('archive reason required, at most 500 characters')
+        _, bundle = self.strategy_input()
+        from zoneinfo import ZoneInfo
+        local = utc_now().astimezone(ZoneInfo('Asia/Shanghai'))
+        dates = [d for d in bundle.sessions if d < local.date() or d == local.date() and local.time().replace(tzinfo=None) >= time(15)]
+        if not dates:
+            raise UnavailableError('ARCHIVE_EXCHANGE_SESSION_UNAVAILABLE', 'candidate')
+        value = {'episode_id':episode_id, 'state':'ARCHIVED', 'effective_session':str(max(dates)),
+                 'recorded_at':utc_now().isoformat(), 'reason':reason.strip(), 'outcomes_retained':True}
+        value['event_id'] = 'episode_archive_' + digest(value)
+        self.store.put_document('research_episode_events', value['event_id'], value)
+        return value
 
     def item_detail(self, run_id, instrument_id):
         run=self.get_run(run_id)

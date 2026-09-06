@@ -6,7 +6,7 @@
 
 > 工程基线更新：当前统一推荐、风控、持久历史与离线测试入口见 [ENGINEERING_BASELINE.md](ENGINEERING_BASELINE.md)。开发环境请安装 `requirements-dev.txt`；后文保留的旧研究/推演功能不代表当前已启用或经过投资验证。
 
-> R05 收口入口：默认候选仍为 `DAILY_V1`，新增 R05 实验策略、动态焦点名单、详情/导出、后验、研究周期跟踪和 Docker 一键启动。所有策略仍标记 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`，`MARKET_EDGE=NOT_ESTABLISHED`。
+> R05 本次整改与真实逐日重建：见 [规格、运行及证据说明](docs/R05_RECTIFICATION_AND_REPLAY.md)。DAILY 原参数冻结；完整 PV 和焦点没有名额截断，价格上涨率与模拟交易分开报告。`MARKET_EDGE=NOT_ESTABLISHED`。
 
 ### 完整决策链路
 

@@ -24,5 +24,6 @@ mlruns
 work
 review
 .codex
+.docker-backups
 node_modules
 .DS_Store
