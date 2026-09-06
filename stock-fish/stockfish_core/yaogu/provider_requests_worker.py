@@ -1,6 +1,8 @@
 """R03 isolated SDK worker with bounded diagnostics; never prints credentials."""
-import contextlib,json,sys,threading,re
+import contextlib,json,os,sys,threading,re
 from datetime import date,datetime,timezone
+from pathlib import Path
+from zoneinfo import ZoneInfo
 
 def classify_error(exc):
     names=[];current=exc
@@ -17,6 +19,18 @@ def classify_error(exc):
     if '429' in label:return 'NETWORK','HTTP_RATE_LIMIT',names
     if (code:=re.search(r'BAOSTOCK_QUERY_([\d-]+)',label)):return 'PROVIDER','BAOSTOCK_ERROR_'+code.group(1),names
     return 'PROVIDER','PROVIDER_QUERY_FAILED',names
+
+def write_partial(path,result):
+    if not path:
+        return
+    try:
+        target=Path(path)
+        target.parent.mkdir(parents=True,exist_ok=True)
+        tmp=target.with_suffix(target.suffix+'.tmp')
+        tmp.write_text(json.dumps(result,ensure_ascii=True,allow_nan=False),encoding='utf-8')
+        tmp.replace(target)
+    except Exception:
+        pass
 
 def bs_rows(result,maximum=30000):
     if result.error_code!='0':raise ValueError('BAOSTOCK_QUERY_'+str(result.error_code))
@@ -161,7 +175,7 @@ def _eastmoney_limit_code(code):
         symbol=match.group(1);exchange=match.group(2).lower()
     return raw,symbol+'.'+exchange.upper(),('1' if exchange=='sh' else '0')+'.'+symbol,symbol
 
-def eastmoney_daily_limits(params,captured,max_requests):
+def eastmoney_daily_limits(params,captured,max_requests,partial_path=None):
     """从逐证券行情记录直接读取供应商 f51/f52 涨跌停价。
 
     clist 端点会把 f51/f52 用作其他含义，因此此连接器只消费
@@ -194,17 +208,15 @@ def eastmoney_daily_limits(params,captured,max_requests):
                 close=float(data['f43']);limit_up=float(data['f51']);limit_down=float(data['f52'])
             except (KeyError,TypeError,ValueError,OSError,OverflowError):
                 raise ValueError('EASTMONEY_LIMIT_FIELDS_MISSING')
-            if source_time.astimezone().date()!=day and source_time.astimezone(timezone.utc).date()!=day:
-                # 规范化层还会按 Asia/Shanghai 语义复核交易日。这里先做
-                # 一层快速检查，用来捕获过期报价，同时不依赖本机时区。
-                from zoneinfo import ZoneInfo
-                if source_time.astimezone(ZoneInfo('Asia/Shanghai')).date()!=day:
-                    raise ValueError('EASTMONEY_LIMIT_DATE_MISMATCH')
+            source_business_date=source_time.astimezone(ZoneInfo('Asia/Shanghai')).date()
+            if source_business_date!=day:
+                raise ValueError('EASTMONEY_LIMIT_DATE_MISMATCH')
             if not (0<limit_down<limit_up and limit_down<=close<=limit_up):
                 raise ValueError('EASTMONEY_LIMIT_VALUES_INVALID')
             rows.append({'code':raw_code,'instrument_id':iid,'date':day.isoformat(),
                 'close':close,'limit_up':limit_up,'limit_down':limit_down,
                 'source_timestamp':source_time.isoformat(),
+                'source_business_date':source_business_date.isoformat(),
                 'field_mapping':'EASTMONEY_STOCK_GET_F51_F52_R04_V1'})
             statuses.append({'code':raw_code,'instrument_id':iid,'status':'COMPLETE',
                 'captured_at':datetime.now(timezone.utc).isoformat()})
@@ -214,6 +226,17 @@ def eastmoney_daily_limits(params,captured,max_requests):
             statuses.append({'code':raw_code,'instrument_id':iid,'status':'FETCH_FAILED',
                 'failure_category':category,'error_code':error,'exception_classes':classes,
                 'captured_at':datetime.now(timezone.utc).isoformat()})
+        partial_failed=[s for s in statuses if s['status']!='COMPLETE']
+        partial_status='COMPLETE' if rows and not partial_failed else 'PARTIAL' if rows else 'FETCH_FAILED'
+        write_partial(partial_path,dict(status=partial_status,rows=rows,pagination_complete=False,
+            http_responses=captured,field_version='EASTMONEY_STOCK_GET_F51_F52_R04_V1',
+            source_url='https://push2.eastmoney.com/api/qt/stock/get',
+            coverage={'returned_rows':len(rows),'requested_codes':params['codes'],
+                'returned_instrument_ids':sorted({r['instrument_id'] for r in rows}),
+                'business_sessions':[day.isoformat()],'http_requests':attempts,
+                'security_statuses':statuses},
+            gaps=partial_failed,diagnostics={'field_mapping':'EASTMONEY_STOCK_GET_F51_F52_R04_V1'},
+            first_seen_at=datetime.now(timezone.utc).isoformat()))
     failed=[s for s in statuses if s['status']!='COMPLETE']
     status='COMPLETE' if rows and not failed else 'PARTIAL' if rows else 'FETCH_FAILED'
     return dict(status=status,rows=rows,pagination_complete=not failed,
@@ -227,6 +250,78 @@ def eastmoney_daily_limits(params,captured,max_requests):
         error_code='BATCH_SECURITY_FAILURES' if failed else None,
         diagnostics={'field_mapping':'EASTMONEY_STOCK_GET_F51_F52_R04_V1'})
 
+def _compact_date(value):
+    if value in (None,''):
+        return value
+    text=str(value)
+    return text.replace('-','') if re.fullmatch(r'\d{4}-\d{2}-\d{2}',text) else text
+
+def tushare_request(endpoint,params,captured,max_requests):
+    from .provider_requests import TUSHARE_ENDPOINTS
+    import requests
+    definition=TUSHARE_ENDPOINTS[endpoint]
+    token=os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN')
+    if not token or token.strip().lower() in {'your-tushare-token','changeme','test'}:
+        return dict(status='FETCH_FAILED',failure_category='AUTH',error_code='AUTH_REQUIRED',rows=[],
+            pagination_complete=False,field_version='TUSHARE_HTTP_PRO_R05_V1',
+            source_url=definition['doc_url'],coverage={'auth_configured':False,'requested_endpoint':definition['api_name']},
+            gaps=['TUSHARE_TOKEN_REQUIRED'],diagnostics={'transport':'HTTP_POST','token_env_names':['TUSHARE_TOKEN','TUSHARE_PRO_TOKEN']})
+    clean_params={k:_compact_date(v) for k,v in params.items() if v not in (None,'')}
+    limit=5000;offset=0;rows=[];field_names=[];attempts=0;first_error=None
+    while True:
+        if attempts>=max_requests:
+            first_error=first_error or 'EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED'
+            break
+        attempts+=1
+        page_params={**clean_params,'limit':limit,'offset':offset}
+        payload={'api_name':definition['api_name'],'token':token,'params':page_params,'fields':definition['fields']}
+        response=requests.post('http://api.tushare.pro',json=payload,timeout=(5,20))
+        try:
+            body=response.json()
+        except ValueError:
+            body={'text_prefix':response.text[:200]}
+        captured.append(dict(url='http://api.tushare.pro',parameters={k:v for k,v in page_params.items() if k!='token'},
+            body=body,status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
+        if response.status_code in (401,403,429):
+            first_error='HTTP_'+str(response.status_code)
+            break
+        response.raise_for_status()
+        if not isinstance(body,dict) or body.get('code') not in (0,'0'):
+            msg=str(body.get('msg',''))
+            code='TUSHARE_API_'+str(body.get('code','UNKNOWN'))
+            if '权限' in msg or '积分' in msg or 'token' in msg.lower() or body.get('code') in (-2001,-2002,'-2001','-2002'):
+                category='PERMISSION'
+            elif '频' in msg or '每分钟' in msg or body.get('code') in (-2003,'-2003'):
+                category='NETWORK'
+            else:
+                category='PROVIDER'
+            return dict(status='FETCH_FAILED',failure_category=category,error_code=code,rows=[],
+                pagination_complete=False,field_version='TUSHARE_HTTP_PRO_R05_V1',source_url=definition['doc_url'],
+                coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'http_requests':attempts},
+                gaps=[code],diagnostics={'provider_message_present':bool(msg)})
+        data=body.get('data') if isinstance(body,dict) else None
+        fields=data.get('fields') if isinstance(data,dict) else None
+        items=data.get('items') if isinstance(data,dict) else None
+        if not isinstance(fields,list) or not isinstance(items,list):
+            return dict(status='FETCH_FAILED',failure_category='UPSTREAM_SCHEMA',error_code='TUSHARE_RESPONSE_SCHEMA_OR_ENCODING',
+                rows=[],pagination_complete=False,field_version='TUSHARE_HTTP_PRO_R05_V1',source_url=definition['doc_url'],
+                coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'http_requests':attempts},
+                gaps=['TUSHARE_RESPONSE_SCHEMA_OR_ENCODING'])
+        field_names=fields
+        rows.extend(dict(zip(fields,item)) for item in items)
+        if len(items)<limit:
+            first_error=None
+            break
+        offset+=limit
+    complete=first_error is None
+    return dict(status='COMPLETE' if complete else 'PARTIAL' if rows else 'FETCH_FAILED',
+        failure_category='NETWORK' if first_error else None,error_code=first_error,
+        rows=rows,pagination_complete=complete,field_version='TUSHARE_HTTP_PRO_R05_V1',
+        source_url=definition['doc_url'],coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],
+            'api_name':definition['api_name'],'returned_rows':len(rows),'fields':field_names,
+            'http_requests':attempts,'limit':limit,'offset_exhausted':complete},
+        gaps=[] if complete else [first_error],diagnostics={'transport':'HTTP_POST','token_redacted':True})
+
 def main():
     request=json.load(sys.stdin);captured=[]
     from .provider_requests import validate_request
@@ -235,7 +330,8 @@ def main():
         with contextlib.redirect_stdout(sys.stderr):
             if request['provider']=='baostock':result=baostock_request(request['endpoint'],parameters)
             elif request['provider']=='sse' and request['endpoint']=='delisting_sse':result=official_sse_delisting(captured)
-            elif request['provider']=='eastmoney' and request['endpoint']=='daily_limits_eastmoney':result=eastmoney_daily_limits(parameters,captured,request['max_http_requests'])
+            elif request['provider']=='eastmoney' and request['endpoint']=='daily_limits_eastmoney':result=eastmoney_daily_limits(parameters,captured,request['max_http_requests'],request.get('partial_path'))
+            elif request['provider']=='tushare':result=tushare_request(request['endpoint'],parameters,captured,request['max_http_requests'])
             else:result=akshare_request(request['endpoint'],parameters,captured,request['max_http_requests'])
     except Exception as exc:
         category,code,classes=classify_error(exc)

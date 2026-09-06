@@ -28,6 +28,30 @@ def register_candidate_routes(app, service):
     def strategy_configs():
         return jsonify(service._all('strategy_configs'))
 
+    @app.get('/api/strategy-experiments/specs')
+    def strategy_experiment_specs():
+        return jsonify(service.strategy_specs())
+
+    @app.get('/api/strategy-experiments')
+    def strategy_experiment_runs():
+        return jsonify(service.list_strategy_experiments(int(request.args.get('limit', 20))))
+
+    @app.post('/api/strategy-experiments/run')
+    def start_strategy_experiment_run():
+        value = body()
+        if set(value) - {'input_id', 'observation_date'}:
+            raise ValueError('select an existing market input only')
+        parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
+        return accepted(service.submit_strategy_experiments(input_id=value.get('input_id'), observation_date=parsed_date))
+
+    @app.get('/api/strategy-experiments/<run_id>/summary')
+    def strategy_experiment_summary(run_id):
+        return jsonify(service.strategy_experiment(run_id))
+
+    @app.get('/api/strategy-comparison/latest')
+    def latest_strategy_comparison():
+        return jsonify(service.latest_strategy_comparison())
+
     @app.post('/api/strategy-configs')
     def new_strategy_config():
         return jsonify(service.register_config(StrategyConfig.model_validate(body()))), 201

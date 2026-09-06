@@ -59,6 +59,7 @@ class CandidateService:
         self.jobs.register('candidate_run', self._candidate_job)
         self.jobs.register('auction_review', self._auction_job)
         self.jobs.register('candidate_outcomes', self._outcome_job)
+        self.jobs.register('strategy_experiments', self._strategy_experiment_job)
         if not self._all('strategy_configs'):
             self.register_config(load_config(Path(__file__).resolve().parents[2] / 'config/yaogu_v1.defaults.yaml'))
         elif self.current_config().strategy_id == 'YAOGU_V1.0.0':
@@ -278,6 +279,8 @@ class CandidateService:
             terminal['activated'] = activation_allowed
         def publish(connection):
             self.store._put_document(connection, 'candidate_runs', result.run_id, value)
+            self.store._put_document(connection, 'candidate_run_summaries', result.run_id,
+                self._run_summary_projection(result, source_run_hash=digest(value)))
             self.store._put_document(connection, 'candidate_publications', result.run_id,
                 {'job_id': ctx.job_id, 'run_hash': digest(value), 'input_id': payload['input_id'], 'config_hash': config.config_hash})
             self.store._put_document(connection, 'market_emotions', result.run_id, result.emotion.model_dump(mode='json'))
@@ -292,16 +295,22 @@ class CandidateService:
                      'activated': activation_allowed, 'consumer_status': result.status})
         return ctx.complete(terminal, publish)
 
-    def get_run(self, run_id):
-        value = self.store.get_document('candidate_runs', run_id)
+    def _publication_authority(self, run_id):
         authority = self.store.get_document('candidate_publications', run_id)
-        if value is None:
-            raise KeyError(run_id)
-        if authority is None or authority['run_hash'] != digest(value):
+        if authority is None:
             raise UnavailableError('CANDIDATE_PUBLICATION_AUTHORITY_MISSING', 'candidate')
         job = self.jobs.get(authority['job_id'])
         if job is None or job['state'] != 'SUCCEEDED' or (job['result'] or {}).get('candidate_run_id') != run_id:
             raise UnavailableError('CANDIDATE_SUCCESSFUL_JOB_REQUIRED', 'candidate')
+        return authority
+
+    def get_run(self, run_id):
+        value = self.store.get_document('candidate_runs', run_id)
+        if value is None:
+            raise KeyError(run_id)
+        authority = self._publication_authority(run_id)
+        if authority['run_hash'] != digest(value):
+            raise UnavailableError('CANDIDATE_PUBLICATION_AUTHORITY_MISSING', 'candidate')
         return CandidateRun.model_validate(value)
 
     def list_runs(self, limit=100):
@@ -354,27 +363,13 @@ class CandidateService:
             'funds_status':item.funds_evidence.get('family_status') if item.funds_evidence else None,
             'has_detail':True}
 
-    def run_summary(self, run_id, *, page=1, page_size=50, family=None, selection=None):
-        if family is not None and family not in FAMILIES:
-            raise ValueError('未知策略族')
-        if selection not in (None,'display','focus'):
-            raise ValueError('未知候选选择')
-        if not 1<=page_size<=50 or page<1:
-            raise ValueError('summary 分页大小必须为 1..50')
-        run=self.get_run(run_id)
-        items=list(run.items)
-        if family is not None:
-            items=[i for i in items if i.primary_family==family]
-        if selection=='display':
-            wanted=set(run.display_ids);items=[i for i in items if i.instrument_id in wanted]
-        elif selection=='focus':
-            wanted=set(run.focus_ids);items=[i for i in items if i.instrument_id in wanted]
-        total=len(items);start=(page-1)*page_size;page_items=items[start:start+page_size]
+    def _run_summary_projection(self, run, *, source_run_hash):
         family_counts={f:{'total':sum(i.primary_family==f for i in run.items),
             'scored':sum(i.primary_family==f and i.score is not None for i in run.items),
             'focus':sum(i.primary_family==f and i.tier=='FOCUS' for i in run.items),
             'watch':sum(i.primary_family==f and i.tier=='WATCH' for i in run.items)} for f in FAMILIES}
-        return {'view':'SUMMARY_V1','run_id':run.run_id,'revision':run.revision,
+        return {'view':'SUMMARY_V1','projection_version':'CANDIDATE_RUN_SUMMARY_PROJECTION_R05_V1',
+            'source_run_hash':source_run_hash,'run_id':run.run_id,'revision':run.revision,
             'parent_run_id':run.parent_run_id,'generated_at':run.generated_at.isoformat(),
             'observation_date':run.observation_date.isoformat(),
             'decision_cutoff':run.decision_cutoff.isoformat(),'market_session':run.market_session,
@@ -385,9 +380,8 @@ class CandidateService:
             'hash_contract_version':run.hash_contract_version,'raw_bundle_hash':run.raw_bundle_hash,
             'effective_input_hash':run.effective_input_hash,'model_id':run.model_id,'profile':run.profile,
             'parameter_status':run.parameter_status,'coverage_type':run.coverage_type,'status':run.status,
-            'item_total':len(run.items),'filtered_total':total,'page':page,'page_size':page_size,
-            'has_next':start+page_size<total,'display_ids':run.display_ids,'focus_ids':run.focus_ids,
-            'family_counts':family_counts,'items':[self._item_summary(i) for i in page_items],
+            'item_total':len(run.items),'display_ids':run.display_ids,'focus_ids':run.focus_ids,
+            'family_counts':family_counts,'items':[self._item_summary(i) for i in run.items],
             'coverage_summary':self._compact_coverage(run.coverage),
             'emotion':{'session':run.emotion.session.isoformat(),'as_of':run.emotion.as_of.isoformat(),
                 'score':run.emotion.score,'state':run.emotion.state,'components':run.emotion.components,
@@ -397,6 +391,87 @@ class CandidateService:
             'excluded_summary':{'count':len(run.excluded),'reason_counts':self._reason_counts(run.excluded)},
             'unavailable_summary':{'count':len(run.unavailable),'reason_counts':self._reason_counts(run.unavailable)},
             'source_ref_count':len(run.source_refs),'detail_endpoint':'/api/candidate-runs/'+run.run_id+'/items/{instrument_id}'}
+
+    def run_summary(self, run_id, *, page=1, page_size=50, family=None, selection=None):
+        if family is not None and family not in FAMILIES:
+            raise ValueError('未知策略族')
+        if selection not in (None,'display','focus'):
+            raise ValueError('未知候选选择')
+        if not 1<=page_size<=50 or page<1:
+            raise ValueError('summary 分页大小必须为 1..50')
+        projection=self.store.get_document('candidate_run_summaries',run_id)
+        if projection is not None:
+            authority=self._publication_authority(run_id)
+            if projection.get('source_run_hash')!=authority['run_hash']:
+                raise UnavailableError('CANDIDATE_SUMMARY_PROJECTION_MISMATCH','candidate')
+            items=list(projection['items'])
+            display_ids=tuple(projection['display_ids'])
+            focus_ids=tuple(projection['focus_ids'])
+            item_total=projection['item_total']
+        else:
+            run=self.get_run(run_id)
+            projection=self._run_summary_projection(run,source_run_hash=digest(run))
+            items=list(projection['items'])
+            display_ids=tuple(projection['display_ids'])
+            focus_ids=tuple(projection['focus_ids'])
+            item_total=projection['item_total']
+        if family is not None:
+            items=[i for i in items if i['primary_family']==family]
+        if selection=='display':
+            wanted=set(display_ids);items=[i for i in items if i['instrument_id'] in wanted]
+        elif selection=='focus':
+            wanted=set(focus_ids);items=[i for i in items if i['instrument_id'] in wanted]
+        total=len(items);start=(page-1)*page_size;page_items=items[start:start+page_size]
+        return {k:v for k,v in projection.items() if k not in {'items'}}|{'filtered_total':total,
+            'page':page,'page_size':page_size,'has_next':start+page_size<total,
+            'item_total':item_total,'items':page_items}
+
+    def strategy_specs(self):
+        from .strategy_experiments import STRATEGY_SPECS
+        return list(STRATEGY_SPECS)
+
+    def submit_strategy_experiments(self, *, input_id=None, observation_date=None, job_id=None):
+        resolved,_=self.input(input_id,observation_date)
+        return self.jobs.submit('strategy_experiments', {'input_id': resolved,
+            'cutoff': utc_now().isoformat()}, job_id=job_id)
+
+    def _strategy_experiment_job(self, ctx):
+        payload=ctx.payload
+        _,bundle=self.input(payload['input_id'])
+        config=self.current_config()
+        cutoff=datetime.fromisoformat(payload['cutoff'])
+        ctx.update(.25,'运行量价观察控制组、股性复排和题材上下文实验')
+        from .strategy_experiments import run_strategy_experiments, strategy_comparison
+        result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
+        latest=self._latest_input_publication(payload['input_id'])
+        daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
+        result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
+            result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'])
+        result['content_hash']=digest({k:v for k,v in result.items() if k!='content_hash'})
+        terminal={'strategy_experiment_run_id':result['run_id'],'run_id':result['run_id'],
+            'status':'complete','quality':result['results']['PV_OBSERVATION_V1']['status'],
+            'pv_count':len(result['results']['PV_OBSERVATION_V1'].get('items',()))}
+        return ctx.complete(terminal,lambda connection:self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result))
+
+    def list_strategy_experiments(self, limit=20):
+        if not 1<=limit<=1000:
+            raise ValueError('invalid result page size')
+        rows=self.store.list_document_metadata('strategy_experiment_runs',limit=limit,descending=True)
+        return [self.strategy_experiment(row['document_id']) for row in rows]
+
+    def strategy_experiment(self, run_id):
+        value=self.store.get_document('strategy_experiment_runs',run_id)
+        if value is None:
+            raise KeyError(run_id)
+        return value
+
+    def latest_strategy_comparison(self):
+        rows=self.store.list_document_metadata('strategy_experiment_runs',limit=1,descending=True)
+        if not rows:
+            return {'comparison_version':'R05_STRATEGY_COMPARISON_V1','status':'UNAVAILABLE',
+                'reason_codes':['NO_STRATEGY_EXPERIMENT_RUN_SAVED'],
+                'parameter_status':'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED'}
+        return self.strategy_experiment(rows[0]['document_id'])['comparison']
 
     def item_detail(self, run_id, instrument_id):
         run=self.get_run(run_id)

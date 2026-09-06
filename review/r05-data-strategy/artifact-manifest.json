@@ -1,0 +1,158 @@
+{
+  "actual-pv-capture-01/capture-report.json": {
+    "bytes": 1481988,
+    "sha256": "13ae8092269ee4e19f73579481f6aaac412cddf31329bd075fdd6b15c7909930"
+  },
+  "actual-pv-capture-01/market-input.json": {
+    "bytes": 40002290,
+    "sha256": "4c97dfd5fc72714941e9cf940a036169a215a8cd1670d37b0f094d1ee6d61c4a"
+  },
+  "actual-pv-capture-01/normalization-report.json": {
+    "bytes": 1373658,
+    "sha256": "a1b44f4c4986310a1d587be704a93ccab6e9188e7ed08718eca3654492821aed"
+  },
+  "actual-pv-capture-01/plan.json": {
+    "bytes": 457,
+    "sha256": "38a3a5b3611c8c26544d252f0efff15c6ec129f0872b9c7c8cd4abbaed6e37da"
+  },
+  "actual-pv-capture-01/pv-observation-top.csv": {
+    "bytes": 71,
+    "sha256": "f646bcf43c5e0ee6fc198fd89e5ba3464c91b4cc743ce5a4b486f5ac9a08bc00"
+  },
+  "actual-pv-capture-01/strategy-experiments.json": {
+    "bytes": 681062,
+    "sha256": "c957d0c47d2ee3cfce1f02141a5b388858cc4b91c28e1647770fa98bf7d6eede"
+  },
+  "actual-pv-capture-02/capture-report.json": {
+    "bytes": 1798647,
+    "sha256": "3b868d1452dde7d84a5ded9617925ae6bce0295e4ef6d504051c71b5e41ecf11"
+  },
+  "actual-pv-capture-02/market-input.json": {
+    "bytes": 61619374,
+    "sha256": "722c4f8197d5c03295e47903d570e1cd6e115437eeb719b5244b62c3625a741b"
+  },
+  "actual-pv-capture-02/normalization-report.json": {
+    "bytes": 1703658,
+    "sha256": "42fe33baf81c221772c85befc38a827690297e744601fb61e216fb62674706bb"
+  },
+  "actual-pv-capture-02/plan.json": {
+    "bytes": 495,
+    "sha256": "c1c3802623a5de25fbd47011597e3e3373a2a7b450eb0d202a1c909629576f68"
+  },
+  "actual-pv-capture-02/pv-observation-top.csv": {
+    "bytes": 114717,
+    "sha256": "aee6b9e33f9d4c945bf7db86bd98a27dbf0d76167c9f24b4d5eb6e5babe90b38"
+  },
+  "actual-pv-capture-02/strategy-experiments.json": {
+    "bytes": 1079861,
+    "sha256": "086a4919009a73e8b7ae15e30642a3df5e347dc1b820f2650bd85e8deaab03f8"
+  },
+  "actual-pv-capture-03/capture-report.json": {
+    "bytes": 1798644,
+    "sha256": "5f19ace2f708bd2fb5cfc52cba9f85e2bc2155b57c0128beef2452d0f7997720"
+  },
+  "actual-pv-capture-03/market-input.json": {
+    "bytes": 61619374,
+    "sha256": "9e652deb7bd5a1038fea9ccd4d2efaecabad0ecd6590810a2f9c40badac3dce3"
+  },
+  "actual-pv-capture-03/normalization-report.json": {
+    "bytes": 1703658,
+    "sha256": "5c4848b616a17862f70bb3a9ecdb87cee52f34107f015fccc911da555d0f4947"
+  },
+  "actual-pv-capture-03/plan.json": {
+    "bytes": 495,
+    "sha256": "1c1749e2341a3c036f9967f972ccd2f002f52370386cc1e416ce7511833e4d02"
+  },
+  "actual-pv-capture-03/pv-observation-top.csv": {
+    "bytes": 114717,
+    "sha256": "aee6b9e33f9d4c945bf7db86bd98a27dbf0d76167c9f24b4d5eb6e5babe90b38"
+  },
+  "actual-pv-capture-03/strategy-experiments.json": {
+    "bytes": 1079909,
+    "sha256": "4920fc630b255d0c7223520940f0707681de6d8924a7baa663135877c211687b"
+  },
+  "artifact-manifest.json": {
+    "bytes": 5768,
+    "sha256": "0b1c01918382d5ab7e1c50a912115655edb3e69ea8fff0865ee5ad590d806028"
+  },
+  "audit-fixes.md": {
+    "bytes": 955,
+    "sha256": "2391d79a7355f01ebbe6f9173a3ba6a0209ea478b1555e1466bd1265430e03b9"
+  },
+  "baseline.json": {
+    "bytes": 3461,
+    "sha256": "0d4fc8f081d3bce1fda0f4009247cb330e8d5436041a75b851dbe10a21566aba"
+  },
+  "bundle.json": {
+    "bytes": 271,
+    "sha256": "89eba64fbc0c3c3991a978efe8797da528e4b597b943f72b66ed1857011c676a"
+  },
+  "data-access-matrix.md": {
+    "bytes": 2453,
+    "sha256": "5b36684f1ac65a8251b9563577a1b123dd8ac0703d2ecbd43b53068b6f165bf7"
+  },
+  "data-execution.json": {
+    "bytes": 2243,
+    "sha256": "3108a8467c771332c282beb0b5c727bc916b7cab13b5860d7bae41e87390f74b"
+  },
+  "external-blockers.md": {
+    "bytes": 720,
+    "sha256": "67e24a9d090104bb38700598c4da767ffa0d3cddb3db75b908376ba6c388c188"
+  },
+  "final-report.md": {
+    "bytes": 1812,
+    "sha256": "047e88cdbfe6358a1679ee554e828deed865a379a86773aa131e51e85cb32d7d"
+  },
+  "logs/r05-compileall.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "logs/r05-core-test-runner.log": {
+    "bytes": 843,
+    "sha256": "3b715dc2ef24625747f689fe2832453ced42b881e375cefd9fc00a2a3f4c3534"
+  },
+  "logs/r05-full-tests.log": {
+    "bytes": 1219,
+    "sha256": "8d1cb38d248422ce76c26c8128e32b760b658dbc49e53fa92be045568236bfa1"
+  },
+  "logs/r05-git-diff-check.log": {
+    "bytes": 1620,
+    "sha256": "f19ef5798fc099488b93738817e9224ab40b0ad330c8dda37bf6ce4189670b64"
+  },
+  "logs/r05-node-check.log": {
+    "bytes": 0,
+    "sha256": "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
+  },
+  "logs/r05-targeted-tests.log": {
+    "bytes": 265,
+    "sha256": "53a8660a6af94a06d2befbba5deea5f08c654d968ecac0c1bd6836f6d15d90f9"
+  },
+  "pv-observation-top20.csv": {
+    "bytes": 4397,
+    "sha256": "653ebedb9cd6e31a2975bbb87b18736ebaf841399ecf2a49e4eb52bd6fead38b"
+  },
+  "pv-observation-top20.json": {
+    "bytes": 21369,
+    "sha256": "f328c85963e68f977f8b8bd4b46d9bc22c192ec90279079e08116322bf6715b4"
+  },
+  "runtime-acceptance.md": {
+    "bytes": 758,
+    "sha256": "5456090602a18fc19d3f12a7e4fc2212eb85c880922fe277441526ebc433cce8"
+  },
+  "source-capabilities.json": {
+    "bytes": 7051,
+    "sha256": "7ab887d81ec30bf7227f483f0d24063c8dc45add1fa3678f2c55638ff38aca78"
+  },
+  "strategy-comparison.md": {
+    "bytes": 921,
+    "sha256": "a7a799e9a82188351060e295dd42f9943677c7de65ed8a7364c8abdcfba254f5"
+  },
+  "strategy-specs.md": {
+    "bytes": 1029,
+    "sha256": "2603498cc4a9ea870fa0cbb1efae967b39f45870cea4970f7fe06a4d630209d7"
+  },
+  "upstream-strategy-review.md": {
+    "bytes": 574,
+    "sha256": "45b171d77111dbdb8a816d2d1cc4ba4479f44bd920e1ac369d0e4481117d6373"
+  }
+}

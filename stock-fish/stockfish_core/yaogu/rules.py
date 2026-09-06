@@ -2,6 +2,7 @@
 from datetime import date
 from decimal import Decimal,ROUND_HALF_UP
 import re
+from .contracts import digest
 
 SSE_2026='https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20260424_10816482.shtml'
 SZSE_2026='https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf'
@@ -9,6 +10,7 @@ SSE_SWITCH='https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_1081
 SZSE_SWITCH='https://investor.szse.cn/lawrules/rule/trade/t20260424_620190.html'
 REGISTRY_VERSION='SSE_SZSE_MAIN_20260706_V1'
 RULE_DERIVED_LIMIT_VERSION='RULE_DERIVED_LIMIT_EVIDENCE_R04_V1'
+RULE_CERTIFIER_VERSION='LOCAL_LIMIT_RULE_CERTIFIER_R05_V1'
 
 def resolve_rule(exchange,board,session,*,st,exception_status,listing_session=None):
     """Only independently established normal/exempt days can resolve a limit.
@@ -51,6 +53,39 @@ def calculate_limits(reference_prev_close,rule,*,source_sample=None):
         status='CROSS_VALIDATED'
     return {'status':status,'limit_up':str(up),'limit_down':str(down),'reference_prev_close':str(base),'rule':rule}
 
+def _certification_payload(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
+    rule=resolve_rule(exchange,board,session,st=st,exception_status='NORMAL_VERIFIED',listing_session=listing_session)
+    if rule['status']!='SUPPORTED':
+        return None,rule,None
+    calculated=calculate_limits(reference_prev_close,rule,source_sample=source_sample)
+    if source_sample is None:
+        return None,rule,calculated
+    proof={k:normal_or_exempt_proof.get(k) for k in (
+        'proof_status','source_receipt_ids','source_fact_ids','official_source_hash',
+        'reference_price_semantics','reference_price_receipt','validation_suite_id',
+        'sample_evidence_refs','definition_version')}
+    payload={'certifier_version':RULE_CERTIFIER_VERSION,'rule_id':rule['rule_id'],
+        'rule_version':rule['registry_version'],'session':rule['session'],'exchange':exchange,
+        'board':board,'st':st,'listing_session':listing_session,
+        'reference_prev_close':calculated['reference_prev_close'],
+        'limit_up':calculated['limit_up'],'limit_down':calculated['limit_down'],
+        'source_sample':{'limit_up':str(source_sample['limit_up']),'limit_down':str(source_sample['limit_down'])},
+        'proof':proof}
+    return payload,rule,calculated
+
+def certify_rule_derived_limits(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
+    """Create the local certification envelope consumed by derive_verified_limits."""
+    payload,rule,calculated=_certification_payload(reference_prev_close,exchange=exchange,board=board,session=session,
+        st=st,normal_or_exempt_proof=normal_or_exempt_proof,listing_session=listing_session,source_sample=source_sample)
+    if payload is None:
+        return {**normal_or_exempt_proof,'local_rule_certification':{'status':'UNKNOWN',
+            'reason':'DIRECT_SOURCE_SAMPLE_REQUIRED_FOR_LOCAL_CERTIFICATION' if source_sample is None else rule.get('reason','RULE_UNSUPPORTED'),
+            'certifier_version':RULE_CERTIFIER_VERSION}}
+    return {**normal_or_exempt_proof,'local_rule_certification':{
+        'status':'CERTIFIED','certifier_version':RULE_CERTIFIER_VERSION,
+        'certified_formula_status':calculated['status'],
+        'certification_hash':digest(payload),'payload':payload}}
+
 def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
     """只有普通/豁免分支证据齐全时，才推导精确涨跌停价。
 
@@ -80,8 +115,17 @@ def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,norm
         return {'status':'UNKNOWN','reason':rule.get('reason','RULE_UNSUPPORTED'),
                 'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
     calculated=calculate_limits(reference_prev_close,rule,source_sample=source_sample)
-    if source_sample is None and normal_or_exempt_proof.get('branch_cross_validated') is not True:
-        return {'status':'UNKNOWN','reason':'RULE_BRANCH_CROSS_VALIDATION_REQUIRED',
+    payload,_,_= _certification_payload(reference_prev_close,exchange=exchange,board=board,session=session,
+        st=st,normal_or_exempt_proof=normal_or_exempt_proof,listing_session=listing_session,source_sample=source_sample)
+    certification=normal_or_exempt_proof.get('local_rule_certification') if isinstance(normal_or_exempt_proof,dict) else None
+    if source_sample is None or payload is None or not isinstance(certification,dict):
+        return {'status':'UNKNOWN','reason':'LOCAL_RULE_CERTIFICATION_REQUIRED',
+                'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if certification.get('status')!='CERTIFIED' or certification.get('certifier_version')!=RULE_CERTIFIER_VERSION:
+        return {'status':'UNKNOWN','reason':'LOCAL_RULE_CERTIFICATION_REQUIRED',
+                'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if certification.get('certification_hash')!=digest(payload):
+        return {'status':'UNKNOWN','reason':'LOCAL_RULE_CERTIFICATION_HASH_MISMATCH',
                 'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
     return {'status':'RULE_DERIVED_VERIFIED','limit_up':calculated['limit_up'],
         'limit_down':calculated['limit_down'],'reference_price_value':calculated['reference_prev_close'],

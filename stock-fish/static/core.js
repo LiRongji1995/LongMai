@@ -296,6 +296,7 @@
   async function refresh() {
     try {
       await refreshPipeline();
+      await refreshExperiments();
       const [config, coverage, runs, schedule] = await Promise.all([
         api('/api/strategy-configs/current'),
         api('/api/universe/coverage'),
@@ -445,6 +446,37 @@
     } catch (e) {
       message(e.message, true);
       await refreshPipeline();
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  async function refreshExperiments() {
+    const [specs, comparison, runs] = await Promise.all([
+      api('/api/strategy-experiments/specs'),
+      api('/api/strategy-comparison/latest'),
+      api('/api/strategy-experiments?limit=1'),
+    ]);
+    $('strategySpecsJson').textContent = JSON.stringify(specs, null, 2);
+    $('experimentJson').textContent = JSON.stringify({ latest_comparison: comparison, latest_run: runs[0] || null }, null, 2);
+    const pv = runs[0]?.results?.PV_OBSERVATION_V1;
+    $('experimentStatus').textContent = pv
+      ? `${runs[0].observation_date} · ${pv.status} · PV入围 ${pv.counts?.ranked ?? 0} · ${runs[0].generated_at}`
+      : '尚未保存 R05 实验运行。';
+  }
+
+  $('runExperiment').onclick = async () => {
+    const button = $('runExperiment');
+    button.disabled = true;
+    try {
+      const value = {};
+      if ($('observationDate').value) value.observation_date = $('observationDate').value;
+      if ($('inputId').value.trim()) value.input_id = $('inputId').value.trim();
+      const result = await follow(await api('/api/strategy-experiments/run', value));
+      await refreshExperiments();
+      message('R05 实验已保存：' + result.run_id);
+    } catch (e) {
+      message(e.message, true);
     } finally {
       button.disabled = false;
     }

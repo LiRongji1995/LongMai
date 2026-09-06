@@ -1,3 +1,21 @@
+# Windows 部署：R05 数据供给与实验策略
+
+默认 Web/API 仍是沪深主板无账户规则候选研究入口。R05 新增“R05实验策略”区域和策略实验 API，可查看 `DAILY_V1`、`PV_OBSERVATION_V1`、`DNA_RERANK_V1`、`THEME_CONTEXT_V1` 规格，并运行量价观察控制组。`DAILY_V1` 不改名、不降级；所有新增实验策略均标记 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`，`MARKET_EDGE` 仍为 `NOT_ESTABLISHED`。
+
+R05 专用 CLI 可运行真实量价观察采集：
+
+~~~powershell
+& $ProjectPython ./stock-fish/scripts/r05_pv_observation_capture.py --cache ./data/r05-cache --output ./data/r05-pv-capture
+~~~
+
+本机验收的最新真实输出为 `review/r05-data-strategy/actual-pv-capture-03/`，观察日 `2026-09-04`，请求 43/43 完成，预算未耗尽；当前主板合格池 3,043 只，资格未知 0，只 3,039 只完成 PV 必需字段核验，缺失 4 只，最终 `PV_OBSERVATION_V1` 入围 525 只。提交内只保留 `review/r05-data-strategy/` 的摘要文档和 Top20，完整市场输入、缓存、日志和 ZIP 不作为源码内容。
+
+Tushare Pro HTTP adapter 已接入基础资料、交易日历、日线/复权、涨跌停、停复牌、ST、龙虎榜、资金、东财题材和竞价端点的配置、字段、分页、token 缺失错误和脱敏日志。当前环境无 token，真实状态为 `AUTH_REQUIRED / REAL_NOT_VERIFIED`。
+
+R05 还关闭了四个审计缺陷：Eastmoney 上海业务日校验、worker 超时部分结果保留、规则推导 VERIFIED 本地认证哈希、CandidateRun summary 轻量投影。R04/R05 相关子集测试 213 项通过，核心业务测试脚本 665 项通过；直接 `pytest -q` 仍被旧 MiroFish `locales/languages.json` 缺失阻塞。
+
+---
+
 # Windows 部署：R04 无账户规则候选
 
 默认 Web/API 是沪深主板五类候选研究入口。无需现金、持仓、LLM 或旧 Alpha158 推理，也不要求先下载模型。**当前真实验收仍为 UNAVAILABLE，尚不能输出完整 DAILY_V1 榜单或证明合法 EMPTY。** R04 变更与边界见 [R04 发布说明](docs/r04-release.md)，R03 基线见 [R03 发布说明](docs/r03-release.md)。

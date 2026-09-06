@@ -128,8 +128,17 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             for row in result['rows']:
                 iid=_iid(row.get('code')) or str(row.get('instrument_id') or '')
                 session=_date(row.get('date'))
-                if iid and session==day:
+                source_business_day=_date(row.get('source_business_date'))
+                try:
+                    source_timestamp=datetime.fromisoformat(str(row.get('source_timestamp')).replace('Z','+00:00')).astimezone(TZ).date()
+                except (TypeError,ValueError):
+                    source_timestamp=None
+                if iid and session==day and source_business_day in (None,day) and source_timestamp==day:
                     direct_limits[(iid,session)]=(row,rid)
+                elif iid:
+                    gaps.append(dict(instrument_id=iid,field='current_limit',status='UNAVAILABLE',
+                        reason='DIRECT_LIMIT_SOURCE_BUSINESS_DATE_MISMATCH',source_ref=rid,
+                        impact='CURRENT_LIMIT_EVENT'))
         elif endpoint=='delisting_sse' and result['status']=='COMPLETE' and result['pagination_complete']:
             codes={str(row.get('INSTRUMENT_ID','')) for row in result['rows']}
             if all(re.fullmatch(r'\d{6}',code) for code in codes):sse_delisting=(codes,rid)
