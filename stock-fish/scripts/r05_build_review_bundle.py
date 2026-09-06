@@ -19,7 +19,29 @@ DEV = ROOT / "stock-fish"
 REVIEW = ROOT / "review" / "r05-data-strategy"
 CAPTURE = REVIEW / "actual-pv-capture-03"
 DELIVERABLES = ROOT / "deliverables"
+PUBLISH_REPO = ROOT / "publish" / "stockfish-qlib-quant-system"
+SOURCE_ROOT = PUBLISH_REPO if PUBLISH_REPO.exists() else ROOT
 sys.path.insert(0, str(DEV))
+
+SOURCE_REVIEW_PATHS = (
+    "DEPLOYMENT.md",
+    "ENGINEERING_BASELINE.md",
+    "stock-fish/ENGINEERING_BASELINE.md",
+    "stock-fish/static/core.js",
+    "stock-fish/static/index.html",
+    "stock-fish/stockfish_core/yaogu/candidate_api.py",
+    "stock-fish/stockfish_core/yaogu/candidate_service.py",
+    "stock-fish/stockfish_core/yaogu/provider_normalization.py",
+    "stock-fish/stockfish_core/yaogu/provider_requests.py",
+    "stock-fish/stockfish_core/yaogu/provider_requests_worker.py",
+    "stock-fish/stockfish_core/yaogu/rules.py",
+    "stock-fish/stockfish_core/yaogu/strategy_experiments.py",
+    "stock-fish/tests/r04_product/test_direct_limits_and_summary.py",
+    "stock-fish/tests/r05_product/__init__.py",
+    "stock-fish/tests/r05_product/test_strategy_experiments_and_tushare.py",
+    "stock-fish/scripts/r05_pv_observation_capture.py",
+    "stock-fish/scripts/r05_build_review_bundle.py",
+)
 
 
 def load(path, default=None):
@@ -46,6 +68,10 @@ def sha256(path):
     return h.hexdigest()
 
 
+def strip_trailing_whitespace(text):
+    return "\n".join(line.rstrip() for line in text.splitlines())
+
+
 def command(args, cwd=DEV):
     result = subprocess.run(args, cwd=cwd, capture_output=True, text=True, encoding="utf-8", errors="replace", timeout=120)
     return {"exit_code": result.returncode, "stdout": result.stdout.strip(), "stderr": result.stderr.strip()}
@@ -63,6 +89,36 @@ def compact_capture():
     dna = experiments.get("results", {}).get("DNA_RERANK_V1", {})
     theme = experiments.get("results", {}).get("THEME_CONTEXT_V1", {})
     return report, experiments, normalization, pv, dna, theme
+
+
+def source_review_files():
+    for rel in SOURCE_REVIEW_PATHS:
+        path = SOURCE_ROOT / rel
+        if path.exists():
+            yield rel, path
+
+
+def write_source_review_files():
+    rows = ["# R05 源码审阅清单", ""]
+    for rel, path in source_review_files():
+        rows.append(f"- `source/{rel}`：{path.stat().st_size} bytes，SHA256 `{sha256(path)}`")
+    source_git = git(SOURCE_ROOT, "rev-parse", "HEAD") if (SOURCE_ROOT / ".git").exists() else {"stdout": ""}
+    if source_git.get("stdout"):
+        rows.append("")
+        rows.append(f"源码快照来源提交：`{source_git['stdout']}`。")
+        rows.append("对应提交补丁及可能存在的未提交源码差异见 `source-diff.patch`。")
+        diff = git(SOURCE_ROOT, "show", "--format=fuller", "--stat", "--patch", "--no-ext-diff", source_git["stdout"])
+        staged = git(SOURCE_ROOT, "diff", "--cached", "--", *SOURCE_REVIEW_PATHS)
+        unstaged = git(SOURCE_ROOT, "diff", "--", *SOURCE_REVIEW_PATHS)
+        parts = [diff.get("stdout", "")]
+        if staged.get("stdout"):
+            parts.extend(("", "# 暂存区源码差异", "", staged["stdout"]))
+        if unstaged.get("stdout"):
+            parts.extend(("", "# 工作区源码差异", "", unstaged["stdout"]))
+        write(REVIEW / "source-diff.patch", strip_trailing_whitespace("\n".join(part for part in parts if part is not None)) + "\n")
+    else:
+        write(REVIEW / "source-diff.patch", "当前环境未发现可用 Git 提交，源码已按文件快照收入 ZIP。\n")
+    write(REVIEW / "source-file-list.md", "\n".join(rows) + "\n")
 
 
 def top20_files(pv):
@@ -83,6 +139,7 @@ def main():
     r04_gaps = load(ROOT / "review" / "r04-gpt55-closure" / "field-gaps.json", {})
     report, experiments, normalization, pv, dna, theme = compact_capture()
     top20_files(pv)
+    write_source_review_files()
     source_capabilities = {
         "capability_review_version": "R05_SOURCE_CAPABILITIES_V1",
         "generated_at": datetime.now().astimezone().isoformat(),
@@ -288,6 +345,8 @@ Tushare 真实权限、DNA 样本库、题材成员冻结、完整 DAILY 全链�
         if not path.is_file() or "actual-cache" in path.parts:
             continue
         manifest[str(path.relative_to(REVIEW)).replace("\\", "/")] = {"bytes": path.stat().st_size, "sha256": sha256(path)}
+    for rel, path in source_review_files():
+        manifest["source/" + rel] = {"bytes": path.stat().st_size, "sha256": sha256(path)}
     write_json(REVIEW / "artifact-manifest.json", manifest)
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     zip_path = DELIVERABLES / f"StockRecommendation_R05_Data_Strategy_ReviewBundle_{timestamp}.zip"
@@ -296,6 +355,8 @@ Tushare 真实权限、DNA 样本库、题材成员冻结、完整 DAILY 全链�
             if not path.is_file() or "actual-cache" in path.parts:
                 continue
             zf.write(path, "r05-data-strategy/" + str(path.relative_to(REVIEW)).replace("\\", "/"))
+        for rel, path in source_review_files():
+            zf.write(path, "r05-data-strategy/source/" + rel)
     zip_hash = sha256(zip_path)
     write_json(REVIEW / "bundle.json", {"zip_path": str(zip_path), "sha256": zip_hash,
                                         "bytes": zip_path.stat().st_size,
