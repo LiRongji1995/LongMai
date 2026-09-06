@@ -356,11 +356,11 @@ class CandidateService:
 
     def run_summary(self, run_id, *, page=1, page_size=50, family=None, selection=None):
         if family is not None and family not in FAMILIES:
-            raise ValueError('unknown strategy family')
+            raise ValueError('未知策略族')
         if selection not in (None,'display','focus'):
-            raise ValueError('unknown candidate selection')
+            raise ValueError('未知候选选择')
         if not 1<=page_size<=50 or page<1:
-            raise ValueError('summary page size must be 1..50')
+            raise ValueError('summary 分页大小必须为 1..50')
         run=self.get_run(run_id)
         items=list(run.items)
         if family is not None:
@@ -409,7 +409,7 @@ class CandidateService:
 
     def family(self, run_id, family):
         if family not in FAMILIES:
-            raise ValueError('unknown strategy family')
+            raise ValueError('未知策略族')
         result = self.get_run(run_id)
         return [x for x in result.items if x.primary_family == family]
 

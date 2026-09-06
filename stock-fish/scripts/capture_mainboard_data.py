@@ -1,7 +1,7 @@
-"""Run/resume the same bounded full-directory DAG used by the default Web page.
+"""运行/续跑默认网页同款的有界全目录DAG。
 
-Outputs real observations only. This local operation does not activate user
-inputs; Web capture publishes through CandidateService's normal transaction.
+仅输出真实观测。本地操作不会激活用户输入；网页采集仍通过
+CandidateService 的正常事务发布。
 """
 from pathlib import Path
 import argparse
@@ -19,13 +19,13 @@ p.add_argument('--cache',required=True)
 p.add_argument('--output',required=True)
 p.add_argument('--max-requests',type=int,default=128)
 p.add_argument('--max-seconds',type=float,default=600)
-p.add_argument('--rounds',type=int,default=1,help='Run multiple bounded resume rounds into output/round-XXX. Default preserves the one-output-directory contract.')
+p.add_argument('--rounds',type=int,default=1,help='执行多轮有界续跑，输出到 output/round-XXX；默认保持单输出目录契约。')
 args=p.parse_args()
 out=Path(args.output)
 if not 1<=args.rounds<=20:
-    raise SystemExit('rounds must be 1..20')
+    raise SystemExit('rounds 必须在 1..20 范围内')
 if out.exists():
-    raise SystemExit('Output must be a new directory; reuse cache to resume.')
+    raise SystemExit('输出目录必须是新目录；请复用 cache 续跑')
 def progress(value):
     print(json.dumps({k:value[k] for k in ('requested','states','network_requests_this_run','cache_hits_this_run','elapsed_seconds')},ensure_ascii=False),flush=True)
 runs=[]

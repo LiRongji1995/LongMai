@@ -1,4 +1,4 @@
-/* Candidate facts only. No account, order size, LLM vote or model-selection dependency. */
+/* 仅展示候选事实；不依赖账户、下单规模、LLM投票或模型选择。 */
 (() => {
   'use strict';
 

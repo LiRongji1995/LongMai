@@ -52,11 +52,11 @@ def calculate_limits(reference_prev_close,rule,*,source_sample=None):
     return {'status':status,'limit_up':str(up),'limit_down':str(down),'reference_prev_close':str(base),'rule':rule}
 
 def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
-    """Derive exact limits only when the normal/exempt branch is evidenced.
+    """只有普通/豁免分支证据齐全时，才推导精确涨跌停价。
 
-    This is the allowed R04 RULE_DERIVED_VERIFIED path. It is intentionally not
-    a convenience wrapper around close/preclose percentage math: absent proof,
-    unsupported rules and unvalidated branch samples remain unavailable.
+    这是 R04 允许的 RULE_DERIVED_VERIFIED 路径。它刻意不是
+    close/preclose 百分比计算的便捷封装：缺少证据、规则不支持或分支
+    样本未校验时，结果仍保持不可用。
     """
     required=('proof_status','source_receipt_ids','source_fact_ids','official_source_hash',
               'reference_price_semantics','reference_price_receipt','validation_suite_id',
@@ -100,11 +100,10 @@ def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,norm
         'effective_dependency_hash':normal_or_exempt_proof.get('effective_dependency_hash')}
 
 def abnormal_deviation(stock_end,stock_start,index_end,index_start,*,basis_comparable):
-    """2026 rule cumulative deviation = price ratio return minus index ratio.
+    """2026规则累计偏离值=股票价格比收益减指数价格比收益。
 
-    This is not the sum of daily percentage-point deviations. Reference indices:
-    SSE A-share index; SZSE A-share index. Exempt sessions excluded and reset
-    dates require externally verified regulatory disclosures before use.
+    这不是每日百分点偏离值的简单求和。参考指数为上证A股指数和深证A股指数。
+    豁免交易日需要排除，重置日期使用前必须有外部可核验监管披露。
     """
     if not basis_comparable: return None
     vals=[Decimal(str(x)) for x in (stock_end,stock_start,index_end,index_start)]

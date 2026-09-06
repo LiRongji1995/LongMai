@@ -162,12 +162,11 @@ def _eastmoney_limit_code(code):
     return raw,symbol+'.'+exchange.upper(),('1' if exchange=='sh' else '0')+'.'+symbol,symbol
 
 def eastmoney_daily_limits(params,captured,max_requests):
-    """Direct vendor f51/f52 daily limits from per-instrument quote records.
+    """从逐证券行情记录直接读取供应商 f51/f52 涨跌停价。
 
-    The clist endpoint reuses f51/f52 for other meanings, so this connector only
-    consumes qt/stock/get and checks the provider timestamp against the requested
-    exchange session. It is a direct market-data observation, not a normal-rule
-    inference and not a historical PIT source.
+    clist 端点会把 f51/f52 用作其他含义，因此此连接器只消费
+    qt/stock/get，并按请求交易日校验供应商时间戳。它是直接市场数据
+    观测，不是普通规则推导，也不是历史 PIT 数据源。
     """
     import requests
     day=date.fromisoformat(params['date'])
@@ -196,9 +195,8 @@ def eastmoney_daily_limits(params,captured,max_requests):
             except (KeyError,TypeError,ValueError,OSError,OverflowError):
                 raise ValueError('EASTMONEY_LIMIT_FIELDS_MISSING')
             if source_time.astimezone().date()!=day and source_time.astimezone(timezone.utc).date()!=day:
-                # The exchange date check is repeated by the normalizer with
-                # Asia/Shanghai semantics. This early check catches stale quotes
-                # without relying on local timezone being Shanghai.
+                # 规范化层还会按 Asia/Shanghai 语义复核交易日。这里先做
+                # 一层快速检查，用来捕获过期报价，同时不依赖本机时区。
                 from zoneinfo import ZoneInfo
                 if source_time.astimezone(ZoneInfo('Asia/Shanghai')).date()!=day:
                     raise ValueError('EASTMONEY_LIMIT_DATE_MISMATCH')
