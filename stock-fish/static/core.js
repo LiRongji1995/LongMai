@@ -27,6 +27,7 @@
   let loadedFamily = 'OVERVIEW';
   let currentConfig = null;
   let latestCoverage = null;
+  let latestExperiment = null;
 
   const textNode = (tag, text, cls) => {
     const el = document.createElement(tag);
@@ -293,6 +294,63 @@
     }
   }
 
+  async function loadExperimentItemDetail(item, slot, button) {
+    button.disabled = true;
+    try {
+      const full = await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/items/' + encodeURIComponent(item.instrument_id));
+      slot.replaceChildren(
+        details('PV / DNA / Theme 实验证据', full.strategy_results),
+        details('焦点名单规则与原因', full.focus_selection),
+        details('实验后验观察', full.outcomes),
+        details('研究周期跟踪', full.tracking),
+      );
+    } catch (error) {
+      button.disabled = false;
+      message(error.message, true);
+    }
+  }
+
+  function drawExperimentCandidates(summary) {
+    const root = $('experimentCandidates');
+    root.replaceChildren();
+    if (!summary || !summary.items?.length) {
+      const empty = textNode('div', undefined, 'empty');
+      empty.append(textNode('h3', '尚无可展示实验样本'), textNode('p', '未成熟、未选择或缺证据的样本仍会在导出和分母中保留。'));
+      root.append(empty);
+      return;
+    }
+    const focusIds = new Set(summary.focus_ids || []);
+    for (const item of summary.items) {
+      const card = textNode('article', undefined, 'candidate');
+      const head = textNode('div', undefined, 'card-heading');
+      const identity = textNode('div');
+      identity.append(textNode('div', item.instrument_id, 'security-id'), textNode('h3', 'PV 第 ' + (item.rank ?? '—') + ' 名'));
+      identity.append(
+        textNode('span', focusIds.has(item.instrument_id) ? '焦点跟踪' : '未入焦点', 'badge ' + (focusIds.has(item.instrument_id) ? 'focus' : '')),
+        textNode('span', summary.status || 'UNKNOWN', 'badge'),
+      );
+      const score = textNode('div', undefined, 'score');
+      score.append(textNode('small', 'S_PV'), textNode('span', display(item.S_PV)));
+      head.append(identity, score);
+      card.append(head);
+      card.append(textNode('p', `A ${display(item.A)} · R ${display(item.R)} · H ${display(item.H)} · ${summary.parameter_status}`));
+      const comps = textNode('div', undefined, 'components');
+      for (const key of ['A', 'R', 'H']) {
+        const el = textNode('div', key, 'component');
+        el.append(textNode('strong', display(item.rank_percentiles?.[key])));
+        const bar = document.createElement('i');
+        bar.style.width = item.rank_percentiles?.[key] === null || item.rank_percentiles?.[key] === undefined ? '0' : Math.max(0, Math.min(100, item.rank_percentiles[key])) + '%';
+        el.append(bar);
+        comps.append(el);
+      }
+      const slot = textNode('div');
+      const button = textNode('button', '加载实验详情', 'secondary');
+      button.onclick = () => loadExperimentItemDetail(item, slot, button);
+      card.append(comps, button, slot);
+      root.append(card);
+    }
+  }
+
   async function refresh() {
     try {
       await refreshPipeline();
@@ -458,10 +516,19 @@
       api('/api/strategy-experiments?limit=1'),
     ]);
     $('strategySpecsJson').textContent = JSON.stringify(specs, null, 2);
-    $('experimentJson').textContent = JSON.stringify({ latest_comparison: comparison, latest_run: runs[0] || null }, null, 2);
-    const pv = runs[0]?.results?.PV_OBSERVATION_V1;
+    latestExperiment = runs[0] || null;
+    for (const id of ['experimentExportJson', 'experimentExportCsv', 'experimentOutcomes', 'experimentTracking']) $(id).disabled = !latestExperiment;
+    const summary = latestExperiment
+      ? await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/summary?page_size=30&strategy_id=PV_OBSERVATION_V1')
+      : null;
+    const review = latestExperiment
+      ? await api('/api/strategy-experiments/' + encodeURIComponent(latestExperiment.run_id) + '/review')
+      : null;
+    $('experimentJson').textContent = JSON.stringify({ latest_comparison: comparison, latest_summary: summary, latest_review: review }, null, 2);
+    drawExperimentCandidates(summary);
+    const pv = summary?.results?.PV_OBSERVATION_V1;
     $('experimentStatus').textContent = pv
-      ? `${runs[0].observation_date} · ${pv.status} · PV入围 ${pv.counts?.ranked ?? 0} · ${runs[0].generated_at}`
+      ? `${summary.observation_date} · ${pv.status} · PV样本 ${pv.counts?.evaluated ?? 0} · 焦点 ${summary.focus_ids?.length ?? 0}`
       : '尚未保存 R05 实验运行。';
   }
 
@@ -475,6 +542,53 @@
       const result = await follow(await api('/api/strategy-experiments/run', value));
       await refreshExperiments();
       message('R05 实验已保存：' + result.run_id);
+    } catch (e) {
+      message(e.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
+
+  async function downloadExperiment(format) {
+    if (!latestExperiment) return;
+    try {
+      const response = await fetch('/api/strategy-experiments/' + latestExperiment.run_id + '/export?format=' + format, { headers: headers() });
+      if (!response.ok) throw new Error('实验记录不可导出');
+      const url = URL.createObjectURL(await response.blob());
+      const a = textNode('a');
+      a.href = url;
+      a.download = 'r05-experiment-' + latestExperiment.run_id + '.' + format;
+      a.click();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    } catch (e) {
+      message(e.message, true);
+    }
+  }
+
+  $('experimentExportJson').onclick = () => downloadExperiment('json');
+  $('experimentExportCsv').onclick = () => downloadExperiment('csv');
+  $('experimentOutcomes').onclick = async () => {
+    if (!latestExperiment) return;
+    const button = $('experimentOutcomes');
+    button.disabled = true;
+    try {
+      await follow(await api('/api/strategy-experiments/' + latestExperiment.run_id + '/outcomes', { horizons: [1, 2, 3, 4, 5, 10, 20] }));
+      await refreshExperiments();
+      message('R05 实验后验已追加；未来未成熟和缺失数据不会计入成熟分母。');
+    } catch (e) {
+      message(e.message, true);
+    } finally {
+      button.disabled = false;
+    }
+  };
+  $('experimentTracking').onclick = async () => {
+    if (!latestExperiment) return;
+    const button = $('experimentTracking');
+    button.disabled = true;
+    try {
+      await follow(await api('/api/strategy-experiments/' + latestExperiment.run_id + '/tracking', { horizons: [1, 2, 3, 4, 5, 10, 20] }));
+      await refreshExperiments();
+      message('R05 焦点研究周期已更新；状态为观察标签，不是交易指令。');
     } catch (e) {
       message(e.message, true);
     } finally {

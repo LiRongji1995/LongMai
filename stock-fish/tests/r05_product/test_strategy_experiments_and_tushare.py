@@ -108,6 +108,25 @@ def test_strategy_experiment_api_uses_registered_market_input(tmp_path, monkeypa
         saved = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/summary")
         assert saved.status_code == 200
         assert saved.json["results"]["PV_OBSERVATION_V1"]["top_ids"]
+        assert saved.json["items"]
+        detail = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/items/" + saved.json["items"][0]["instrument_id"])
+        assert detail.status_code == 200
+        assert "PV_OBSERVATION_V1" in detail.json["strategy_results"]
+        exported = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/export?format=csv")
+        assert exported.status_code == 200
+        assert "selected_focus" in exported.get_data(as_text=True)
+        outcome_job = wait(core, client.post("/api/strategy-experiments/" + job["result"]["run_id"] + "/outcomes", json={"horizons": [1, 2, 3, 4, 5, 10, 20]}).json["job_id"])
+        assert outcome_job["state"] == "SUCCEEDED", outcome_job
+        outcomes = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/outcomes")
+        assert outcomes.status_code == 200 and outcomes.json
+        tracking_job = wait(core, client.post("/api/strategy-experiments/" + job["result"]["run_id"] + "/tracking", json={"horizons": [1, 2, 3, 4, 5, 10, 20]}).json["job_id"])
+        assert tracking_job["state"] == "SUCCEEDED", tracking_job
+        review = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/review")
+        assert review.status_code == 200
+        assert review.json["market_edge"] == "NOT_ESTABLISHED"
+        latest_feedback = client.get("/api/research-feedback/latest")
+        assert latest_feedback.status_code == 200
+        assert latest_feedback.json["schema_version"] == "R05_RESEARCH_FEEDBACK_V1"
         comparison = client.get("/api/strategy-comparison/latest")
         assert comparison.status_code == 200
         assert comparison.json["comparison_version"] == "R05_STRATEGY_COMPARISON_V1"

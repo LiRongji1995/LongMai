@@ -6,7 +6,7 @@ budgets, retries and caching belong to the persistent data pipeline caller.
 from __future__ import annotations
 from datetime import date,datetime,timezone
 from pathlib import Path
-import hashlib,json,re,subprocess,sys
+import hashlib,json,os,re,subprocess,sys
 from .providers import archive_receipt
 
 TUSHARE_ENDPOINTS={
@@ -37,7 +37,7 @@ TUSHARE_ENDPOINTS={
     'tushare_limit_list_d':{
         'provider':'tushare','api_name':'limit_list_d','params':('ts_code','trade_date','start_date','end_date','limit_type','exchange'),
         'required':(),'fields':'trade_date,ts_code,industry,name,close,pct_chg,amount,limit_amount,float_mv,total_mv,turnover_ratio,fd_amount,first_time,last_time,open_times,up_stat,limit_times,limit,limit_type',
-        'doc_url':'https://tushare.pro/document/2?doc_id=298'},
+        'doc_url':'https://tushare.pro/document/2?doc_id=298','page_limit':2500},
     'tushare_suspend_d':{
         'provider':'tushare','api_name':'suspend_d','params':('ts_code','suspend_date','resume_date'),
         'required':(),'fields':'ts_code,suspend_date,resume_date,ann_date,suspend_reason,reason_type',
@@ -159,9 +159,12 @@ def execute_request(endpoint,params,output_dir,timeout=45):
         'max_http_requests':128,'partial_path':str(partial_path)}
     identity={k:v for k,v in request.items() if k!='partial_path'}
     rid=hashlib.sha256(json.dumps(identity,sort_keys=True).encode()).hexdigest();started=datetime.now(timezone.utc)
+    project_root=str(Path(__file__).resolve().parents[2])
+    env=os.environ.copy()
+    env['PYTHONPATH']=project_root+(os.pathsep+env['PYTHONPATH'] if env.get('PYTHONPATH') else '')
     try:
         process=subprocess.run([sys.executable,'-m','stockfish_core.yaogu.provider_requests_worker'],input=json.dumps(request),
-            capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=timeout)
+            capture_output=True,text=True,encoding='utf-8',errors='replace',timeout=timeout,cwd=project_root,env=env)
         result=json.loads(process.stdout)
         if process.returncode or not isinstance(result,dict):raise ValueError('WORKER_INVALID_RESULT')
     except subprocess.TimeoutExpired:

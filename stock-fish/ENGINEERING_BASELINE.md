@@ -1,14 +1,16 @@
 # R05 当前入口
 
-默认无账户候选仍保留原五族 `DAILY_V1`，不改名、不降级；参数状态仍为 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`。R05 新增实验策略 API 和首页“R05实验策略”区域：`GET /api/strategy-experiments/specs`、`POST /api/strategy-experiments/run`、`GET /api/strategy-experiments/<run_id>/summary`、`GET /api/strategy-comparison/latest`。新增实验只用于研究对照，不表示市场边际已经成立。
+默认无账户候选仍保留原五族 `DAILY_V1`，不改名、不降级；参数状态仍为 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`。R05 新增完整实验与研究反馈面：`GET /api/strategy-experiments/specs`、`POST /api/strategy-experiments/run`、分页 `GET /api/strategy-experiments/<run_id>/summary`、详情 `GET /api/strategy-experiments/<run_id>/items/<instrument_id>`、完整 JSON/CSV 导出、`/outcomes`、`/tracking`、`/review`、`GET /api/research-feedback/latest` 与 `GET /api/strategy-comparison/latest`。首页“R05实验策略”区域展示动态 PV 全样本、焦点名单、详情、导出、后验和研究周期按钮。
 
-`PV_OBSERVATION_V1` 使用当前可信主板普通股合格池内 T 与前 5 个交易日完整同口径 RAW 成交额、可比收盘、RAW high/low/reference_prev_close，按固定公式和中位百分位排序。`DNA_RERANK_V1` 与 `THEME_CONTEXT_V1` 只对 PV 入围项追加股性和题材上下文；缺历史事件、次日样本或冻结主题时分别标记未覆盖，不影响 PV。
+`PV_OBSERVATION_V1` 使用合格池 T 与前 5 个交易日完整同口径成交额、可比收盘和 high/low，按 Decimal 精确 midpoint percentile 计算 `S_PV=0.40*PR_mid(A)+0.30*PR_mid(R)+0.30*PR_mid(H)`，低于 98% 报 `LIMITED_SCOPE`，不凑满固定数量。`DNA_REVERSAL_V1`（兼容别名 `DNA_RERANK_V1`）要求 252 个交易日和 Wilson 下界可靠性门槛；`THEME_LIMITUP_V1`（兼容别名 `THEME_CONTEXT_V1`）要求有效题材成员不少于 5 且 peer 限价事件覆盖不少于 95%。缺历史、缺题材、未知限价不以 0 分替代。
 
-主板识别不依赖 CSI300 或简单代码前缀，默认排除 ST、退市整理、新股未满 60 个交易日和停牌对象，未知资格单列。Tushare Pro adapter 已实现端点、字段、参数校验、分页、token 缺失和脱敏响应；当前无 token，状态为 `AUTH_REQUIRED / REAL_NOT_VERIFIED`。
+`PV_FOCUS_PREVIEW_V0.1` 只是在 PV 全样本上的确定性焦点过滤：rank 1..30、`A>=2.0`、`R>=0.06`、`H>=0.035`、收盘区间位置 `>=0.70`。未选中样本保留在导出和后验分母中。后验支持 1/2/3/4/5/10/20 个交易日，研究 episode 支持 ACTIVE/COOLING/THESIS_INVALIDATED 等可变生命周期；调度器在收盘后发现同日已登记输入时自动排队实验后验与研究跟踪。
 
-真实 R05 PV 运行位于 `../review/r05-data-strategy/actual-pv-capture-03/`：观察日 `2026-09-04`，请求 43/43 完成，当前主板合格池 3,043，只 3,039 只完成 PV 必需字段核验，缺失 4 只，入围 525 只，资格未知 0。Top20 摘要见 `../review/r05-data-strategy/pv-observation-top20.csv`。`DNA_RERANK_V1=INSUFFICIENT_COVERAGE`，`THEME_CONTEXT_V1=UNAVAILABLE`，`MARKET_EDGE=NOT_ESTABLISHED`。
+真实数据接线状态分开报告：Tushare Pro HTTP adapter 已实现端点、字段、参数校验、接口专属分页上限、token 缺失和脱敏响应；本机无 token，实测为 `AUTH_REQUIRED`。Eastmoney 单证券直接限价探针已按上海业务日与 f51/f52 字段校验接线；本机网络经代理失败，实测为 `PROXY_CONNECTION_FAILED`。本轮未取得新的完整真实主板行情快照；附件中提到的 `/mnt/data/.../actual-pv-capture-03` 与本机 `../review/r05-data-strategy` 不存在，不能声称真实 PV 全市场运行通过。`MARKET_EDGE=NOT_ESTABLISHED`。
 
-R05 已关闭四个审计缺陷：Eastmoney 上海业务日校验、worker 超时部分结果保留、规则推导 VERIFIED 本地认证哈希、CandidateRun summary 轻量投影。R04/R05 相关子集测试 213 项通过，核心业务测试脚本 665 项通过；直接 `pytest -q` 仍被旧 MiroFish `locales/languages.json` 缺失阻塞。完整审阅索引为 `../review/r05-data-strategy/final-report.md`。
+Docker 交付包含 `Dockerfile`、`docker-compose.yml`、`wsgi.py`、`requirements-docker.txt`、`Start-StockRecommendation-Docker.ps1` 与 `start-stockrecommendation-docker.sh`。Compose 保持非 root、命名卷、只读根、回环端口、healthcheck、日志轮转和单 worker gunicorn/wsgi 调度器；脚本首次生成被忽略的 `.env.docker.local`，不打印 API key。当前主机 Docker CLI/Compose 存在，但 daemon 不可达，因此 `DOCKER_RUNTIME_VERIFIED=false`；静态 `docker compose config --quiet` 通过。
+
+本轮验证：独立 R05 反例探针 8/8 通过；R05 产品测试 6/6 通过；R04 直接限价与 summary 测试 8/8 通过；调度相关组合测试 14/14 通过；排除 MiroFish 的全量业务回归 665/665 通过。直接 `pytest -q` 仍被旧 MiroFish 原型 `locales/languages.json` 缺失阻塞。
 
 ---
 

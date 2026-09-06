@@ -46,11 +46,64 @@ def register_candidate_routes(app, service):
 
     @app.get('/api/strategy-experiments/<run_id>/summary')
     def strategy_experiment_summary(run_id):
-        return jsonify(service.strategy_experiment(run_id))
+        return jsonify(service.strategy_experiment_summary(run_id, page=int(request.args.get('page', 1)),
+            page_size=int(request.args.get('page_size', 50)),
+            strategy_id=request.args.get('strategy_id') or 'PV_OBSERVATION_V1',
+            selection=request.args.get('selection') or None))
+
+    @app.get('/api/strategy-experiments/<run_id>/items/<instrument_id>')
+    def strategy_experiment_item_detail(run_id, instrument_id):
+        return jsonify(service.strategy_experiment_item_detail(run_id, instrument_id))
+
+    @app.get('/api/strategy-experiments/<run_id>/export')
+    def strategy_experiment_export(run_id):
+        if request.args.get('format', 'json') == 'csv':
+            return Response('\ufeff' + service.export_strategy_experiment_csv(run_id),
+                            mimetype='text/csv; charset=utf-8',
+                            headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.csv'})
+        return Response(service.export_strategy_experiment_json(run_id), mimetype='application/json',
+                        headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.json'})
+
+    def parse_horizons(value):
+        if value in (None, '', []):
+            return None
+        if not isinstance(value, list) or any(not isinstance(item, int) for item in value):
+            raise ValueError('horizons must be an integer list')
+        return value
+
+    @app.get('/api/strategy-experiments/<run_id>/outcomes')
+    def strategy_experiment_outcomes(run_id):
+        return jsonify(service.strategy_outcomes(run_id))
+
+    @app.post('/api/strategy-experiments/<run_id>/outcomes')
+    def start_strategy_experiment_outcomes(run_id):
+        value = body()
+        if set(value) - {'input_id', 'horizons'} or value.get('input_id') is not None and not isinstance(value['input_id'], str):
+            raise ValueError('select an existing outcome input ID')
+        return accepted(service.submit_strategy_outcomes(run_id, value.get('input_id'), horizons=parse_horizons(value.get('horizons'))))
+
+    @app.get('/api/strategy-experiments/<run_id>/tracking')
+    def strategy_experiment_tracking(run_id):
+        return jsonify(service.strategy_tracking(run_id))
+
+    @app.post('/api/strategy-experiments/<run_id>/tracking')
+    def start_strategy_experiment_tracking(run_id):
+        value = body()
+        if set(value) - {'input_id', 'horizons'} or value.get('input_id') is not None and not isinstance(value['input_id'], str):
+            raise ValueError('select an existing tracking input ID')
+        return accepted(service.submit_strategy_tracking(run_id, value.get('input_id'), horizons=parse_horizons(value.get('horizons'))))
+
+    @app.get('/api/strategy-experiments/<run_id>/review')
+    def strategy_experiment_review(run_id):
+        return jsonify(service.strategy_review(run_id))
 
     @app.get('/api/strategy-comparison/latest')
     def latest_strategy_comparison():
         return jsonify(service.latest_strategy_comparison())
+
+    @app.get('/api/research-feedback/latest')
+    def latest_research_feedback():
+        return jsonify(service.latest_research_feedback())
 
     @app.post('/api/strategy-configs')
     def new_strategy_config():

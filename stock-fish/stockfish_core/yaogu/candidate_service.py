@@ -4,6 +4,7 @@ from __future__ import annotations
 from datetime import date, datetime, time
 import csv
 import io
+import json
 from pathlib import Path
 from threading import RLock
 from typing import Literal
@@ -60,6 +61,8 @@ class CandidateService:
         self.jobs.register('auction_review', self._auction_job)
         self.jobs.register('candidate_outcomes', self._outcome_job)
         self.jobs.register('strategy_experiments', self._strategy_experiment_job)
+        self.jobs.register('strategy_outcomes', self._strategy_outcome_job)
+        self.jobs.register('strategy_tracking', self._strategy_tracking_job)
         if not self._all('strategy_configs'):
             self.register_config(load_config(Path(__file__).resolve().parents[2] / 'config/yaogu_v1.defaults.yaml'))
         elif self.current_config().strategy_id == 'YAOGU_V1.0.0':
@@ -163,6 +166,36 @@ class CandidateService:
         if observation_date is not None and bundle.observation_date != observation_date:
             raise ValueError('registered input observation date mismatch')
         return input_id, bundle
+
+    def strategy_input(self, input_id=None, observation_date=None):
+        """Select an immutable market input for R05 research experiments.
+
+        Unlike DAILY_V1 publication, experiments may run against the latest
+        registered input even when it has not been activated for production
+        candidate publication. The input remains explicitly marked by its
+        coverage_type and consumer activation status.
+        """
+        if input_id is not None:
+            return self.input(input_id, observation_date)
+        try:
+            return self.input(None, observation_date)
+        except UnavailableError:
+            wanted = observation_date.isoformat() if observation_date is not None else None
+            offset = 0
+            selected = None
+            while True:
+                rows = self.store.list_document_metadata('candidate_inputs', limit=1000, offset=offset, descending=True)
+                for row in rows:
+                    value = self.store.get_document('candidate_inputs', row['document_id'])
+                    if value and (wanted is None or value.get('observation_date') == wanted):
+                        selected = row['document_id']
+                        break
+                if selected or len(rows) < 1000:
+                    break
+                offset += len(rows)
+            if selected is None:
+                raise
+            return self.input(selected, observation_date)
 
     def submit(self, request: CandidateRequest, *, job_id=None, market_session='ON_DEMAND', cutoff=None):
         input_id, bundle = self.input(request.input_id, request.observation_date)
@@ -431,7 +464,7 @@ class CandidateService:
         return list(STRATEGY_SPECS)
 
     def submit_strategy_experiments(self, *, input_id=None, observation_date=None, job_id=None):
-        resolved,_=self.input(input_id,observation_date)
+        resolved,_=self.strategy_input(input_id,observation_date)
         return self.jobs.submit('strategy_experiments', {'input_id': resolved,
             'cutoff': utc_now().isoformat()}, job_id=job_id)
 
@@ -443,6 +476,7 @@ class CandidateService:
         ctx.update(.25,'运行量价观察控制组、股性复排和题材上下文实验')
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
+        result['input_id']=payload['input_id']
         latest=self._latest_input_publication(payload['input_id'])
         daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
         result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
@@ -464,6 +498,193 @@ class CandidateService:
         if value is None:
             raise KeyError(run_id)
         return value
+
+    def _strategy_result_summaries(self, run):
+        summaries = {}
+        for strategy_id, result in (run.get('results') or {}).items():
+            if strategy_id in {'DNA_RERANK_V1', 'THEME_CONTEXT_V1'}:
+                continue
+            summaries[strategy_id] = {k: v for k, v in result.items()
+                                      if k not in {'items', 'incomplete', 'missing'}}
+        return summaries
+
+    def strategy_experiment_summary(self, run_id, *, page=1, page_size=50, strategy_id='PV_OBSERVATION_V1', selection=None):
+        if not 1 <= page_size <= 500 or page < 1:
+            raise ValueError('summary 分页大小必须为 1..500')
+        run = self.strategy_experiment(run_id)
+        result = (run.get('results') or {}).get(strategy_id)
+        if result is None:
+            raise KeyError(strategy_id)
+        items = list(result.get('items') or [])
+        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        focus_ids = set(focus.get('selected_ids') or [])
+        if selection == 'focus':
+            items = [row for row in items if row.get('instrument_id') in focus_ids]
+        elif selection == 'unselected':
+            items = [row for row in items if row.get('instrument_id') not in focus_ids]
+        elif selection not in (None, '', 'all'):
+            raise ValueError('unknown strategy experiment selection')
+        total = len(items)
+        start = (page - 1) * page_size
+        return {
+            'run_id': run_id,
+            'input_id': run.get('input_id'),
+            'observation_date': run.get('observation_date'),
+            'implementation_version': run.get('implementation_version'),
+            'parameter_status': run.get('parameter_status'),
+            'strategy_id': strategy_id,
+            'status': result.get('status'),
+            'counts': result.get('counts'),
+            'top_ids': result.get('top_ids'),
+            'focus_ids': list(focus_ids),
+            'selection_policy': focus.get('selection_policy'),
+            'results': self._strategy_result_summaries(run),
+            'comparison': run.get('comparison'),
+            'filtered_total': total,
+            'page': page,
+            'page_size': page_size,
+            'has_next': start + page_size < total,
+            'items': items[start:start + page_size],
+        }
+
+    def strategy_experiment_item_detail(self, run_id, instrument_id):
+        run = self.strategy_experiment(run_id)
+        matches = {}
+        for strategy_id, result in (run.get('results') or {}).items():
+            found = [row for row in result.get('items', []) if row.get('instrument_id') == instrument_id]
+            if found:
+                matches[strategy_id] = found
+        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        focus_matches = [row for row in focus.get('items', []) if row.get('instrument_id') == instrument_id]
+        if not matches and not focus_matches:
+            raise KeyError(instrument_id)
+        return {
+            'run_id': run_id,
+            'instrument_id': instrument_id,
+            'observation_date': run.get('observation_date'),
+            'strategy_results': matches,
+            'focus_selection': focus_matches[0] if focus_matches else None,
+            'selection_policy': focus.get('selection_policy'),
+            'outcomes': [row for row in self._all('strategy_trading_session_observations')
+                         if row.get('run_id') == run_id and row.get('instrument_id') == instrument_id],
+            'tracking': [row for row in self._all('research_episode_observations')
+                         if row.get('run_id') == run_id and row.get('instrument_id') == instrument_id][-100:],
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+
+    def export_strategy_experiment_csv(self, run_id):
+        run = self.strategy_experiment(run_id)
+        pv = (run.get('results') or {}).get('PV_OBSERVATION_V1') or {}
+        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        focus_by_id = {row['instrument_id']: row for row in focus.get('items', [])}
+        stream = io.StringIO(newline='')
+        fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'A', 'R', 'H',
+                  'selected_focus', 'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status']
+        writer = csv.DictWriter(stream, fieldnames=fields)
+        writer.writeheader()
+        for item in pv.get('items', []):
+            focus_row = focus_by_id.get(item['instrument_id'], {})
+            row = {
+                'run_id': run_id,
+                'observation_date': run.get('observation_date'),
+                'strategy_id': 'PV_OBSERVATION_V1',
+                'instrument_id': item.get('instrument_id'),
+                'rank': item.get('rank'),
+                'S_PV': item.get('S_PV'),
+                'A': item.get('A'),
+                'R': item.get('R'),
+                'H': item.get('H'),
+                'selected_focus': focus_row.get('selected'),
+                'focus_reason_codes': '|'.join(focus_row.get('reason_codes') or []),
+                'close_location': focus_row.get('close_location'),
+                'scope_label': pv.get('scope_label'),
+                'parameter_status': run.get('parameter_status'),
+            }
+            writer.writerow({k: "'" + v if isinstance(v, str) and v[:1] in '=+-@' else v for k, v in row.items()})
+        return stream.getvalue()
+
+    def export_strategy_experiment_json(self, run_id):
+        return json.dumps(self.strategy_experiment(run_id), ensure_ascii=False, indent=2, allow_nan=False)
+
+    def submit_strategy_outcomes(self, run_id, input_id=None, *, horizons=None, job_id=None):
+        run = self.strategy_experiment(run_id)
+        resolved, _ = self.strategy_input(input_id or run.get('input_id'))
+        horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
+        if any(not isinstance(h, int) or h <= 0 or h > 60 for h in horizons):
+            raise ValueError('unsupported research horizon')
+        return self.jobs.submit('strategy_outcomes', {'run_id': run_id, 'input_id': resolved,
+            'horizons': list(horizons), 'evaluated_at': utc_now().isoformat()}, job_id=job_id)
+
+    def _strategy_outcome_job(self, ctx):
+        payload = ctx.payload
+        run = self.strategy_experiment(payload['run_id'])
+        _, bundle = self.input(payload['input_id'])
+        from .strategy_tracking import evaluate_strategy_experiment_outcomes
+        values = evaluate_strategy_experiment_outcomes(run, bundle, datetime.fromisoformat(payload['evaluated_at']),
+                                                       horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)))
+        def write(connection):
+            for value in values:
+                self.store._put_document(connection, 'strategy_trading_session_observations', value['observation_id'], value)
+        return ctx.complete({'run_id': run['run_id'], 'observations': len(values),
+                             'horizon_unit': 'exchange_trading_sessions'}, write)
+
+    def strategy_outcomes(self, run_id):
+        self.strategy_experiment(run_id)
+        return [v for v in self._all('strategy_trading_session_observations') if v.get('run_id') == run_id]
+
+    def submit_strategy_tracking(self, run_id, input_id=None, *, horizons=None, job_id=None):
+        run = self.strategy_experiment(run_id)
+        resolved, _ = self.strategy_input(input_id or run.get('input_id'))
+        horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
+        if any(not isinstance(h, int) or h <= 0 or h > 60 for h in horizons):
+            raise ValueError('unsupported research horizon')
+        return self.jobs.submit('strategy_tracking', {'run_id': run_id, 'input_id': resolved,
+            'horizons': list(horizons), 'evaluated_at': utc_now().isoformat()}, job_id=job_id)
+
+    def _strategy_tracking_job(self, ctx):
+        payload = ctx.payload
+        run = self.strategy_experiment(payload['run_id'])
+        _, bundle = self.input(payload['input_id'])
+        from .strategy_tracking import build_strategy_feedback_report, build_strategy_tracking
+        tracking = build_strategy_tracking(run, bundle, datetime.fromisoformat(payload['evaluated_at']),
+                                           horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)))
+        outcomes = self.strategy_outcomes(run['run_id'])
+        review = build_strategy_feedback_report(run, outcomes, [*self.strategy_tracking(run['run_id']), tracking],
+                                                datetime.fromisoformat(payload['evaluated_at']))
+        def write(connection):
+            for value in tracking['episodes']:
+                self.store._put_document(connection, 'research_episodes', value['episode_id'], value)
+            for value in tracking['observations']:
+                obs_id = 'research_episode_observation_' + digest(value)
+                value = {**value, 'observation_id': obs_id}
+                self.store._put_document(connection, 'research_episode_observations', obs_id, value)
+            self.store._put_document(connection, 'strategy_tracking_runs', tracking['tracking_run_id'], tracking)
+            self.store._put_document(connection, 'strategy_research_reviews', review['review_id'], review)
+        return ctx.complete({'run_id': run['run_id'], 'tracking_run_id': tracking['tracking_run_id'],
+                             'episodes': tracking['episode_count'], 'observations': tracking['observation_count'],
+                             'review_id': review['review_id']}, write)
+
+    def strategy_tracking(self, run_id):
+        self.strategy_experiment(run_id)
+        return [v for v in self._all('strategy_tracking_runs') if v.get('run_id') == run_id]
+
+    def strategy_review(self, run_id):
+        run = self.strategy_experiment(run_id)
+        reviews = [v for v in self._all('strategy_research_reviews') if v.get('run_id') == run_id]
+        if reviews:
+            return reviews[-1]
+        from .strategy_tracking import build_strategy_feedback_report
+        return build_strategy_feedback_report(run, self.strategy_outcomes(run_id), self.strategy_tracking(run_id), utc_now())
+
+    def latest_research_feedback(self):
+        rows = self.store.list_document_metadata('strategy_research_reviews', limit=1, descending=True)
+        if not rows:
+            latest = self.store.list_document_metadata('strategy_experiment_runs', limit=1, descending=True)
+            if latest:
+                return self.strategy_review(latest[0]['document_id'])
+            return {'schema_version': 'R05_RESEARCH_FEEDBACK_V1', 'status': 'UNAVAILABLE',
+                    'reason_codes': ['NO_STRATEGY_EXPERIMENT_RUN_SAVED'], 'market_edge': 'NOT_ESTABLISHED'}
+        return self.store.get_document('strategy_research_reviews', rows[0]['document_id'])
 
     def latest_strategy_comparison(self):
         rows=self.store.list_document_metadata('strategy_experiment_runs',limit=1,descending=True)

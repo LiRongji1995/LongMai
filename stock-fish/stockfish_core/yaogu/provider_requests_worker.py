@@ -267,55 +267,57 @@ def tushare_request(endpoint,params,captured,max_requests):
             source_url=definition['doc_url'],coverage={'auth_configured':False,'requested_endpoint':definition['api_name']},
             gaps=['TUSHARE_TOKEN_REQUIRED'],diagnostics={'transport':'HTTP_POST','token_env_names':['TUSHARE_TOKEN','TUSHARE_PRO_TOKEN']})
     clean_params={k:_compact_date(v) for k,v in params.items() if v not in (None,'')}
-    limit=5000;offset=0;rows=[];field_names=[];attempts=0;first_error=None
+    limit=int(definition.get('page_limit',5000));offset=0;rows=[];field_names=[];attempts=0;first_error=None;first_category=None
     while True:
         if attempts>=max_requests:
             first_error=first_error or 'EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED'
+            first_category=first_category or 'NETWORK'
             break
         attempts+=1
         page_params={**clean_params,'limit':limit,'offset':offset}
         payload={'api_name':definition['api_name'],'token':token,'params':page_params,'fields':definition['fields']}
-        response=requests.post('http://api.tushare.pro',json=payload,timeout=(5,20))
         try:
-            body=response.json()
-        except ValueError:
-            body={'text_prefix':response.text[:200]}
-        captured.append(dict(url='http://api.tushare.pro',parameters={k:v for k,v in page_params.items() if k!='token'},
-            body=body,status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
-        if response.status_code in (401,403,429):
-            first_error='HTTP_'+str(response.status_code)
+            response=requests.post('http://api.tushare.pro',json=payload,timeout=(5,20))
+            try:
+                body=response.json()
+            except ValueError:
+                body={'text_prefix':response.text[:200]}
+            captured.append(dict(url='http://api.tushare.pro',parameters={k:v for k,v in page_params.items() if k!='token'},
+                body=body,status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
+            if response.status_code in (401,403,429):
+                first_error='HTTP_'+str(response.status_code);first_category='PERMISSION' if response.status_code in (401,403) else 'NETWORK'
+                break
+            response.raise_for_status()
+            if not isinstance(body,dict) or body.get('code') not in (0,'0'):
+                msg=str(body.get('msg',''))
+                code='TUSHARE_API_'+str(body.get('code','UNKNOWN'))
+                if '权限' in msg or '积分' in msg or 'token' in msg.lower() or body.get('code') in (-2001,-2002,'-2001','-2002'):
+                    category='PERMISSION'
+                elif '频' in msg or '每分钟' in msg or body.get('code') in (-2003,'-2003'):
+                    category='NETWORK'
+                else:
+                    category='PROVIDER'
+                first_error=code;first_category=category
+                break
+            data=body.get('data') if isinstance(body,dict) else None
+            fields=data.get('fields') if isinstance(data,dict) else None
+            items=data.get('items') if isinstance(data,dict) else None
+            if not isinstance(fields,list) or not isinstance(items,list):
+                first_error='TUSHARE_RESPONSE_SCHEMA_OR_ENCODING';first_category='UPSTREAM_SCHEMA'
+                break
+        except Exception as exc:
+            first_category,first_error,_classes=classify_error(exc)
             break
-        response.raise_for_status()
-        if not isinstance(body,dict) or body.get('code') not in (0,'0'):
-            msg=str(body.get('msg',''))
-            code='TUSHARE_API_'+str(body.get('code','UNKNOWN'))
-            if '权限' in msg or '积分' in msg or 'token' in msg.lower() or body.get('code') in (-2001,-2002,'-2001','-2002'):
-                category='PERMISSION'
-            elif '频' in msg or '每分钟' in msg or body.get('code') in (-2003,'-2003'):
-                category='NETWORK'
-            else:
-                category='PROVIDER'
-            return dict(status='FETCH_FAILED',failure_category=category,error_code=code,rows=[],
-                pagination_complete=False,field_version='TUSHARE_HTTP_PRO_R05_V1',source_url=definition['doc_url'],
-                coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'http_requests':attempts},
-                gaps=[code],diagnostics={'provider_message_present':bool(msg)})
-        data=body.get('data') if isinstance(body,dict) else None
-        fields=data.get('fields') if isinstance(data,dict) else None
-        items=data.get('items') if isinstance(data,dict) else None
-        if not isinstance(fields,list) or not isinstance(items,list):
-            return dict(status='FETCH_FAILED',failure_category='UPSTREAM_SCHEMA',error_code='TUSHARE_RESPONSE_SCHEMA_OR_ENCODING',
-                rows=[],pagination_complete=False,field_version='TUSHARE_HTTP_PRO_R05_V1',source_url=definition['doc_url'],
-                coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'http_requests':attempts},
-                gaps=['TUSHARE_RESPONSE_SCHEMA_OR_ENCODING'])
         field_names=fields
         rows.extend(dict(zip(fields,item)) for item in items)
         if len(items)<limit:
             first_error=None
+            first_category=None
             break
         offset+=limit
     complete=first_error is None
     return dict(status='COMPLETE' if complete else 'PARTIAL' if rows else 'FETCH_FAILED',
-        failure_category='NETWORK' if first_error else None,error_code=first_error,
+        failure_category=first_category if first_error else None,error_code=first_error,
         rows=rows,pagination_complete=complete,field_version='TUSHARE_HTTP_PRO_R05_V1',
         source_url=definition['doc_url'],coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],
             'api_name':definition['api_name'],'returned_rows':len(rows),'fields':field_names,

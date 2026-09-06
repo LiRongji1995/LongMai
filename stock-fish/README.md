@@ -6,6 +6,8 @@
 
 > 工程基线更新：当前统一推荐、风控、持久历史与离线测试入口见 [ENGINEERING_BASELINE.md](ENGINEERING_BASELINE.md)。开发环境请安装 `requirements-dev.txt`；后文保留的旧研究/推演功能不代表当前已启用或经过投资验证。
 
+> R05 收口入口：默认候选仍为 `DAILY_V1`，新增 R05 实验策略、动态焦点名单、详情/导出、后验、研究周期跟踪和 Docker 一键启动。所有策略仍标记 `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`，`MARKET_EDGE=NOT_ESTABLISHED`。
+
 ### 完整决策链路
 
 <p align="center">
@@ -145,52 +147,41 @@ StockFish 内置 4 层文件记忆系统，无需外部数据库：
 
 ---
 
-## 📦 Docker 部署（推荐）
+## 📦 Docker 部署（R05 推荐入口）
 
-使用预构建的 Docker 镜像，无需手动安装依赖。
-
-### 前置条件
-
-- Docker & Docker Compose
-- `.env` 配置文件（见下方）
+默认只启动 StockFish 研究核心，不启用 MiroFish、旧 Bot 或交易账户体系。容器使用非 root 用户、命名卷、只读根文件系统、回环端口绑定、单 worker gunicorn/wsgi 和 `/api/health` 健康检查。
 
 ### 一键启动
 
-```bash
-bash run.sh
+Windows PowerShell：
+
+```powershell
+.\Start-StockRecommendation-Docker.ps1 -NonInteractive
 ```
 
-脚本自动完成：
-1. 拉取 `zhuhai123/stockfish-stockfish:latest` + `zhuhai123/stockfish-mirofish:latest`
-2. 将项目代码挂载到容器内，启动两个服务
-3. 等待服务就绪
-
-> **镜像只提供运行环境**（Python 包、Node.js、camel-ai 等），应用代码来自项目文件挂载。
-> 修改代码后执行 `docker compose up -d` 重建容器即可生效，无需重新构建镜像。
-
-### 其他模式
+Linux / macOS：
 
 ```bash
-bash run.sh --local          # 本地 Python 直接运行（无需 Docker）
-bash run.sh --no-mirofish    # Docker 部署，仅启动 StockFish
+sh ./start-stockrecommendation-docker.sh
 ```
 
-### 访问服务
-
-| 服务 | 地址 |
-|------|------|
-| StockFish 前端 | http://localhost:8000 |
-| MiroFish 前端 | http://localhost:3000 |
-| MiroFish API | http://localhost:5001 |
+脚本会检测 Docker/Compose/daemon，首次生成被 `.gitignore` 忽略的 `.env.docker.local`，执行 `docker compose up -d --wait --build`，等待健康检查，然后打印本地入口。API key 只保存在本地私密 env 文件中，不打印到日志或 URL。
 
 ### 管理命令
 
 ```bash
-docker compose logs -f stockfish    # 查看日志
-docker compose logs -f mirofish     # 查看 MiroFish 日志
-docker compose down                 # 停止服务
-docker compose pull                 # 更新到最新镜像
+docker compose --env-file .env.docker.local up -d --wait --build
+docker compose --env-file .env.docker.local logs -f stockfish
+docker compose --env-file .env.docker.local down
 ```
+
+可选备份：
+
+```powershell
+.\Start-StockRecommendation-Docker.ps1 -NonInteractive -BackupDirectory .\backups
+```
+
+当前本机验证状态：`docker compose config --quiet` 已通过；Docker CLI/Compose 已安装，但 daemon 不可达时实际启动会安全失败并提示启动 Docker Desktop/Engine，不能把静态检查当作部署验收。
 
 ---
 

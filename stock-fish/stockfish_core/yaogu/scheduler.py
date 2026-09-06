@@ -155,6 +155,7 @@ class CandidateScheduler:
         # Observation jobs form a later independent stage. A capture is already
         # committed (or still running); observer failure cannot undo its success.
         results.extend(self.schedule_observations(now))
+        results.extend(self.schedule_strategy_research(now))
         return results
 
     def schedule_observations(self, now=None):
@@ -240,6 +241,52 @@ class CandidateScheduler:
                              'scope':'CURRENT_RAW_CLOSE_PRESENCE_ONLY; outcome consumer separately validates states, sources, comparable prices and each horizon'},
                          'calendar_hash':self.calendar_hash,'lookback_exchange_sessions':config.schedule.prospective_sessions,
                          'backdated_capture':False,'reference_method':'MARKED_PRICES_NOT_ASSUMED_FILLS'}
+                self._event(job_id,value)
+                results.append(value)
+                submitted += 1
+        return results
+
+    def schedule_strategy_research(self, now=None):
+        now = now or self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError('observer clock must be timezone-aware')
+        local = now.astimezone(SH)
+        day = local.date()
+        if day not in self.sessions or local.time().replace(tzinfo=None) < time(15):
+            return []
+        try:
+            input_id, bundle = self.service.strategy_input()
+        except UnavailableError:
+            return []
+        if bundle.observation_date != day:
+            return []
+        rows = self.service.store.list_document_metadata('strategy_experiment_runs', limit=100, descending=True)
+        submitted, results = 0, []
+        for row in rows:
+            run = self.service.strategy_experiment(row['document_id'])
+            observation = date.fromisoformat(str(run['observation_date'])[:10])
+            if observation >= day:
+                continue
+            for kind, submitter in (
+                ('STRATEGY_OUTCOME_OBSERVATION', self.service.submit_strategy_outcomes),
+                ('STRATEGY_RESEARCH_TRACKING', self.service.submit_strategy_tracking),
+            ):
+                job_id = kind.lower() + '_' + digest({'run_id':run['run_id'],'day':day.isoformat(),'input_id':input_id})
+                if self.service.jobs.get(job_id) is not None or self.service.store.get_document('candidate_schedule_events',job_id) is not None:
+                    continue
+                if submitted >= self.MAX_OUTCOME_SUBMISSIONS_PER_TICK:
+                    return results
+                try:
+                    job = submitter(run['run_id'], input_id, job_id=job_id)
+                except JobConflict:
+                    return results
+                value = {'event_id':job_id,'job_id':job['job_id'],'run_id':run['run_id'],'input_id':input_id,
+                         'evaluation_session':day.isoformat(),'observed_at':now.isoformat(),
+                         'market_session':kind,'status':'SUBMITTED','snapshot_created':False,
+                         'coverage_type':bundle.coverage_type,
+                         'research_horizons':[1,2,3,4,5,10,20],
+                         'missing_policy':'NULL_CENSORED_OR_UNAVAILABLE_NEVER_SYNTHETIC_PRICE',
+                         'market_edge':'NOT_ESTABLISHED'}
                 self._event(job_id,value)
                 results.append(value)
                 submitted += 1

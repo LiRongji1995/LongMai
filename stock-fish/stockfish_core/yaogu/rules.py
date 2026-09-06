@@ -11,6 +11,9 @@ SZSE_SWITCH='https://investor.szse.cn/lawrules/rule/trade/t20260424_620190.html'
 REGISTRY_VERSION='SSE_SZSE_MAIN_20260706_V1'
 RULE_DERIVED_LIMIT_VERSION='RULE_DERIVED_LIMIT_EVIDENCE_R04_V1'
 RULE_CERTIFIER_VERSION='LOCAL_LIMIT_RULE_CERTIFIER_R05_V1'
+_PROOF_REQUIRED_FIELDS=('proof_status','source_receipt_ids','source_fact_ids','official_source_hash',
+              'reference_price_semantics','reference_price_receipt','validation_suite_id',
+              'sample_evidence_refs','definition_version')
 
 def resolve_rule(exchange,board,session,*,st,exception_status,listing_session=None):
     """Only independently established normal/exempt days can resolve a limit.
@@ -73,8 +76,32 @@ def _certification_payload(reference_prev_close,*,exchange,board,session,st,norm
         'proof':proof}
     return payload,rule,calculated
 
+def _contains_unresolved_marker(value):
+    markers={'','DOES_NOT_EXIST','NOT_RUN','MISSING','MISSING_REFERENCE','UNRESOLVED','TEST_FIXTURE'}
+    if isinstance(value,(list,tuple,set)):
+        return any(_contains_unresolved_marker(item) for item in value)
+    if isinstance(value,dict):
+        return any(_contains_unresolved_marker(item) for item in value.values())
+    text=str(value).strip()
+    upper=text.upper()
+    return upper in markers or upper.startswith('DOES_NOT_EXIST') or upper.startswith('NOT_RUN')
+
+def _proof_references_resolved(proof):
+    if not isinstance(proof,dict):
+        return False
+    for field in _PROOF_REQUIRED_FIELDS:
+        if not proof.get(field):
+            return False
+        if _contains_unresolved_marker(proof.get(field)):
+            return False
+    return True
+
 def certify_rule_derived_limits(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
     """Create the local certification envelope consumed by derive_verified_limits."""
+    if not _proof_references_resolved(normal_or_exempt_proof):
+        return {**normal_or_exempt_proof,'local_rule_certification':{'status':'UNKNOWN',
+            'reason':'LOCAL_EVIDENCE_REFERENCES_UNRESOLVED',
+            'certifier_version':RULE_CERTIFIER_VERSION}}
     payload,rule,calculated=_certification_payload(reference_prev_close,exchange=exchange,board=board,session=session,
         st=st,normal_or_exempt_proof=normal_or_exempt_proof,listing_session=listing_session,source_sample=source_sample)
     if payload is None:
@@ -93,11 +120,11 @@ def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,norm
     close/preclose 百分比计算的便捷封装：缺少证据、规则不支持或分支
     样本未校验时，结果仍保持不可用。
     """
-    required=('proof_status','source_receipt_ids','source_fact_ids','official_source_hash',
-              'reference_price_semantics','reference_price_receipt','validation_suite_id',
-              'sample_evidence_refs','definition_version')
-    if not isinstance(normal_or_exempt_proof,dict) or any(not normal_or_exempt_proof.get(k) for k in required):
+    if not isinstance(normal_or_exempt_proof,dict) or any(not normal_or_exempt_proof.get(k) for k in _PROOF_REQUIRED_FIELDS):
         return {'status':'UNKNOWN','reason':'NORMAL_OR_EXEMPT_PROOF_REQUIRED','derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if not _proof_references_resolved(normal_or_exempt_proof):
+        return {'status':'UNKNOWN','reason':'LOCAL_EVIDENCE_REFERENCES_UNRESOLVED',
+                'derivation_version':RULE_DERIVED_LIMIT_VERSION}
     if normal_or_exempt_proof['proof_status']!='NORMAL_VERIFIED':
         return {'status':'UNKNOWN','reason':'ONLY_NORMAL_VERIFIED_BRANCH_SUPPORTED_FOR_DERIVATION',
                 'derivation_version':RULE_DERIVED_LIMIT_VERSION}

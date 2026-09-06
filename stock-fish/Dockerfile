@@ -17,12 +17,12 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10001 stockfish \
     && useradd --uid 10001 --gid 10001 --no-create-home stockfish
 
-COPY requirements-core.txt ./
-RUN pip install --no-cache-dir -r requirements-core.txt && pip check
+COPY requirements-core.txt requirements-docker.txt ./
+RUN pip install --no-cache-dir -r requirements-core.txt -r requirements-docker.txt && pip check
 
 # Explicit source allowlist prevents copying .env variants, private portfolios,
 # credential stores, local virtualenvs, model releases or third-party prototypes.
-COPY app.py config.py ./
+COPY app.py config.py wsgi.py ./
 COPY stockfish_core/ ./stockfish_core/
 COPY config/ ./config/
 COPY static/ ./static/
@@ -32,4 +32,4 @@ RUN mkdir -p /app/data/core /app/qlib-data /home/stockfish \
 
 USER 10001:10001
 EXPOSE 8000
-CMD ["python", "app.py"]
+CMD ["gunicorn", "--bind", "0.0.0.0:8000", "--workers", "1", "--threads", "4", "--timeout", "120", "--graceful-timeout", "30", "wsgi:app"]
