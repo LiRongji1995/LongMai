@@ -1,6 +1,6 @@
 """R03 isolated SDK worker with bounded diagnostics; never prints credentials."""
 import contextlib,json,sys,threading,re
-from datetime import datetime,timezone
+from datetime import date,datetime,timezone
 
 def classify_error(exc):
     names=[];current=exc
@@ -150,6 +150,85 @@ def akshare_request(endpoint,params,captured,max_requests):
         coverage={'returned_rows':len(rows),'upstream_total_values':expected,'http_requests':attempted[0],'page_sets':{k:sorted(v) for k,v in page_sets.items()}},
         gaps=[] if complete else ['PAGINATION_OR_EMPTY_RESULT_NOT_VERIFIED'],diagnostics={'schema_columns':list(result.columns),'endpoint_function':ENDPOINTS[endpoint]['function']})
 
+def _eastmoney_limit_code(code):
+    raw=str(code).strip()
+    match=re.fullmatch(r'(?i)(sh|sz)\.(\d{6})',raw)
+    if match:
+        exchange=match.group(1).lower();symbol=match.group(2)
+    else:
+        match=re.fullmatch(r'(?i)(\d{6})\.(SH|SZ)',raw)
+        if not match:raise ValueError('EASTMONEY_LIMIT_CODE_FORMAT_UNSUPPORTED')
+        symbol=match.group(1);exchange=match.group(2).lower()
+    return raw,symbol+'.'+exchange.upper(),('1' if exchange=='sh' else '0')+'.'+symbol,symbol
+
+def eastmoney_daily_limits(params,captured,max_requests):
+    """Direct vendor f51/f52 daily limits from per-instrument quote records.
+
+    The clist endpoint reuses f51/f52 for other meanings, so this connector only
+    consumes qt/stock/get and checks the provider timestamp against the requested
+    exchange session. It is a direct market-data observation, not a normal-rule
+    inference and not a historical PIT source.
+    """
+    import requests
+    day=date.fromisoformat(params['date'])
+    rows=[];statuses=[];attempts=0
+    for code in params['codes']:
+        attempts+=1
+        if attempts>max_requests:raise ValueError('EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED')
+        raw_code=str(code);iid=raw_code
+        try:
+            raw_code,iid,secid,symbol=_eastmoney_limit_code(code)
+            query={'fltt':'2','invt':'2','secid':secid,'fields':'f43,f51,f52,f57,f59,f86'}
+            response=requests.get('https://push2.eastmoney.com/api/qt/stock/get',params=query,timeout=(5,12))
+            try:body=response.json()
+            except ValueError:body={'text_prefix':response.text[:200]}
+            captured.append(dict(url='https://push2.eastmoney.com/api/qt/stock/get',
+                parameters={k:v for k,v in query.items() if k!='ut'},body=body,
+                status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
+            if response.status_code in (401,403,429):raise ValueError('HTTP_'+str(response.status_code))
+            response.raise_for_status()
+            data=body.get('data') if isinstance(body,dict) else None
+            if not isinstance(data,dict) or body.get('rc')!=0 or str(data.get('f57'))!=symbol:
+                raise ValueError('EASTMONEY_LIMIT_IDENTITY_MISMATCH')
+            try:
+                source_time=datetime.fromtimestamp(float(data['f86']),timezone.utc)
+                close=float(data['f43']);limit_up=float(data['f51']);limit_down=float(data['f52'])
+            except (KeyError,TypeError,ValueError,OSError,OverflowError):
+                raise ValueError('EASTMONEY_LIMIT_FIELDS_MISSING')
+            if source_time.astimezone().date()!=day and source_time.astimezone(timezone.utc).date()!=day:
+                # The exchange date check is repeated by the normalizer with
+                # Asia/Shanghai semantics. This early check catches stale quotes
+                # without relying on local timezone being Shanghai.
+                from zoneinfo import ZoneInfo
+                if source_time.astimezone(ZoneInfo('Asia/Shanghai')).date()!=day:
+                    raise ValueError('EASTMONEY_LIMIT_DATE_MISMATCH')
+            if not (0<limit_down<limit_up and limit_down<=close<=limit_up):
+                raise ValueError('EASTMONEY_LIMIT_VALUES_INVALID')
+            rows.append({'code':raw_code,'instrument_id':iid,'date':day.isoformat(),
+                'close':close,'limit_up':limit_up,'limit_down':limit_down,
+                'source_timestamp':source_time.isoformat(),
+                'field_mapping':'EASTMONEY_STOCK_GET_F51_F52_R04_V1'})
+            statuses.append({'code':raw_code,'instrument_id':iid,'status':'COMPLETE',
+                'captured_at':datetime.now(timezone.utc).isoformat()})
+        except Exception as exc:
+            category,error,classes=classify_error(exc)
+            if error=='PROVIDER_QUERY_FAILED' and str(exc).startswith('EASTMONEY_'):error=str(exc)
+            statuses.append({'code':raw_code,'instrument_id':iid,'status':'FETCH_FAILED',
+                'failure_category':category,'error_code':error,'exception_classes':classes,
+                'captured_at':datetime.now(timezone.utc).isoformat()})
+    failed=[s for s in statuses if s['status']!='COMPLETE']
+    status='COMPLETE' if rows and not failed else 'PARTIAL' if rows else 'FETCH_FAILED'
+    return dict(status=status,rows=rows,pagination_complete=not failed,
+        field_version='EASTMONEY_STOCK_GET_F51_F52_R04_V1',
+        source_url='https://push2.eastmoney.com/api/qt/stock/get',
+        coverage={'returned_rows':len(rows),'requested_codes':params['codes'],
+            'returned_instrument_ids':sorted({r['instrument_id'] for r in rows}),
+            'business_sessions':[day.isoformat()],'http_requests':attempts,
+            'security_statuses':statuses},
+        gaps=[s for s in failed],failure_category=failed[0].get('failure_category') if failed else None,
+        error_code='BATCH_SECURITY_FAILURES' if failed else None,
+        diagnostics={'field_mapping':'EASTMONEY_STOCK_GET_F51_F52_R04_V1'})
+
 def main():
     request=json.load(sys.stdin);captured=[]
     from .provider_requests import validate_request
@@ -158,6 +237,7 @@ def main():
         with contextlib.redirect_stdout(sys.stderr):
             if request['provider']=='baostock':result=baostock_request(request['endpoint'],parameters)
             elif request['provider']=='sse' and request['endpoint']=='delisting_sse':result=official_sse_delisting(captured)
+            elif request['provider']=='eastmoney' and request['endpoint']=='daily_limits_eastmoney':result=eastmoney_daily_limits(parameters,captured,request['max_http_requests'])
             else:result=akshare_request(request['endpoint'],parameters,captured,request['max_http_requests'])
     except Exception as exc:
         category,code,classes=classify_error(exc)

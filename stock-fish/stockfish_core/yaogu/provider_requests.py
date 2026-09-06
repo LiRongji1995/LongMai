@@ -31,6 +31,7 @@ ENDPOINTS={
     'money_flow':{'provider':'akshare','function':'stock_individual_fund_flow','params':('stock','market'),'required':('stock','market')},
     'lhb_summary':{'provider':'akshare','function':'stock_lhb_detail_em','params':('start_date','end_date'),'required':('start_date','end_date')},
     'limit_up_pool':{'provider':'akshare','function':'stock_zt_pool_em','params':('date',),'required':('date',)},
+    'daily_limits_eastmoney':{'provider':'eastmoney','params':('date','codes'),'required':('date','codes')},
 }
 FIELD_VERSION='R03_PROVIDER_ROWS_V1'
 

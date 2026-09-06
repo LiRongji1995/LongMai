@@ -1,3 +1,13 @@
+# R04 当前入口
+
+默认无账户候选仍为 `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`，五族公式、权重、阈值和目标语义不调参。R04 只改变数据证据链、默认读取体验和续采工具：新增 Eastmoney 单股 `qt/stock/get` f51/f52 的 `daily_limits_eastmoney` 直接限价路径，默认 DAG 为全主板当前对象登记直接限价批次；新增严格审计门槛的 `RULE_DERIVED_VERIFIED` 辅助逻辑；新增 CandidateRun 分页 summary 和单证券 detail API，首页不再默认拉取完整大记录；CLI 支持 `--rounds` 连续有限预算续采。
+
+R04 实际低预算烟测为 `../review/r04-gpt55-closure/evidence/actual-capture-01/`：观察日 `2026-09-04`、当前主板 3,194 只、剩余请求 393、直接限价 pending 160、`consumer_status=UNAVAILABLE`、候选 0。单股直接限价探针因 `PROXY_CONNECTION_FAILED` 失败；这不是合法 EMPTY 或完整 DAILY。MARKET_EDGE 仍为 `NOT_ESTABLISHED`。
+
+审阅索引：`../review/r04-gpt55-closure/final-audit.md`。本轮全量业务测试 `656 passed in 179.94s`。发布提交遵循父目录 `AGENTS.md` 的后续授权：检查通过后中文提交并推送发布仓库 main。
+
+---
+
 # R03 当前入口
 
 默认无账户候选采用 `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`，五族公式、权重、阈值不调优。精确三交易日情绪差、资格分区、统一receipt/行可见性、资金窗口及raw/effective/semantic摘要分别核验。全主板采集使用 `data_pipeline.py` 的分层持久请求队列；Web、API、调度与CLI共享该实现，不再默认截取六只涨停样本。

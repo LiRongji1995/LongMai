@@ -1,12 +1,14 @@
 """Exchange facts separate from strategy thresholds. No prefix-based identity."""
 from datetime import date
 from decimal import Decimal,ROUND_HALF_UP
+import re
 
 SSE_2026='https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20260424_10816482.shtml'
 SZSE_2026='https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf'
 SSE_SWITCH='https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_10816474.shtml'
 SZSE_SWITCH='https://investor.szse.cn/lawrules/rule/trade/t20260424_620190.html'
 REGISTRY_VERSION='SSE_SZSE_MAIN_20260706_V1'
+RULE_DERIVED_LIMIT_VERSION='RULE_DERIVED_LIMIT_EVIDENCE_R04_V1'
 
 def resolve_rule(exchange,board,session,*,st,exception_status,listing_session=None):
     """Only independently established normal/exempt days can resolve a limit.
@@ -48,6 +50,54 @@ def calculate_limits(reference_prev_close,rule,*,source_sample=None):
             raise ValueError('OFFICIAL_VENDOR_LIMIT_SAMPLE_MISMATCH')
         status='CROSS_VALIDATED'
     return {'status':status,'limit_up':str(up),'limit_down':str(down),'reference_prev_close':str(base),'rule':rule}
+
+def derive_verified_limits(reference_prev_close,*,exchange,board,session,st,normal_or_exempt_proof,listing_session=None,source_sample=None):
+    """Derive exact limits only when the normal/exempt branch is evidenced.
+
+    This is the allowed R04 RULE_DERIVED_VERIFIED path. It is intentionally not
+    a convenience wrapper around close/preclose percentage math: absent proof,
+    unsupported rules and unvalidated branch samples remain unavailable.
+    """
+    required=('proof_status','source_receipt_ids','source_fact_ids','official_source_hash',
+              'reference_price_semantics','reference_price_receipt','validation_suite_id',
+              'sample_evidence_refs','definition_version')
+    if not isinstance(normal_or_exempt_proof,dict) or any(not normal_or_exempt_proof.get(k) for k in required):
+        return {'status':'UNKNOWN','reason':'NORMAL_OR_EXEMPT_PROOF_REQUIRED','derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if normal_or_exempt_proof['proof_status']!='NORMAL_VERIFIED':
+        return {'status':'UNKNOWN','reason':'ONLY_NORMAL_VERIFIED_BRANCH_SUPPORTED_FOR_DERIVATION',
+                'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if normal_or_exempt_proof['reference_price_semantics'] not in ('RAW_PREVIOUS_CLOSE','OFFICIAL_EX_RIGHT_REFERENCE_PRICE'):
+        return {'status':'UNKNOWN','reason':'REFERENCE_PRICE_SEMANTICS_UNSUPPORTED',
+                'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if not re.fullmatch(r'[0-9a-f]{64}',str(normal_or_exempt_proof['official_source_hash'])):
+        return {'status':'UNKNOWN','reason':'OFFICIAL_SOURCE_HASH_REQUIRED',
+                'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    if not normal_or_exempt_proof.get('sample_evidence_refs'):
+        return {'status':'UNKNOWN','reason':'VALIDATION_SAMPLE_EVIDENCE_REQUIRED',
+                'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    rule=resolve_rule(exchange,board,session,st=st,exception_status='NORMAL_VERIFIED',listing_session=listing_session)
+    if rule['status']!='SUPPORTED':
+        return {'status':'UNKNOWN','reason':rule.get('reason','RULE_UNSUPPORTED'),
+                'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    calculated=calculate_limits(reference_prev_close,rule,source_sample=source_sample)
+    if source_sample is None and normal_or_exempt_proof.get('branch_cross_validated') is not True:
+        return {'status':'UNKNOWN','reason':'RULE_BRANCH_CROSS_VALIDATION_REQUIRED',
+                'rule':rule,'derivation_version':RULE_DERIVED_LIMIT_VERSION}
+    return {'status':'RULE_DERIVED_VERIFIED','limit_up':calculated['limit_up'],
+        'limit_down':calculated['limit_down'],'reference_price_value':calculated['reference_prev_close'],
+        'reference_price_semantics':normal_or_exempt_proof['reference_price_semantics'],
+        'reference_price_receipt':normal_or_exempt_proof['reference_price_receipt'],
+        'price_tick':rule['tick'],'rounding_rule':rule['rounding'],'rule_id':rule['rule_id'],
+        'rule_version':rule['registry_version'],'effective_interval':{'from':rule['effective_from'],'to':rule['effective_to']},
+        'official_source_hash':normal_or_exempt_proof['official_source_hash'],
+        'instrument_session_status_ref':normal_or_exempt_proof['source_fact_ids'],
+        'normal_or_exempt_proof':normal_or_exempt_proof['proof_status'],
+        'source_receipt_ids':tuple(normal_or_exempt_proof['source_receipt_ids']),
+        'source_fact_ids':tuple(normal_or_exempt_proof['source_fact_ids']),
+        'derivation_version':RULE_DERIVED_LIMIT_VERSION,
+        'validation_suite_id':normal_or_exempt_proof['validation_suite_id'],
+        'sample_evidence_refs':tuple(normal_or_exempt_proof['sample_evidence_refs']),
+        'effective_dependency_hash':normal_or_exempt_proof.get('effective_dependency_hash')}
 
 def abnormal_deviation(stock_end,stock_start,index_end,index_start,*,basis_comparable):
     """2026 rule cumulative deviation = price ratio return minus index ratio.

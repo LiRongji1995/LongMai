@@ -197,6 +197,7 @@ class MainboardPipeline:
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
                     'initial_estimate': {'full_pool_structure_members': len(ids),
                         'full_pool_raw_daily_requests': sum(structure_start <= s <= day for s in sessions),
+                        'current_direct_limit_batches': (len(ids)+19)//20,
                         'full_pool_adjustment_factor_batches': (len(ids)+99)//100,
                         'basic_directory_batches': (len(missing_listing)+99)//100, 'published_outcome_objects': len(demand),
                         'candidate_history_requests': 'DETERMINED_AFTER_ALL_POOL_STRUCTURE_DISCOVERY',
@@ -275,7 +276,9 @@ class MainboardPipeline:
                 'start_date':'1990-01-01', 'end_date':str(day)}, 'StructureHistoryCapture')
                 for i in range(0,len(ids),100)]
             current_limit = add('limit_up_pool', {'date':str(day)}, 'MarketBreadthLimitEvidence', current=True)
-            drain('MarketBreadthLimitEvidence', [current_limit])
+            direct_limits = [add('daily_limits_eastmoney', {'date':str(day), 'codes':ids[i:i+20]},
+                'MarketBreadthDirectLimitEvidence', current=True) for i in range(0,len(ids),20)]
+            drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
             outcome_requests = [rid for item in demand for endpoint in ('history','history_adjusted')
                                 for rid in history(item['instrument_id'], date.fromisoformat(item['start_date']), day,
                                                    'PublishedCandidateOutcomeCapture', endpoint)]

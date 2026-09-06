@@ -65,15 +65,18 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         source_by[rid]=source
         params=result.get('parameters',{});end=_date(params.get('end_date') or params.get('date'))
         clock=_clock(source,end)
+        coverage=result.get('coverage',{})
+        instrument_ids=tuple(sorted(str(v) for v in coverage.get('returned_instrument_ids',()) if v))
+        business_sessions=tuple(sorted({_date(v) for v in coverage.get('business_sessions',()) if _date(v) is not None}))
         receipts[rid]=SourceReceipt(receipt_id=rid,provider=result['provider'],dataset=result['endpoint'],content_hash=source['content_hash'],
             field_version=result['field_version'],row_count=len(result.get('rows',[])),pagination_complete=result.get('pagination_complete',False),
             status=result['status'],parameters={k:v if isinstance(v,(str,int,float,bool)) or v is None else str(v) for k,v in params.items()},
-            source_url=source.get('source_url'),**clock)
+            source_url=source.get('source_url'),instrument_ids=instrument_ids,business_sessions=business_sessions,**clock)
         if result['status'] not in ('COMPLETE','PARTIAL'):continue
         usable.append(result)
     usable.sort(key=lambda r:datetime.fromisoformat(source_by[r['request_receipt_id']]['ingested_at']))
     masters={};master_refs=[];master_endpoints=set();history={};adjusted={};basic={};market_states={};theme_names={};theme_results=[]
-    factor_captures=defaultdict(list); limit_pool={}; malformed_master_count=0; master_latest={};sse_delisting=None
+    factor_captures=defaultdict(list); limit_pool={}; direct_limits={}; malformed_master_count=0; master_latest={};sse_delisting=None
     for result in usable:
         if result['endpoint'] in ('mainboard_sse','master_szse'):master_latest[result['endpoint']]=result['request_receipt_id']
     for result in usable:
@@ -121,6 +124,12 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         elif endpoint=='limit_up_pool' and _date(result['parameters'].get('date'))==day and result['status']=='COMPLETE' and result['pagination_complete']:
             for row in result['rows']:
                 if re.fullmatch(r'\d{6}',str(row.get('代码',''))):limit_pool[str(row['代码'])]=(row,rid)
+        elif endpoint=='daily_limits_eastmoney' and _date(result['parameters'].get('date'))==day and result['status'] in ('COMPLETE','PARTIAL'):
+            for row in result['rows']:
+                iid=_iid(row.get('code')) or str(row.get('instrument_id') or '')
+                session=_date(row.get('date'))
+                if iid and session==day:
+                    direct_limits[(iid,session)]=(row,rid)
         elif endpoint=='delisting_sse' and result['status']=='COMPLETE' and result['pagination_complete']:
             codes={str(row.get('INSTRUMENT_ID','')) for row in result['rows']}
             if all(re.fullmatch(r'\d{6}',code) for code in codes):sse_delisting=(codes,rid)
@@ -149,7 +158,8 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             security_type='UNKNOWN',listed_on=_date(row['ipoDate']),name=str(row.get('code_name') or ''),source=rid)
         outcome_only.append(iid)
     securities=[];bars=[];limit_proofs=[];identity_proofs=[];fields=dict(historical_isST=0,historical_tradestatus=0,reference_prev_close=0,turnover_fraction=0,
-        adjusted_comparable_rows=0,raw_rows=len(history),raw_mainboard_rows=0,verified_current_limit_rows=0,outcome_only_raw_rows=0)
+        adjusted_comparable_rows=0,raw_rows=len(history),raw_mainboard_rows=0,verified_current_limit_rows=0,direct_published_limit_rows=0,
+        vendor_pool_rule_cross_validated_limit_rows=0,outcome_only_raw_rows=0)
     for iid,master in sorted(observations.items()):
         listing=master['listed_on'];basic_pair=basic.get(iid)
         if listing is None and basic_pair:listing=_date(basic_pair[0].get('ipoDate'))
@@ -197,8 +207,21 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             if session in converted:
                 comparable,cmprefs=converted[session];refs.extend(cmprefs);fields['adjusted_comparable_rows']+=1
             limit_values=dict(limit_applicable=None,limit_verified=False)
+            direct=direct_limits.get((iid,session)) if session==day and iid in masters and master['board']=='MAIN' else None
+            if direct and values['close'] is not None:
+                row,limit_ref=direct
+                up=_number(row.get('limit_up'),positive=True);down=_number(row.get('limit_down'),positive=True);sample=_number(row.get('close'),positive=True)
+                if up is not None and down is not None and sample is not None and abs(sample-values['close'])<=Decimal('0.005') and down<=values['close']<=up and down<up:
+                    limit_values=dict(limit_applicable=True,limit_verified=True,limit_up=up,limit_down=down,rule_id='DIRECT_PUBLISHED_EASTMONEY_F51_F52_R04')
+                    refs.append(limit_ref);fields['verified_current_limit_rows']+=1;fields['direct_published_limit_rows']+=1
+                    limit_proofs.append(dict(instrument_id=iid,session=str(day),verification='DIRECT_PUBLISHED',
+                        source='EASTMONEY_STOCK_GET_F51_F52',source_refs=[rid,limit_ref],field_mapping=row.get('field_mapping'),
+                        limit_up=str(up),limit_down=str(down),source_timestamp=row.get('source_timestamp')))
+                else:
+                    gaps.append(dict(instrument_id=iid,field='current_limit',status='UNAVAILABLE',
+                        reason='DIRECT_LIMIT_PRICE_DATE_OR_VALUE_CROSS_VALIDATION_FAILED',source_ref=limit_ref,impact='CURRENT_LIMIT_EVENT'))
             pool=limit_pool.get(iid[:6]) if session==day and iid in masters and master['board']=='MAIN' else None
-            if pool and st is False and values['close'] is not None and values['reference_prev_close'] is not None and sum(listing<=s<=day for s in sessions)>=6:
+            if not limit_values['limit_verified'] and pool and st is False and values['close'] is not None and values['reference_prev_close'] is not None and sum(listing<=s<=day for s in sessions)>=6:
                 # Explicit vendor closing-limit event independently corroborates
                 # this date's normal limit; it does not certify historical days.
                 rule=resolve_rule(master['exchange'],'MAIN',day,st=st,exception_status='NORMAL_VERIFIED')
@@ -206,7 +229,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
                 up=_number(calculated['limit_up'],positive=True);sample=_number(pool[0].get('最新价'),positive=True)
                 if up is not None and sample==up==values['close'] and values['high'] is not None and values['high']<=up:
                     limit_values=dict(limit_applicable=True,limit_verified=True,limit_up=up,limit_down=_number(calculated['limit_down'],positive=True),rule_id=rule['rule_id'])
-                    refs.append(pool[1]);fields['verified_current_limit_rows']+=1
+                    refs.append(pool[1]);fields['verified_current_limit_rows']+=1;fields['vendor_pool_rule_cross_validated_limit_rows']+=1
                     limit_proofs.append(dict(instrument_id=iid,session=str(day),verification='RAW_REFERENCE_OFFICIAL_RULE_VENDOR_CLOSE_LIMIT_EVENT',source_refs=[rid,pool[1]],rule=rule,limit_up=str(up)))
                 else:gaps.append(dict(instrument_id=iid,field='current_limit',status='UNAVAILABLE',reason='VENDOR_POOL_RAW_RULE_CROSS_VALIDATION_FAILED',impact='CURRENT_LIMIT_EVENT'))
             valid=all(values[x] is not None for x in ('open','high','low','close'))

@@ -1,6 +1,13 @@
-# Windows 部署：R03 无账户规则候选
+# Windows 部署：R04 无账户规则候选
 
-默认 Web/API 是沪深主板五类候选研究入口。无需现金、持仓、LLM 或旧 Alpha158 推理，也不要求先下载模型。**当前真实验收为 UNAVAILABLE，尚不能输出完整 DAILY_V1 榜单或证明合法 EMPTY。** 来源缺口与已完成验证见 [R03 发布说明](docs/r03-release.md)。
+默认 Web/API 是沪深主板五类候选研究入口。无需现金、持仓、LLM 或旧 Alpha158 推理，也不要求先下载模型。**当前真实验收仍为 UNAVAILABLE，尚不能输出完整 DAILY_V1 榜单或证明合法 EMPTY。** R04 变更与边界见 [R04 发布说明](docs/r04-release.md)，R03 基线见 [R03 发布说明](docs/r03-release.md)。
+
+R04 后首页默认读取分页 summary：
+
+- `GET /api/candidate-runs/<run_id>/summary?page_size=50`
+- `GET /api/candidate-runs/<run_id>/items/<instrument_id>`
+
+完整 run/export 仍保留用于审计。直接限价队列新增 `daily_limits_eastmoney`，通过 Eastmoney 单股 `qt/stock/get` f51/f52 尝试获取当日涨跌停价；未知或网络失败不会被当成可用限价。
 
 ## 1. 项目环境
 
@@ -33,7 +40,7 @@ if (-not (Test-Path -LiteralPath $ProjectEnv)) {
 在同一个 PowerShell 会话中，为本次部署设置数据库和 artifacts。下例使用仓库根目录下被忽略的 data/，也可以改为自己的独立运行目录：
 
 ~~~powershell
-$ProjectState = Join-Path $ProjectRoot 'data/r03'
+$ProjectState = Join-Path $ProjectRoot 'data/r04'
 New-Item -ItemType Directory -Force -Path $ProjectState | Out-Null
 $env:STOCKFISH_DB_PATH = Join-Path $ProjectState 'research.sqlite3'
 $env:STOCKFISH_STATE_DIR = Join-Path $ProjectState 'core'
@@ -58,6 +65,12 @@ Invoke-RestMethod 'http://127.0.0.1:8000/api/universe/coverage'
 $CaptureJob = Invoke-RestMethod -Method Post -Uri 'http://127.0.0.1:8000/api/candidate-data-pipeline/capture' -ContentType 'application/json' -Body '{}'
 Invoke-RestMethod ('http://127.0.0.1:8000/api/jobs/' + $CaptureJob.job_id)
 Invoke-RestMethod 'http://127.0.0.1:8000/api/candidate-data-pipeline'
+~~~
+
+命令行可用同一 DAG 做连续有限预算续采：
+
+~~~powershell
+& $ProjectPython ./stock-fish/scripts/capture_mainboard_data.py --cache ./data/r04-cache --output ./data/r04-capture --rounds 3
 ~~~
 
 配置 STOCKFISH_API_KEY 后，请求还需携带对应 Bearer 认证。HTTP 不接受任意文件路径、账户、来源批准或回填时间。
@@ -85,7 +98,7 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root $ProjectRoot
 备份目标必须是新目录：
 
 ~~~powershell
-$ProjectBackup = Join-Path $ProjectRoot ('data/backups/r03-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
+$ProjectBackup = Join-Path $ProjectRoot ('data/backups/r04-' + (Get-Date -Format 'yyyyMMdd-HHmmss'))
 & $ProjectPython ./stock-fish/scripts/backup_restore_state.py backup --database $env:STOCKFISH_DB_PATH --artifact-root $env:STOCKFISH_STATE_DIR --destination $ProjectBackup
 & $ProjectPython ./stock-fish/scripts/backup_restore_state.py verify --backup $ProjectBackup
 ~~~
@@ -100,10 +113,10 @@ $ProjectBackup = Join-Path $ProjectRoot ('data/backups/r03-' + (Get-Date -Format
 & $ProjectPython -m pip check
 ~~~
 
-测试使用隔离 DB/state 和明确 TEST_FIXTURE，不依赖个人运行库。合成样例、离线故障注入、真实来源调用和 Windows 启动核验是不同证据。R03 原工作环境最终业务 651 项通过，这是该次记录，不承诺新机器已自动完成验收。
+测试使用隔离 DB/state 和明确 TEST_FIXTURE，不依赖个人运行库。合成样例、离线故障注入、真实来源调用和 Windows 启动核验是不同证据。R04 原工作环境最终业务 656 项通过（179.94 秒），这是该次记录，不承诺新机器已自动完成验收。
 
 ## 可选 Qlib 与历史记录
 
 旧 CSI300 Alpha158 / LightGBM 仅为诊断研究对照。下载不等于登记，登记不等于样本外有效。模型审批、消费者校验和原 hash 保留，不能为规则候选指定未运行的 model_id。
 
-早期结果位于 [历史执行清单](docs/verification/inference-execution.json)，来源和许可见 [第三方通知](THIRD_PARTY_NOTICES.md)。它们不证明 R03 数据完整或投资收益。完整模型、Qlib binary 行情和本机私有审阅数据不随源码发布迁移。Docker、真实竞价和完整历史投资验证未在 R03 完成。
+早期结果位于 [历史执行清单](docs/verification/inference-execution.json)，来源和许可见 [第三方通知](THIRD_PARTY_NOTICES.md)。它们不证明 R04 数据完整或投资收益。完整模型、Qlib binary 行情和本机私有审阅数据不随源码发布迁移。Docker、真实竞价和完整历史投资验证未在 R04 完成。

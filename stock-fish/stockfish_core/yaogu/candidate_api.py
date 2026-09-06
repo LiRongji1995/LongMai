@@ -70,6 +70,16 @@ def register_candidate_routes(app, service):
     def get_candidate_run(run_id):
         return jsonify(service.get_run(run_id).model_dump(mode='json'))
 
+    @app.get('/api/candidate-runs/<run_id>/summary')
+    def get_candidate_run_summary(run_id):
+        return jsonify(service.run_summary(run_id, page=int(request.args.get('page', 1)),
+            page_size=int(request.args.get('page_size', 50)), family=request.args.get('family') or None,
+            selection=request.args.get('selection') or None))
+
+    @app.get('/api/candidate-runs/<run_id>/items/<instrument_id>')
+    def get_candidate_item_detail(run_id, instrument_id):
+        return jsonify(service.item_detail(run_id, instrument_id))
+
     @app.get('/api/candidate-runs/<run_id>/family/<family>')
     def candidate_family(run_id, family):
         return jsonify([x.model_dump(mode='json') for x in service.family(run_id, family)])

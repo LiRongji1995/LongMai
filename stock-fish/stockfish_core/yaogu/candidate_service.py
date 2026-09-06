@@ -310,6 +310,103 @@ class CandidateService:
         rows = self.store.list_document_metadata('candidate_runs', limit=limit, descending=True)
         return [self.get_run(r['document_id']) for r in rows]
 
+    @staticmethod
+    def _reason_counts(records):
+        counts={}
+        for record in records:
+            for reason in record.get('reason_codes',()):
+                counts[reason]=counts.get(reason,0)+1
+        return dict(sorted(counts.items()))
+
+    @staticmethod
+    def _compact_coverage(coverage):
+        skip={'eligible_ids','known_excluded_records','eligibility_unknown_records',
+              'known_suspended_ids','structural_screening_unknown_ids'}
+        result={k:v for k,v in coverage.items() if k not in skip}
+        for key in skip:
+            value=coverage.get(key)
+            if isinstance(value,(list,tuple)):
+                result[key[:-4]+'_count' if key.endswith('_ids') else key+'_count']=len(value)
+        return result
+
+    @staticmethod
+    def _item_summary(item):
+        feature_keys=('streak_exchange','streak_lower_bound','close_limit_up','touched_limit_up',
+            'M5','M10','M20','cmax60','amount_ratio_5','turnover_fraction','ret3','ret5',
+            'ret10','close_location','open','close','reference_prev_close','comparable_close')
+        features={}
+        for key in feature_keys:
+            value=item.features.get(key)
+            if value is not None:
+                features[key]={'value':value.value,'quality':value.quality,'unit':value.unit,'window':value.window}
+        selected_theme=next((e for e in item.theme_evidence if e.get('theme_id')==item.primary_theme),None)
+        return {'instrument_id':item.instrument_id,'name':item.name,'primary_family':item.primary_family,
+            'secondary_tags':item.secondary_tags,'score':item.score,'daily_score':item.daily_score,
+            'funds_score':item.funds_score,'family_rank':item.family_rank,'tier':item.tier,
+            'primary_theme':item.primary_theme,'components':item.components,'weights':item.weights,
+            'contributions':item.contributions,'reason_codes':item.reason_codes,
+            'risk_flags':item.risk_flags,'missing':item.missing,'features':features,
+            'theme_summary':{'theme_id':item.primary_theme,'selection_reason':selected_theme.get('selection_reason') if selected_theme else None,
+                'peer_expected':selected_theme.get('peer_expected') if selected_theme else None,
+                'peer_observed':selected_theme.get('peer_observed') if selected_theme else None,
+                'coverage':selected_theme.get('coverage') if selected_theme else None,
+                'theme_evidence_count':len(item.theme_evidence)},
+            'funds_status':item.funds_evidence.get('family_status') if item.funds_evidence else None,
+            'has_detail':True}
+
+    def run_summary(self, run_id, *, page=1, page_size=50, family=None, selection=None):
+        if family is not None and family not in FAMILIES:
+            raise ValueError('unknown strategy family')
+        if selection not in (None,'display','focus'):
+            raise ValueError('unknown candidate selection')
+        if not 1<=page_size<=50 or page<1:
+            raise ValueError('summary page size must be 1..50')
+        run=self.get_run(run_id)
+        items=list(run.items)
+        if family is not None:
+            items=[i for i in items if i.primary_family==family]
+        if selection=='display':
+            wanted=set(run.display_ids);items=[i for i in items if i.instrument_id in wanted]
+        elif selection=='focus':
+            wanted=set(run.focus_ids);items=[i for i in items if i.instrument_id in wanted]
+        total=len(items);start=(page-1)*page_size;page_items=items[start:start+page_size]
+        family_counts={f:{'total':sum(i.primary_family==f for i in run.items),
+            'scored':sum(i.primary_family==f and i.score is not None for i in run.items),
+            'focus':sum(i.primary_family==f and i.tier=='FOCUS' for i in run.items),
+            'watch':sum(i.primary_family==f and i.tier=='WATCH' for i in run.items)} for f in FAMILIES}
+        return {'view':'SUMMARY_V1','run_id':run.run_id,'revision':run.revision,
+            'parent_run_id':run.parent_run_id,'generated_at':run.generated_at.isoformat(),
+            'observation_date':run.observation_date.isoformat(),
+            'decision_cutoff':run.decision_cutoff.isoformat(),'market_session':run.market_session,
+            'strategy_id':run.strategy_id,'config_hash':run.config_hash,
+            'feature_definition_version':run.feature_definition_version,
+            'source_hash':run.source_hash,'universe_hash':run.universe_hash,'input_hash':run.input_hash,
+            'semantic_hash':run.semantic_hash,'semantic_hash_version':run.semantic_hash_version,
+            'hash_contract_version':run.hash_contract_version,'raw_bundle_hash':run.raw_bundle_hash,
+            'effective_input_hash':run.effective_input_hash,'model_id':run.model_id,'profile':run.profile,
+            'parameter_status':run.parameter_status,'coverage_type':run.coverage_type,'status':run.status,
+            'item_total':len(run.items),'filtered_total':total,'page':page,'page_size':page_size,
+            'has_next':start+page_size<total,'display_ids':run.display_ids,'focus_ids':run.focus_ids,
+            'family_counts':family_counts,'items':[self._item_summary(i) for i in page_items],
+            'coverage_summary':self._compact_coverage(run.coverage),
+            'emotion':{'session':run.emotion.session.isoformat(),'as_of':run.emotion.as_of.isoformat(),
+                'score':run.emotion.score,'state':run.emotion.state,'components':run.emotion.components,
+                'readings':{k:v for k,v in run.emotion.readings.items() if k in {'delta_status','d','missing_history_sessions','cohort_n','cohort_s','cohort_raw_p','cohort_m','cohort_p_status','cohort_m_status'}},
+                'coverage':self._compact_coverage(run.emotion.coverage),'reasons':run.emotion.reasons,
+                'source_complete':run.emotion.source_complete},
+            'excluded_summary':{'count':len(run.excluded),'reason_counts':self._reason_counts(run.excluded)},
+            'unavailable_summary':{'count':len(run.unavailable),'reason_counts':self._reason_counts(run.unavailable)},
+            'source_ref_count':len(run.source_refs),'detail_endpoint':'/api/candidate-runs/'+run.run_id+'/items/{instrument_id}'}
+
+    def item_detail(self, run_id, instrument_id):
+        run=self.get_run(run_id)
+        matches=[item for item in run.items if item.instrument_id==instrument_id]
+        if len(matches)!=1:
+            raise KeyError(instrument_id)
+        return {'run_id':run.run_id,'observation_date':run.observation_date.isoformat(),
+            'decision_cutoff':run.decision_cutoff.isoformat(),'semantic_hash':run.semantic_hash,
+            'item':matches[0].model_dump(mode='json')}
+
     def family(self, run_id, family):
         if family not in FAMILIES:
             raise ValueError('unknown strategy family')
