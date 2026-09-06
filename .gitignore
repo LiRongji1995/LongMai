@@ -30,6 +30,13 @@ dist/
 /stock-fish/qlib-zh/mlruns/
 /stock-fish/batch_results/
 /stock-fish/data/sentiment_history/
+/stock-fish/data/
+/review/
+/deliverables/
+*.sqlite3
+*.sqlite3-wal
+*.sqlite3-shm
+*.jobs.lock
 *.log
 *.tmp
 *.bak

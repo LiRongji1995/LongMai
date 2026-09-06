@@ -164,8 +164,6 @@ class RiskEngine:
 
         if reserved_cash < 0 or reserved_cash > portfolio.cash + 1e-8:
             raise ValueError("invalid reserved cash")
-        if item.hard_veto:
-            return result(RiskAction.REJECT, "HARD_VETO", *item.veto_reasons)
         if item.data_available_at > item.decision_time or item.price_timestamp > item.decision_time:
             return result(RiskAction.UNAVAILABLE, "FUTURE_DATA")
         if portfolio.as_of > item.decision_time:
@@ -178,6 +176,8 @@ class RiskEngine:
             return result(RiskAction.UNAVAILABLE, "UNTRUSTED_MARKET_DATA")
         if (item.decision_time - item.price_timestamp).total_seconds() > p.max_price_age_seconds:
             return result(RiskAction.UNAVAILABLE, "STALE_PRICE")
+        if item.hard_veto:
+            return result(RiskAction.REJECT, "HARD_VETO", *item.veto_reasons)
         if item.tradability == RiskAction.REJECT:
             return result(RiskAction.REJECT, *item.tradability_reasons or ("NOT_TRADABLE",))
         if item.tradability not in (RiskAction.ACCEPT, RiskAction.REDUCE):

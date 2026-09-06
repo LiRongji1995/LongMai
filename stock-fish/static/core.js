@@ -1,232 +1,38 @@
-/* Canonical recommendation UI. Dynamic content is rendered as text, never HTML. */
+/* Candidate facts only. No account, order size, LLM vote or model-selection dependency. */
 (() => {
-  'use strict';
-  let latestResult = null;
-  const byId = id => document.getElementById(id);
-  const node = (tag, text, cls) => {
-    const el = document.createElement(tag);
-    if (text !== undefined) el.textContent = String(text);
-    if (cls) el.className = cls;
-    return el;
-  };
-  const errorText = error => typeof error === 'string' ? error : JSON.stringify(error);
-  async function api(url, options = {}) {
-    const headers = {'Content-Type': 'application/json', ...(options.headers || {})};
-    const token = byId('coreApiKey')?.value;
-    if (token) headers.Authorization = 'Bearer ' + token;
-    const response = await fetch(url, {...options, headers});
-    const value = await response.json();
-    if (!response.ok) throw new Error(errorText(value.error || value) + (value.fields?.length ? ' [' + value.fields.join(', ') + ']' : ''));
-    return value;
-  }
-  function fail(error) {
-    const result = byId('result');
-    result.replaceChildren(node('div', '不可用：' + errorText(error.message || error), 'error'));
-    byId('analyzeBtn').disabled = false;
-  }
-  function requestBody() {
-    const raw = byId('symbolInput').value.trim();
-    const body = {symbols: raw, mode: 'RESEARCH', cash: Number(byId('cashInput').value || 0)};
-    const model = byId('qlibModelSelect')?.value;
-    if (model) body.model_id = model;
-    const snapshot = byId('coreSnapshot')?.value.trim();
-    if (snapshot) body.snapshot_id = snapshot;
-    const holdings = byId('coreHoldings')?.value.trim();
-    if (holdings) body.holdings = JSON.parse(holdings);
-    else if (byId('sharesInput').value.split('/').some(v => Number(v || 0) !== 0)) {
-      throw new Error('请在“可审计组合输入”中提供持仓、可卖股数、行业与当前市价；成本价不能替代市值。');
-    }
-    return body;
-  }
-  function table(rows) {
-    const wrapper = node('div');
-    wrapper.style.overflowX = 'auto';
-    const result = node('table');
-    result.style.cssText = 'display:table;min-width:600px;width:100%;border-collapse:collapse;margin-top:12px;text-align:left';
-    const header = node('tr');
-    ['排名', '证券', '量化原始分', '风险', '目标股数', '目标权重'].forEach(v => {
-      const cell = node('th', v); cell.style.padding = '10px 6px'; header.append(cell);
-    });
-    result.append(header);
-    rows.forEach(item => {
-      const row = node('tr');
-      [item.final_rank, item.instrument_id, Number(item.quant_score).toFixed(6), item.risk_decision.decision,
-       item.target_shares, (item.target_weight * 100).toFixed(1) + '%'].forEach(v => {
-        const cell = node('td', v);
-        cell.style.padding = '10px 6px';
-        row.append(cell);
-      });
-      result.append(row);
-    });
-    wrapper.append(result);
-    return wrapper;
-  }
-  function render(value) {
-    const final = value.final_recommendation || value;
-    const root = byId('result');
-    root.replaceChildren();
-    if (!final.context || !Array.isArray(final.items)) {
-      root.append(node('p', '量化运行已保存，尚无通过统一风控的最终推荐。'));
-      const details = node('pre', JSON.stringify(value, null, 2));
-      details.style.whiteSpace = 'pre-wrap';
-      root.append(details);
-      return;
-    }
-    latestResult = value;
-    root.append(node('h2', '统一推荐 · ' + final.status));
-    const c = final.context;
-    root.append(node('p', `模型 ${c.model_id} / ${c.model_version} · 数据截止 ${c.as_of}`));
-    root.append(node('p', `推荐时间 ${c.decision_time} · 最早交易 ${c.earliest_trade_at}`));
-    root.append(node('p', `策略 ${final.policy.version} · 数据版本 ${c.data_version}`));
-    root.append(node('p', '研究模式；量化原始分只用于排序，未校准为概率或预期收益。成交前必须再次检查交易日限制。'));
-    if (final.items.length) {
-      root.append(node('p', '首选与 Top5 / Top20 均来自以下同一份最终名单。'));
-      root.append(table(final.items));
-    } else root.append(node('p', '当前没有通过全部条件的推荐。' + (final.reason_codes || []).join(' / '), 'error'));
-    if (final.rejected?.length) {
-      const details = node('details');
-      details.append(node('summary', `排除或不可用：${final.rejected.length} 只`));
-      final.rejected.forEach(item => details.append(node('p', item.instrument_id + ' · ' + item.risk_decision.decision + ' · ' + item.reason_codes.join(', '))));
-      root.append(details);
-    }
-    const audit = node('details');
-    audit.append(node('summary', '完整审计记录'));
-    const pre = node('pre', JSON.stringify(final, null, 2));
-    pre.style.cssText = 'white-space:pre-wrap;overflow-wrap:anywhere';
-    audit.append(pre);
-    root.append(audit);
-    const download = node('button', '下载已保存的审计报告');
-    download.onclick = async () => {
-      try {
-        const headers = {'Content-Type': 'application/json'};
-        if (byId('coreApiKey').value) headers.Authorization = 'Bearer ' + byId('coreApiKey').value;
-        const response = await fetch('/api/report/download', {method: 'POST', headers,
-          body: JSON.stringify({recommendation_run_id: final.recommendation_run_id})});
-        if (!response.ok) throw new Error('审计报告不可用');
-        const url = URL.createObjectURL(await response.blob());
-        const a = node('a'); a.href = url; a.download = 'stockfish-audit.html'; a.click();
-        setTimeout(() => URL.revokeObjectURL(url), 1000);
-      } catch (error) { fail(error); }
-    };
-    root.append(download);
-  }
-  async function follow(jobId, renderResult = true) {
-    // Fetch permits Authorization headers; the same durable state is also exposed by SSE.
-    for (;;) {
-      const job = await api('/api/jobs/' + encodeURIComponent(jobId));
-      byId('simLog').style.display = 'block';
-      byId('simLog').textContent = `${job.job_id} · ${job.state} · ${Math.round(job.progress * 100)}% · ${job.message || ''}`;
-      if (job.state === 'SUCCEEDED') {
-        if (renderResult) render(job.result || job);
-        return job.result || job;
-      }
-      if (['FAILED', 'CANCELLED', 'INTERRUPTED'].includes(job.state)) throw new Error(errorText(job.error || job.state));
-      await new Promise(resolve => setTimeout(resolve, 1000));
-    }
-  }
-  async function recommend() {
-    byId('analyzeBtn').disabled = true;
-    byId('result').replaceChildren(node('p', '正在提交可恢复的推荐任务…'));
-    try {
-      const job = await api('/api/recommendations', {method: 'POST', body: JSON.stringify(requestBody())});
-      await follow(job.job_id);
-    } catch (error) { fail(error); }
-    finally { byId('analyzeBtn').disabled = false; }
-  }
-  window.analyze = recommend;
-  window.batchAnalyze = recommend;
-  window.startQlibInfer = recommend;
-  window.renderAnalysis = render;
-  window.executeQlibDataUpdate = async () => {
-    const button = byId('qlibDataExecuteBtn');
-    const status = byId('qlibDataStatus');
-    button.disabled = true;
-    status.textContent = '正在创建独立数据快照…';
-    try {
-      const job = await api('/api/qlib/data/update', {method: 'POST', body: '{}'});
-      const result = await follow(job.job_id, false);
-      status.textContent = result.activation_required
-        ? '数据快照已验证保存，尚未切换。请按迁移文档显式设置新目录并重启。'
-        : (result.message || '数据任务完成；请核对保存的快照版本。');
-    } catch (error) { status.textContent = '不可用：' + errorText(error.message || error); }
-    finally { button.disabled = false; }
-  };
-  window.fillIndexStocks = async indexName => {
-    const status = byId('fullMarketStatus');
-    try {
-      const result = await api('/api/qlib/index-stocks?index=' + encodeURIComponent(indexName)
-        + '&exclude_star=' + Boolean(byId('excludeStarCheck').checked));
-      byId('symbolInput').value = result.stocks;
-      status.textContent = `已填入 ${result.count} 只，成员日期 ${result.as_of}`;
-    } catch (error) { status.textContent = '不可用：' + errorText(error.message || error); }
-  };
-  window.loadHealthCheck = async () => {
-    const content = byId('healthContent') || byId('healthCheckContent');
-    try {
-      const health = await api('/api/health');
-      const target = content || byId('result');
-      target.replaceChildren(node('h3', '工程组件状态 · ' + health.status));
-      Object.entries(health.components).forEach(([name, value]) => {
-        target.append(node('p', `${name}: ${value.status} ${value.reason || value.licensing || ''}`));
-      });
-    } catch (error) { fail(error); }
-  };
-  window.startQlibTrain = async () => {
-    try {
-      const text = byId('coreTraining').value.trim();
-      if (!text) throw new Error('请提供包含特征哈希、训练/验证/测试窗口及 label_end 的 TrainRequest JSON。');
-      const job = await api('/api/qlib/train', {method: 'POST', body: JSON.stringify(JSON.parse(text))});
-      await follow(job.task_id);
-    } catch (error) { fail(error); }
-  };
-  const section = node('details');
-  section.style.cssText = 'margin:18px 0;padding:16px;border:1px solid #2a4058;border-radius:10px';
-  section.append(node('summary', '可审计组合输入与工程状态'));
-  section.append(node('p', '可用现金用于组合约束。已有持仓须提供 shares、sellable_shares、mark_price、industry、marked_at；未通过风险检查时不生成名单。'));
-  [['coreSnapshot', '数据快照 ID（留空使用已选快照）', 'text'], ['coreApiKey', 'API 密钥（仅保留在当前页面）', 'password']].forEach(([id, label, type]) => {
-    const wrapper = node('label', label + ' ');
-    const input = node('input'); input.id = id; input.type = type; input.autocomplete = 'off'; input.style.width = '100%';
-    wrapper.append(input); section.append(wrapper);
-  });
-  [['coreHoldings', '持仓 JSON 数组（无持仓留空）'], ['coreTraining', '训练请求 JSON（可选）']].forEach(([id, label]) => {
-    section.append(node('p', label)); const input = node('textarea'); input.id = id; input.rows = 3; input.style.width = '100%'; section.append(input);
-  });
-  const historyButton = node('button', '读取持久推荐历史');
-  historyButton.onclick = async () => {
-    try {
-      const history = await api('/api/recommendations/history');
-      const result = byId('result'); result.replaceChildren(node('h2', '推荐历史（原记录与修订均保留）'));
-      if (!history.length) result.append(node('p', '尚无已保存的推荐记录。'));
-      history.forEach(record => {
-        const button = node('button', `${record.instrument_id} · ${record.recommendation_time} · ${record.status}`);
-        button.style.display = 'block'; button.style.margin = '8px 0';
-        button.onclick = async () => {
-          try {
-            const saved = await api('/api/recommendation-runs/' + encodeURIComponent(record.metadata.recommendation_run_id));
-            render(saved);
-            const detail = await api('/api/recommendations/' + encodeURIComponent(record.recommendation_id));
-            const outcomes = node('section');
-            outcomes.append(node('h3', record.instrument_id + ' · 独立结果观察'));
-            if (!detail.evaluations.length) outcomes.append(node('p', '尚无评估观察；未填写任何预期或实际收益。'));
-            detail.evaluations.forEach(observation => {
-              const metric = observation.return === null ? '收益未形成'
-                : `假设持有净收益 ${(observation.return * 100).toFixed(3)}%`;
-              outcomes.append(node('p', `${observation.horizon} 天 · ${observation.state} · ${metric} · ${observation.provenance}`));
-            });
-            result.append(outcomes);
-          } catch (error) { fail(error); }
-        };
-        result.append(button);
-      });
-    } catch (error) { fail(error); }
-  };
-  section.append(historyButton);
-  byId('result').before(section);
-  if (byId('simCheck')) {
-    byId('simCheck').checked = false;
-    byId('simCheck').disabled = true;
-    byId('simCheck').title = '模拟为实验模块，不参与最终推荐';
-  }
-  if (byId('masterSelect')) byId('masterSelect').disabled = true;
-  byId('backendStatusText').textContent = '可信数据 · 唯一推荐策略 · 持久历史 · 研究模式';
+'use strict';
+const $ = id => document.getElementById(id);
+const families = [['OVERVIEW','观察分配'],['FOCUS','重点'],['ONE_TO_TWO','首板 · 1进2'],['TWO_TO_THREE','2进3'],['TREND_NM','N天M板'],['HIGH_BOARD','高标接力'],['REBOUND_SETUP','断板恢复']];
+const labels={B:'板结构',V:'量价换手',T:'主题共振',L:'相对强度',G:'历史股性',M:'市场情绪'};
+const tiers={FOCUS:'重点',WATCH:'观察',STRUCTURAL_MATCH:'结构匹配',DATA_PENDING:'数据待齐',UNAVAILABLE:'不可用',DIAGNOSTIC:'价格诊断',EXCLUDED:'排除'};
+let current=null, selectedFamily='OVERVIEW', currentConfig=null, latestCoverage=null;
+const textNode=(tag,text,cls)=>{const el=document.createElement(tag);if(text!==undefined)el.textContent=String(text);if(cls)el.className=cls;return el;};
+const display=x=>x===null||x===undefined?'不可用':typeof x==='number'?x.toFixed(2):String(x);
+function message(text,error=false){$('message').textContent=text;$('message').className='notice'+(error?' error':'');}
+function headers(){const value={'Content-Type':'application/json'};if($('apiKey').value)value.Authorization='Bearer '+$('apiKey').value;return value;}
+async function api(path,body){const response=await fetch(path,{headers:headers(),...(body===undefined?{}:{method:'POST',body:JSON.stringify(body)})});const value=await response.json();if(!response.ok)throw new Error((value.error||response.status)+(value.fields?.length?'：'+value.fields.join(', '):''));return value;}
+function details(title,value){const el=textNode('details');el.append(textNode('summary',title),textNode('pre',JSON.stringify(value,null,2)));return el;}
+function drawTabs(){const tabs=$('familyTabs');tabs.replaceChildren();for(const [id,name] of families){const count=current?current.items.filter(i=>id==='OVERVIEW'?current.display_ids.includes(i.instrument_id):id==='FOCUS'?current.focus_ids.includes(i.instrument_id):i.primary_family===id).length:null;const button=textNode('button',name+(count===null?'':' · '+count));button.setAttribute('role','tab');button.setAttribute('aria-selected',String(selectedFamily===id));button.onclick=()=>{selectedFamily=id;drawTabs();drawCandidates();};tabs.append(button);}}
+function drawCandidates(){const root=$('candidates');root.replaceChildren();if(!current){const e=textNode('div',undefined,'empty');e.append(textNode('h3','等待已保存的真实计算'),textNode('p','可信输入尚未就绪时，不生成示例榜或正常候选。'));root.append(e);return;}let items=current.items;if(selectedFamily==='OVERVIEW')items=current.display_ids.map(id=>items.find(i=>i.instrument_id===id)).filter(Boolean);else if(selectedFamily==='FOCUS')items=current.focus_ids.map(id=>items.find(i=>i.instrument_id===id)).filter(Boolean);else items=items.filter(i=>i.primary_family===selectedFamily);
+if(!items.length){const el=textNode('div',undefined,'empty');el.append(textNode('h3',current.status==='UNAVAILABLE'?'关键数据不可用':'该视图没有候选'),textNode('p','不放宽条件填满名额。各族保留全部结构命中与数据缺失原因。'));root.append(el);return;}
+for(const item of items){const card=textNode('article',undefined,'candidate');const head=textNode('div',undefined,'card-heading');const identity=textNode('div');identity.append(textNode('div',item.instrument_id,'security-id'),textNode('h3',item.name||item.instrument_id));identity.append(textNode('span',tiers[item.tier]||item.tier,'badge '+(item.tier==='FOCUS'?'focus':item.score===null?'pending':'')),textNode('span',families.find(f=>f[0]===item.primary_family)?.[1]||item.primary_family,'badge'));const score=textNode('div',undefined,'score');score.append(textNode('small','规则匹配分'),textNode('span',display(item.score)));head.append(identity,score);card.append(head);
+const feature=name=>item.features[name]?.value;card.append(textNode('p',`同族第 ${item.family_rank??'—'} · 连板 ${display(feature('streak_exchange'))} · 5日 ${display(feature('M5'))} 板 / 10日 ${display(feature('M10'))} 板`));const comps=textNode('div',undefined,'components');for(const key of ['B','V','T','L','G','M']){const el=textNode('div',labels[key],'component');el.append(textNode('strong',display(item.components[key])));const bar=document.createElement('i');bar.style.width=item.components[key]===null?'0':Math.max(0,Math.min(100,item.components[key]))+'%';el.append(bar);comps.append(el);}card.append(comps);
+card.append(textNode('p','主主题：'+(item.primary_theme||'未取得合格主题')+' · '+(item.secondary_tags.join(' / ')||'无其他策略命中')));if(item.risk_flags.length)card.append(textNode('p','风险：'+item.risk_flags.join(' / ')));if(item.missing.length)card.append(textNode('p','数据缺口：'+item.missing.join(' / ')));
+const evidence=textNode('details');evidence.append(textNode('summary','展开分数、来源与证伪条件'));const table=textNode('table');const tr=textNode('tr');['分项','原分','权重','贡献'].forEach(t=>tr.append(textNode('th',t)));table.append(tr);for(const key of ['B','V','T','L','G','M']){const r=textNode('tr');[labels[key],display(item.components[key]),item.weights[key]+'%',display(item.contributions[key])].forEach(t=>r.append(textNode('td',t)));table.append(r);}evidence.append(table,details('今日与历史量价 · 定义/单位/窗口/来源',item.features),details('主题同伴与选择依据',item.theme_evidence),details('资金与龙虎榜证据',item.funds_evidence),details('冻结的竞价证伪条件',item.thesis_conditions),details('排除理由、风险和来源引用',{reason_codes:item.reason_codes,risk_flags:item.risk_flags,evidence_refs:item.evidence_refs}));card.append(evidence);root.append(card);}}
+async function loadRun(id){current=await api('/api/candidate-runs/'+encodeURIComponent(id));$('runCount').textContent=current.items.length+' 个结构命中';$('runStatus').textContent=current.status+' · '+current.profile;$('emotionScore').textContent=display(current.emotion.score)+' / '+current.emotion.state;$('emotionText').textContent=current.emotion.readings?.delta_status==='UNKNOWN_DELTA'?'前三个交易日情绪记录未齐，d 不参与分类。':current.emotion.reasons?.length?'共同数据未核齐：'+current.emotion.reasons.length+' 项缺口，详见覆盖记录。':'读数与分母见覆盖记录';$('runIdentity').textContent=`${current.run_id} · revision ${current.revision} · 观察日 ${current.observation_date} · 截止 ${current.decision_cutoff} · 实际生成 ${current.generated_at} · ${current.coverage_type}`;$('coverageJson').textContent=JSON.stringify({coverage:current.coverage,emotion:current.emotion,source_refs:current.source_refs,config_hash:current.config_hash,source_hash:current.source_hash,raw_bundle_hash:current.raw_bundle_hash,effective_input_hash:current.effective_input_hash,hash_contract_version:current.hash_contract_version,semantic_hash:current.semantic_hash,semantic_hash_version:current.semantic_hash_version},null,2);$('excludedJson').textContent=JSON.stringify({excluded:current.excluded,unavailable:current.unavailable},null,2);for(const id of ['downloadJson','downloadCsv','auctionReview','outcomeReview'])$(id).disabled=false;drawTabs();drawCandidates();await loadObservations();}
+async function loadObservations(){if(!current)return;const [outcomes,reviews]=await Promise.all([api('/api/candidate-runs/'+current.run_id+'/outcomes'),api('/api/candidate-runs/'+current.run_id+'/auction-review')]);$('outcomesJson').textContent=outcomes.length?JSON.stringify(outcomes,null,2):'尚未追加结果。未到期不填0、不计入成熟样本分母。';const root=$('auctionResults');root.replaceChildren();if(reviews.length){const latest=reviews[reviews.length-1];root.append(textNode('p','竞价复核：'+latest.status+' · '+latest.coverage_type+' · '+latest.evaluated_at));const order={FOCUS:0,WATCH:1,STRUCTURAL_MATCH:2,DIAGNOSTIC:3,DATA_PENDING:4,UNAVAILABLE:5};const familyOf=id=>current.items.find(i=>i.instrument_id===id)?.primary_family;const familyOrder=id=>families.findIndex(f=>f[0]===familyOf(id));const items=[...latest.evaluations].sort((a,b)=>familyOrder(a.instrument_id)-familyOrder(b.instrument_id)||(order[a.reviewed_tier]??9)-(order[b.reviewed_tier]??9)||(a.original_rank??1e9)-(b.original_rank??1e9)||a.instrument_id.localeCompare(b.instrument_id));for(const e of items){const row=textNode('div',undefined,'review-row');row.append(textNode('strong',(families.find(f=>f[0]===familyOf(e.instrument_id))?.[1]||'')+' · '+e.instrument_id+' · '+(tiers[e.reviewed_tier]||e.reviewed_tier)),textNode('p',`原关注 ${e.original_tier} · 原同族位置 ${e.original_rank??'—'} · 原始分 ${display(e.original_score)} · ${e.flags.join(' / ')||'无已确认触发项'}`),details('TRUE / FALSE / NOT_EVALUATED 条件',e.conditions));root.append(row);}}}
+function drawMarketPreview(coverage){latestCoverage=coverage;const root=$('marketPreview');root.replaceChildren();const all=coverage.current_event_previews||[];const filter=$('rawEvidenceFilter').value.trim().toUpperCase();const matched=filter?all.filter(r=>r.instrument_id.includes(filter)):all;const rows=matched.slice(0,50);if(!rows.length){root.append(textNode('p','无可核验的当日价格事实。'));return;}root.append(textNode('p',coverage.observation_date+` · 已登记 ${all.length} 条当日事实，匹配 ${matched.length} 条，本页显示 ${rows.length} 条。完整候选资格另行校验。`));for(const row of rows){const el=textNode('div',undefined,'review-row');el.append(textNode('strong',row.instrument_id+' · 收盘 '+display(row.close)+' · 收盘封板 '+row.event.close_limit_up));const button=textNode('button','查看原始日线与来源','secondary');button.onclick=async()=>{try{const data=await api('/api/instruments/'+encodeURIComponent(row.instrument_id)+'/evidence?input_id='+encodeURIComponent(coverage.input_id));el.append(details('原始来源、时点和字段',data));button.disabled=true;}catch(e){message(e.message,true);}};el.append(button);root.append(el);}}
+async function refresh(){try{await refreshPipeline();const [config,coverage,runs,schedule]=await Promise.all([api('/api/strategy-configs/current'),api('/api/universe/coverage'),api('/api/candidate-runs'),api('/api/candidate-schedule')]);if(!currentConfig||currentConfig.config_hash!==config.config_hash)$('profile').value=config.config.funds_primary?'FUNDS_V1':'DAILY_V1';currentConfig=config;$('strategyVersion').textContent=config.config.strategy_id;$('configHash').textContent=config.config_hash.slice(0,20)+'…';$('configEditor').value=JSON.stringify(config.config,null,2);$('dataDate').textContent=coverage.observation_date||'UNAVAILABLE';$('coverageText').textContent=coverage.coverage_type?`${coverage.active?'已激活':'未激活诊断输入'} · ${coverage.status} · ${coverage.coverage_type} · ${coverage.bar_rows} 条日线`:(coverage.reason_codes||[]).join(' / ');if(coverage.input_id&&!coverage.active&&!$('inputId').value)$('inputId').value=coverage.input_id;if(coverage.observation_date&&!$('observationDate').value)$('observationDate').value=coverage.observation_date;if(coverage.stale)$('coverageText').textContent+=' · 陈旧历史，最近应有收盘日 '+coverage.expected_observation_date;const part=coverage.coverage;if(part)$('coverageText').textContent+=` · 身份 ${part.identity_observed}/${part.master_expected}，合格 ${part.eligible}，已知排除 ${part.known_excluded}，未知 ${part.eligibility_unknown}，价格及限价事件核验 ${part.price_observed}/${part.price_required}`;drawMarketPreview(coverage);$('scheduleJson').textContent=JSON.stringify(schedule,null,2);$('coverageJson').textContent=JSON.stringify(coverage,null,2);const history=$('historySelect');history.replaceChildren(textNode('option',runs.length?'选择已保存运行':'暂无已保存运行'));history.firstChild.value='';for(const r of runs){const option=textNode('option',`${r.observation_date} · ${r.market_session} · ${r.profile} · r${r.revision} · ${r.status}`);option.value=r.run_id;history.append(option);}if(current&&runs.some(r=>r.run_id===current.run_id)){history.value=current.run_id;await loadRun(current.run_id);}else if(runs.length){history.value=runs[0].run_id;await loadRun(runs[0].run_id);}else{drawTabs();drawCandidates();}message(coverage.status==='UNAVAILABLE'?'真实规则输入未就绪：'+(coverage.reason_codes||[]).join(' / '):'已读取真实保存状态。完整策略、价格诊断和缺失证据分别展示。',coverage.status==='UNAVAILABLE');}catch(error){message(error.message,true);}}
+async function follow(job){for(let i=0;i<3600;i++){const state=await api('/api/jobs/'+job.job_id);message(`${job.job_id} · ${state.state} · ${state.message||''}`);if(state.state==='SUCCEEDED')return state.result;if(['FAILED','CANCELLED','INTERRUPTED'].includes(state.state))throw new Error(state.state+' · '+JSON.stringify(state.error));await new Promise(resolve=>setTimeout(resolve,700));}throw new Error('任务仍未终止，请在历史任务中查看；未创建替代结果。');}
+$('compute').onclick=async()=>{const button=$('compute');button.disabled=true;try{const value={profile:$('profile').value};if($('observationDate').value)value.observation_date=$('observationDate').value;if($('inputId').value.trim())value.input_id=$('inputId').value.trim();if(currentConfig)value.config_hash=currentConfig.config_hash;if(current&&current.observation_date===value.observation_date)value.parent_run_id=current.run_id;const result=await follow(await api('/api/candidate-runs',value));await loadRun(result.candidate_run_id);await refresh();}catch(error){message(error.message,true);}finally{button.disabled=false;}};
+$('rawEvidenceFilter').oninput=()=>{if(latestCoverage)drawMarketPreview(latestCoverage);};$('refresh').onclick=refresh;$('apiKey').onchange=refresh;$('historySelect').onchange=()=>{if($('historySelect').value)loadRun($('historySelect').value).catch(e=>message(e.message,true));};
+async function download(format){try{const response=await fetch('/api/candidate-runs/'+current.run_id+'/export?format='+format,{headers:headers()});if(!response.ok)throw new Error('保存记录不可导出');const url=URL.createObjectURL(await response.blob());const a=textNode('a');a.href=url;a.download='candidate-'+current.run_id+'.'+format;a.click();setTimeout(()=>URL.revokeObjectURL(url),1000);}catch(e){message(e.message,true);}}
+$('downloadJson').onclick=()=>download('json');$('downloadCsv').onclick=()=>download('csv');
+$('auctionReview').onclick=async()=>{try{const value={};if($('auctionId').value.trim())value.snapshot_id=$('auctionId').value.trim();await follow(await api('/api/candidate-runs/'+current.run_id+'/auction-review',value));await loadObservations();message('竞价复核已单独保存；原始候选与分数保持不变。');}catch(e){message(e.message,true);}};
+$('outcomeReview').onclick=async()=>{try{await follow(await api('/api/candidate-runs/'+current.run_id+'/outcomes',{}));await loadObservations();message('交易日观察已追加；尚未成熟与缺失项保持空值。');}catch(e){message(e.message,true);}};
+$('saveConfig').onclick=async()=>{try{const result=await api('/api/strategy-configs',JSON.parse($('configEditor').value));message('已保存新配置版本 '+result.config.strategy_id);await refresh();}catch(e){message(e.message,true);}};
+
+async function refreshPipeline(){const data=await api('/api/candidate-data-pipeline');$('pipelineJson').textContent=JSON.stringify(data,null,2);const r=data.latest;const q=r?.queue;$('pipelineStatus').textContent=r?`${r.observation_date} · ${r.consumer_status} · 请求完成 ${q?.states?.COMPLETE??0}/${q?.requested??0} · 待续采 ${q?.pending_request_ids?.length??0} · 实际完成 ${r.completed_at}`:'尚未运行全主板采集。候选数据就绪须单独核验。';}
+$('captureData').onclick=async()=>{const b=$('captureData');b.disabled=true;try{const result=await follow(await api('/api/candidate-data-pipeline/capture',{}));if(result.candidate_run_id)await loadRun(result.candidate_run_id);await refresh();}catch(e){message(e.message,true);await refreshPipeline();}finally{b.disabled=false;}};
+drawTabs();refresh();
 })();

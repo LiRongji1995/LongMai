@@ -8,6 +8,8 @@ import re
 import shutil
 import sys
 import subprocess
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import datetime
 from pathlib import Path
 from typing import Literal
@@ -15,6 +17,7 @@ from typing import Literal
 from pydantic import field_validator
 
 from .common import CoreModel, UnavailableError, canonical_json, digest, utc_now
+from .storage import SQLiteStore, checked_payload
 
 
 def file_hash(path: str | Path) -> str:
@@ -104,15 +107,97 @@ class ModelArtifact(CoreModel):
 
 
 class ModelRegistry:
-    def __init__(self, root: str | Path):
+    def __init__(self, root: str | Path, *, store: SQLiteStore | None = None):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
+        self.store = store or SQLiteStore(self.root / 'publication.sqlite3')
+        self._pending_job = ContextVar('pending_model_publication_' + str(id(self)), default=None)
 
-    def register(self, artifact: ModelArtifact) -> ModelArtifact:
+    def bind_store(self, store: SQLiteStore) -> None:
+        """Bind the same authority database as the application's durable jobs."""
+        self.store = store
+
+    @contextmanager
+    def pending_job(self, job_id: str):
+        token = self._pending_job.set(job_id)
+        try:
+            yield
+        finally:
+            self._pending_job.reset(token)
+
+    @staticmethod
+    def _publication_id(model):
+        return model.model_id + '/' + model.model_version
+
+    def prepare(self, artifact: ModelArtifact) -> ModelArtifact:
+        """Save verified immutable files; this creates no inference authorization."""
         self.verify(artifact)
         directory = self.root / artifact.model_id / artifact.model_version
         directory.mkdir(parents=True, exist_ok=True)
-        write_once(directory / 'model.json', artifact)
+        path = directory / 'model.json'
+        if path.exists():
+            original = self.get_prepared(artifact.model_id, artifact.model_version)
+            if (original.checkpoint_hash, original.data_version, original.feature_schema_hash) != (
+                    artifact.checkpoint_hash, artifact.data_version, artifact.feature_schema_hash):
+                raise UnavailableError('MODEL_VERSION_PROVENANCE_COLLISION', 'quant')
+            return original
+        write_once(path, artifact)
+        return artifact
+
+    def _authorize(self, connection, model, *, kind, run_id=None, job_id=None):
+        identity = self._publication_id(model)
+        existing = connection.execute('SELECT * FROM documents WHERE namespace=? AND document_id=?',
+                                      ('model_publications', identity)).fetchone()
+        if existing:
+            original = checked_payload(existing)
+            if original['metadata_hash'] != digest(model):
+                raise UnavailableError('MODEL_PUBLICATION_METADATA_MISMATCH', 'quant')
+            # Repeated training must not replace or revoke a successful publication.
+            return
+        self.store._put_document(connection, 'model_publications', identity, {
+            'model_id': model.model_id, 'model_version': model.model_version,
+            'metadata_hash': digest(model), 'checkpoint_hash': model.checkpoint_hash,
+            'kind': kind, 'training_run_id': run_id, 'job_id': job_id,
+            'published_at': utc_now().isoformat()})
+
+    def publish_training(self, result, *, connection=None, job_id=None):
+        """Authorize only complete training, alongside a durable successful job.
+
+        With a job, the caller MUST use JobContext.complete's connection. Files
+        are prepared earlier; SQLite commits only the authority and job state.
+        """
+        if connection is None and self._pending_job.get() is not None:
+            return  # A cancellable worker has prepared diagnostics only.
+        if job_id is not None and connection is None:
+            raise ValueError('job publication requires the terminal transaction connection')
+        model = self.get_prepared(result.model.model_id, result.model.model_version)
+        if model != result.model:
+            raise UnavailableError('TRAINING_MODEL_METADATA_MISMATCH', 'quant')
+        completed = Path(result.artifact_path) / 'result.json'
+        if not completed.is_file() or json.loads(completed.read_text(encoding='utf-8')) != result.model_dump(mode='json'):
+            raise UnavailableError('TRAINING_RESULT_NOT_PREPARED', 'quant')
+        def publish(conn):
+            if job_id:
+                job = conn.execute('SELECT state,cancel_requested FROM jobs WHERE job_id=?', (job_id,)).fetchone()
+                if job is None or job['state'] != 'RUNNING' or job['cancel_requested']:
+                    raise UnavailableError('MODEL_JOB_PUBLICATION_NOT_AUTHORIZED', 'quant')
+            self.store._put_document(conn, 'training_runs', result.run_id, result.model_dump(mode='json'))
+            self._authorize(conn, model, kind='JOB_TRAINING' if job_id else 'SYNCHRONOUS_TRAINING',
+                            run_id=result.run_id, job_id=job_id)
+        if connection is not None:
+            publish(connection)
+        else:
+            with self.store.transaction() as conn:
+                publish(conn)
+
+    def register(self, artifact: ModelArtifact) -> ModelArtifact:
+        """Explicit local administrative import; never upgrades OOS validation.
+
+        This method is not exposed through HTTP. Training uses prepare instead.
+        """
+        artifact = self.prepare(artifact)
+        with self.store.transaction() as connection:
+            self._authorize(connection, artifact, kind='ADMINISTRATIVE_RESEARCH_IMPORT')
         return artifact
 
     def get(self, model_id: str, model_version: str | None = None) -> ModelArtifact:
@@ -122,7 +207,14 @@ class ModelRegistry:
             if len(versions) != 1:
                 raise UnavailableError('MODEL_VERSION_REQUIRED' if versions else 'MODEL_UNAVAILABLE', 'quant')
             return self.get(model_id, versions[0].model_version)
-        path = self.root / model_id / safe_id(model_version) / 'model.json'
+        model = self.get_prepared(model_id, model_version)
+        self._check_authorized(model)
+        return model
+
+    def get_prepared(self, model_id: str, model_version: str) -> ModelArtifact:
+        """Diagnostic-only lookup; never use this in model consumers."""
+        model_id, model_version = safe_id(model_id), safe_id(model_version)
+        path = self.root / model_id / model_version / 'model.json'
         if not path.is_file():
             raise UnavailableError('MODEL_UNAVAILABLE', 'quant')
         model = ModelArtifact.model_validate_json(path.read_text(encoding='utf-8'))
@@ -132,9 +224,43 @@ class ModelRegistry:
         return model
 
     def list(self, model_id: str | None = None) -> tuple[ModelArtifact, ...]:
+        if model_id:
+            safe_id(model_id)
+        # The authority is the inventory. Orphaned or malformed diagnostics
+        # must not become discoverable models or poison unrelated publication.
+        with self.store.transaction(write=False) as connection:
+            rows = connection.execute('SELECT * FROM documents WHERE namespace=? ORDER BY document_id',
+                                      ('model_publications',)).fetchall()
+            entries = [checked_payload(row) for row in rows]
+        return tuple(self.get(item['model_id'], item['model_version']) for item in entries
+                     if model_id is None or item['model_id'] == model_id)
+
+    def list_prepared(self, model_id: str | None = None) -> tuple[ModelArtifact, ...]:
         parent = self.root / safe_id(model_id) if model_id else self.root
         paths = parent.glob('*/model.json') if model_id else parent.glob('*/*/model.json')
         return tuple(ModelArtifact.model_validate_json(p.read_text(encoding='utf-8')) for p in sorted(paths))
+
+    def _check_authorized(self, model):
+        with self.store.transaction(write=False) as connection:
+            row = connection.execute('SELECT * FROM documents WHERE namespace=? AND document_id=?',
+                                     ('model_publications', self._publication_id(model))).fetchone()
+            if row is None:
+                raise UnavailableError('MODEL_NOT_PUBLISHED', 'quant')
+            authority = checked_payload(row)
+            if authority['metadata_hash'] != digest(model) or authority['checkpoint_hash'] != model.checkpoint_hash:
+                raise UnavailableError('MODEL_PUBLICATION_METADATA_MISMATCH', 'quant')
+            if authority['training_run_id']:
+                training = connection.execute('SELECT * FROM documents WHERE namespace=? AND document_id=?',
+                    ('training_runs', authority['training_run_id'])).fetchone()
+                if training is None or checked_payload(training)['model'] != model.model_dump(mode='json'):
+                    raise UnavailableError('MODEL_TRAINING_AUTHORITY_MISSING', 'quant')
+            if authority['job_id']:
+                job = connection.execute('SELECT state,result FROM jobs WHERE job_id=?', (authority['job_id'],)).fetchone()
+                if job is None or job['state'] != 'SUCCEEDED':
+                    raise UnavailableError('MODEL_SUCCESSFUL_JOB_AUTHORITY_MISSING', 'quant')
+                terminal = json.loads(job['result']) if job['result'] else {}
+                if terminal.get('run_id') != authority['training_run_id']:
+                    raise UnavailableError('MODEL_JOB_RESULT_MISMATCH', 'quant')
 
     @staticmethod
     def verify(model: ModelArtifact) -> None:
@@ -147,14 +273,21 @@ class ModelRegistry:
             raise UnavailableError('MODEL_ARTIFACT_MISSING', 'quant') from exc
 
     def health(self) -> dict:
+        checked_at = utc_now().isoformat()
         try:
             models = self.list()
-            for model in models:
+            prepared = self.list_prepared()
+            for model in prepared:
                 self.verify(model)
             return {'status': 'healthy' if models else 'unavailable', 'models': len(models),
-                    'production_validated': sum(m.oos_validated for m in models)}
-        except Exception:
-            return {'status': 'unavailable', 'reason': 'REGISTRY_INTEGRITY_FAILURE'}
+                    'production_validated': sum(m.oos_validated for m in models), 'prepared_models': len(prepared),
+                    'quarantined_models': len(prepared) - len(models), 'checked_at': checked_at,
+                    'scope': ['metadata', 'publication_authority', 'checkpoint_bytes', 'dataset_bytes'],
+                    'integrity_guarantee': 'LOCAL_CORRUPTION_DETECTION_NOT_FULL_DISK_WRITER_AUTHENTICATION'}
+        except Exception as exc:
+            return {'status': 'unavailable', 'reason': 'REGISTRY_INTEGRITY_FAILURE', 'checked_at': checked_at,
+                    'detail_code': getattr(exc, 'reason', type(exc).__name__),
+                    'scope': ['metadata', 'publication_authority', 'checkpoint_bytes', 'dataset_bytes']}
 
     def import_legacy(self, model_dir: str | Path, *, expected_checkpoint_hash: str,
                       model_id: str = 'csi300-alpha158-legacy') -> ModelArtifact:
@@ -210,5 +343,5 @@ class ModelRegistry:
             reasons=('UNPURGED_VALIDATION_LABELS', 'LEGACY_DATA_VERSION_UNKNOWN', 'NOT_OOS_VALIDATED'))
         existing = dest / 'model.json'
         if existing.exists():
-            return self.get(model_id, version)
+            return self.register(self.get_prepared(model_id, version))
         return self.register(artifact)

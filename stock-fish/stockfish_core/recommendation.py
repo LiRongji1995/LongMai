@@ -140,7 +140,14 @@ class RecommendationEngine:
         for iid, data in risk_inputs.items():
             if data.instrument_id != iid or data.decision_time != context.decision_time:
                 raise ValueError("risk input identity or decision time mismatch")
-        hashed_risk_inputs = risk_inputs
+        # Outer context is authoritative. Never read business values from a
+        # future record, including its hard veto, reference price or reasons.
+        future_ids = {iid for iid, data in risk_inputs.items()
+                      if data.data_available_at > context.decision_time or data.price_timestamp > context.decision_time}
+        risk_inputs = {iid: data for iid, data in risk_inputs.items() if iid not in future_ids}
+        hashed_risk_inputs = dict(risk_inputs)
+        for iid in sorted(future_ids):
+            hashed_risk_inputs[iid] = {'instrument_id': iid, 'quality': 'UNAVAILABLE', 'reason': 'FUTURE_DATA'}
         if self._legacy_replay:
             # The first research-only runtime record predates explicit exit terms.
             # Its serialized input schema remains replayable; no API can select v1
@@ -168,7 +175,7 @@ class RecommendationEngine:
             raw = risk_inputs.get(c.instrument_id)
             if unavailable or raw is None:
                 risk = RiskDecision(decision=RiskAction.UNAVAILABLE,
-                                    reason_codes=tuple(unavailable) or ("RISK_INPUT_UNAVAILABLE",),
+                                    reason_codes=tuple(unavailable) or (("FUTURE_DATA",) if c.instrument_id in future_ids else ("RISK_INPUT_UNAVAILABLE",)),
                                     policy_version=self.risk.policy.version, policy_hash=self.risk.policy.policy_hash)
             else:
                 risk = self.risk.evaluate(raw, portfolio, reserved_cash=reserved,

@@ -167,16 +167,17 @@ def train_linear(request: TrainRequest, registry: ModelRegistry, root: str | Pat
         # Identical data/procedure produce identical immutable model version.
         path = registry.root / model.model_id / model.model_version / 'model.json'
         if path.exists():
-            registered = registry.get(model.model_id, model.model_version)
+            registered = registry.get_prepared(model.model_id, model.model_version)
             if registered.data_version != model.data_version:
                 raise UnavailableError('MODEL_VERSION_PROVENANCE_COLLISION', 'quant')
             model = registered
         else:
-            registry.register(model)
+            registry.prepare(model)
         result = TrainingResult(run_id=run_id, model=model, validation_mse=valid_mse,
             split_counts={name: len(rows) for name, rows in parts.items()}, purged_counts=purged,
             artifact_path=str(directory.resolve()))
         write_once(directory / 'result.json', result)
+        registry.publish_training(result)
         return result
     except Exception as exc:
         write_once(directory / 'failure.json', {'run_id': run_id, 'reason': getattr(exc, 'reason', type(exc).__name__)})

@@ -157,7 +157,10 @@ def create_app(service: ApplicationService | None = None) -> Flask:
     @app.get("/api/health")
     @app.get("/api/config/health")
     def health():
-        return jsonify(core.health())
+        candidates = getattr(core, 'candidates', None)
+        checked=core.health()
+        return jsonify(**checked, candidate_research=candidates.health(storage_health=checked.get('components',{}).get('tracker')) if candidates is not None else
+                       {'status': 'UNAVAILABLE', 'reason_codes': ['CANDIDATE_SERVICE_NOT_CONFIGURED']})
 
     @app.get("/api/config")
     def config():
@@ -345,11 +348,12 @@ def create_app(service: ApplicationService | None = None) -> Flask:
     def training_worker(ctx):
         from .experiments import TrainRequest
         ctx.update(0.1, "校验特征快照与标签时间边界")
-        result = core.quant.train(TrainRequest.model_validate(ctx.payload))
+        with core.registry.pending_job(ctx.job_id):
+            result = core.quant.train(TrainRequest.model_validate(ctx.payload))
         ctx.check_cancelled()
         value = {"status": "complete", "run_id": result.run_id, "training": result.model_dump(mode="json")}
-        return ctx.complete(value, lambda connection: core.store._put_document(
-            connection, "training_runs", result.run_id, result.model_dump(mode="json")))
+        return ctx.complete(value, lambda connection: core.registry.publish_training(
+            result, connection=connection, job_id=ctx.job_id))
 
     core.jobs.register("training", training_worker)
 
@@ -365,14 +369,15 @@ def create_app(service: ApplicationService | None = None) -> Flask:
     def finetune_worker(ctx):
         value = FinetuneRequest.model_validate(ctx.payload)
         ctx.update(.1, "核验基础模型与完整清洁窗口；执行版本化重新拟合")
-        result = core.quant.finetune(value.training, base_model_id=value.base_model_id,
-                                    base_model_version=value.base_model_version)
+        with core.registry.pending_job(ctx.job_id):
+            result = core.quant.finetune(value.training, base_model_id=value.base_model_id,
+                                        base_model_version=value.base_model_version)
         ctx.check_cancelled()
         terminal = {"status": "complete", "run_id": result.run_id, "training": result.model_dump(mode="json"),
                     "method": "FULL_CLEAN_WINDOW_REFIT", "warm_start": False,
                     "base_model_id": value.base_model_id, "base_model_version": value.base_model_version}
-        return ctx.complete(terminal, lambda connection: core.store._put_document(
-            connection, "training_runs", result.run_id, result.model_dump(mode="json")))
+        return ctx.complete(terminal, lambda connection: core.registry.publish_training(
+            result, connection=connection, job_id=ctx.job_id))
 
     core.jobs.register("finetune", finetune_worker)
 
@@ -403,11 +408,15 @@ def create_app(service: ApplicationService | None = None) -> Flask:
         spec.loader.exec_module(module)
         def progress(value):
             ctx.update(min(.95, float(value.get("progress", .1))), value.get("message", "验证数据快照"))
-        result = module.run_data_update(progress_callback=progress, expected_sha256=ctx.payload.get("expected_sha256"))
+        result = module.run_data_update(progress_callback=progress, expected_sha256=ctx.payload.get("expected_sha256"),
+                                        cancel_check=ctx.check_cancelled)
         ctx.check_cancelled()
         if not result.get("success"):
             raise UnavailableError(result.get("error", "DATA_UPDATE_FAILED"), "data")
-        return {"status": "complete", **result, "message": "新数据快照已验证并保存，待显式切换；当前运行数据未改变。"}
+        validation = result.get("validation", {})
+        return {"status": "complete", **result,
+                "message": "数据下载和声明消费者内容校验完成；仅适用于 " + validation.get("consumer", "UNSPECIFIED_CONSUMER")
+                           + "。其他模型特征与全市场覆盖未由此获验证；当前活动数据未改变。"}
 
     core.jobs.register("data_update", update_worker)
 
@@ -421,4 +430,9 @@ def create_app(service: ApplicationService | None = None) -> Flask:
         job = core.jobs.submit("data_update", value)
         return jsonify(task_id=job["job_id"], job_id=job["job_id"], state=job["state"], status="pending"), 202
 
+    from .yaogu.candidate_api import register_candidate_routes
+    # Protocol-limited dependency injection is used by the original HTTP security
+    # contract probes. The actual ApplicationService always configures candidates.
+    if getattr(core, 'candidates', None) is not None:
+        register_candidate_routes(app, core.candidates)
     return app

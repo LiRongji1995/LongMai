@@ -24,6 +24,7 @@ RUN pip install --no-cache-dir -r requirements-core.txt && pip check
 # credential stores, local virtualenvs, model releases or third-party prototypes.
 COPY app.py config.py ./
 COPY stockfish_core/ ./stockfish_core/
+COPY config/ ./config/
 COPY static/ ./static/
 COPY qlib-zh/data_runner.py ./qlib-zh/data_runner.py
 RUN mkdir -p /app/data/core /app/qlib-data /home/stockfish \

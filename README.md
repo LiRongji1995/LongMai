@@ -1,81 +1,63 @@
 # StockFish + Qlib Quant System
 
-面向 Windows 的 A 股量化研究系统：保留 StockFish Web/API/SSE 外壳，整合 Microsoft Qlib 源码及 CSI300 Alpha158 / LightGBM 原生推理适配。当前由 `stockfish_core` 统一处理可信数据快照、量化、确定性推荐与风控、持久任务及不可变历史。
+面向 Windows 的沪深主板 A 股候选研究系统。默认 Web/API 使用确定性规则发现、排序、解释与跟踪强势股，提供首板后 1进2、2进3、高标接力、N天M板和断板恢复五类观察。无需现金、持仓、LLM 或旧 Alpha158 推理；系统不连接券商、不自动下单。
 
-**当前默认研究模式。** 下载模型不等于完成登记或通过样本外验证；历史作者模型登记后保持 `RESEARCH_ONLY`。当前架构、输入契约、离线测试和使用边界见 [工程基线](stock-fish/ENGINEERING_BASELINE.md)。下文的原生推理结果属于核心更新前的历史验收，不能替代当前推荐流程的验收。
+**R03 真实验收仍为 UNAVAILABLE，尚不能显示完整真实 DAILY_V1 候选或证明合法 EMPTY。** 全主板采集、保存、默认 UI/API、导出和重启已实际接通；必要历史身份和限价事实不足时，页面展示真实覆盖与缺口，不生成示例榜、不建立虚拟账户。详见 [R03 发布说明](docs/r03-release.md)。
 
-## 项目结构
+## 默认研究流程
 
-```text
-stock-fish/                      StockFish 源码及 Windows 兼容修改
-  stockfish_core/                 可信数据、量化、推荐、风控、持久任务与历史
-  ENGINEERING_BASELINE.md         当前核心架构、开发测试和运行边界
-  .env.windows.example           无密钥的 Windows 配置样例
-  qlib-zh/native_predict.py      CSI300 Alpha158 原生推理入口
-qlib/                            Microsoft Qlib main 源码快照
-Start-StockFish.ps1               启动并检查服务
-Stop-StockFish.ps1                校验进程身份后停止服务
-Logs-StockFish.ps1                查看日志
-requirements-windows.lock.txt    已验证 Windows 环境依赖快照
-docs/verification/               2026-09-04 预测日的脱敏验收结果
-```
+历史证券资格 → 全池原始行情与结构历史 → 来源、时点和覆盖核验 → 涨停事件、量价、主题与情绪 → 五类规则 → 不可变 CandidateRun → 页面、历史、竞价复核与交易日观察。
 
-运行时使用 `stock-fish/.venv` 中的 **pyqlib 0.9.7 Windows wheel**；旁边的 `qlib/` 为源码参考和后续开发保留，不会自动替代运行时包。模型、完整行情数据、虚拟环境、日志和真实 `.env` 均不随仓库发布。上游随源码提供的小型示例数据保留。
+- 策略版本为 YAOGU_V1.1.0，特征版本为 YAOGU_FEATURES_V1_R03。配置保存新版本，旧榜不覆盖。
+- 六分项是板结构、量价、板块共振、板块相对强度、历史股性、市场情绪；分数表示规则匹配度，不是涨停概率或胜率。
+- 首页最多显示 20 只观察对象、5 只重点对象，按五类轮询展示；这是展示数量，不是组合仓位或跨族成功概率排名。
+- 资金增强使用独立 FUNDS_V1 口径；来源、窗口和全族覆盖不足时不发布资金排行。
+- 缺真实 09:25 撮合数据时竞价复核不可用。未成熟或缺失后验结果为 NULL，不计作零收益。
+
+批准公式与边界见 [策略规格](stock-fish/STRATEGY_SPEC_V1.md)。旧组合模拟有独立账户约束；可选 Qlib/Alpha158 保留研究对照用途，不决定默认规则候选。
 
 ## 安装与运行
 
-需要 Windows x64、Python 3.12、PowerShell 7、Git，以及可下载依赖和发布资产的网络。克隆到一个空目录，按 [部署指南](DEPLOYMENT.md) 创建虚拟环境、填写路径并下载模型和数据。
+需要 Windows x64、Python 3.12、PowerShell 7 和 Git。按 [部署指南](DEPLOYMENT.md) 建立项目虚拟环境与本地配置；默认规则入口不要求先下载模型或 Qlib binary 行情。
 
-```powershell
+~~~powershell
 git clone https://github.com/LiRongji1995/stockfish-qlib-quant-system.git
-Set-Location .\stockfish-qlib-quant-system
-```
+Set-Location ./stockfish-qlib-quant-system
+~~~
 
-配置完成后，在仓库根目录运行：
+配置完成后，从仓库根目录运行：
 
-```powershell
-pwsh -NoProfile -File .\Start-StockFish.ps1
-pwsh -NoProfile -File .\Logs-StockFish.ps1 -Follow
-pwsh -NoProfile -File .\Stop-StockFish.ps1
-```
+~~~powershell
+pwsh -NoProfile -File ./Start-StockFish.ps1
+pwsh -NoProfile -File ./Logs-StockFish.ps1 -Follow
+pwsh -NoProfile -File ./Stop-StockFish.ps1
+~~~
 
-打开 [StockFish Web](http://127.0.0.1:8000/)。前后端共用 Flask 服务，无需 Node 构建或外部数据库。三个脚本的 `-Root` 默认为脚本所在目录，也可显式指定部署根目录。
+打开 [本地页面](http://127.0.0.1:8000/)，点击“采集 / 续采全主板数据”。前后端共用 Flask 服务，无需 Node 构建或外部数据库。三个脚本支持可移植的 -Root，默认值为脚本所在目录。新检出不会迁移、覆盖或重启已有部署；同一 SQLite 数据库只运行一个任务服务，默认端口为 8000。
 
-已有部署与新检出目录相互独立；发布代码不会迁移或重启原有服务。新检出目录不要覆盖现有运行目录。默认端口为 8000，同一时刻只能启动一个使用此端口的实例。
+健康检查表示应用、持久内容和任务服务状态；行情覆盖与策略就绪由 /api/universe/coverage 单独报告。服务停止时不会继续采集，错过时点不倒填假快照。
 
-`/api/health` 分别报告应用、数据、量化、模型登记、研究、LLM、历史存储和任务组件。缺少已登记模型、可信快照或 LLM transport 时会明确报告不可用。SQLite 保存任务及历史；进程中断后任务恢复为 `INTERRUPTED`，显式重试创建新 ID。分析归档模块已补齐。
+## 项目结构
 
-## 历史原生推理验收
+~~~text
+stock-fish/stockfish_core/yaogu/  规则、证据、采集、持久候选与观察
+stock-fish/config/               版本化策略初始配置
+stock-fish/tests/                隔离回归测试
+stock-fish/STRATEGY_SPEC_V1.md    策略公式与语义
+qlib/                           Microsoft Qlib 源码参考
+Start-StockFish.ps1              启动及健康检查
+Stop-StockFish.ps1               核验进程身份后停止
+Logs-StockFish.ps1               本地日志
+docs/r03-release.md              R03 变更、验证与真实阻塞摘要
+docs/verification/              早期 CSI300 推理历史记录
+~~~
 
-2026-09-05 在 Windows 11 上对核心更新前的原生推理流程完成以下检查，预测日为 **2026-09-04**：
+R03 原工作环境最终业务测试为 **651 passed、0 failed、0 skipped**，单独打包测试为 23 passed；它们不证明市场优势。真实完整历史投资验证、竞价采集和未来成熟样本尚未完成，MARKET_EDGE=NOT_ESTABLISHED。
 
-| 项目 | 结果 |
-|---|---|
-| Python / pyqlib / LightGBM | 3.12.14 / 0.9.7 / 4.7.0 |
-| Web、配置、健康及模型接口 | HTTP 200；最终健康报告错误数为 0 |
-| 真实行情 | Qlib 与 Baostock 均读取到 10 个交易日行情 |
-| CSI300 Alpha158 | 300 只成分股，158 个特征 |
-| 已发布模型推理 | 约 96 秒完成；特征表达式、顺序及维度核验通过 |
-| 页面交互 | 从 Web 发起推理并回填 20 只股票；控制台无错误或警告 |
-| 进程管理 | 启动、重复启动、停止、重启已验证 |
+早期 [CSI300 执行清单](docs/verification/inference-execution.json) 和模型排名保留历史语境，不是 R03 主板候选，也不表示旧模型已通过样本外验证。运行时采用 pyqlib 0.9.7 wheel，不自动安装相邻 Qlib main。
 
-模型原始排名前五名：
+## 许可与数据
 
-| 排名 | 股票代码 | Score |
-|---:|---|---:|
-| 1 | 688256 | 0.432629 |
-| 2 | 600015 | 0.390850 |
-| 3 | 300274 | 0.388415 |
-| 4 | 601600 | 0.377634 |
-| 5 | 000807 | 0.348765 |
+保留各上游版权、许可证与 [第三方通知](THIRD_PARTY_NOTICES.md)。StockFish 和 Qlib 的主要源码采用 MIT，嵌入 MiroFish 组件适用 AGPL-3.0；不能把整个整合仓库声明为纯 MIT。
 
-Score 用于该模型内的相对排序，不代表收益率。Strategy B 会进一步筛选候选，因此其结果可能与原始排名不同。结果是本次新执行的推理输出，没有重新训练模型。
-
-- [完整 300 股排名](docs/verification/CSI300-ranking-2026-09-04.csv)
-- [执行清单与模型指纹](docs/verification/inference-execution.json)
-
-## 当前边界
-
-原生 Alpha158 适配范围是 CSI300 特征及成员历史，不等于完整全 A 股 RAW 数据或可交易性覆盖。当前核心包含训练/重拟合、回测和评估实现，其工程正确性不等于投资样本外验证通过。历史模型仍为研究用途；LLM transport、可信输入和部署备份需在实际环境配置。MiroFish、旧 Bot 等保持实验隔离，Linux 容器未完成运行验收。Qlib main 源码扩展构建需要额外的 C++ 编译工具，运行时继续使用 `pyqlib==0.9.7` wheel。
-
-详细配置、数据范围和已知限制见 [DEPLOYMENT.md](DEPLOYMENT.md)。源码来源、嵌入组件和许可见 [THIRD_PARTY_NOTICES.md](THIRD_PARTY_NOTICES.md)；本整合仓库包含不同许可证的组件。
+真实 .env、凭据、私人数据库/日志、虚拟环境、模型权重、完整行情及本机审阅包不公开。SDK 开源不代表底层行情可以任意再分发；数据和模型遵循原来源使用条件。

@@ -28,6 +28,27 @@ def money(value) -> Decimal:
     return Decimal(str(value)).quantize(Decimal('.01'), rounding=ROUND_HALF_UP)
 
 
+def allocate_split_lots(lots, ratio: Decimal, expected_total: int):
+    """Largest remainder allocation, ties to oldest acquisition then input index.
+
+    The total must be an integral number of shares. Allocation preserves that
+    exact total and every lot's acquisition date (including T+1 eligibility).
+    Fractional share entitlements themselves remain explicitly unsupported.
+    """
+    exact = [Decimal(quantity) * ratio for _, quantity in lots]
+    if sum(exact, Decimal(0)) != expected_total:
+        raise UnavailableError('CORPORATE_ACTION_LOT_TOTAL_MISMATCH', 'backtest')
+    quantities = [int(value) for value in exact]
+    residual = expected_total - sum(quantities)
+    order = sorted(range(len(lots)), key=lambda i: (-(exact[i] - quantities[i]), lots[i][0], i))
+    for index in order[:residual]:
+        quantities[index] += 1
+    allocated = [(day, quantity) for (day, _), quantity in zip(lots, quantities) if quantity]
+    if sum(q for _, q in allocated) != expected_total:
+        raise AssertionError('split lot conservation failed')
+    return allocated
+
+
 class FeeSchedule(CoreModel):
     version: str = 'paper-fees-v1'
     commission_rate: float = Field(default=.0005, ge=0, le=.1)
@@ -349,8 +370,8 @@ class BacktestEngine:
                 if split != split.to_integral_value():
                     raise UnavailableError('FRACTIONAL_CORPORATE_ACTION_UNSUPPORTED', 'backtest')
                 positions[identity] = int(split)
-                acquisition[identity] = [(d, int(Decimal(q) * Decimal(str(action.split_ratio))))
-                                         for d, q in acquisition[identity]]
+                acquisition[identity] = allocate_split_lots(acquisition[identity],
+                    Decimal(str(action.split_ratio)), int(split))
                 receivables.append((action.pay_date, money(Decimal(before) * Decimal(str(action.net_cash_dividend_per_share)))))
                 if pending and identity in pending['target']:
                     pending['target'][identity] = int(Decimal(pending['target'][identity]) * Decimal(str(action.split_ratio)))
@@ -462,6 +483,8 @@ class BacktestEngine:
             total_fees += session_fees
             if cash < 0:
                 raise AssertionError('negative cash after fills')
+            if any(sum(q for _, q in acquisition.get(i, ())) != shares for i, shares in positions.items()):
+                raise AssertionError('position and acquisition lots must conserve shares')
             for identity in positions:
                 bar = by_key.get((day, identity))
                 if bar is None:

@@ -1,3 +1,21 @@
+# R03 当前入口
+
+默认无账户候选采用 `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`，五族公式、权重、阈值不调优。精确三交易日情绪差、资格分区、统一receipt/行可见性、资金窗口及raw/effective/semantic摘要分别核验。全主板采集使用 `data_pipeline.py` 的分层持久请求队列；Web、API、调度与CLI共享该实现，不再默认截取六只涨停样本。
+
+当前源在原分支未提交；无commit/push或Qlib wheel替换。旧榜、配置、模型及账户模拟安全契约保留。`../review/r03-realdata-closure/final-audit.md` 是当前验收索引，实际数据、历史研究、竞价和前瞻成熟分别报告。完整原始市场数据不随源码分发，包内有hash清单及最小真实样例。MARKET_EDGE=NOT_ESTABLISHED。
+
+---
+
+# R02-FULL 当前入口
+
+默认页面与候选 API 使用 `stockfish_core/yaogu/` 确定性规则核心，五族配置为 `config/yaogu_v1.defaults.yaml`。实际业务规格见 `STRATEGY_SPEC_V1.md`。候选不依赖账户、LLM、Qlib模型；原组合模拟另保留。用户数据未覆盖，本轮测试和运行核验在独立state。
+
+Git HEAD仍是 e7e8d5125913e5929d6611eaaffecf1c4bf41dbe；R02为未提交工作区变更。完整证据在父目录 `review/r02-fullscope/`，打包时一并提供。真实数据覆盖、历史评价和市场效果应分别阅读，不以fixture通过替代市场边际。MARKET_EDGE=NOT_ESTABLISHED。
+
+下方为原工程基线，保留历史语境。
+
+---
+
 # StockFish 可验证工程基线
 
 当前核心保留 StockFish Web/API/SSE 外壳，由 `stockfish_core` 统一处理可信数据、量化、确定性推荐与风险、持久任务和不可变历史。当前默认是研究模式；模型分数不表示已校准的概率或预期收益。

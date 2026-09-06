@@ -88,11 +88,13 @@ class RecommendationRequest(CoreModel):
 
 class ApplicationService:
     def __init__(self, root: str | Path | None = None, *, store=None, quant=None, registry=None,
-                 jobs=None, data_dir=None):
+                 jobs=None, data_dir=None, allow_test_fixture=False):
         self.root = Path(root or os.environ.get("STOCKFISH_STATE_DIR") or Path(__file__).resolve().parents[1] / "data" / "core").resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.store = store or SQLiteStore()
-        self.registry = registry or ModelRegistry(self.root / "model_registry")
+        self.registry = registry or ModelRegistry(self.root / "model_registry", store=self.store)
+        if registry is not None:
+            self.registry.bind_store(self.store)
         self.data_dir = Path(data_dir or os.environ.get("QLIB_DATA_DIR") or Path(__file__).resolve().parents[2] / "data" / "cn_data")
         self.quant = quant or QlibQuantEngine(self.registry, self.root / "quant", self.data_dir)
         self.recommendations = RecommendationEngine()
@@ -101,8 +103,13 @@ class ApplicationService:
         self.jobs = jobs or JobService(self.store, max_workers=1, max_pending=20)
         self.jobs.register("recommendation", self._recommendation_job)
         self.jobs.register("quant", self._quant_job)
+        from .yaogu.candidate_service import CandidateService
+        self.candidates = CandidateService(self.store, self.jobs, self.root / "yaogu", allow_test_fixture=allow_test_fixture)
+        self.candidate_scheduler = None
 
     def close(self):
+        if self.candidate_scheduler is not None:
+            self.candidate_scheduler.stop()
         self.jobs.shutdown(wait=True)
 
     def register_snapshot(self, snapshot: InputSnapshot) -> str:

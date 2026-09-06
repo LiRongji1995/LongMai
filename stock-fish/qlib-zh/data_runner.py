@@ -210,7 +210,7 @@ def _extract_tar_gz(archive_path: Path, extract_to: Path, progress_callback: Cal
     _log(progress_callback, "新快照解压完成，旧活动数据保持可读")
 
 
-def _verify_data_dir(progress_callback: Callable | None = None, data_dir: Path | None = None) -> list[str]:
+def _verify_data_dir(progress_callback: Callable | None = None, data_dir: Path | None = None, *, consumer_contract=None) -> list[str]:
     target = Path(data_dir or QLIB_DATA_DIR).resolve()
     checks = ["calendars/day.txt", "instruments/csi300.txt", "instruments/all.txt"]
     if any(not (target/name).is_file() for name in checks):
@@ -239,11 +239,18 @@ def _verify_data_dir(progress_callback: Callable | None = None, data_dir: Path |
             index = struct.unpack("<f", handle.read(4))[0]
         if not math.isfinite(index) or index < 0 or index != int(index) or int(index)+(size//4-1) > len(sessions):
             raise ValueError("QLIB_FEATURE_INDEX_INVALID")
-    _log(progress_callback, "日历、证券区间与全部日线二进制边界验证通过")
+    core_root = str(Path(__file__).resolve().parent.parent)
+    if core_root not in sys.path:
+        sys.path.insert(0, core_root)
+    from stockfish_core.data_validation import default_close_contract, validate_qlib_consumer
+    validation = validate_qlib_consumer(target, consumer_contract or default_close_contract(target))
+    if not validation['activation_allowed']:
+        raise ValueError('QLIB_CONSUMER_'+validation['status']+':'+validation['consumer'])
+    _log(progress_callback, "结构及声明消费者内容校验通过；不表示满足其他模型或全市场数据需求", validation=validation)
     return checks + ["features/*.day.bin"]
 
 
-def run_data_update(progress_callback: Callable | None = None, *, expected_sha256: str | None = None) -> dict:
+def run_data_update(progress_callback: Callable | None = None, *, expected_sha256: str | None = None, consumer_contract=None, cancel_check=None) -> dict:
     """Publish an immutable validated snapshot; never mutate active QLIB_DATA_DIR.
 
     SHA256 must come from GitHub's release asset digest or an explicitly pinned
@@ -272,24 +279,31 @@ def run_data_update(progress_callback: Callable | None = None, *, expected_sha25
                 raise ValueError("ARCHIVE_SHA256_MISMATCH")
             candidate = stage/"dataset"
             _extract_tar_gz(archive, candidate, progress_callback)
-            verified = _verify_data_dir(progress_callback, candidate)
+            if cancel_check and cancel_check():
+                raise ValueError('UPDATE_CANCELLED')
+            verified = _verify_data_dir(progress_callback, candidate, consumer_contract=consumer_contract)
             # data_runner is also executable directly from qlib-zh.
             core_root = str(Path(__file__).resolve().parent.parent)
             if core_root not in sys.path:
                 sys.path.insert(0, core_root)
             from stockfish_core.data import LocalQlibDataAdapter
+            from stockfish_core.data_validation import default_close_contract, validate_qlib_consumer
+            validation = validate_qlib_consumer(candidate, consumer_contract or default_close_contract(candidate))
             manifest = LocalQlibDataAdapter(candidate).manifest()
+            if cancel_check and cancel_check():
+                raise ValueError('UPDATE_CANCELLED')
             destination = snapshot_parent/manifest.digest
             if destination.exists():
                 if LocalQlibDataAdapter(destination).manifest().digest != manifest.digest:
                     raise ValueError("IMMUTABLE_SNAPSHOT_COLLISION")
             else:
                 candidate.rename(destination)
-            message = "新数据快照已验证并保存；通过 QLIB_DATA_DIR 显式切换后生效"
+            message = "新快照已保存，结构与声明消费者内容有效；未激活，其他消费者须另行校验"
             _log(progress_callback, message, progress=1.0, status="completed", activation_required=True)
             return dict(success=True, message=message, tag=info["tag"], verified_files=verified,
                         elapsed_seconds=round(time.monotonic()-started, 1), data_dir=str(destination),
-                        data_version=manifest.digest, archive_sha256=h.hexdigest(), activation_required=True)
+                        data_version=manifest.digest, archive_sha256=h.hexdigest(), activation_required=True,
+                        validation=validation, consumer_status=validation['status'], active_changed=False)
     except Exception as exc:
         reason = str(exc) if isinstance(exc, (ValueError, FileNotFoundError)) else type(exc).__name__
         _log(progress_callback, "数据更新失败；原活动快照未修改", status="failed", error=reason)

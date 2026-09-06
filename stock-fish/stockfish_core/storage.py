@@ -9,8 +9,10 @@ from contextlib import contextmanager
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import sqlite3
+from threading import RLock
 from typing import Any, Iterator
 
 from .common import canonical_json, utc_now, UnavailableError
@@ -127,6 +129,7 @@ class SQLiteStore:
         self.path = Path(path or os.environ.get("STOCKFISH_DB_PATH") or
                          Path(__file__).resolve().parents[1] / "data" / "stockfish.sqlite3").resolve()
         self.timeout = timeout
+        self._health_lock = RLock()
         if timeout <= 0:
             raise ValueError("timeout must be positive")
         try:
@@ -249,22 +252,111 @@ class SQLiteStore:
                      "content_hash": row["content_hash"], "created_at": row["created_at"],
                      "payload": checked_payload(row)} for row in rows]
 
+    def list_document_metadata(self, namespace: str, *, limit: int = 100, offset: int = 0,
+                               descending: bool = False) -> list[dict]:
+        """Routing metadata only; callers must verify selected content before use."""
+        _validate_page(limit, offset)
+        direction = 'DESC' if descending else 'ASC'
+        with self.transaction(write=False) as connection:
+            rows = connection.execute(
+                f'SELECT namespace,document_id,content_hash,created_at FROM documents WHERE namespace=? '
+                f'ORDER BY created_at {direction},document_id {direction} LIMIT ? OFFSET ?',
+                (namespace, limit, offset)).fetchall()
+            return [dict(row) for row in rows]
+
+    @staticmethod
+    def _blob_hash(connection, table, rowid):
+        checksum = hashlib.sha256()
+        with connection.blobopen(table, 'payload', rowid, readonly=True) as blob:
+            while chunk := blob.read(1024 * 1024):
+                checksum.update(chunk)
+        return checksum.hexdigest()
+
+    def verified_document_metadata(self, namespace: str, document_id: str, *, expected_hash=None):
+        """Hash current bytes, in a read transaction, without JSON object expansion.
+
+        This is usable for a previously schema-validated projection only when
+        the expected content address is supplied. It is not schema validation.
+        """
+        with self.transaction(write=False) as connection:
+            row = connection.execute('SELECT rowid,namespace,document_id,content_hash,created_at FROM documents '
+                                     'WHERE namespace=? AND document_id=?', (namespace, document_id)).fetchone()
+            if row is None:
+                return None
+            if ((expected_hash is not None and row['content_hash'] != expected_hash)
+                    or self._blob_hash(connection, 'documents', row['rowid']) != row['content_hash']):
+                raise IntegrityError('persisted document hash mismatch')
+            return {key: row[key] for key in ('namespace', 'document_id', 'content_hash', 'created_at')}
+
+    def get_document_bytes(self, namespace: str, document_id: str, *, expected_hash=None):
+        """Read and verify one immutable payload once, for a typed JSON consumer."""
+        with self.transaction(write=False) as connection:
+            row = connection.execute('SELECT rowid,content_hash FROM documents WHERE namespace=? AND document_id=?',
+                                     (namespace, document_id)).fetchone()
+            if row is None:
+                return None
+            if expected_hash is not None and row['content_hash'] != expected_hash:
+                raise IntegrityError('persisted document content address mismatch')
+            with connection.blobopen('documents', 'payload', row['rowid'], readonly=True) as blob:
+                raw = blob.read()
+            if hashlib.sha256(raw).hexdigest() != row['content_hash']:
+                raise IntegrityError('persisted document hash mismatch')
+            return raw
+
     def health(self) -> dict:
+        # Multiple browser/startup polls must not expand the same large DB in
+        # parallel. Every invocation still checks current persisted bytes.
+        with self._health_lock:
+            return self._health_checked()
+
+    def _health_checked(self) -> dict:
+        checked_at = utc_now().isoformat()
+        scope = {'structure': 'CHECKED', 'payload_hashes': 'CHECKED_ALL_IMMUTABLE_FACT_TABLES',
+                 'payload_json': 'SQLITE_JSON_OBJECT_CHECK_NO_PYTHON_OBJECT_EXPANSION',
+                 'external_artifacts': 'NOT_CHECKED_USE_MODEL_REGISTRY_HEALTH',
+                 'mutable_jobs': 'SQLITE_STRUCTURE_ONLY_NO_CONTENT_HASH'}
         try:
             with self.transaction(write=False) as connection:
                 integrity = connection.execute("PRAGMA quick_check").fetchone()[0]
                 fk_errors = connection.execute("PRAGMA foreign_key_check").fetchall()
                 mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
                 schema_version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
-                triggers = {r[0] for r in connection.execute("SELECT name FROM sqlite_master WHERE type='trigger'")}
-                expected = {f"{table}_no_{action}" for table in ("documents", "recommendations", "evaluations", "job_events") for action in ("update", "delete")}
-                valid = integrity == "ok" and not fk_errors and mode == "wal" and expected <= triggers
+                # Compare definitions, not merely names. A same-named no-op
+                # trigger is not append-only enforcement.
+                normalize = lambda sql: re.sub(r'\s+', ' ', sql.strip().rstrip(';')).strip()
+                with sqlite3.connect(':memory:') as reference:
+                    for _, script in _MIGRATIONS:
+                        reference.executescript(script)
+                    expected = {(r[0], r[1]): normalize(r[2]) for r in reference.execute(
+                        "SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL")}
+                actual = {(r[0], r[1]): normalize(r[2]) for r in connection.execute(
+                    "SELECT type,name,sql FROM sqlite_master WHERE sql IS NOT NULL")}
+                schema_mismatches = sorted(name for key, definition in expected.items()
+                                           if actual.get(key) != definition for _, name in [key])
+                trigger_valid = all(actual.get(key) == value for key, value in expected.items() if key[0] == 'trigger')
+                migration_valid = {row['version']: row['checksum'] for row in connection.execute(
+                    'SELECT version,checksum FROM schema_migrations')} == {v: _hash_text(s) for v, s in _MIGRATIONS}
+                checked_counts, corrupt_counts = {}, {}
+                for table in ('documents', 'recommendation_records', 'evaluation_observations'):
+                    checked_counts[table], corrupt_counts[table] = 0, 0
+                    for row in connection.execute(f"SELECT rowid,content_hash,CASE WHEN json_valid(payload) "
+                                                  f"THEN json_type(payload) ELSE 'invalid' END AS json_kind FROM {table}"):
+                        checked_counts[table] += 1
+                        if (row['json_kind'] != 'object'
+                                or self._blob_hash(connection, table, row['rowid']) != row['content_hash']):
+                            corrupt_counts[table] += 1
+                valid = (integrity == 'ok' and not fk_errors and mode == 'wal' and not schema_mismatches
+                         and migration_valid and not any(corrupt_counts.values()))
                 return {"component": "storage", "status": "healthy" if valid else "unavailable",
                         "journal_mode": mode, "integrity": integrity, "schema_version": schema_version,
-                        "foreign_key_errors": len(fk_errors), "immutable_triggers": expected <= triggers,
-                        "path": str(self.path)}
-        except (StorageError, OSError):
-            return {"component": "storage", "status": "unavailable", "reason_codes": ["STORAGE_UNAVAILABLE"]}
+                        "foreign_key_errors": len(fk_errors), "immutable_triggers": trigger_valid,
+                        "path": str(self.path), 'checked_at': checked_at, 'scope': scope,
+                        'schema_definition_mismatches': schema_mismatches, 'migration_checksums_valid': migration_valid,
+                        'payload_rows_checked': checked_counts, 'corrupt_payload_rows': corrupt_counts,
+                        'integrity_guarantee': 'LOCAL_CORRUPTION_DETECTION_NOT_FULL_DISK_WRITER_AUTHENTICATION'}
+        except (StorageError, OSError, ValueError, TypeError, KeyError):
+            return {"component": "storage", "status": "unavailable", "reason_codes": ["STORAGE_UNAVAILABLE"],
+                    'checked_at': checked_at, 'scope': scope}
 
 
 def _validate_page(limit: int, offset: int) -> None:
