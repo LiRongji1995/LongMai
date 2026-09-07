@@ -500,7 +500,8 @@ class CandidateService:
             result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'],
             result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'),
             [value for key,value in result.get('results',{}).items()
-             if key in {'THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1','SIMPLE_TREND_TEMPLATE_REFERENCE_V1'}])
+             if key in {'THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1',
+                        'SIMPLE_TREND_TEMPLATE_REFERENCE_V1','STAGE_AWARE_MOMENTUM_V1'}])
         from .strategy_tracking import _visible_bars
         frozen_bars = _visible_bars(bundle, cutoff)
         if latest is not None:
@@ -546,7 +547,11 @@ class CandidateService:
         focus_ids = set(focus.get('selected_ids') or [])
         scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
                          'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
-                         'shape_type','amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
+                         'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
+                         'formal_status','relative_strength_status','ret1_pct','ret3_pct','ret5_pct','ret10_pct','ret20_pct','CLV',
+                         'amplitude_pct','low_return_pct','high_return_pct','close_return_pct','recovery_points_pct',
+                         'low_to_close_rebound_pct','RS_market_1d_pct','RS_sector_1d_pct',
+                         'amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
                          'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh'}
         header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
@@ -703,7 +708,11 @@ class CandidateService:
         stream = io.StringIO(newline='')
         fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'S_DNA', 'S_THEME', 'S_PV_REFERENCE',
                   'reference_score', 'reference_rank', 'A', 'R', 'H', 'status', 'technical_status', 'theme_status', 'capital_status',
-                  'hard_requirements_status', 'shape_type', 'amount_cny', 'turnover_fraction', 'reason', 'reason_codes', 'selected_focus',
+                  'hard_requirements_status', 'formal_status', 'primary_stage', 'alternate_stages', 'liquidity_status', 'sector_status',
+                  'funds_status', 'funds_grade', 'relative_strength_status', 'ret1_pct', 'ret3_pct', 'ret5_pct', 'ret10_pct', 'ret20_pct',
+                  'CLV', 'amplitude_pct', 'low_return_pct', 'high_return_pct', 'close_return_pct', 'recovery_points_pct',
+                  'low_to_close_rebound_pct', 'RS_market_1d_pct', 'RS_sector_1d_pct',
+                  'shape_type', 'amount_cny', 'turnover_fraction', 'reason', 'reason_codes', 'selected_focus',
                   'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status', 'parameter_status_label_zh']
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
@@ -729,6 +738,28 @@ class CandidateService:
                 'theme_status': item.get('theme_status'),
                 'capital_status': item.get('capital_status'),
                 'hard_requirements_status': item.get('hard_requirements_status'),
+                'formal_status': item.get('formal_status'),
+                'primary_stage': item.get('primary_stage'),
+                'alternate_stages': '|'.join(item.get('alternate_stages') or []),
+                'liquidity_status': item.get('liquidity_status'),
+                'sector_status': item.get('sector_status'),
+                'funds_status': item.get('funds_status'),
+                'funds_grade': item.get('funds_grade'),
+                'relative_strength_status': item.get('relative_strength_status'),
+                'ret1_pct': item.get('ret1_pct'),
+                'ret3_pct': item.get('ret3_pct'),
+                'ret5_pct': item.get('ret5_pct'),
+                'ret10_pct': item.get('ret10_pct'),
+                'ret20_pct': item.get('ret20_pct'),
+                'CLV': item.get('CLV'),
+                'amplitude_pct': item.get('amplitude_pct'),
+                'low_return_pct': item.get('low_return_pct'),
+                'high_return_pct': item.get('high_return_pct'),
+                'close_return_pct': item.get('close_return_pct'),
+                'recovery_points_pct': item.get('recovery_points_pct'),
+                'low_to_close_rebound_pct': item.get('low_to_close_rebound_pct'),
+                'RS_market_1d_pct': item.get('RS_market_1d_pct'),
+                'RS_sector_1d_pct': item.get('RS_sector_1d_pct'),
                 'shape_type': item.get('shape_type'),
                 'amount_cny': item.get('amount_cny'),
                 'turnover_fraction': item.get('turnover_fraction'),

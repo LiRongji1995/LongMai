@@ -13,10 +13,11 @@
 - “昨天那份候选后来怎样？读取原名单并继续跟踪，未成熟的单独列出。”
 - “解释当前规则的指标、权重和研究理念。”
 - “国芳集团为什么入围却没进焦点？引用保存名单里的依据和风险。”
-- “按新要求给我下一交易日名单；没有题材或资金证据就明确写 UNKNOWN，不要用旧PV冒充新版正式名单。”
+- “按新要求给我下一交易日名单；没有题材或资金证据就明确写 UNKNOWN，不要用旧PV冒充阶段感知正式名单。”
+- “哪些股票处于高位分歧但修复很强？哪些属于趋势整理？”
 - “给我最新全面项目综述，供新的网页 AI 对话讨论；先只讨论，不修改策略。”
 
-实际入口：[Codex 日常操作协议](docs/CODEX_DAILY_RESEARCH.md) · [新版板块资金趋势说明](docs/THEME_CAPITAL_TREND_V1.md) · [全面项目综述](docs/PROJECT_OVERVIEW.md) · [本次首用验证](docs/CODEX_FIRST_USE_VERIFICATION.md) · [项目 Agent 指引](AGENTS.md)。Codex 使用 [轻量调用脚本](scripts/codex_research.py)，用户无需自己执行命令。完整导出与报告保存在本机被 Git 忽略的 `reports/codex/`；权威运行保存在 `data/stockfish.sqlite3` 与 `data/core/`，这些私有数据不随源码上传。
+实际入口：[Codex 日常操作协议](docs/CODEX_DAILY_RESEARCH.md) · [阶段感知强势股框架](docs/STAGE_AWARE_MOMENTUM_V1.md) · [新版板块资金趋势说明](docs/THEME_CAPITAL_TREND_V1.md) · [全面项目综述](docs/PROJECT_OVERVIEW.md) · [本次首用验证](docs/CODEX_FIRST_USE_VERIFICATION.md) · [项目 Agent 指引](AGENTS.md)。Codex 使用 [轻量调用脚本](scripts/codex_research.py)，用户无需自己执行命令。完整导出与报告保存在本机被 Git 忽略的 `reports/codex/`；权威运行保存在 `data/stockfish.sqlite3` 与 `data/core/`，这些私有数据不随源码上传。
 
 普通研究允许读取、按请求更新现有研究和保存报告；**不自动授权改正式策略、生产代码或提交推送**。讨论变更先讨论，明确要求实施才进入开发。付费调用、模型升级和预算扩大需单独授权。网页内聊天、自动模型路由和统一模型费用面板未实现；当前 Codex 可以组织研究，不代表应用内 LLM 已接通。
 
@@ -26,7 +27,7 @@
 | 日常解释、报告、综述、简单文档或小修复 | 用户可先选 5.5 或较便宜模型 | 保持当前选择；尚未进行本项目多模型成本/质量评测 |
 | 已定位的复杂时序、来源冲突或统计难题 | 先缩小问题并做普通核验 | 确有必要时申请更强模型定向复核，不默认升级 |
 
-**历史核对：2026-09-07（上海时间）。** 实际本地服务曾核验为 [http://127.0.0.1:8000/](http://127.0.0.1:8000/)，运行于 `D:/StockRecommendation/stock-fish`；发布仓库 `publish/stockfish-qlib-quant-system` 的核验基础为 main / `bff88593089faa3cb80a5d7d0a339d1c74ecaeb7`，其运行代码与 R05 `d88f1f0` 相同。当前交付新增独立 `THEME_CAPITAL_TREND_V1` 研究臂、配置、Codex profile、文档和测试；最终提交以仓库历史和交付回复为准。
+**历史核对：2026-09-07（上海时间）。** 实际本地服务曾核验为 [http://127.0.0.1:8000/](http://127.0.0.1:8000/)，运行于 `D:/StockRecommendation/stock-fish`；发布仓库 `publish/stockfish-qlib-quant-system` 的历史核验基础为 main / `bff88593089faa3cb80a5d7d0a339d1c74ecaeb7`。当前 D 盘克隆已新增独立 `THEME_CAPITAL_TREND_V1` 和 `STAGE_AWARE_MOMENTUM_V1` 研究臂、配置、Codex profile、文档和测试；最终提交以仓库历史和交付回复为准。
 
 本次默认库读取的是 **9 月 4 日真实历史重建输入，PV 完整 525 只、焦点 17 只，覆盖 LIMITED_SCOPE，成熟后验为 0**；不是 9 月 7 日新行情。后文引用的 R05 多日回放、752 项工程回归等属于此前独立证据，不是当前默认库拥有相同历史，也不是本次重跑。缺行情、未成熟后验或应用 LLM 未配置不阻止保存名单、详情、导出和有限研究。
 
@@ -46,7 +47,7 @@
 
 研究范围是沪深主板，排除创业板、科创板和北交所；日期化资格、上市时长、ST/停牌等条件按实际证据校验。无需提供账户、现金或持仓。本系统不连接券商、不下单，最终交易由用户自行决定。策略参数属于研究假设，排名分不是上涨概率，市场有效性仍为 `NOT_ESTABLISHED`。
 
-当前分工是：程序校验数据、执行冻结公式并保存研究记录；项目中的 Codex 根据用户请求读取证据、组织研究和报告。网页仍可独立看榜，应用内聊天与工具编排尚未实现。Codex 的普通研究权限与修改生产代码的权限分开。`THEME_CAPITAL_TREND_V1` 已作为新版独立研究臂接入实验结果，要求板块/题材联动、活跃资金、成交额、换手率和多头趋势全部 `PASS`；其初始研究参数在报告中必须标明 **尚未验证**，不作为已验证最优规则。
+当前分工是：程序校验数据、执行冻结公式并保存研究记录；项目中的 Codex 根据用户请求读取证据、组织研究和报告。网页仍可独立看榜，应用内聊天与工具编排尚未实现。Codex 的普通研究权限与修改生产代码的权限分开。`THEME_CAPITAL_TREND_V1` 和 `STAGE_AWARE_MOMENTUM_V1` 已作为独立研究臂接入实验结果；后者先识别 `START / ACCELERATION / HIGH_LEVEL_DIVERGENCE / TREND_PULLBACK`，再按阶段解释证据。两者初始研究参数在报告中必须标明 **尚未验证**，不作为已验证最优规则。
 
 下表的“实现”“验证”“数据/权限”分别判断。**“引用既有证据”指已结束的 R05 整改执行，不是本次文档任务重新实测。**
 

@@ -4,14 +4,14 @@
 
 ## 1. 文档身份、核验基础与版本
 
-**最后核对：2026-09-07，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 干净克隆中完成，新增独立 `THEME_CAPITAL_TREND_V1` 研究臂、Codex profile、文档与测试。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
+**最后核对：2026-09-07，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，新增独立 `STAGE_AWARE_MOMENTUM_V1` 研究臂、Codex profile、文档与测试；上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
 
 | 对象 | 核对基础及含义 |
 |---|---|
-| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮开始时 `main` 为 `1fcff64 完善Codex日常研究入口与项目综述` |
-| 本轮新增版本 | `THEME_CAPITAL_TREND_V1`；配置 [theme_capital_trend_v1.yaml](../config/theme_capital_trend_v1.yaml)，实现 [theme_capital_trend.py](../stockfish_core/yaogu/theme_capital_trend.py)，说明 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md) |
+| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮开始时 `main` 为 `c266f29 新增板块资金多头趋势研究臂` |
+| 本轮新增版本 | `STAGE_AWARE_MOMENTUM_V1`；配置 [stage_aware_momentum_v1.yaml](../config/stage_aware_momentum_v1.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，说明 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
 | 历史运行证据 | 旧 `D:/StockRecommendation` 服务与发布检出证据保留为历史核对材料；其 PID、端口和镜像身份是当时事实，使用前必须重新核对 |
-| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；新增实验实现 `R06_THEME_CAPITAL_TREND_V1`；新增初始参数状态 **尚未验证** |
+| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；本轮新增实现 `R07_STAGE_AWARE_MOMENTUM_V1`；新增初始参数状态 **尚未验证** |
 
 开发工作区、发布检出与运行进程分别核验。本次任务只提交当前授权文件，不覆盖私人数据库、缓存、报告或旧运行目录。正式 DAILY、旧 PV、旧焦点、DNA、THEME 的规则与历史结果保留；新增策略不以国芳集团或金健米业是否入选作为验收标准。
 
@@ -111,6 +111,8 @@ RAW 价格用于当日 OHLC、限价/封板、参考前收和开盘执行研究�
 | `PV_FOCUS_PREVIEW_V0.1` | 完整 PV 的确定性焦点子集，非新增排序策略；正式周期只作用其选中项 | 原 PV + A/R/RAW 阳线与 CLV 条件，无配额 |
 | `DNA_RERANK_V1` | 已实现的股性增强实验，在合格子群重算 PV 后混合 G | 连续 252 会话、可核验板事件、成熟样本与可靠性门槛；最新实际输入不足 |
 | `THEME_CONTEXT_V1` | 已实现的事件题材增强实验，在合格子群重算 PV 后混合 T | 截止前可见完整 EVENT 主题、至少5成员、同伴价格/板事件覆盖≥95%；最新实际输入不足 |
+| `THEME_CAPITAL_TREND_V1` | 上一版板块、资金、多头趋势独立研究臂，保留为对照 | 成交额、换手、长窗均线、题材联动、同题材活跃资金均需 `PASS` |
+| `STAGE_AWARE_MOMENTUM_V1` | 本轮阶段感知强势股研究臂，先识别阶段再看证据 | 主板资格、成交额/换手底线、阶段识别、题材链接和资金等级；A/CLV 不作全阶段统一硬门槛 |
 
 `DNA_REVERSAL_V1` 与 `THEME_LIMITUP_V1` 是旧客户端兼容别名；实际 canonical ID 分别为 DNA_RERANK/THEME_CONTEXT，不是两个新增策略，也不重复统计。配置 `execution_enabled: false` 指不启用交易执行，不代表禁止运行研究实验。日常以已确认 PV 路径处理量价请求，仍明确 DAILY 是冻结原基线，不拿 PV 结果冒充 DAILY 已齐备。
 
@@ -358,7 +360,7 @@ R05历史诊断包括全资格池及成交额强度Top5/10/20等同条件对照�
 | “给我总体短线市场与强势股报告” | 从真实覆盖、完整PV/焦点、旧run变化及已取证资料生成报告，明确事实/程序计算/Agent推断/未知；主板不冒充全市场，焦点下降不直接认定退潮，没取到板块/龙虎榜就不补造 |
 | “昨天的候选后来怎么样” | 读昨天保存原run，按已有输入读取或追加后验/跟踪，保留旧依据、退出、缺数与未成熟；不按今日规则重造昨日名单 |
 | “为什么某股入围/没入围” | 读同run单股detail、原因子与资格/焦点拒绝原因；资格不合格、基础未过、未进焦点、分页未显示分别解释 |
-| “按新要求给我下一交易日名单” | 使用独立 `THEME_CAPITAL_TREND_V1`；硬性条件和本版初始研究参数分开报告，初始参数标明**尚未验证**。缺长窗均线、题材或资金证据时输出 `UNKNOWN/INSUFFICIENT_EVIDENCE`，不借旧PV冒充新版正式名单 |
+| “按新要求给我下一交易日名单” | 默认使用独立 `STAGE_AWARE_MOMENTUM_V1`；硬性条件和本版初始研究参数分开报告，初始参数标明**尚未验证**。缺长窗均线、题材或资金证据时输出 `UNKNOWN/INSUFFICIENT_EVIDENCE`，不借旧PV冒充新版正式名单 |
 | “复盘最近一周：没选上的是否更好” | 同日期、同输入、同成熟窗口比较旧PV、旧焦点、新技术诊断、新正式策略和趋势模板；落选、退出、坏样本保留在ledger，不以指定股票是否入选验收 |
 | “用了哪些指标/权重” | 先小型指引与当前配置，需要时展开本文和指定函数；通常不取新行情或回测 |
 | “我想改策略” | 区分讨论与实施，整理真实现状、拟改部分与影响；未明确实施授权不改配置/源码 |
@@ -374,14 +376,14 @@ R05历史诊断包括全资格池及成交额强度Top5/10/20等同条件对照�
 | 数据进度与采集/续采 | GET `/api/candidate-data-pipeline`；POST同路径`/capture`，body `{}` |
 | 查询保存实验 | GET `/api/strategy-experiments?limit=20&offset=0`；GET `/api/strategy-experiments/<run_id>/summary?strategy_id=PV_OBSERVATION_V1&selection=all&page=1&page_size=50` |
 | 计算新实验 | POST `/api/strategy-experiments/run`，选择已登记input_id/observation_date |
-| 详情、导出 | GET `/api/strategy-experiments/<run_id>/items/<instrument_id>`；同run `/export?format=csv或json&strategy_id=PV_OBSERVATION_V1&selection=all或focus或unselected`，新版可把 `strategy_id` 换成 `THEME_CAPITAL_TREND_V1`、`THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1` 或 `SIMPLE_TREND_TEMPLATE_REFERENCE_V1` |
+| 详情、导出 | GET `/api/strategy-experiments/<run_id>/items/<instrument_id>`；同run `/export?format=csv或json&strategy_id=PV_OBSERVATION_V1&selection=all或focus或unselected`，新版可把 `strategy_id` 换成 `STAGE_AWARE_MOMENTUM_V1`、`THEME_CAPITAL_TREND_V1`、`THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1` 或 `SIMPLE_TREND_TEMPLATE_REFERENCE_V1` |
 | 已保存后验/跟踪/复盘 | GET同run的`/outcomes`、`/tracking`、`/review`；GET `/api/research-feedback/latest`、`/api/strategy-comparison/latest` |
 | 更新后验/跟踪 | POST同run的`/outcomes`或`/tracking`，指定已登记后续input_id，可给正整数horizons |
 | 任务与调度 | GET `/api/jobs/<job_id>`、`/api/candidate-schedule`；失败原因明确后才按授权重试 |
 
 POST返回202/job_id表示已接受，不代表完成。任务终态SUCCEEDED后仍核对业务status、覆盖、保存run；FAILED/CANCELLED/INTERRUPTED不算成功。只读历史和导出不调用LLM、不重算排名。同run的完整canonical排名是唯一权威，报告与Agent意见是派生材料，不新建平行“权威名单”。
 
-新版板块—资金—多头趋势策略说明见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。本轮已接入 `THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1`、`THEME_CAPITAL_TREND_V1` 与 `SIMPLE_TREND_TEMPLATE_REFERENCE_V1` 三个实验臂；旧PV/焦点、DAILY、DNA、THEME 不改名、不重写历史。首轮用 2026-09-04 已保存真实输入重放时，因只有近6日PV价格、无可授权题材快照、无可授权资金事件，三个新增臂均为 `INSUFFICIENT_EVIDENCE`，新版正式名单为0；这是证据不足，不是证明市场中没有合格股票。国芳集团旧PV第1但因 `CLOSE_LOCATION_BELOW_0_70` 未进旧焦点；金健米业旧PV因 `PV_AMOUNT_RATIO_BELOW_1_2` 未入围。两者在新版中成交额与换手可过，但长窗均线、题材和资金均为 `UNKNOWN`。
+阶段感知强势股框架说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。本轮已接入 `STAGE_AWARE_MOMENTUM_V1`；旧PV/焦点、DAILY、DNA、THEME、`THEME_CAPITAL_TREND_V1` 不改名、不重写历史。首轮用 2026-09-04 已保存真实输入重放时，因只有近6日PV价格、无可授权题材快照、无可授权资金事件，阶段感知正式名单为0；这是证据不足，不是证明市场中没有合格股票。国芳集团旧PV第1但因 `CLOSE_LOCATION_BELOW_0_70` 未进旧焦点，阶段诊断为高位分歧修复强；金健米业旧PV因 `PV_AMOUNT_RATIO_BELOW_1_2` 未入围，阶段诊断偏加速/高热度分歧但非强修复。上一版板块资金趋势策略说明仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
 ### 7.2 自动与需要触发的步骤
 
@@ -484,7 +486,7 @@ Codex是当前日常Agent入口，负责解析委托、按权限调用现有程�
 | 操作入口与权限 | [README](../README.md)、[AGENTS](../AGENTS.md)、[Codex协议](CODEX_DAILY_RESEARCH.md)、[轻量封装](../scripts/codex_research.py)、[本轮首用验证](CODEX_FIRST_USE_VERIFICATION.md) |
 | 冻结数值与已签发规格 | [yaogu配置](../config/yaogu_v1.defaults.yaml)、[实验配置](../config/r05_strategy_experiments.yaml)、[增补配置](../config/r05_completion_requirements.yaml)、[source lock](../config/r05_source_lock.json)、[规格追踪](../strategy_spec_traceability.md)、[DAILY规格](../STRATEGY_SPEC_V1.md) |
 | DAILY公式/资格与数据时点 | [engine](../stockfish_core/yaogu/engine.py)、[features](../stockfish_core/yaogu/features.py)、[events](../stockfish_core/yaogu/events.py)、[themes](../stockfish_core/yaogu/themes.py)、[emotion](../stockfish_core/yaogu/emotion.py)、[visibility](../stockfish_core/yaogu/visibility.py) |
-| PV/FOCUS/DNA/THEME/新版板块资金趋势 | [strategy_experiments](../stockfish_core/yaogu/strategy_experiments.py)、[theme_capital_trend](../stockfish_core/yaogu/theme_capital_trend.py)、[新版配置](../config/theme_capital_trend_v1.yaml)、[新版说明](THEME_CAPITAL_TREND_V1.md)、[独立golden](../tests/r05_product/test_r05_spec_goldens.py) |
+| PV/FOCUS/DNA/THEME/阶段感知与板块资金趋势 | [strategy_experiments](../stockfish_core/yaogu/strategy_experiments.py)、[stage_aware_momentum](../stockfish_core/yaogu/stage_aware_momentum.py)、[阶段感知配置](../config/stage_aware_momentum_v1.yaml)、[阶段感知说明](STAGE_AWARE_MOMENTUM_V1.md)、[theme_capital_trend](../stockfish_core/yaogu/theme_capital_trend.py)、[板块资金配置](../config/theme_capital_trend_v1.yaml)、[独立golden](../tests/r05_product/test_r05_spec_goldens.py) |
 | 标签/周期/统计/纸面执行 | [strategy_tracking](../stockfish_core/yaogu/strategy_tracking.py)、[paper_execution](../stockfish_core/yaogu/paper_execution.py)、[replay_statistics](../stockfish_core/yaogu/replay_statistics.py)、[R05整改与回放说明](R05_RECTIFICATION_AND_REPLAY.md) |
 | 供给/预算/部署 | [provider_requests](../stockfish_core/yaogu/provider_requests.py)、[provider_normalization](../stockfish_core/yaogu/provider_normalization.py)、[request_queue](../stockfish_core/yaogu/request_queue.py)、[data_pipeline](../stockfish_core/yaogu/data_pipeline.py)、[数据Docker说明](R05_DATA_AND_DOCKER_RECTIFICATION.md)、[compose](../docker-compose.yml) |
 | 运行保存一致性 | [candidate_service](../stockfish_core/yaogu/candidate_service.py)、[candidate_api](../stockfish_core/yaogu/candidate_api.py)、[storage](../stockfish_core/storage.py)、[scheduler](../stockfish_core/yaogu/scheduler.py)、[备份工具](../scripts/backup_restore_state.py) |

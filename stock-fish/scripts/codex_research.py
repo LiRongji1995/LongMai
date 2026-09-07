@@ -28,10 +28,13 @@ FOCUS = "PV_FOCUS_PREVIEW_V0.1"
 THEME_CAPITAL = "THEME_CAPITAL_TREND_V1"
 THEME_CAPITAL_TECHNICAL = "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1"
 SIMPLE_TREND = "SIMPLE_TREND_TEMPLATE_REFERENCE_V1"
-RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND)
+STAGE_AWARE = "STAGE_AWARE_MOMENTUM_V1"
+RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE)
 READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
     # R05 V4 before the additive THEME_CAPITAL_TREND_V1 experiment arms.
     "cde229340f46f123246c7ce7fe9b15331dc62f2a516b19e9524390ff4858031c",
+    # R06 before the additive STAGE_AWARE_MOMENTUM_V1 experiment arm.
+    "0cb20a15af9347785a73e005714e02030e8606e2b31c812472e0a3cc6daeb897",
 }
 REAL_COVERAGE = {"PROSPECTIVE_CAPTURED", "RECONSTRUCTED_HISTORICAL"}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED"}
@@ -216,7 +219,11 @@ def detail_summary(item):
     fields = ("instrument_id", "name", "rank", "A", "R", "H", "S_PV", "S_DNA", "S_THEME",
               "amount_cny", "mean_prior5_amount_cny", "close", "comparable_close", "comparable_close_T_minus_5",
               "rank_percentiles", "board_state", "limit_event_status", "risk_flags", "risk_review_status",
-              "status", "reason", "reason_codes", "selected", "close_location", "parent_rank", "parent_score")
+              "status", "formal_status", "primary_stage", "alternate_stages", "liquidity_status", "sector_status",
+              "funds_status", "funds_grade", "relative_strength_status", "ret1_pct", "ret3_pct", "ret5_pct",
+              "ret10_pct", "CLV", "amplitude_pct", "low_return_pct", "close_return_pct", "recovery_points_pct",
+              "RS_market_1d_pct", "RS_sector_1d_pct", "reason", "reason_codes", "selected", "close_location",
+              "parent_rank", "parent_score")
     result = pick(item, ("run_id", "instrument_id", "observation_date", "market_edge"))
     result["strategy_results"] = {sid: [pick(row, fields) for row in rows]
                                   for sid, rows in item.get("strategy_results", {}).items()
@@ -319,7 +326,11 @@ def report_text(saved, review, context=None, strategy_id=PV):
     counts = result.get("counts") or {}
     focus = saved.get("selection_results", {}).get(FOCUS, {})
     ranked = [row for row in result.get("items", []) if row.get("rank") is not None]
-    profile_title = "沪深主板量价研究简报" if strategy_id == PV else "沪深主板新版板块资金趋势研究简报"
+    profile_title = (
+        "沪深主板量价研究简报" if strategy_id == PV
+        else "沪深主板阶段感知强势股研究简报" if strategy_id == STAGE_AWARE
+        else "沪深主板新版板块资金趋势研究简报"
+    )
     lines = ["# " + profile_title, "", "本报告由正式保存结果派生；范围仅为输入实际覆盖的沪深主板。",
              "事实与计算结果：", "",
              "- 原运行：`" + saved["run_id"] + "`；输入：`" + saved["input_id"] + "`。",
@@ -334,6 +345,9 @@ def report_text(saved, review, context=None, strategy_id=PV):
     if strategy_id == THEME_CAPITAL:
         lines.append("- 新版初始研究参数状态：**尚未验证**；用户硬性要求与本版初始参数必须分开理解。")
         lines.append("- 正式名单要求成交额、换手率、均线/形态、题材联动和同题材活跃资金全部 `PASS`；`UNKNOWN` 不填补。")
+    if strategy_id == STAGE_AWARE:
+        lines.append("- 阶段感知初始研究参数状态：**尚未验证**；阶段标签是研究分类，不是市场事实。")
+        lines.append("- A 和 CLV 不再作为所有阶段的统一硬门槛；正式名单仍要求流动性底线、阶段识别、题材链接和资金等级达标。")
     if context:
         lines += ["- 目标交易日：" + context["target_session"] + "；该目标前一交易日：" + context["expected_observation_date"] + "。",
                   "- 请求时最后收盘交易日：" + context["latest_completed_session"] + "；当前报告使用最后可复用的原保存结果。"]
@@ -349,8 +363,12 @@ def report_text(saved, review, context=None, strategy_id=PV):
             detail += "；风险标记=" + json.dumps(row.get("risk_flags", []), ensure_ascii=False) + "，风险核对状态=" + str(row.get("risk_review_status", "未提供额外结论"))
         else:
             detail += "：状态=" + str(row.get("status")) + "，参考分=" + str(row.get("reference_score"))
-            detail += "，技术/题材/资金=" + "/".join(str(row.get(k)) for k in ("technical_status", "theme_status", "capital_status"))
-            detail += "，形态=" + str(row.get("shape_type"))
+            if strategy_id == STAGE_AWARE:
+                detail += "，阶段=" + str(row.get("primary_stage")) + "，流动性/题材/资金=" + "/".join(
+                    str(row.get(k)) for k in ("liquidity_status", "sector_status", "funds_status"))
+            else:
+                detail += "，技术/题材/资金=" + "/".join(str(row.get(k)) for k in ("technical_status", "theme_status", "capital_status"))
+                detail += "，形态=" + str(row.get("shape_type"))
         lines.append(detail + "。")
     maturity = review.get("counts", {})
     lines += ["", "## 跟踪与限制", "",

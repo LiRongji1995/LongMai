@@ -1,0 +1,156 @@
+strategy_id: STAGE_AWARE_MOMENTUM_V1
+version: 1
+specification_name: "StockRecommendation stage-aware strong-stock research framework"
+parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+parameter_status_label_zh: "尚未验证"
+traceability:
+  replaces_prior_draft: "板块资金趋势筛选与落选反思"
+  prior_draft_execution: REPLACED_NOT_MERGED
+  preserves_existing_strategies:
+    - DAILY_V1
+    - PV_OBSERVATION_V1
+    - PV_FOCUS_PREVIEW_V0.1
+    - DNA_RERANK_V1
+    - THEME_CONTEXT_V1
+    - THEME_CAPITAL_TREND_V1
+  acceptance_policy: "Specific named stocks entering any list are not acceptance criteria."
+  stage_label_policy: "Stage labels are research classifications, not objective market facts."
+hard_requirements:
+  qualified_universe:
+    exchanges: [SSE, SZSE]
+    board: MAIN
+    security_type: A_COMMON
+    exclude_boards: [STAR, CHINEXT, BJ]
+    exclude_security_types: [B_SHARE, FUND, BOND, OTHER]
+  liquidity_bottom:
+    amount_cny_min_inclusive: 500000000
+    turnover_fraction_min_inclusive: 0.07
+    amount_ratio_is_not_universal_gate: true
+  sector_linkage:
+    no_verifiable_sector_link_blocks_formal_list: true
+    sector_day_up_not_required_for_high_level_divergence: true
+  funds_linkage:
+    required_grade: [STRONG, MODERATE]
+    weak_or_unknown_blocks_formal_list: true
+  statuses:
+    pass: PASS
+    fail: FAIL
+    unknown: UNKNOWN
+    unknown_policy: "UNKNOWN is never imputed; formal output requires required evidence to be non-weak and not completely unknown."
+  list_count:
+    fixed_count: null
+    zero_list_allowed: true
+research_seed_parameters:
+  note: "These are implementation seed parameters for this version, not user-originated rules and not verified optimum."
+  parameter_status_label_zh: "尚未验证"
+  stages:
+    ids: [START, ACCELERATION, HIGH_LEVEL_DIVERGENCE, TREND_PULLBACK]
+    primary_stage_precedence: [HIGH_LEVEL_DIVERGENCE, ACCELERATION, TREND_PULLBACK, START]
+    start:
+      amount_ratio_prior5_min_inclusive: 1.2
+      ret5_min_exclusive: 0
+      amount_ratio_applies_only_to_stage: START
+    acceleration:
+      ret3_min_inclusive: 0.10
+      ret5_min_inclusive: 0.15
+      ret10_min_inclusive: 0.25
+      high_turnover_days_5_min_inclusive: 3
+      evidence_points_min_inclusive: 2
+    high_level_divergence:
+      ret5_context_min_inclusive: 0.10
+      ret10_context_min_inclusive: 0.18
+      percentile_context_min_inclusive: 80
+      amplitude_min_inclusive: 0.07
+      deep_low_return_max_inclusive: -0.04
+      recovery_points_min_inclusive: 0.05
+      rs_market_or_sector_supports_repair: true
+      no_hard_clv_threshold: true
+      no_hard_amount_ratio_threshold: true
+    trend_pullback:
+      ma_windows: [5, 10, 20, 60, 120, 250]
+      bullish_arrangement: [5, 10, 20, 60, 120, 250]
+      close_minimums: [120, 250]
+      below_ma5_sessions_inclusive: [1, 3]
+      near_ma_5_10_20_fraction_inclusive: 0.03
+      insufficient_ma250_policy: UNKNOWN
+  price_strength_windows: [1, 3, 5, 10, 20]
+  relative_strength:
+    primary_market_benchmark: MAINBOARD_EQUAL_WEIGHT_PRICE_DIAGNOSTIC
+    optional_market_benchmarks: [SSE_COMPOSITE, CSI300]
+    no_posthoc_benchmark_selection: true
+    windows: [1, 3, 5]
+  sector_evidence:
+    allowed_theme_types: [EVENT, INDUSTRY]
+    display_order: [theme_id_asc]
+    peer_excludes_self: true
+    min_other_valid_members_inclusive: 2
+    min_peer_return_coverage_fraction_inclusive: 0.60
+    windows: [1, 3, 5]
+    strong_gain_return_1d_min_inclusive: 0.07
+  liquidity:
+    descriptive_prior_amount_windows: [5, 10]
+    descriptive_prior_turnover_windows: [5]
+    high_turnover_fraction_inclusive: 0.07
+  funds:
+    lookback_sessions: 5
+    recent_activity_sessions_for_strong: 3
+    recent_activity_sessions_for_moderate: 5
+    peers_exclude_self: true
+    classified_source_layers:
+      - PUBLIC_EXCHANGE_LHB
+      - EXCHANGE_TRADING_INFO
+      - SUPPLIER_CLASSIFIED_ACTIVE_SEAT
+      - SUPPLIER_CLASSIFIED_SEAT
+      - CLASSIFIED_ACTIVE_MONEY_SEAT
+    proxy_source_layers:
+      - CAPITAL_PROXY
+      - LARGE_ORDER_PROXY
+      - MAIN_NET_FLOW_PROXY
+    grade_mapping:
+      STRONG:
+        min_active_instruments_inclusive: 2
+        min_active_seats_inclusive: 2
+        min_dedup_buy_amount_cny_inclusive: 100000000
+        require_dedup_net_amount_positive: true
+        max_days_since_last_activity_inclusive: 3
+      MODERATE:
+        min_active_instruments_inclusive: 1
+        min_active_seats_inclusive: 1
+        min_dedup_buy_amount_cny_inclusive: 20000000
+        require_dedup_net_amount_positive: true
+        max_days_since_last_activity_inclusive: 5
+      WEAK:
+        fallback_when_classified_evidence_exists_but_not_moderate: true
+      UNKNOWN:
+        no_funds_data: true
+        proxy_only: true
+        overlapping_windows: true
+  ranking:
+    complex_new_score: false
+    reference_score: "PV continuous percentile score over computable PV factors, without PV A/R screen and without focus filters."
+    tie_break: [reference_score_desc, primary_stage_precedence, instrument_id_asc]
+review_policy:
+  cadence_exchange_sessions: 5
+  compare_strategies:
+    - PV_OBSERVATION_V1
+    - PV_FOCUS_PREVIEW_V0.1
+    - THEME_CAPITAL_TREND_V1
+    - STAGE_AWARE_MOMENTUM_V1
+  required_report_sections:
+    - phenomenon
+    - data
+    - cause_hypothesis
+    - counterexamples
+    - minimal_change_suggestion
+    - possible_new_errors
+    - followup_validation_plan
+ai_responsibilities:
+  allowed:
+    - explain_stage_and_evidence
+    - separate_facts_rule_calculation_judgment_unknowns
+    - explain_old_vs_new_without_rewriting_history
+    - identify_posthoc_risk
+  forbidden:
+    - alter_history_or_frozen_rules
+    - tune_thresholds_to_force_named_stock_selection
+    - claim_market_edge_without_review

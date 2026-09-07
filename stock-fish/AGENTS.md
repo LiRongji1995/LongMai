@@ -5,6 +5,7 @@
 - 日常先读 [执行协议](docs/CODEX_DAILY_RESEARCH.md)，用户入口见 [README](README.md)。[全面项目综述](docs/PROJECT_OVERVIEW.md) 供规则解释与新对话使用，不必每次全读。
 - Codex是自然语言日常入口，网页可选。用户无需自己执行命令；协调现有正式 API/CLI，复用正确实例及保存结果。调用封装为 [codex_research.py](scripts/codex_research.py)，不复制策略或后验算法。
 - 市场限沪深主板普通A股，沿用日期化资格、ST/停牌/上市时长等证据门槛。日常PV是已确认的量价研究实验；DAILY_V1保持冻结五族主策略身份。不得用实验替代不可用的DAILY结论，不凑17/20/30只。
+- 阶段感知新版为 `STAGE_AWARE_MOMENTUM_V1`，说明见 [STAGE_AWARE_MOMENTUM_V1.md](docs/STAGE_AWARE_MOMENTUM_V1.md)。先识别 `START/ACCELERATION/HIGH_LEVEL_DIVERGENCE/TREND_PULLBACK`，再按阶段解释；A/CLV 不作全阶段统一硬门槛，初始参数必须标明“尚未验证”。
 - 普通请求允许读代码/配置/结果、在现有来源和预算内采集、调用正式逻辑、保存名单/报告/后验。它不授权改策略公式、权重、窗口、资格、生产代码、依赖、交易口径、Git历史，也不自动授权提交推送。
 - 工程交付只有在当前任务明确授权时提交推送；本次入口与综述任务已获授权，检查后直接中文提交。不得强推、切分支、建worktree、pull合并未知工作、reset/clean/rebase或全量盲目暂存。当前开发dirty是既存交付，不整体提交到开发远端。
 - 每次先核对实际仓库、分支、HEAD、远端、运行路径和工作区变化。约定发布目标为 LiRongji1995/stockfish-qlib-quant-system 的 main；本机发布检出在上级 publish/stockfish-qlib-quant-system，实际远端仍须重新核验，仅同步本任务文件。

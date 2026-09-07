@@ -1,6 +1,6 @@
 # THEME_CAPITAL_TREND_V1 版本说明与首轮审计
 
-本文件对应用户指定的唯一执行规格《StockRecommendation：板块—资金—多头趋势策略与落选复盘》，此前《板块资金趋势筛选与落选反思》不合并执行。旧 DAILY、PV、焦点、DNA、THEME 与历史结果保留；两只指定股票是否入选不作为验收标准。
+本文件对应上一版执行规格《StockRecommendation：板块—资金—多头趋势策略与落选复盘》，此前《板块资金趋势筛选与落选反思》不合并执行。2026-09-07 后新增的最新研究框架为 [STAGE_AWARE_MOMENTUM_V1](STAGE_AWARE_MOMENTUM_V1.md)；本策略作为历史独立研究臂和对照保留，不与阶段感知规格合并执行。旧 DAILY、PV、焦点、DNA、THEME 与历史结果保留；两只指定股票是否入选不作为验收标准。
 
 ## 1. 用户硬性要求
 
