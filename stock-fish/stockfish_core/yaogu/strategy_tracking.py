@@ -19,6 +19,8 @@ METRIC_POLICY_ID = 'R05_COMPARABLE_PRICE_AND_LIMIT_EVENT_LABEL_V1'
 TRACKING_VERSION = 'R05_RESEARCH_EPISODE_TRACKING_V2'
 REVIEW_VERSION = 'R05_RESEARCH_FEEDBACK_V2'
 FOCUS = 'PV_FOCUS_PREVIEW_V0.1'
+STAGE_AWARE = 'STAGE_AWARE_MOMENTUM_V2'
+V2_OUTCOME_POLICY_ID = 'STAGE_AWARE_MOMENTUM_V2_SETUP_SPECIFIC_OUTCOMES_V1'
 
 
 def _day(value):
@@ -142,6 +144,177 @@ def _metric(value, mature, reason=None):
             'valid': mature and value is not None, 'reason_codes': [reason] if mature and value is None and reason else []}
 
 
+def _session_mature(day, evaluated_at):
+    return datetime.combine(day, time(15), SH) <= evaluated_at.astimezone(SH)
+
+
+def _event_flags(bar):
+    if bar is None:
+        return {'close_limit_up': None, 'close_limit_down': None, 'event_status': 'MISSING_PRICE'}
+    event = limit_event(bar)
+    return {
+        'close_limit_up': True if event.close_limit_up == TRUE else False if event.close_limit_up == 'FALSE' else None,
+        'close_limit_down': True if event.close_limit_down == TRUE else False if event.close_limit_down == 'FALSE' else None,
+        'event_status': 'VERIFIED' if event.close_limit_up in (TRUE, 'FALSE') and event.close_limit_down in (TRUE, 'FALSE') else 'LIMIT_EVENT_UNVERIFIED',
+    }
+
+
+def _future_state(iid, day, bars, evaluated_at, basis):
+    state = {'session': str(day), 'status': 'NOT_MATURED', 'close_limit_up': None, 'close_limit_down': None}
+    if not _session_mature(day, evaluated_at):
+        return state
+    bar = bars.get((iid, day))
+    if bar is None or bar.comparable_close is None:
+        state['status'] = 'MISSING_PRICE'
+        return state
+    if not basis or bar.comparable_basis != basis:
+        state['status'] = 'COMPANY_ACTION_OR_COMPARABILITY_UNSUPPORTED'
+        return state
+    state.update(
+        status='OBSERVED',
+        open=str(bar.open) if bar.open is not None else None,
+        high=str(bar.high) if bar.high is not None else None,
+        low=str(bar.low) if bar.low is not None else None,
+        close=str(bar.close) if bar.close is not None else None,
+        comparable_open=str(bar.comparable_open) if bar.comparable_open is not None else None,
+        comparable_high=str(bar.comparable_high) if bar.comparable_high is not None else None,
+        comparable_low=str(bar.comparable_low) if bar.comparable_low is not None else None,
+        comparable_close=str(bar.comparable_close) if bar.comparable_close is not None else None,
+    )
+    state.update(_event_flags(bar))
+    return state
+
+
+def _reversal_hit(state, t_high):
+    close = _dec(state.get('comparable_close'))
+    return state.get('status') == 'OBSERVED' and (state.get('close_limit_up') is True or (close is not None and t_high is not None and close > t_high))
+
+
+def _first_hit(states, predicate):
+    for offset, state in enumerate(states, 1):
+        if predicate(state):
+            return offset, state['session']
+    return None, None
+
+
+def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, bars, evaluated_at, basis, signal_bar):
+    try:
+        from .stage_aware_momentum import CONFIG as STAGE_AWARE_CONFIG
+        outcome_config = STAGE_AWARE_CONFIG['research_seed_parameters'].get('tracking_outcomes', {})
+    except Exception:
+        outcome_config = {}
+    max_repair = int((outcome_config.get('repair_latency') or {}).get('max_sessions', 3))
+    max_new_high = int((outcome_config.get('time_to_new_high') or {}).get('max_sessions', 3))
+    local_peak_lookback = int((outcome_config.get('time_to_new_high') or {}).get('local_peak_lookback_sessions_excluding_T', 10))
+    t_high = signal_bar.comparable_high if signal_bar is not None and signal_bar.comparable_basis == basis else None
+    t_ohlc = {
+        'open': str(signal_bar.open) if signal_bar and signal_bar.open is not None else None,
+        'high': str(signal_bar.high) if signal_bar and signal_bar.high is not None else None,
+        'low': str(signal_bar.low) if signal_bar and signal_bar.low is not None else None,
+        'close': str(signal_bar.close) if signal_bar and signal_bar.close is not None else None,
+        'comparable_high': str(t_high) if t_high is not None else None,
+        'comparable_close': str(signal_bar.comparable_close) if signal_bar and signal_bar.comparable_close is not None else None,
+        'comparable_basis': basis,
+    }
+    future3 = [_future_state(iid, day, bars, evaluated_at, basis) for day in future[:max(max_repair, max_new_high, 3)]]
+    t1_state = future3[0] if future3 else {'status': 'NOT_MATURED', 'session': None}
+    t1_mature = t1_state.get('status') != 'NOT_MATURED'
+    reversal_value = _reversal_hit(t1_state, t_high) if t1_mature and t1_state.get('status') == 'OBSERVED' else None
+    reversal = {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'event_date': str(observation_date),
+        'event_identity': item.get('primary_stage') or 'UNCLASSIFIED_STAGE_AWARE_SIGNAL',
+        't_ohlc': t_ohlc,
+        't_plus_1_ohlc': t1_state,
+        'verified_t1_limit_event': t1_state.get('close_limit_up'),
+        'reclaim_definition': 'VERIFIED_CLOSE_LIMIT_UP_OR_T_PLUS_1_CLOSE_GT_T_HIGH',
+        'result': reversal_value,
+        'maturity_status': 'NOT_MATURED' if not t1_mature else 'MATURE_VALID' if reversal_value is not None else 'UNAVAILABLE',
+        'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
+    }
+
+    repair_states = future3[:max_repair]
+    first_repair, first_repair_session = _first_hit(repair_states, lambda state: _reversal_hit(state, t_high))
+    repair_all_mature = len(repair_states) == max_repair and all(state.get('status') != 'NOT_MATURED' for state in repair_states)
+    repair_latency = {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'max_sessions': max_repair,
+        'session_statuses': repair_states,
+        'first_repair_session': first_repair_session,
+        'sessions_to_repair': first_repair,
+        'result': 'REPAIRED' if first_repair else 'NOT_REPAIRED_WITHIN_WINDOW' if repair_all_mature else 'NOT_MATURED',
+        'maturity_status': 'MATURE_VALID' if first_repair or repair_all_mature else 'NOT_MATURED',
+        'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
+    }
+
+    observation_index = calendar.index(observation_date)
+    local_peak_bars = [
+        bars.get((iid, day)) for day in calendar[max(0, observation_index - local_peak_lookback):observation_index]
+    ]
+    local_peak_values = [
+        bar.comparable_high for bar in local_peak_bars
+        if bar is not None and bar.comparable_high is not None and bar.comparable_basis == basis
+    ]
+    local_peak = max(local_peak_values) if local_peak_values else None
+    new_high_states = future3[:max_new_high]
+    drop_high_offset, drop_high_session = _first_hit(new_high_states, lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and t_high is not None and _dec(state.get('comparable_high')) > t_high)
+    local_peak_offset, local_peak_session = _first_hit(new_high_states, lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and local_peak is not None and _dec(state.get('comparable_high')) > local_peak)
+    new_high_all_mature = len(new_high_states) == max_new_high and all(state.get('status') != 'NOT_MATURED' for state in new_high_states)
+    time_to_new_high = {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'max_sessions': max_new_high,
+        'drop_day_high': str(t_high) if t_high is not None else None,
+        'local_peak_lookback_sessions_excluding_T': local_peak_lookback,
+        'pre_divergence_local_peak': str(local_peak) if local_peak is not None else None,
+        'session_statuses': new_high_states,
+        'drop_day_high_first_session_reached': drop_high_session,
+        'drop_day_high_sessions_to_reclaim': drop_high_offset,
+        'local_peak_first_session_reached': local_peak_session,
+        'local_peak_sessions_to_reclaim': local_peak_offset,
+        'maturity_status': 'MATURE_VALID' if drop_high_offset or local_peak_offset or new_high_all_mature else 'NOT_MATURED',
+        'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
+    }
+
+    breakout_level = _dec(((item.get('stage_candidates') or {}).get('START') or {}).get('breakout_prior_high'))
+    breakout_states = future3[:max_repair]
+    if breakout_level is None:
+        breakout_hold = {'status': 'NOT_APPLICABLE', 'reason_codes': ['SAM_BREAKOUT_LEVEL_NOT_IN_SIGNAL']}
+        breakout_failure = {'status': 'NOT_APPLICABLE', 'reason_codes': ['SAM_BREAKOUT_LEVEL_NOT_IN_SIGNAL']}
+    else:
+        observed_breakout = [state for state in breakout_states if state.get('status') == 'OBSERVED']
+        failed = any((_dec(state.get('comparable_close')) is not None and _dec(state.get('comparable_close')) < breakout_level) for state in observed_breakout)
+        all_mature = len(breakout_states) == max_repair and all(state.get('status') != 'NOT_MATURED' for state in breakout_states)
+        breakout_hold = {'status': 'MATURE_VALID' if all_mature else 'NOT_MATURED', 'breakout_level': str(breakout_level), 'held_through_window': bool(observed_breakout) and not failed and all_mature}
+        breakout_failure = {'status': 'MATURE_VALID' if failed or all_mature else 'NOT_MATURED', 'breakout_level': str(breakout_level), 'failed': failed}
+
+    shadow_rows = [row for row in ((item.get('supply_pressure') or {}).get('upper_shadow_rows') or []) if row.get('long_upper_shadow')]
+    levels = [_dec(row.get('shadow_high')) for row in shadow_rows if _dec(row.get('shadow_high')) is not None]
+    supply_level = max(levels) if levels else None
+    supply_offset, supply_session = _first_hit(future3[:max_repair], lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_close')) is not None and supply_level is not None and _dec(state.get('comparable_close')) >= supply_level)
+    supply_all_mature = len(future3[:max_repair]) == max_repair and all(state.get('status') != 'NOT_MATURED' for state in future3[:max_repair])
+    supply_absorption = {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'supply_reference_level': str(supply_level) if supply_level is not None else None,
+        'first_absorption_session': supply_session,
+        'sessions_to_absorption': supply_offset,
+        'result': 'SUPPLY_ABSORBED' if supply_offset else 'SUPPLY_UNRESOLVED' if supply_level is not None and supply_all_mature else 'NOT_MATURED' if supply_level is not None else 'NOT_APPLICABLE',
+        'maturity_status': 'MATURE_VALID' if supply_offset or supply_all_mature else 'NOT_MATURED',
+        'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
+    }
+    return {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'next_session_reversal': reversal,
+        'repair_latency': repair_latency,
+        'time_to_new_high': time_to_new_high,
+        'breakout_hold': breakout_hold,
+        'breakout_failure': breakout_failure,
+        'supply_absorption': supply_absorption,
+        'failed_limit_up_repair': {'status': 'UNKNOWN', 'reason_codes': ['SAM_INTRADAY_LIMIT_UP_REPAIR_SEQUENCE_UNAVAILABLE']},
+        'temporal_leadership': {'status': 'UNKNOWN', 'reason_codes': ['SAM_INTRADAY_TIMESTAMPS_NOT_IN_MARKET_INPUT']},
+        'future_only_policy': 'APPEND_OUTCOME_REVISION_ONLY_DOES_NOT_REWRITE_SIGNAL',
+    }
+
+
 def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons=DEFAULT_RESEARCH_HORIZONS, _context=None):
     if evaluated_at.tzinfo is None:
         raise ValueError('evaluated_at requires timezone')
@@ -233,6 +406,15 @@ def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons
                          'reference_method': 'COMPARABLE_MARKED_PRICES_NOT_ASSUMED_FILLS',
                          'logical_label_id': 'strategy_label_' + digest(logical),
                          'signal_id': 'strategy_signal_' + digest({k: v for k, v in logical.items() if k != 'horizon'})}
+                if sid == STAGE_AWARE:
+                    setup_outcomes = _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, bars, evaluated_at, basis, signal_bar)
+                    value['setup_specific_outcomes'] = setup_outcomes
+                    value['next_session_reversal'] = setup_outcomes['next_session_reversal']
+                    value['repair_latency'] = setup_outcomes['repair_latency']
+                    value['time_to_new_high'] = setup_outcomes['time_to_new_high']
+                    value['breakout_hold'] = setup_outcomes['breakout_hold']
+                    value['breakout_failure'] = setup_outcomes['breakout_failure']
+                    value['supply_absorption'] = setup_outcomes['supply_absorption']
                 value['observation_id'] = 'strategy_outcome_' + digest(value)
                 values.append(value)
     return values

@@ -1,5 +1,7 @@
 strategy_id: STAGE_AWARE_MOMENTUM_V2
 version: 2
+spec_revision: R09_SEMANTIC_COMPLETION
+implementation_version: R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION
 specification_name: "StockRecommendation active stage-aware strong-stock core strategy"
 canonical_replaces: STAGE_AWARE_MOMENTUM_V1
 legacy_read_aliases:
@@ -43,6 +45,8 @@ research_seed_parameters:
     states: [STRONG_UPTREND, TREND_DETERIORATING, TREND_BROKEN, UNKNOWN]
     ma_windows: [5, 10, 20, 60, 120, 250]
     bullish_arrangement: [5, 10, 20, 60, 120, 250]
+    long_term_windows: [60, 120, 250]
+    short_term_windows: [5, 10, 20]
     close_minimums: [120, 250]
     slope_lookback_sessions: 5
     long_slope_min_inclusive: 0
@@ -62,6 +66,7 @@ research_seed_parameters:
       rs_market_1d_min_exclusive: 0
       rs_momentum_delta_min_exclusive: 0
       ret1_min_exclusive: 0
+      required_strength_momentum_state: RISING
       parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
     acceleration:
       high_level_ret5_min_inclusive: 0.15
@@ -72,6 +77,7 @@ research_seed_parameters:
       rising_rs1_min_exclusive: 0
       rising_rs3_min_exclusive: 0
       high_turnover_sessions_5_including_T_min_inclusive: 3
+      required_strength_momentum_state: RISING
       parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
     high_level_repair:
       background_ret5_min_inclusive: 0.10
@@ -104,6 +110,20 @@ research_seed_parameters:
       - BREAKOUT_FAILURE
       - TEMPORAL_LEADERSHIP
     signal_time_future_event_policy: TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE
+    setup_requirements:
+      START: []
+      ACCELERATION: []
+      HIGH_LEVEL_REPAIR: [INTRADAY_WEAK_TO_STRONG]
+      TREND_PULLBACK: []
+  strength_momentum:
+    calculation_id: EQUAL_WINDOW_RECENT_MINUS_PREVIOUS_3_SESSION_RETURN_AND_RS_V1
+    equal_window_sessions: 3
+    stable_band_fraction_inclusive: 0.001
+    high_level_state_components: [return_5d, return_10d, rs_5d]
+    momentum_state_components: [return_momentum, rs_momentum]
+    activity_momentum_components: [amount_change, turnover_change]
+    no_posthoc_window_selection: true
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
   price_strength_windows: [1, 3, 5, 10, 20]
   relative_strength:
     primary_market_benchmark: MAINBOARD_EQUAL_WEIGHT_PRICE_DIAGNOSTIC
@@ -132,8 +152,31 @@ research_seed_parameters:
     windows: [1, 3, 5]
     strong_gain_return_1d_min_inclusive: 0.07
     level_high_peer_ret5_min_inclusive: 0.08
+    level_low_peer_ret5_max_inclusive: 0
+    momentum_equal_window_sessions: 3
+    momentum_stable_band_fraction_inclusive: 0.001
     breadth_broad_up_fraction_min_inclusive: 0.60
+    breadth_narrow_up_fraction_max_inclusive: 0.40
     core_rank_percentile_min_inclusive: 0.67
+    leader_rank_percentile_min_inclusive: 0.90
+    first_tier_rank_percentile_min_inclusive: 0.50
+    setup_compatibility:
+      START:
+        supportive_level: [HIGH]
+        supportive_momentum: [STRENGTHENING]
+        negative_momentum: [WEAKENING]
+      ACCELERATION:
+        supportive_level: [HIGH]
+        supportive_momentum: [STRENGTHENING]
+        negative_momentum: [WEAKENING]
+      HIGH_LEVEL_REPAIR:
+        supportive_level: [HIGH]
+        supportive_momentum: [STRENGTHENING, STABLE, WEAKENING]
+        supportive_breadth: [BROAD, NORMAL, NARROW]
+      TREND_PULLBACK:
+        supportive_level: [HIGH]
+        supportive_momentum: [STRENGTHENING, STABLE]
+        negative_momentum: [WEAKENING]
     parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
   liquidity:
     descriptive_prior_amount_windows_excluding_T: [5, 10]
@@ -187,6 +230,18 @@ research_seed_parameters:
     setup_rank_features_are_saved: true
     display_order_not_investment_priority: true
     setup_order: [START, ACCELERATION, HIGH_LEVEL_REPAIR, TREND_PULLBACK]
+  tracking_outcomes:
+    version: V2_SETUP_SPECIFIC_OUTCOMES_V1
+    next_session_reversal:
+      definition: VERIFIED_CLOSE_LIMIT_UP_OR_T_PLUS_1_CLOSE_GT_T_HIGH
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+    repair_latency:
+      max_sessions: 3
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+    time_to_new_high:
+      max_sessions: 3
+      local_peak_lookback_sessions_excluding_T: 10
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
 review_policy:
   cadence_exchange_sessions: 5
   compare_strategies:

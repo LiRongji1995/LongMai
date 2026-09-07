@@ -15,7 +15,7 @@ from .contracts import MarketInput, digest
 from .request_queue import RequestQueue, RequestBudget
 from .provider_requests import execute_request, FIELD_VERSION
 
-PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R03_V1'
+PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R04_STAGE_AWARE_V2_READINESS'
 SH = ZoneInfo('Asia/Shanghai')
 
 
@@ -131,6 +131,27 @@ def published_outcome_demand(service, observation_date, sessions):
     return demand
 
 
+def stage_aware_history_sessions_required(*, planned_replay_signal_sessions=60):
+    """History needed before a V2 signal can honestly evaluate long trend.
+
+    This is data readiness math, not parameter search: MA250 plus slope lookback
+    are warm-up requirements, and the replay signal range is a bounded reporting
+    target.
+    """
+    try:
+        import yaml
+        config_path = Path(__file__).resolve().parents[2] / 'config' / 'stage_aware_momentum_v2.yaml'
+        config = yaml.safe_load(config_path.read_text(encoding='utf-8'))
+        seed = config['research_seed_parameters']
+        ma_required = max(seed['trend_state']['ma_windows']) + int(seed['trend_state']['slope_lookback_sessions'])
+        momentum_required = int(seed['strength_momentum']['equal_window_sessions']) * 2
+        price_required = max(seed['price_strength_windows'])
+        supply_required = int(seed['supply_pressure']['recent_window_sessions_including_T'])
+        return max(ma_required, momentum_required, price_required, supply_required) + planned_replay_signal_sessions
+    except Exception:
+        return 315
+
+
 def tushare_request_plan(day, sessions):
     """Registered optional enrichment; no token is ever a PV dependency."""
     selected=[s for s in sessions if s<=day][-22:]
@@ -199,7 +220,8 @@ class MainboardPipeline:
             if calendar_source != 'CAPTURED_PROVIDER_CALENDAR':
                 sessions = tuple(s for s in registered if s <= day)
             structure_start = sessions[max(0, len(sessions)-22)]
-            history_start = sessions[max(0, len(sessions)-251)]
+            stage_aware_history_sessions = stage_aware_history_sessions_required()
+            history_start = sessions[max(0, len(sessions)-stage_aware_history_sessions)]
             demand = published_outcome_demand(self.service, day, sessions)
             missing_listing=[]
             for r in initial:
@@ -215,7 +237,8 @@ class MainboardPipeline:
             missing_listing=sorted(set(missing_listing))
             plan = {'pipeline_version': PIPELINE_VERSION, 'captured_at': now.isoformat(), 'observation_date': str(day),
                     'master_instrument_ids': ids, 'master_observed_count': len(ids),
-                    'minimum_structure_sessions': 22, 'scoring_history_sessions': 251,
+                    'minimum_structure_sessions': 22, 'scoring_history_sessions': stage_aware_history_sessions,
+                    'scoring_history_basis': 'STAGE_AWARE_V2_MA250_PLUS_SLOPE_WARMUP_PLUS_60_SIGNAL_REPLAY_SESSIONS',
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
                     'initial_estimate': {'full_pool_structure_members': len(ids),
                         'full_pool_raw_daily_requests': sum(structure_start <= s <= day for s in sessions),

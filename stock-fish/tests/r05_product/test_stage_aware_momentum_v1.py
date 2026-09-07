@@ -208,9 +208,9 @@ def test_cross_theme_sector_and_funds_do_not_combine():
     row = _row(run_stage_aware_momentum(bundle, cutoff=cutoff))
 
     assert row["sector_status"] == "PASS"
-    assert row["funds_status"] == "FAIL"
-    assert row["same_theme_context_status"] == "FAIL"
-    assert "SAM_NO_CLASSIFIED_SECTOR_FUNDS_IN_WINDOW" in row["reason_codes"]
+    assert row["funds_status"] == "UNKNOWN"
+    assert row["same_theme_context_status"] == "UNKNOWN"
+    assert "SAM_FUNDS_NOT_CAPTURED_OR_COMPLETENESS_UNPROVEN" in row["reason_codes"]
 
 
 def test_funds_proxy_future_and_conflict_rows_remain_unknown():
@@ -270,8 +270,8 @@ def test_v2_does_not_publish_global_pv_score_ranking():
     bundle, cutoff = trend_bundle()
     result = run_stage_aware_momentum(bundle, cutoff=cutoff)
 
-    assert result["rank_semantics"] == "DETERMINISTIC_DISPLAY_ORDER_NOT_GLOBAL_SCORE"
-    assert result["tie_break"].startswith("setup_rank_features within setup")
+    assert result["rank_semantics"] == "SETUP_AND_DECISION_TIER_RESEARCH_ORDER_NOT_GLOBAL_SCORE"
+    assert result["tie_break"].startswith("setup_rank_features within decision tier and setup")
     assert result["full_eligible_pool_retained"] is True
 
 

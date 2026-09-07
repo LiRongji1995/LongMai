@@ -4,16 +4,18 @@
 
 ## 1. 文档身份、核验基础与版本
 
-**最后核对：2026-09-07，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知重构为主动核心 `STAGE_AWARE_MOMENTUM_V2`；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
+**最后核对：2026-09-07，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R09_SEMANTIC_COMPLETION`；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
 
 | 对象 | 核对基础及含义 |
 |---|---|
-| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮开始时 `main` 为 `c266f29 新增板块资金多头趋势研究臂` |
+| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮开始时 `main` 为 `53e6c5d 重构阶段感知核心策略 V2` |
 | 本轮核心版本 | `STAGE_AWARE_MOMENTUM_V2`；配置 [stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，说明 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)；V1 只读历史说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
 | 历史运行证据 | 旧 `D:/StockRecommendation` 服务与发布检出证据保留为历史核对材料；其 PID、端口和镜像身份是当时事实，使用前必须重新核对 |
-| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；本轮核心实现 `R08_STAGE_AWARE_MOMENTUM_V2`；新增初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
+| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；本轮核心实现 `R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION`，spec `R09_SEMANTIC_COMPLETION`；新增初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
 
 开发工作区、发布检出与运行进程分别核验。本次任务只提交当前授权文件，不覆盖私人数据库、缓存、报告或旧运行目录。正式 DAILY、旧 PV、旧焦点、DNA、THEME 的规则与历史结果保留；新增策略不以国芳集团或金健米业是否入选作为验收标准。
+
+本轮新增交付文档：[V2_SEMANTIC_COMPLETION_REPORT.md](V2_SEMANTIC_COMPLETION_REPORT.md)、[V2_DATA_READINESS.md](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT.md](V2_HISTORICAL_REPLAY_REPORT.md)、[V2_PROSPECTIVE_VALIDATION_PROTOCOL.md](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)、[V2_PROSPECTIVE_READINESS.md](V2_PROSPECTIVE_READINESS.md)。2026-09-07 盘后已实际补取 BaoStock 当日日线并组装 `PROSPECTIVE_CAPTURED` 输入：主板 9.7 bar 覆盖 4600 条，V2 eligible 3041，FOCUS 0，WATCH 40，REJECTED 2887，UNKNOWN 114；下一目标交易会话为 2026-09-08。该结果是研究队列，不是交易建议或市场优势证明。
 
 实验模块加载时检验批准配置的字节 SHA-256：`r05_strategy_experiments.yaml` 为 `8cd729cab31f80ec84d6486c733165360ba264fc3efb2d70c0c69f5a78148462`，`r05_completion_requirements.yaml` 为 `203325cad6cde76ca9399353af163e9b122b73b1ab2d3c8ecbfd1878fb3f5e11`。冻结 DAILY 配置为 `5863af482cc396a000477fdfcfe694aac162a935ece7fa11279a2e3ecc0376b6`。上游研究版本与批准文件锁见 [r05_source_lock.json](../config/r05_source_lock.json)。这些哈希标识内容，不是抵御具有完整本机写权限者的安全认证。
 
@@ -384,6 +386,8 @@ R05历史诊断包括全资格池及成交额强度Top5/10/20等同条件对照�
 POST返回202/job_id表示已接受，不代表完成。任务终态SUCCEEDED后仍核对业务status、覆盖、保存run；FAILED/CANCELLED/INTERRUPTED不算成功。只读历史和导出不调用LLM、不重算排名。同run的完整canonical排名是唯一权威，报告与Agent意见是派生材料，不新建平行“权威名单”。
 
 阶段感知强势股主动核心说明见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。本轮已接入 `STAGE_AWARE_MOMENTUM_V2`；旧PV/焦点、DAILY、DNA、THEME、`THEME_CAPITAL_TREND_V1` 不改名、不重写历史。2026-09-04 已保存真实输入重放时，V2 保留全 eligible 诊断，正式 FOCUS 只来自完整通过的决策链；缺题材、资金、市场覆盖或行为确认时进入 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE`，这是证据不足，不是证明市场中没有合格股票。国芳集团、金健米业只作为诊断样例，不作为入选验收目标。上一版板块资金趋势策略说明仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
+
+2026-09-07 R09 语义完成版的实际输入和派生报告在本机 `stock-fish/reports/codex/v2_semantic_completion_20260907_20260907T190336/`。数据 readiness 显示 MA5/MA10、RET1/3/5/10 与 RS1/3/5/10 在 eligible 池完整；MA20/60/120/250、长均线斜率、PIT 题材、资金、竞价与日内时间戳仍为 UNKNOWN/PARTIAL。历史 replay 报告登记了 60 个目标会话，但当前工作区没有可核验 `RECONSTRUCTED_HISTORICAL` MarketInput 或 source-policy supply 目录，不能用 9.7 晚到前瞻输入倒填历史，因此该段以唯一客观 blocker 关闭。
 
 ### 7.2 自动与需要触发的步骤
 
