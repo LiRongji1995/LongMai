@@ -1,0 +1,214 @@
+strategy_id: STAGE_AWARE_MOMENTUM_V2
+version: 2
+specification_name: "StockRecommendation active stage-aware strong-stock core strategy"
+canonical_replaces: STAGE_AWARE_MOMENTUM_V1
+legacy_read_aliases:
+  - STAGE_AWARE_MOMENTUM_V1
+parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+parameter_status_label_zh: "尚未验证"
+market_edge: NOT_ESTABLISHED
+traceability:
+  prior_core_strategy: STAGE_AWARE_MOMENTUM_V1
+  prior_core_strategy_status: FROZEN_FOR_HISTORICAL_REPLAY_AND_AUDIT
+  product_role: ACTIVE_DEFAULT_CORE_STRONG_STOCK_STRATEGY
+  preserves_existing_strategies:
+    - DAILY_V1
+    - PV_OBSERVATION_V1
+    - PV_FOCUS_PREVIEW_V0.1
+    - DNA_RERANK_V1
+    - THEME_CONTEXT_V1
+    - THEME_CAPITAL_TREND_V1
+  acceptance_policy: "Specific named stocks entering any list are not acceptance criteria."
+  setup_label_policy: "Setup labels are deterministic research classifications, not objective market facts."
+  ranking_policy: "Rank only within setup; any cross-setup order is deterministic display order, not a global investment score."
+hard_requirements:
+  qualified_universe:
+    exchanges: [SSE, SZSE]
+    board: MAIN
+    security_type: A_COMMON
+    exclude_boards: [STAR, CHINEXT, BJ]
+    exclude_security_types: [B_SHARE, FUND, BOND, OTHER]
+  liquidity_bottom:
+    amount_cny_min_inclusive: 500000000
+    turnover_fraction_min_inclusive: 0.07
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  funds_linkage:
+    required_grade: [STRONG, MODERATE]
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  final_decision_states: [FOCUS, WATCH, REJECTED, UNKNOWN]
+research_seed_parameters:
+  note: "These are implementation seed parameters for this version, not verified market rules."
+  parameter_status_label_zh: "尚未验证"
+  trend_state:
+    states: [STRONG_UPTREND, TREND_DETERIORATING, TREND_BROKEN, UNKNOWN]
+    ma_windows: [5, 10, 20, 60, 120, 250]
+    bullish_arrangement: [5, 10, 20, 60, 120, 250]
+    close_minimums: [120, 250]
+    slope_lookback_sessions: 5
+    long_slope_min_inclusive: 0
+    insufficient_long_window_policy: UNKNOWN
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  setups:
+    ids: [START, ACCELERATION, HIGH_LEVEL_REPAIR, TREND_PULLBACK]
+    legacy_aliases:
+      HIGH_LEVEL_DIVERGENCE: HIGH_LEVEL_REPAIR
+    display_order: [START, ACCELERATION, HIGH_LEVEL_REPAIR, TREND_PULLBACK]
+    start:
+      prior_state_window_sessions_excluding_T: 5
+      prior_ret5_max_inclusive: 0.08
+      prior_high_turnover_days_5_max_inclusive: 2
+      breakout_lookback_sessions_excluding_T: 5
+      amount_ratio_prior5_min_inclusive: 1.2
+      rs_market_1d_min_exclusive: 0
+      rs_momentum_delta_min_exclusive: 0
+      ret1_min_exclusive: 0
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+    acceleration:
+      high_level_ret5_min_inclusive: 0.15
+      high_level_ret10_min_inclusive: 0.25
+      high_level_rs5_min_exclusive: 0
+      rising_ret1_min_exclusive: 0
+      rising_ret3_min_exclusive: 0
+      rising_rs1_min_exclusive: 0
+      rising_rs3_min_exclusive: 0
+      high_turnover_sessions_5_including_T_min_inclusive: 3
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+    high_level_repair:
+      background_ret5_min_inclusive: 0.10
+      background_ret10_min_inclusive: 0.18
+      background_percentile10_min_inclusive: 80
+      high_activity_turnover_min_inclusive: 0.07
+      divergence_amplitude_min_inclusive: 0.07
+      divergence_low_return_max_inclusive: -0.04
+      repair_recovery_points_min_inclusive: 0.05
+      repair_clv_min_inclusive: 0.45
+      repair_today_rs_market_min_exclusive: 0
+      repair_close_return_min_exclusive: 0
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+    trend_pullback:
+      below_ma5_sessions_inclusive: [1, 3]
+      near_ma_5_10_20_fraction_inclusive: 0.03
+      amount_contraction_ratio_max_inclusive: 0.90
+      resilience_rs_market_1d_min_inclusive: 0
+      parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  behavioral_confirmation:
+    events:
+      - AUCTION_WEAK_TO_STRONG
+      - INTRADAY_WEAK_TO_STRONG
+      - NEXT_SESSION_REVERSAL
+      - REPAIR_LATENCY
+      - TIME_TO_NEW_HIGH
+      - FAILED_LIMIT_UP_REPAIR
+      - SUPPLY_ABSORPTION
+      - BREAKOUT_HOLD
+      - BREAKOUT_FAILURE
+      - TEMPORAL_LEADERSHIP
+    signal_time_future_event_policy: TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE
+  price_strength_windows: [1, 3, 5, 10, 20]
+  relative_strength:
+    primary_market_benchmark: MAINBOARD_EQUAL_WEIGHT_PRICE_DIAGNOSTIC
+    optional_market_benchmarks: [SSE_COMPOSITE, CSI300]
+    no_posthoc_benchmark_selection: true
+    windows: [1, 3, 5, 10]
+  market_context:
+    min_benchmark_coverage_fraction_inclusive: 0.60
+    min_limit_event_coverage_fraction_inclusive: 0.60
+    expansion_limit_count_min_inclusive: 15
+    expansion_max_height_min_inclusive: 3
+    divergence_touched_not_closed_count_min_inclusive: 10
+    states: [EXPANSION, DIVERGENCE, REPAIR, RETREAT, UNKNOWN]
+    setup_compatibility:
+      START: [EXPANSION, REPAIR, UNKNOWN]
+      ACCELERATION: [EXPANSION, REPAIR]
+      HIGH_LEVEL_REPAIR: [DIVERGENCE, REPAIR, EXPANSION, UNKNOWN]
+      TREND_PULLBACK: [EXPANSION, DIVERGENCE, REPAIR, RETREAT, UNKNOWN]
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  sector_evidence:
+    allowed_theme_types: [EVENT, INDUSTRY]
+    display_order: [theme_id_asc]
+    peer_excludes_self: true
+    min_other_valid_members_inclusive: 2
+    min_peer_return_coverage_fraction_inclusive: 0.60
+    windows: [1, 3, 5]
+    strong_gain_return_1d_min_inclusive: 0.07
+    level_high_peer_ret5_min_inclusive: 0.08
+    breadth_broad_up_fraction_min_inclusive: 0.60
+    core_rank_percentile_min_inclusive: 0.67
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  liquidity:
+    descriptive_prior_amount_windows_excluding_T: [5, 10]
+    descriptive_prior_turnover_windows_excluding_T: [5]
+    high_turnover_fraction_inclusive: 0.07
+  funds:
+    lookback_sessions_including_T: 5
+    recent_activity_sessions_for_strong: 3
+    recent_activity_sessions_for_moderate: 5
+    peers_exclude_self: true
+    classified_source_layers:
+      - PUBLIC_EXCHANGE_LHB
+      - EXCHANGE_TRADING_INFO
+      - SUPPLIER_CLASSIFIED_ACTIVE_SEAT
+      - SUPPLIER_CLASSIFIED_SEAT
+      - CLASSIFIED_ACTIVE_MONEY_SEAT
+    proxy_source_layers:
+      - CAPITAL_PROXY
+      - LARGE_ORDER_PROXY
+      - MAIN_NET_FLOW_PROXY
+    status_mapping: [CONFIRMED, SUPPORTIVE, MIXED, NEGATIVE, UNKNOWN]
+    grade_mapping:
+      STRONG:
+        capital_status: CONFIRMED
+        min_active_instruments_inclusive: 2
+        min_active_seats_inclusive: 2
+        min_dedup_buy_amount_cny_inclusive: 100000000
+        require_dedup_net_amount_positive: true
+        max_days_since_last_activity_inclusive: 3
+      MODERATE:
+        capital_status: SUPPORTIVE
+        min_active_instruments_inclusive: 1
+        min_active_seats_inclusive: 1
+        min_dedup_buy_amount_cny_inclusive: 20000000
+        require_dedup_net_amount_positive: true
+        max_days_since_last_activity_inclusive: 5
+      WEAK:
+        capital_status: NEGATIVE
+        fallback_when_classified_evidence_exists_but_not_moderate: true
+      UNKNOWN:
+        no_funds_data: true
+        proxy_only: true
+        conflict_or_overlapping_windows: true
+  supply_pressure:
+    recent_window_sessions_including_T: 5
+    long_upper_shadow_to_range_min_inclusive: 0.50
+    unreclaimed_recent_shadow_count_warning_min_inclusive: 2
+    parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+  ranking:
+    global_score_enabled: false
+    setup_rank_features_are_saved: true
+    display_order_not_investment_priority: true
+    setup_order: [START, ACCELERATION, HIGH_LEVEL_REPAIR, TREND_PULLBACK]
+review_policy:
+  cadence_exchange_sessions: 5
+  compare_strategies:
+    - PV_OBSERVATION_V1
+    - PV_FOCUS_PREVIEW_V0.1
+    - THEME_CAPITAL_TREND_V1
+    - STAGE_AWARE_MOMENTUM_V2
+  required_report_sections:
+    - phenomenon
+    - data
+    - cause_hypothesis
+    - counterexamples
+    - minimal_change_suggestion
+    - possible_new_errors
+    - followup_validation_plan
+ai_responsibilities:
+  allowed:
+    - explain_setup_and_evidence
+    - separate_facts_rule_calculation_judgment_unknowns
+    - explain_old_vs_new_without_rewriting_history
+    - identify_posthoc_risk
+  forbidden:
+    - alter_history_or_frozen_rules
+    - tune_thresholds_to_force_named_stock_selection
+    - claim_market_edge_without_review

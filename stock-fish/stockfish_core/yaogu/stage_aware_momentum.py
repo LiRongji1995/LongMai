@@ -1,8 +1,10 @@
-"""Stage-aware momentum research arm.
+"""Active stage-aware strong-stock core strategy.
 
-This is an additive research view.  It keeps the frozen PV/focus/DNA/theme
-rules intact and records stage diagnostics before any formal inclusion check.
-Seed thresholds in the config are explicitly unvalidated research parameters.
+Version 2 freezes the old additive STAGE_AWARE_MOMENTUM_V1 identity for
+historical replay and promotes the stage-aware semantics to the active core
+strategy.  The implementation records layered evidence first; FOCUS is only a
+final decision label after trend, setup, behavior, context and counter-evidence
+have all been evaluated without imputing UNKNOWN evidence.
 """
 from __future__ import annotations
 
@@ -17,24 +19,25 @@ from statistics import median
 import yaml
 
 from .contracts import MarketInput, digest
-from .events import TRUE, UNKNOWN, annotate_streaks
+from .events import FALSE, TRUE, UNKNOWN, annotate_streaks
 
 
 ROOT = Path(__file__).resolve().parents[2]
-CONFIG_PATH = ROOT / "config/stage_aware_momentum_v1.yaml"
+CONFIG_PATH = ROOT / "config/stage_aware_momentum_v2.yaml"
 CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
 
 STAGE_AWARE_ID = CONFIG["strategy_id"]
-IMPLEMENTATION_VERSION = "R07_STAGE_AWARE_MOMENTUM_V1"
+IMPLEMENTATION_VERSION = "R08_STAGE_AWARE_MOMENTUM_V2"
 PARAMETER_STATUS = CONFIG["parameter_status"]
 PARAMETER_STATUS_LABEL_ZH = CONFIG["parameter_status_label_zh"]
-STAGE_IDS = tuple(CONFIG["research_seed_parameters"]["stages"]["ids"])
-PRIMARY_STAGE_PRECEDENCE = tuple(CONFIG["research_seed_parameters"]["stages"]["primary_stage_precedence"])
+LEGACY_STAGE_AWARE_IDS = tuple(CONFIG.get("legacy_read_aliases", ()))
+STAGE_IDS = tuple(CONFIG["research_seed_parameters"]["setups"]["ids"])
+PRIMARY_STAGE_PRECEDENCE = tuple(CONFIG["research_seed_parameters"]["setups"]["display_order"])
 PRICE_WINDOWS = tuple(CONFIG["research_seed_parameters"]["price_strength_windows"])
 RS_WINDOWS = tuple(CONFIG["research_seed_parameters"]["relative_strength"]["windows"])
 SECTOR_WINDOWS = tuple(CONFIG["research_seed_parameters"]["sector_evidence"]["windows"])
-MA_WINDOWS = tuple(CONFIG["research_seed_parameters"]["stages"]["trend_pullback"]["ma_windows"])
-LONG_CLOSE_WINDOWS = tuple(CONFIG["research_seed_parameters"]["stages"]["trend_pullback"]["close_minimums"])
+MA_WINDOWS = tuple(CONFIG["research_seed_parameters"]["trend_state"]["ma_windows"])
+LONG_CLOSE_WINDOWS = tuple(CONFIG["research_seed_parameters"]["trend_state"]["close_minimums"])
 
 
 def _se():
@@ -231,15 +234,20 @@ def _return_map(ctx, iid, end_index, windows=PRICE_WINDOWS):
 
 def _market_benchmarks(ctx, end_index):
     primary = CONFIG["research_seed_parameters"]["relative_strength"]["primary_market_benchmark"]
+    coverage_min = Fraction(str(CONFIG["research_seed_parameters"]["market_context"]["min_benchmark_coverage_fraction_inclusive"]))
     values = {}
     for window in set(PRICE_WINDOWS) | set(RS_WINDOWS):
         returns = [value for iid in ctx.eligible_ids if (value := _price_return(ctx, iid, end_index, window)) is not None]
+        coverage = Fraction(len(returns), len(ctx.eligible_ids)) if ctx.eligible_ids else Fraction(0)
+        status = "COMPLETE" if returns and coverage >= coverage_min else "INSUFFICIENT_COVERAGE" if returns else "UNKNOWN"
         values[str(window)] = {
-            "status": "COMPLETE" if returns else "UNKNOWN",
+            "status": status,
             "benchmark_return": sum(returns, Fraction(0)) / len(returns) if returns else None,
-            "observed_count": len(returns),
-            "eligible_count": len(ctx.eligible_ids),
-            "coverage": Fraction(len(returns), len(ctx.eligible_ids)) if ctx.eligible_ids else None,
+            "valid_count": len(returns),
+            "expected_count": len(ctx.eligible_ids),
+            "coverage": coverage,
+            "membership_basis": "DATED_ELIGIBLE_MAINBOARD_A_COMMON_AT_OBSERVATION_DATE",
+            "reason_codes": [] if status == "COMPLETE" else ["SAM_MARKET_BENCHMARK_COVERAGE_INSUFFICIENT"] if returns else ["SAM_MARKET_BENCHMARK_RETURNS_UNAVAILABLE"],
         }
     optional = {
         key: {"status": "UNKNOWN", "reason_codes": ["SAM_INDEX_BARS_NOT_IN_MARKET_INPUT"]}
@@ -252,9 +260,15 @@ def _market_benchmarks(ctx, end_index):
                 str(window): {
                     "status": row["status"],
                     "return_pct": _pct(row["benchmark_return"]),
-                    "observed_count": row["observed_count"],
-                    "eligible_count": row["eligible_count"],
+                    "observed_count": row["valid_count"],
+                    "valid_count": row["valid_count"],
+                    "expected_count": row["expected_count"],
+                    "eligible_count": row["expected_count"],
                     "coverage": _number(row["coverage"]),
+                    "membership_basis": row["membership_basis"],
+                    "observation_date": ctx.observation_date,
+                    "decision_cutoff": ctx.cutoff.isoformat(),
+                    "reason_codes": row["reason_codes"],
                 }
                 for window, row in values.items()
             },
@@ -268,13 +282,16 @@ def _relative_strength(ctx, iid, end_index, return_values, market):
     windows = {}
     for window in RS_WINDOWS:
         stock_ret = return_values.get(str(window))
-        benchmark = market["_primary_values"].get(str(window), {}).get("benchmark_return")
+        benchmark_row = market["_primary_values"].get(str(window), {})
+        benchmark = benchmark_row.get("benchmark_return") if benchmark_row.get("status") == "COMPLETE" else None
         rs = stock_ret - benchmark if stock_ret is not None and benchmark is not None else None
         windows[str(window)] = {
             "stock_return_pct": _pct(stock_ret),
-            "benchmark_return_pct": _pct(benchmark),
+            "benchmark_return_pct": _pct(benchmark_row.get("benchmark_return")),
             "rs_market_pct": _pct(rs),
             "status": "PASS" if rs is not None and rs > 0 else "FAIL" if rs is not None else "UNKNOWN",
+            "benchmark_status": benchmark_row.get("status", "UNKNOWN"),
+            "benchmark_coverage": _number(benchmark_row.get("coverage")),
         }
     statuses = [row["status"] for row in windows.values()]
     status = "PASS" if any(status == "PASS" for status in statuses) else "UNKNOWN" if any(status == "UNKNOWN" for status in statuses) else "FAIL"
@@ -347,6 +364,13 @@ def _prior_values(ctx, iid, end_index, count, getter):
     return values if len(values) == count and all(value is not None for value in values) else None
 
 
+def _recent_values_including_t(ctx, iid, end_index, count, getter):
+    if end_index is None or end_index - count + 1 < 0:
+        return None
+    values = [getter(_bar(ctx, ctx.sessions[index], iid)) for index in range(end_index - count + 1, end_index + 1)]
+    return values if len(values) == count and all(value is not None for value in values) else None
+
+
 def _liquidity(ctx, iid, end_index):
     current = _bar(ctx, ctx.observation_date, iid)
     amount = _amount_fraction(current)
@@ -368,11 +392,11 @@ def _liquidity(ctx, iid, end_index):
     prior5_amount = _prior_values(ctx, iid, end_index, 5, _amount_fraction)
     prior10_amount = _prior_values(ctx, iid, end_index, 10, _amount_fraction)
     prior5_turnover = _prior_values(ctx, iid, end_index, 5, _turnover_fraction)
+    recent5_turnover = _recent_values_including_t(ctx, iid, end_index, 5, _turnover_fraction)
     a = amount * len(prior5_amount) / sum(prior5_amount, Fraction(0)) if amount is not None and prior5_amount and sum(prior5_amount, Fraction(0)) > 0 else None
     high_turnover_threshold = Fraction(str(CONFIG["research_seed_parameters"]["liquidity"]["high_turnover_fraction_inclusive"]))
-    high_turnover_days_5 = sum(value >= high_turnover_threshold for value in prior5_turnover or [])
-    if turnover is not None and turnover >= high_turnover_threshold:
-        high_turnover_days_5 += 1
+    high_turnover_days_prior5 = sum(value >= high_turnover_threshold for value in prior5_turnover or []) if prior5_turnover else None
+    high_turnover_days_recent5 = sum(value >= high_turnover_threshold for value in recent5_turnover or []) if recent5_turnover else None
     return _condition(
         status,
         reasons,
@@ -386,13 +410,56 @@ def _liquidity(ctx, iid, end_index):
             "prior5_amount_max_cny": _money(max(prior5_amount)) if prior5_amount else None,
             "prior5_turnover_min": _number(min(prior5_turnover)) if prior5_turnover else None,
             "prior5_turnover_max": _number(max(prior5_turnover)) if prior5_turnover else None,
-            "high_turnover_days_5_including_today": high_turnover_days_5 if prior5_turnover else None,
+            "high_turnover_days_5_excluding_T": high_turnover_days_prior5,
+            "high_turnover_days_5_including_T": high_turnover_days_recent5,
+            "high_turnover_window_policy": {
+                "recent_5_including_T": "sessions[end_index-4:end_index+1]",
+                "prior_5_excluding_T": "sessions[end_index-5:end_index]",
+            },
         },
     )
 
 
 def _ma_reason(reason):
     return reason.replace("TCT_", "SAM_") if reason else reason
+
+
+def _known_limit_flag(value):
+    return value in (TRUE, FALSE)
+
+
+def _rs_exact(rs_market, window):
+    row = (rs_market.get("windows") or {}).get(str(window), {})
+    value = _frac(row.get("rs_market_pct"))
+    return value / 100 if value is not None else None
+
+
+def _sector_rs_exact(sector_candidates, window):
+    values = []
+    for row in sector_candidates:
+        if row.get("status") != "PASS":
+            continue
+        value = _frac(((row.get("windows") or {}).get(str(window)) or {}).get("rs_sector_pct"))
+        if value is not None:
+            values.append(value / 100)
+    return max(values) if values else None
+
+
+def _close_value(ctx, iid, index):
+    if index is None or index < 0 or index >= len(ctx.sessions):
+        return None
+    return _close_fraction(_bar(ctx, ctx.sessions[index], iid))
+
+
+def _prior_window_return(ctx, iid, end_index, lookback):
+    return _window_return(ctx, iid, end_index - 1, lookback) if end_index is not None else None
+
+
+def _prior_close_high(ctx, iid, end_index, lookback):
+    if end_index is None or end_index - lookback < 0:
+        return None
+    closes = [_close_value(ctx, iid, index) for index in range(end_index - lookback, end_index)]
+    return max(closes) if len(closes) == lookback and all(value is not None for value in closes) else None
 
 
 def _trend(ctx, iid, end_index):
@@ -407,21 +474,38 @@ def _trend(ctx, iid, end_index):
         str(window): _number((close - value) / value) if close is not None and value is not None and value > 0 else None
         for window, value in values.items()
     }
+    slope_lookback = CONFIG["research_seed_parameters"]["trend_state"]["slope_lookback_sessions"]
+    slopes, slope_reasons = {}, []
+    for window in (20, 60, 120, 250):
+        current_ma = values.get(window)
+        past_ma, reason = _ma_value(ctx, iid, end_index - slope_lookback, window) if end_index is not None else (None, f"TCT_MA{window}_SLOPE_WINDOW_UNAVAILABLE")
+        if reason:
+            slope_reasons.append(_ma_reason(reason).replace(f"SAM_MA{window}_", f"SAM_MA{window}_SLOPE_"))
+        slopes[str(window)] = _number((current_ma - past_ma) / past_ma) if current_ma is not None and past_ma is not None and past_ma > 0 else None
     if reasons:
         return _condition("UNKNOWN", sorted(set(reasons)), details={
+            "trend_state": "UNKNOWN",
             "ma_values": ma_values,
             "dist_ma": distances,
-            "ma250_policy": CONFIG["research_seed_parameters"]["stages"]["trend_pullback"]["insufficient_ma250_policy"],
+            "ma_slopes": slopes,
+            "ma250_policy": CONFIG["research_seed_parameters"]["trend_state"]["insufficient_long_window_policy"],
             "pullback_days_below_ma5": None,
         })
     ordered = [values[window] for window in MA_WINDOWS]
-    fail = []
+    broken, deteriorating = [], []
     bullish = all(left > right for left, right in zip(ordered, ordered[1:]))
     if not bullish:
-        fail.append("SAM_MA_BULLISH_ARRANGEMENT_FAIL")
+        deteriorating.append("SAM_MA_BULLISH_ARRANGEMENT_FAIL")
     for window in LONG_CLOSE_WINDOWS:
         if close < values[window]:
-            fail.append(f"SAM_CLOSE_BELOW_MA{window}")
+            broken.append(f"SAM_CLOSE_BELOW_MA{window}")
+    long_slope_min = Fraction(str(CONFIG["research_seed_parameters"]["trend_state"]["long_slope_min_inclusive"]))
+    for window, slope in slopes.items():
+        if slope is None:
+            slope_reasons.append(f"SAM_MA{window}_SLOPE_UNAVAILABLE")
+            continue
+        if Fraction(str(slope)) < long_slope_min:
+            deteriorating.append(f"SAM_MA{window}_SLOPE_NEGATIVE")
 
     pullback_days, pullback_unknown = 0, []
     for index in range(end_index, -1, -1):
@@ -439,15 +523,29 @@ def _trend(ctx, iid, end_index):
         for window in (5, 10, 20)
         if values[window] is not None and values[window] > 0
     }
-    matched_ma, matched_distance = min(near_values.items(), key=lambda item: (item[1], item[0]))
-    status = "FAIL" if fail else "UNKNOWN" if pullback_unknown else "PASS"
-    return _condition(status, fail or pullback_unknown, details={
+    matched_ma, matched_distance = min(near_values.items(), key=lambda item: (item[1], item[0])) if near_values else (None, None)
+    if slope_reasons or pullback_unknown:
+        return _condition("UNKNOWN", sorted(set(slope_reasons + pullback_unknown)), details={
+            "trend_state": "UNKNOWN",
+            "ma_values": ma_values,
+            "dist_ma": distances,
+            "ma_slopes": slopes,
+            "bullish_arrangement": bullish,
+            "pullback_days_below_ma5": pullback_days,
+            "matched_ma": matched_ma,
+            "matched_ma_distance": _number(matched_distance) if matched_distance is not None else None,
+        })
+    trend_state = "TREND_BROKEN" if broken else "TREND_DETERIORATING" if deteriorating else "STRONG_UPTREND"
+    status = "PASS" if trend_state == "STRONG_UPTREND" else "FAIL"
+    return _condition(status, broken or deteriorating, details={
+        "trend_state": trend_state,
         "ma_values": ma_values,
         "dist_ma": distances,
+        "ma_slopes": slopes,
         "bullish_arrangement": bullish,
         "pullback_days_below_ma5": pullback_days,
         "matched_ma": matched_ma,
-        "matched_ma_distance": _number(matched_distance),
+        "matched_ma_distance": _number(matched_distance) if matched_distance is not None else None,
     })
 
 
@@ -456,6 +554,9 @@ def _market_position_context(ctx, end_index):
     market_heights = []
     close_limit_count = 0
     touched_not_closed_count = 0
+    close_limit_down_count = 0
+    known_count = 0
+    unknown_count = 0
     if end_index is not None:
         for candidate in ctx.eligible_ids:
             cevents = [
@@ -466,18 +567,57 @@ def _market_position_context(ctx, end_index):
             if not cann:
                 continue
             event = cann[-1]
+            known_current = (
+                _known_limit_flag(event.close_limit_up)
+                and _known_limit_flag(event.touched_limit_up)
+                and _known_limit_flag(event.touched_not_closed)
+                and _known_limit_flag(event.close_limit_down)
+            )
+            known_count += int(known_current)
+            unknown_count += int(not known_current)
             instrument_limits[candidate] = {
                 "close_limit_up": event.close_limit_up,
                 "touched_limit_up": event.touched_limit_up,
                 "touched_not_closed": event.touched_not_closed,
+                "close_limit_down": event.close_limit_down,
                 "streak_exchange": event.streak_exchange,
                 "streak_lower_bound": event.streak_lower_bound,
                 "streak_quality": event.streak_quality,
+                "event_quality": event.quality,
+                "known_current_limit_event": known_current,
             }
+            if not known_current:
+                continue
             close_limit_count += event.close_limit_up == TRUE
             touched_not_closed_count += event.touched_not_closed == TRUE
+            close_limit_down_count += event.close_limit_down == TRUE
             if event.close_limit_up == TRUE and event.streak_exchange is not None:
                 market_heights.append(event.streak_exchange)
+    expected = len(ctx.eligible_ids)
+    coverage = Fraction(known_count, expected) if expected else Fraction(0)
+    seed = CONFIG["research_seed_parameters"]["market_context"]
+    coverage_min = Fraction(str(seed["min_limit_event_coverage_fraction_inclusive"]))
+    max_height = max(market_heights) if market_heights else None
+    if expected and coverage < coverage_min:
+        ecosystem_state = "UNKNOWN"
+        status = "UNKNOWN"
+        reasons = ["SAM_MARKET_LIMIT_EVENT_COVERAGE_INSUFFICIENT"]
+    elif close_limit_count >= seed["expansion_limit_count_min_inclusive"] or (max_height is not None and max_height >= seed["expansion_max_height_min_inclusive"]):
+        ecosystem_state = "EXPANSION"
+        status = "PASS"
+        reasons = []
+    elif close_limit_down_count > 0 or touched_not_closed_count >= seed["divergence_touched_not_closed_count_min_inclusive"]:
+        ecosystem_state = "DIVERGENCE"
+        status = "PASS"
+        reasons = []
+    elif close_limit_count > 0 or touched_not_closed_count > 0:
+        ecosystem_state = "REPAIR"
+        status = "PASS"
+        reasons = []
+    else:
+        ecosystem_state = "RETREAT"
+        status = "PASS"
+        reasons = []
     return {
         "instrument_limits": instrument_limits,
         "return_populations": {
@@ -487,13 +627,17 @@ def _market_position_context(ctx, end_index):
         "market_width": {
             "close_limit_count": close_limit_count,
             "touched_not_closed_count": touched_not_closed_count,
-            "verified_max_height": max(market_heights) if market_heights else None,
+            "close_limit_down_count": close_limit_down_count,
+            "verified_max_height": max_height,
+            "known_limit_event_count": known_count,
+            "unknown_limit_event_count": unknown_count,
+            "expected_limit_event_count": expected,
+            "limit_event_coverage": _number(coverage),
         },
-        "status_label": (
-            "HIGH" if close_limit_count >= 50 or (market_heights and max(market_heights) >= 5)
-            else "MEDIUM" if close_limit_count >= 15 or (market_heights and max(market_heights) >= 3)
-            else "LOW"
-        ),
+        "status": status,
+        "reason_codes": reasons,
+        "ecosystem_state": ecosystem_state,
+        "status_label": ecosystem_state,
     }
 
 
@@ -509,13 +653,19 @@ def _limit_market_status(ctx, iid, end_index, return_values, market_position):
             "close_limit_up": current.get("close_limit_up") if current else UNKNOWN,
             "touched_limit_up": current.get("touched_limit_up") if current else UNKNOWN,
             "touched_not_closed": current.get("touched_not_closed") if current else UNKNOWN,
+            "close_limit_down": current.get("close_limit_down") if current else UNKNOWN,
             "streak_exchange": current.get("streak_exchange") if current else None,
             "streak_lower_bound": current.get("streak_lower_bound") if current else None,
             "streak_quality": current.get("streak_quality") if current else "UNKNOWN",
+            "event_quality": current.get("event_quality") if current else "UNKNOWN",
+            "known_current_limit_event": current.get("known_current_limit_event") if current else False,
         },
         "market_width": market_position["market_width"],
         "return_percentiles": percentiles,
         "status_label": market_position["status_label"],
+        "status": market_position["status"],
+        "ecosystem_state": market_position["ecosystem_state"],
+        "reason_codes": market_position["reason_codes"],
         "status_label_policy": "DESCRIPTIVE_ONLY_WITH_VISIBLE_LIMIT_EVIDENCE",
     }
 
@@ -569,6 +719,18 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
             state = "FADE"
         elif stock_ret_1 is not None and stock_ret_1 > peer_mean_1:
             state = "REPAIR"
+    ret5 = return_values.get("5")
+    peer_ret5 = [value for peer in peers if (value := _price_return(ctx, peer, end_index, 5)) is not None]
+    stock_level = "HIGH" if ret5 is not None and ret5 >= Fraction(str(seed["level_high_peer_ret5_min_inclusive"])) else "LOW" if ret5 is not None else "UNKNOWN"
+    peer_breadth = Fraction(sum(value > 0 for value in current_peer_returns), len(current_peer_returns)) if current_peer_returns else None
+    breadth_state = "BROAD" if peer_breadth is not None and peer_breadth >= Fraction(str(seed["breadth_broad_up_fraction_min_inclusive"])) else "NARROW" if peer_breadth is not None else "UNKNOWN"
+    if peer_ret5 and ret5 is not None:
+        role_percentile = percentile_rank_midpoint(ret5, peer_ret5 + [ret5])
+        role_threshold = float(seed["core_rank_percentile_min_inclusive"]) * 100
+        stock_role = "CORE" if role_percentile is not None and role_percentile >= role_threshold else "FOLLOWER"
+    else:
+        role_percentile = None
+        stock_role = "UNKNOWN"
     status = "PASS"
     reasons = []
     if expected < seed["min_other_valid_members_inclusive"]:
@@ -589,6 +751,10 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
         "member_count": len(members),
         "peer_expected": expected,
         "day_state": state,
+        "level_state": stock_level,
+        "breadth_state": breadth_state,
+        "stock_role": stock_role,
+        "stock_role_percentile_5d": role_percentile,
         "strong_gain_count_1d": sum(value >= strong_gain for value in current_peer_returns),
         "close_limit_count_1d": close_limit_count,
         "windows": windows,
@@ -604,10 +770,11 @@ def _sector(ctx, iid, visible_themes, end_index, return_values):
     candidates.sort(key=lambda row: row["theme_id"])
     if not candidates:
         if ctx.bundle.themes:
-            return _condition("FAIL", ["SAM_NO_AUTHORIZED_SECTOR_LINKAGE"], details={"primary_theme_id": None}), []
+            return _condition("UNKNOWN", ["SAM_NO_VISIBLE_AUTHORIZED_SECTOR_LINKAGE"], details={"primary_theme_id": None}), []
         return _condition("UNKNOWN", ["SAM_SECTOR_DATA_UNAVAILABLE"], details={"primary_theme_id": None}), []
-    if any(row["status"] == "PASS" for row in candidates):
-        return _condition("PASS", details={"primary_theme_id": candidates[0]["theme_id"], "primary_theme_order": "theme_id_asc"}), candidates
+    passing = [row for row in candidates if row["status"] == "PASS"]
+    if passing:
+        return _condition("PASS", details={"primary_theme_id": passing[0]["theme_id"], "primary_theme_order": "first_passing_theme_id_asc"}), candidates
     status = "UNKNOWN" if any(row["status"] == "UNKNOWN" for row in candidates) else "FAIL"
     reasons = sorted({reason for row in candidates for reason in row.get("reason_codes", [])})
     return _condition(status, reasons, details={"primary_theme_id": candidates[0]["theme_id"], "primary_theme_order": "theme_id_asc"}), candidates
@@ -617,9 +784,10 @@ def _classified_capital(row):
     seed = CONFIG["research_seed_parameters"]["funds"]
     layer = str(row.get("source_layer") or row.get("evidence_layer") or "").upper()
     classification = str(row.get("classification") or "").upper()
+    if layer in set(seed["proxy_source_layers"]):
+        return False
     return (
         layer in set(seed["classified_source_layers"])
-        or row.get("classified_active") is True
         or ("ACTIVE" in classification and ("SEAT" in classification or "HOT_MONEY" in classification))
     )
 
@@ -633,25 +801,50 @@ def _visible_theme_funds(ctx, iid, theme, end_index):
     seed = CONFIG["research_seed_parameters"]["funds"]
     sessions_5 = [
         date.fromisoformat(day)
-        for day in ctx.sessions[max(0, end_index - seed["lookback_sessions"] + 1) : end_index + 1]
+        for day in ctx.sessions[max(0, end_index - seed["lookback_sessions_including_T"] + 1) : end_index + 1]
     ] if end_index is not None else []
     session_set = {str(day) for day in sessions_5}
+    all_sessions = {date.fromisoformat(str(day)) for day in ctx.sessions}
+    observation = date.fromisoformat(ctx.observation_date)
     peers = set(theme.get("member_ids") or []) & set(ctx.eligible_ids)
     if seed.get("peers_exclude_self", True):
         peers.discard(iid)
-    visible = [
-        dict(row)
-        for row in ctx.bundle.funds
-        if _visible_fund(row, ctx.cutoff, ctx.bundle.coverage_type)
-        and str(row.get("theme_id")) == str(theme.get("theme_id"))
-        and str(row.get("instrument_id")) in peers
-        and str(_fund_date(row.get("session") or row.get("trade_date") or row.get("event_session"))) in session_set
-    ]
-    return visible, sessions_5
+    visible, rejected = [], []
+    for original in ctx.bundle.funds:
+        row = dict(original)
+        if str(row.get("theme_id")) != str(theme.get("theme_id")):
+            continue
+        row_iid = str(row.get("instrument_id"))
+        if row_iid not in peers:
+            continue
+        session = _fund_date(row.get("session") or row.get("trade_date") or row.get("event_session"))
+        if session is None or str(session) not in session_set:
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": ["SAM_FUNDS_SESSION_OUTSIDE_LOOKBACK_OR_INVALID"]})
+            continue
+        window = _fund_window(row)
+        if window is None or window[0] is None or window[1] is None:
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": ["SAM_FUNDS_WINDOW_UNAVAILABLE_OR_INVALID"]})
+            continue
+        if window[1] > observation:
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": ["SAM_FUNDS_FUTURE_WINDOW_END"]})
+            continue
+        if window[0] not in all_sessions or window[1] not in all_sessions or not window[0] <= session <= window[1]:
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": ["SAM_FUNDS_WINDOW_NOT_ALIGNED_TO_EXCHANGE_SESSIONS"]})
+            continue
+        proof = ctx.resolver.resolve(row, instrument_id=row_iid, session=session, require_session=True)
+        if not proof.allowed:
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": list(proof.reason_codes)})
+            continue
+        if not _visible_fund(row, ctx.cutoff, ctx.bundle.coverage_type):
+            rejected.append({"theme_id": theme.get("theme_id"), "instrument_id": row_iid, "reason_codes": ["SAM_FUNDS_ROW_CLOCK_NOT_VISIBLE"]})
+            continue
+        row["_source_resolution"] = {"source_ids": list(proof.source_ids), "reconstruction_used": proof.reconstruction_used}
+        visible.append(row)
+    return visible, sessions_5, rejected
 
 
 def _dedupe_funds(rows):
-    deduped, seen = [], set()
+    deduped, by_key = [], defaultdict(list)
     for row in rows:
         key = str(row.get("dedupe_key") or (
             str(row.get("instrument_id")),
@@ -662,12 +855,33 @@ def _dedupe_funds(rows):
             str(row.get("window_end") or ""),
             str(row.get("source_layer") or ""),
         ))
-        if key in seen:
-            continue
-        seen.add(key)
         row["_dedupe_key"] = key
-        deduped.append(row)
-    return deduped
+        by_key[key].append(row)
+    for copies in by_key.values():
+        fingerprints = {
+            digest({
+                "instrument_id": str(row.get("instrument_id")),
+                "theme_id": str(row.get("theme_id")),
+                "session": str(_fund_date(row.get("session") or row.get("trade_date") or row.get("event_session"))),
+                "window_start": str(_fund_date(row.get("window_start") or row.get("start_session") or row.get("session"))),
+                "window_end": str(_fund_date(row.get("window_end") or row.get("end_session") or row.get("session"))),
+                "seat_id": str(row.get("seat_id") or ""),
+                "seat_name": str(row.get("seat_name") or ""),
+                "source_id": str(row.get("source_id") or ""),
+                "buy_amount_cny": str(_as_decimal(row.get("buy_amount_cny"))),
+                "sell_amount_cny": str(_as_decimal(row.get("sell_amount_cny"))),
+                "net_amount_cny": str(_as_decimal(row.get("net_amount_cny"))),
+                "source_layer": str(row.get("source_layer") or row.get("evidence_layer") or ""),
+                "classification": str(row.get("classification") or ""),
+                "source_refs": sorted(row.get("source_refs") or []),
+            })
+            for row in copies
+        }
+        if len(fingerprints) > 1:
+            return [], "SAM_FUNDS_DISCLOSURE_KEY_CONFLICT"
+        deduped.append(copies[0])
+    deduped.sort(key=lambda row: row["_dedupe_key"])
+    return deduped, None
 
 
 def _overlap_risk(rows):
@@ -710,21 +924,36 @@ def _grade_funds(metrics, sessions):
 def _funds_for_theme(ctx, iid, theme, end_index):
     if not ctx.bundle.funds:
         return _condition("UNKNOWN", ["SAM_FUNDS_DATA_UNAVAILABLE"], details={"theme_id": theme.get("theme_id"), "grade": "UNKNOWN"}), {}
-    visible, sessions = _visible_theme_funds(ctx, iid, theme, end_index)
-    classified = _dedupe_funds([row for row in visible if _classified_capital(row)])
+    visible, sessions, rejected = _visible_theme_funds(ctx, iid, theme, end_index)
+    classified, conflict_reason = _dedupe_funds([row for row in visible if _classified_capital(row)])
     proxy = [row for row in visible if _proxy_capital(row)]
-    if not classified:
-        reason = "SAM_FUNDS_PROXY_ONLY_PENDING_VERIFICATION" if proxy else "SAM_NO_CLASSIFIED_SECTOR_FUNDS_IN_WINDOW"
-        return _condition("UNKNOWN", [reason], details={"theme_id": theme.get("theme_id"), "grade": "UNKNOWN"}), {
+    if conflict_reason:
+        return _condition("UNKNOWN", [conflict_reason], details={"theme_id": theme.get("theme_id"), "grade": "UNKNOWN", "rejected_funds": rejected}), {
             "theme_id": theme.get("theme_id"),
             "classified_events": 0,
             "proxy_events": len(proxy),
+            "rejected_events": len(rejected),
+        }
+    if not classified:
+        reason = (
+            "SAM_FUNDS_PROXY_ONLY_PENDING_VERIFICATION" if proxy else
+            "SAM_FUNDS_EVIDENCE_REJECTED_OR_UNVERIFIED" if rejected else
+            "SAM_NO_CLASSIFIED_SECTOR_FUNDS_IN_WINDOW"
+        )
+        status = "UNKNOWN" if proxy or rejected else "FAIL"
+        grade = "UNKNOWN" if status == "UNKNOWN" else "WEAK"
+        return _condition(status, [reason], details={"theme_id": theme.get("theme_id"), "grade": grade, "rejected_funds": rejected}), {
+            "theme_id": theme.get("theme_id"),
+            "classified_events": 0,
+            "proxy_events": len(proxy),
+            "rejected_events": len(rejected),
         }
     overlap, overlap_reason = _overlap_risk(classified)
     if overlap:
         return _condition("UNKNOWN", [overlap_reason], details={"theme_id": theme.get("theme_id"), "grade": "UNKNOWN"}), {
             "theme_id": theme.get("theme_id"),
             "classified_events": len(classified),
+            "rejected_events": len(rejected),
             "overlapping_window_risk": True,
         }
     total_buy, total_sell, total_net = Decimal(0), Decimal(0), Decimal(0)
@@ -755,11 +984,14 @@ def _funds_for_theme(ctx, iid, theme, end_index):
             "sell_amount_cny": _money(sell),
             "net_amount_cny": _money(net),
             "source_layer": row.get("source_layer") or row.get("evidence_layer"),
+            "source_refs": sorted(row.get("source_refs") or []),
+            "source_resolution": row.get("_source_resolution"),
         })
     metrics = {
         "theme_id": theme.get("theme_id"),
         "classified_events": len(classified),
         "proxy_events": len(proxy),
+        "rejected_events": len(rejected),
         "active_instrument_count": len(active_instruments),
         "active_seat_count": len(active_seats),
         "dedup_buy_amount_cny": _money(total_buy),
@@ -780,11 +1012,12 @@ def _funds_for_theme(ctx, iid, theme, end_index):
 
 
 def _funds(ctx, iid, visible_themes, sector_candidates, end_index):
-    if not sector_candidates:
+    passing_sectors = [row for row in sector_candidates if row.get("status") == "PASS"]
+    if not passing_sectors:
         return _condition("UNKNOWN", ["SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE"], details={"grade": "UNKNOWN"}), []
     theme_by_id = {row["theme_id"]: row for row in visible_themes}
     rows = []
-    for sector in sector_candidates:
+    for sector in passing_sectors:
         theme = theme_by_id.get(sector["theme_id"])
         if theme is None:
             continue
@@ -803,6 +1036,8 @@ def _funds(ctx, iid, visible_themes, sector_candidates, end_index):
 
 def _sector_rs_support(sector_candidates):
     for row in sector_candidates:
+        if row.get("status") != "PASS":
+            continue
         for window in row.get("windows", {}).values():
             value = _frac(window.get("rs_sector_pct"))
             if value is not None and value > 0:
@@ -810,138 +1045,278 @@ def _sector_rs_support(sector_candidates):
     return False
 
 
-def _stage_start(return_values, liquidity):
-    seed = CONFIG["research_seed_parameters"]["stages"]["start"]
+def _stage_start(ctx, iid, end_index, return_values, liquidity, rs_market):
+    seed = CONFIG["research_seed_parameters"]["setups"]["start"]
     a = _frac(liquidity.get("amount_ratio_prior5"))
-    ret5 = return_values.get("5")
-    if a is None or ret5 is None:
-        return _condition("UNKNOWN", ["SAM_START_A_OR_RET5_UNAVAILABLE"])
-    reasons = []
-    if a < Fraction(str(seed["amount_ratio_prior5_min_inclusive"])):
+    ret1 = return_values.get("1")
+    prior_ret5 = _prior_window_return(ctx, iid, end_index, seed["prior_state_window_sessions_excluding_T"])
+    prior_high_turnover = liquidity.get("high_turnover_days_5_excluding_T")
+    prior_high = _prior_close_high(ctx, iid, end_index, seed["breakout_lookback_sessions_excluding_T"])
+    close = _close_value(ctx, iid, end_index)
+    rs1, rs3 = _rs_exact(rs_market, 1), _rs_exact(rs_market, 3)
+    rs_delta = rs1 - rs3 if rs1 is not None and rs3 is not None else None
+    reasons, unknown = [], []
+    if a is None:
+        unknown.append("SAM_START_AMOUNT_RATIO_UNAVAILABLE")
+    elif a < Fraction(str(seed["amount_ratio_prior5_min_inclusive"])):
         reasons.append("SAM_START_AMOUNT_RATIO_BELOW_SEED")
-    if ret5 <= Fraction(str(seed["ret5_min_exclusive"])):
-        reasons.append("SAM_START_RET5_NOT_POSITIVE")
-    return _condition("FAIL" if reasons else "PASS", reasons, details={
+    if ret1 is None:
+        unknown.append("SAM_START_RET1_UNAVAILABLE")
+    elif ret1 <= Fraction(str(seed["ret1_min_exclusive"])):
+        reasons.append("SAM_START_RET1_NOT_POSITIVE")
+    if prior_ret5 is None:
+        unknown.append("SAM_START_PRIOR_RET5_UNAVAILABLE")
+    elif prior_ret5 > Fraction(str(seed["prior_ret5_max_inclusive"])):
+        reasons.append("SAM_START_PRIOR_STATE_ALREADY_EXPANDED")
+    if prior_high_turnover is None:
+        unknown.append("SAM_START_PRIOR_TURNOVER_UNAVAILABLE")
+    elif prior_high_turnover > seed["prior_high_turnover_days_5_max_inclusive"]:
+        reasons.append("SAM_START_PRIOR_HIGH_TURNOVER_ALREADY_EXPANDED")
+    if prior_high is None or close is None:
+        unknown.append("SAM_START_BREAKOUT_REFERENCE_UNAVAILABLE")
+    elif close <= prior_high:
+        reasons.append("SAM_START_BREAKOUT_NOT_CONFIRMED")
+    if rs1 is None:
+        unknown.append("SAM_START_RS1_UNAVAILABLE")
+    elif rs1 <= Fraction(str(seed["rs_market_1d_min_exclusive"])):
+        reasons.append("SAM_START_RS1_NOT_POSITIVE")
+    if rs_delta is None:
+        unknown.append("SAM_START_RS_MOMENTUM_UNAVAILABLE")
+    elif rs_delta <= Fraction(str(seed["rs_momentum_delta_min_exclusive"])):
+        reasons.append("SAM_START_RS_MOMENTUM_NOT_RISING")
+    status = "FAIL" if reasons else "UNKNOWN" if unknown else "PASS"
+    return _condition(status, reasons or unknown, details={
+        "setup_id": "START",
+        "setup_state": "START_CONFIRMED" if status == "PASS" else "START_PENDING_OR_REJECTED",
         "amount_ratio_policy": "APPLIES_ONLY_TO_START_STAGE",
         "A": _number(a),
-        "ret5_pct": _pct(ret5),
+        "ret1_pct": _pct(ret1),
+        "prior_ret5_excluding_T_pct": _pct(prior_ret5),
+        "prior_high_turnover_days_5_excluding_T": prior_high_turnover,
+        "breakout_close": _number(close),
+        "breakout_prior_high": _number(prior_high),
+        "rs_market_1d_pct": _pct(rs1),
+        "rs_market_3d_pct": _pct(rs3),
+        "rs_momentum_delta_pct": _pct(rs_delta),
     })
 
 
 def _stage_acceleration(return_values, liquidity, market_status, rs_market):
-    seed = CONFIG["research_seed_parameters"]["stages"]["acceleration"]
-    points, unknown = [], []
-    for window, threshold, code in (
-        ("3", seed["ret3_min_inclusive"], "SAM_ACCEL_RET3_STRONG"),
-        ("5", seed["ret5_min_inclusive"], "SAM_ACCEL_RET5_STRONG"),
-        ("10", seed["ret10_min_inclusive"], "SAM_ACCEL_RET10_STRONG"),
+    seed = CONFIG["research_seed_parameters"]["setups"]["acceleration"]
+    ret1, ret3, ret5, ret10 = (return_values.get(str(window)) for window in (1, 3, 5, 10))
+    rs1, rs3, rs5 = (_rs_exact(rs_market, window) for window in (1, 3, 5))
+    high_turnover_days = liquidity.get("high_turnover_days_5_including_T")
+    level_points, momentum_points, unknown = [], [], []
+    if ret5 is None:
+        unknown.append("SAM_ACCEL_RET5_UNAVAILABLE")
+    elif ret5 >= Fraction(str(seed["high_level_ret5_min_inclusive"])):
+        level_points.append("SAM_ACCEL_RET5_HIGH")
+    if ret10 is None:
+        unknown.append("SAM_ACCEL_RET10_UNAVAILABLE")
+    elif ret10 >= Fraction(str(seed["high_level_ret10_min_inclusive"])):
+        level_points.append("SAM_ACCEL_RET10_HIGH")
+    if rs5 is None:
+        unknown.append("SAM_ACCEL_RS5_UNAVAILABLE")
+    elif rs5 > Fraction(str(seed["high_level_rs5_min_exclusive"])):
+        level_points.append("SAM_ACCEL_RS5_HIGH")
+    for value, threshold, code in (
+        (ret1, seed["rising_ret1_min_exclusive"], "SAM_ACCEL_RET1_RISING"),
+        (ret3, seed["rising_ret3_min_exclusive"], "SAM_ACCEL_RET3_RISING"),
+        (rs1, seed["rising_rs1_min_exclusive"], "SAM_ACCEL_RS1_RISING"),
+        (rs3, seed["rising_rs3_min_exclusive"], "SAM_ACCEL_RS3_RISING"),
     ):
-        value = return_values.get(window)
         if value is None:
             unknown.append(code + "_UNAVAILABLE")
-        elif value >= Fraction(str(threshold)):
-            points.append(code)
-    high_turnover_days = liquidity.get("high_turnover_days_5_including_today")
+        elif value > Fraction(str(threshold)):
+            momentum_points.append(code)
+    falling = any(value is not None and value <= 0 for value in (ret1, ret3, rs1, rs3))
+    strength_level = "HIGH" if level_points else "UNKNOWN" if unknown and all(value is None for value in (ret5, ret10, rs5)) else "LOW"
+    strength_momentum = "FALLING" if falling else "RISING" if len(momentum_points) == 4 else "UNKNOWN" if unknown else "FLAT"
+    turnover_status = "UNKNOWN"
     if high_turnover_days is None:
         unknown.append("SAM_ACCEL_HIGH_TURNOVER_PERSISTENCE_UNAVAILABLE")
-    elif high_turnover_days >= seed["high_turnover_days_5_min_inclusive"]:
-        points.append("SAM_ACCEL_HIGH_TURNOVER_PERSISTENCE")
+    elif high_turnover_days >= seed["high_turnover_sessions_5_including_T_min_inclusive"]:
+        turnover_status = "PASS"
+    else:
+        turnover_status = "FAIL"
     if market_status.get("instrument_limit", {}).get("close_limit_up") == TRUE:
-        points.append("SAM_ACCEL_CLOSE_LIMIT_UP")
-    if any(row.get("status") == "PASS" for row in rs_market.get("windows", {}).values()):
-        points.append("SAM_ACCEL_RS_MARKET_POSITIVE")
-    if len(points) >= seed["evidence_points_min_inclusive"]:
-        return _condition("PASS", details={"evidence_points": points, "unknown_points": unknown})
-    if points or unknown:
-        return _condition("UNKNOWN" if unknown else "FAIL", unknown or ["SAM_ACCEL_EVIDENCE_POINTS_BELOW_SEED"], details={"evidence_points": points, "unknown_points": unknown})
-    return _condition("FAIL", ["SAM_ACCEL_NO_EVIDENCE"], details={"evidence_points": points})
+        momentum_points.append("SAM_ACCEL_CLOSE_LIMIT_UP")
+    if strength_level == "HIGH" and strength_momentum == "RISING" and turnover_status == "PASS":
+        status, reasons, state = "PASS", [], "ACCELERATION_CONFIRMED"
+    elif strength_level == "HIGH" and strength_momentum == "FALLING":
+        status, reasons, state = "FAIL", ["SAM_ACCEL_WEAKENING_HIGH_ACTIVITY"], "WEAKENING_HIGH_ACTIVITY"
+    elif unknown and strength_level != "LOW" and turnover_status != "FAIL":
+        status, reasons, state = "UNKNOWN", sorted(set(unknown)), "ACCELERATION_PENDING"
+    else:
+        status, reasons, state = "FAIL", ["SAM_ACCEL_LEVEL_MOMENTUM_OR_TURNOVER_NOT_MET"], "ACCELERATION_NOT_CONFIRMED"
+    return _condition(status, reasons, details={
+        "setup_id": "ACCELERATION",
+        "setup_state": state,
+        "strength_level": strength_level,
+        "strength_momentum": strength_momentum,
+        "level_points": level_points,
+        "momentum_points": momentum_points,
+        "unknown_points": sorted(set(unknown)),
+        "high_turnover_days_5_including_T": high_turnover_days,
+        "turnover_persistence_status": turnover_status,
+        "ret1_pct": _pct(ret1),
+        "ret3_pct": _pct(ret3),
+        "ret5_pct": _pct(ret5),
+        "ret10_pct": _pct(ret10),
+        "rs_market_1d_pct": _pct(rs1),
+        "rs_market_3d_pct": _pct(rs3),
+        "rs_market_5d_pct": _pct(rs5),
+    })
 
 
-def _stage_high_level_divergence(return_values, daily_path, market_status, rs_market, sector_candidates):
-    seed = CONFIG["research_seed_parameters"]["stages"]["high_level_divergence"]
+def _stage_high_level_repair(return_values, daily_path, market_status, rs_market, sector_candidates):
+    seed = CONFIG["research_seed_parameters"]["setups"]["high_level_repair"]
     if daily_path.get("daily_path_status") != "AVAILABLE":
-        return _condition("UNKNOWN", daily_path.get("reason_codes") or ["SAM_HLD_DAILY_PATH_UNAVAILABLE"])
+        return _condition("UNKNOWN", daily_path.get("reason_codes") or ["SAM_HLR_DAILY_PATH_UNAVAILABLE"], details={"setup_id": "HIGH_LEVEL_REPAIR"})
+    if daily_path.get("close_limit_down") == TRUE:
+        return _condition("FAIL", ["SAM_HLR_CLOSE_LIMIT_DOWN_VERIFIED"], details={"setup_id": "HIGH_LEVEL_REPAIR", "setup_state": "LATE_CYCLE_WARNING"})
     ret5, ret10 = return_values.get("5"), return_values.get("10")
     percentile10 = market_status.get("return_percentiles", {}).get("10")
     high_level = []
-    if ret5 is not None and ret5 >= Fraction(str(seed["ret5_context_min_inclusive"])):
-        high_level.append("SAM_HLD_RET5_CONTEXT")
-    if ret10 is not None and ret10 >= Fraction(str(seed["ret10_context_min_inclusive"])):
-        high_level.append("SAM_HLD_RET10_CONTEXT")
-    if percentile10 is not None and percentile10 >= seed["percentile_context_min_inclusive"]:
-        high_level.append("SAM_HLD_RETURN_PERCENTILE_CONTEXT")
+    if ret5 is not None and ret5 >= Fraction(str(seed["background_ret5_min_inclusive"])):
+        high_level.append("SAM_HLR_RET5_CONTEXT")
+    if ret10 is not None and ret10 >= Fraction(str(seed["background_ret10_min_inclusive"])):
+        high_level.append("SAM_HLR_RET10_CONTEXT")
+    if percentile10 is not None and percentile10 >= seed["background_percentile10_min_inclusive"]:
+        high_level.append("SAM_HLR_RETURN_PERCENTILE_CONTEXT")
     if market_status.get("instrument_limit", {}).get("streak_lower_bound"):
-        high_level.append("SAM_HLD_LIMIT_STREAK_CONTEXT")
+        high_level.append("SAM_HLR_LIMIT_STREAK_CONTEXT")
     if not high_level:
         unknown = ret5 is None and ret10 is None and percentile10 is None
-        return _condition("UNKNOWN" if unknown else "FAIL", ["SAM_HLD_HIGH_LEVEL_CONTEXT_UNAVAILABLE" if unknown else "SAM_HLD_HIGH_LEVEL_CONTEXT_NOT_MET"])
+        return _condition("UNKNOWN" if unknown else "FAIL", ["SAM_HLR_HIGH_LEVEL_CONTEXT_UNAVAILABLE" if unknown else "SAM_HLR_HIGH_LEVEL_CONTEXT_NOT_MET"], details={
+            "setup_id": "HIGH_LEVEL_REPAIR",
+            "subconditions": {"HIGH_LEVEL_BACKGROUND": "UNKNOWN" if unknown else "FAIL"},
+        })
 
     amplitude = daily_path.get("_amplitude")
     low_ret = daily_path.get("_low_ret")
     close_ret = daily_path.get("_close_ret")
     recovery = daily_path.get("_recovery")
+    clv = _frac(daily_path.get("CLV"))
+    rs1 = _rs_exact(rs_market, 1)
+    sector_rs1 = _sector_rs_exact(sector_candidates, 1)
     divergence = []
-    if amplitude is not None and amplitude >= Fraction(str(seed["amplitude_min_inclusive"])):
-        divergence.append("SAM_HLD_AMPLITUDE")
-    if low_ret is not None and low_ret <= Fraction(str(seed["deep_low_return_max_inclusive"])):
-        divergence.append("SAM_HLD_DEEP_LOW")
+    if amplitude is not None and amplitude >= Fraction(str(seed["divergence_amplitude_min_inclusive"])):
+        divergence.append("SAM_HLR_AMPLITUDE")
+    if low_ret is not None and low_ret <= Fraction(str(seed["divergence_low_return_max_inclusive"])):
+        divergence.append("SAM_HLR_DEEP_LOW")
     if daily_path.get("touched_limit_down") == TRUE:
-        divergence.append("SAM_HLD_TOUCHED_LIMIT_DOWN")
+        divergence.append("SAM_HLR_TOUCHED_LIMIT_DOWN")
     if not divergence:
-        return _condition("FAIL", ["SAM_HLD_DIVERGENCE_PATH_NOT_MET"], details={"high_level_context": high_level})
+        return _condition("FAIL", ["SAM_HLR_DIVERGENCE_PATH_NOT_MET"], details={"setup_id": "HIGH_LEVEL_REPAIR", "high_level_context": high_level})
 
-    repair = []
-    if recovery is not None and recovery >= Fraction(str(seed["recovery_points_min_inclusive"])):
-        repair.append("SAM_HLD_RECOVERY_POINTS")
-    if close_ret is not None and low_ret is not None and close_ret > 0 and low_ret < 0:
-        repair.append("SAM_HLD_REPAIRED_FROM_UNDERWATER")
-    if any(row.get("status") == "PASS" for row in rs_market.get("windows", {}).values()):
-        repair.append("SAM_HLD_RS_MARKET_SUPPORT")
-    if _sector_rs_support(sector_candidates):
-        repair.append("SAM_HLD_RS_SECTOR_SUPPORT")
-    if not repair:
-        return _condition("FAIL", ["SAM_HLD_REPAIR_EVIDENCE_NOT_MET"], details={"high_level_context": high_level, "divergence_evidence": divergence})
+    repair, repair_fail, repair_unknown = [], [], []
+    if recovery is not None and recovery >= Fraction(str(seed["repair_recovery_points_min_inclusive"])):
+        repair.append("SAM_HLR_RECOVERY_POINTS")
+    else:
+        (repair_unknown if recovery is None else repair_fail).append("SAM_HLR_RECOVERY_POINTS_NOT_MET")
+    if clv is not None and clv >= Fraction(str(seed["repair_clv_min_inclusive"])):
+        repair.append("SAM_HLR_CLV_REPAIR")
+    else:
+        (repair_unknown if clv is None else repair_fail).append("SAM_HLR_CLV_REPAIR_NOT_MET")
+    support = []
+    if close_ret is None:
+        repair_unknown.append("SAM_HLR_CLOSE_RETURN_UNAVAILABLE")
+    elif close_ret > Fraction(str(seed["repair_close_return_min_exclusive"])):
+        support.append("SAM_HLR_CLOSE_RETURN_POSITIVE")
+    if rs1 is not None and rs1 > Fraction(str(seed["repair_today_rs_market_min_exclusive"])):
+        support.append("SAM_HLR_TODAY_RS_MARKET_SUPPORT")
+    if sector_rs1 is not None and sector_rs1 > 0:
+        support.append("SAM_HLR_TODAY_RS_SECTOR_SUPPORT")
+    if support:
+        repair.extend(support)
+    elif rs1 is None and sector_rs1 is None and close_ret is None:
+        repair_unknown.append("SAM_HLR_TODAY_REPAIR_SUPPORT_UNAVAILABLE")
+    else:
+        repair_fail.append("SAM_HLR_TODAY_REPAIR_SUPPORT_NOT_MET")
+    if repair_fail:
+        return _condition("FAIL", sorted(set(repair_fail)), details={
+            "setup_id": "HIGH_LEVEL_REPAIR",
+            "setup_state": "HIGH_LEVEL_DIVERGENCE_WITHOUT_TODAY_REPAIR",
+            "high_level_context": high_level,
+            "divergence_evidence": divergence,
+            "repair_evidence": repair,
+            "legacy_setup_alias": "HIGH_LEVEL_DIVERGENCE",
+            "subconditions": {"HIGH_LEVEL_BACKGROUND": "PASS", "TODAY_DIVERGENCE": "PASS", "TODAY_REPAIR": "FAIL"},
+        })
+    if repair_unknown:
+        return _condition("UNKNOWN", sorted(set(repair_unknown)), details={
+            "setup_id": "HIGH_LEVEL_REPAIR",
+            "setup_state": "HIGH_LEVEL_REPAIR_PENDING",
+            "high_level_context": high_level,
+            "divergence_evidence": divergence,
+            "repair_evidence": repair,
+            "legacy_setup_alias": "HIGH_LEVEL_DIVERGENCE",
+            "subconditions": {"HIGH_LEVEL_BACKGROUND": "PASS", "TODAY_DIVERGENCE": "PASS", "TODAY_REPAIR": "UNKNOWN"},
+        })
     return _condition("PASS", details={
+        "setup_id": "HIGH_LEVEL_REPAIR",
+        "setup_state": "HIGH_LEVEL_REPAIR_CONFIRMED",
         "high_level_context": high_level,
         "divergence_evidence": divergence,
         "repair_evidence": repair,
-        "amount_ratio_policy": "NOT_USED_FOR_HIGH_LEVEL_DIVERGENCE_GATE",
-        "clv_policy": "NO_HARD_CLV_THRESHOLD",
+        "legacy_setup_alias": "HIGH_LEVEL_DIVERGENCE",
+        "amount_ratio_policy": "NOT_USED_FOR_HIGH_LEVEL_REPAIR_GATE",
+        "clv_policy": "SAME_DAY_REPAIR_GATE_FOR_HIGH_LEVEL_REPAIR_ONLY",
+        "subconditions": {"HIGH_LEVEL_BACKGROUND": "PASS", "TODAY_DIVERGENCE": "PASS", "TODAY_REPAIR": "PASS"},
     })
 
 
-def _stage_trend_pullback(trend):
-    seed = CONFIG["research_seed_parameters"]["stages"]["trend_pullback"]
+def _stage_trend_pullback(trend, liquidity, rs_market, sector_candidates):
+    seed = CONFIG["research_seed_parameters"]["setups"]["trend_pullback"]
     if trend["status"] == "UNKNOWN":
-        return _condition("UNKNOWN", trend.get("reason_codes") or ["SAM_TREND_PULLBACK_MA_UNKNOWN"])
-    if trend["status"] == "FAIL":
+        return _condition("UNKNOWN", trend.get("reason_codes") or ["SAM_TREND_PULLBACK_TREND_UNKNOWN"], details={"setup_id": "TREND_PULLBACK"})
+    if trend.get("trend_state") != "STRONG_UPTREND":
         return _condition("FAIL", trend.get("reason_codes") or ["SAM_TREND_PULLBACK_TREND_FAIL"])
     days = trend.get("pullback_days_below_ma5")
     distance = _frac(trend.get("matched_ma_distance"))
+    a = _frac(liquidity.get("amount_ratio_prior5"))
+    rs1 = _rs_exact(rs_market, 1)
+    sector_rs1 = _sector_rs_exact(sector_candidates, 1)
     min_days, max_days = seed["below_ma5_sessions_inclusive"]
-    reasons = []
+    reasons, unknown = [], []
     if days is None:
-        reasons.append("SAM_TREND_PULLBACK_DAYS_UNKNOWN")
+        unknown.append("SAM_TREND_PULLBACK_DAYS_UNKNOWN")
     elif not min_days <= days <= max_days:
         reasons.append("SAM_TREND_PULLBACK_DAYS_OUTSIDE_SEED")
     if distance is None:
-        reasons.append("SAM_TREND_PULLBACK_DISTANCE_UNKNOWN")
+        unknown.append("SAM_TREND_PULLBACK_DISTANCE_UNKNOWN")
     elif distance > Fraction(str(seed["near_ma_5_10_20_fraction_inclusive"])):
         reasons.append("SAM_TREND_PULLBACK_NOT_NEAR_MA5_10_20")
-    return _condition("FAIL" if reasons else "PASS", reasons, details={
+    if a is None:
+        unknown.append("SAM_TREND_PULLBACK_AMOUNT_CONTRACTION_UNAVAILABLE")
+    elif a > Fraction(str(seed["amount_contraction_ratio_max_inclusive"])):
+        reasons.append("SAM_TREND_PULLBACK_AMOUNT_NOT_CONTRACTED")
+    known_rs = [value for value in (rs1, sector_rs1) if value is not None]
+    if known_rs and all(value < Fraction(str(seed["resilience_rs_market_1d_min_inclusive"])) for value in known_rs):
+        reasons.append("SAM_TREND_PULLBACK_RELATIVE_WEAKNESS_COUNTER")
+    elif not known_rs:
+        unknown.append("SAM_TREND_PULLBACK_RESILIENCE_UNKNOWN")
+    status = "FAIL" if reasons else "UNKNOWN" if unknown else "PASS"
+    return _condition(status, reasons or unknown, details={
+        "setup_id": "TREND_PULLBACK",
+        "setup_state": "TREND_PULLBACK_CONFIRMED" if status == "PASS" else "TREND_PULLBACK_PENDING_OR_REJECTED",
         "pullback_days_below_ma5": days,
         "matched_ma": trend.get("matched_ma"),
         "matched_ma_distance": trend.get("matched_ma_distance"),
         "near_ma_threshold": seed["near_ma_5_10_20_fraction_inclusive"],
+        "amount_ratio_prior5": _number(a),
+        "rs_market_1d_pct": _pct(rs1),
+        "rs_sector_1d_pct": _pct(sector_rs1),
     })
 
 
-def _stages(return_values, daily_path, liquidity, trend, market_status, rs_market, sector_candidates):
+def _stages(ctx, iid, end_index, return_values, daily_path, liquidity, trend, market_status, rs_market, sector_candidates):
     candidates = {
-        "START": _stage_start(return_values, liquidity),
+        "START": _stage_start(ctx, iid, end_index, return_values, liquidity, rs_market),
         "ACCELERATION": _stage_acceleration(return_values, liquidity, market_status, rs_market),
-        "HIGH_LEVEL_DIVERGENCE": _stage_high_level_divergence(return_values, daily_path, market_status, rs_market, sector_candidates),
-        "TREND_PULLBACK": _stage_trend_pullback(trend),
+        "HIGH_LEVEL_REPAIR": _stage_high_level_repair(return_values, daily_path, market_status, rs_market, sector_candidates),
+        "TREND_PULLBACK": _stage_trend_pullback(trend, liquidity, rs_market, sector_candidates),
     }
     passing = [stage for stage in PRIMARY_STAGE_PRECEDENCE if candidates[stage]["status"] == "PASS"]
     unknown = [stage for stage in STAGE_IDS if candidates[stage]["status"] == "UNKNOWN"]
@@ -952,24 +1327,201 @@ def _stages(return_values, daily_path, liquidity, trend, market_status, rs_marke
         "primary_stage": primary,
         "alternate_stages": [stage for stage in passing if stage != primary],
         "stage_candidates": candidates,
-        "stage_label_policy": CONFIG["traceability"]["stage_label_policy"],
+        "legacy_stage_aliases": CONFIG["research_seed_parameters"]["setups"].get("legacy_aliases", {}),
+        "stage_label_policy": CONFIG["traceability"]["setup_label_policy"],
     })
 
 
+def _behavioral_confirmation(primary_setup, daily_path, stages):
+    path_available = daily_path.get("daily_path_status") == "AVAILABLE"
+    low_ret = daily_path.get("_low_ret")
+    close_ret = daily_path.get("_close_ret")
+    recovery = daily_path.get("_recovery")
+    intraday_status = "UNKNOWN"
+    intraday_reasons = ["SAM_INTRADAY_PATH_UNAVAILABLE"]
+    if path_available:
+        intraday_pass = low_ret is not None and close_ret is not None and recovery is not None and low_ret < 0 and close_ret > 0 and recovery > 0
+        intraday_status = "PASS" if intraday_pass else "FAIL"
+        intraday_reasons = [] if intraday_pass else ["SAM_INTRADAY_WEAK_TO_STRONG_NOT_CONFIRMED_FROM_DAILY_OHLC"]
+    events = {
+        "AUCTION_WEAK_TO_STRONG": {"status": "UNKNOWN", "reason_codes": ["SAM_AUCTION_PHASES_NOT_IN_MARKET_INPUT"], "signal_policy": "NO_FINAL_AUCTION_SNAPSHOT_PROXY"},
+        "INTRADAY_WEAK_TO_STRONG": {"status": intraday_status, "reason_codes": intraday_reasons, "evidence_basis": "DAILY_OHLC_ONLY"},
+        "NEXT_SESSION_REVERSAL": {"status": "NOT_EVALUATED", "reason_codes": ["SAM_TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE"]},
+        "REPAIR_LATENCY": {"status": "NOT_EVALUATED", "reason_codes": ["SAM_TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE"]},
+        "TIME_TO_NEW_HIGH": {"status": "NOT_EVALUATED", "reason_codes": ["SAM_TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE"]},
+        "FAILED_LIMIT_UP_REPAIR": {"status": "UNKNOWN", "reason_codes": ["SAM_INTRADAY_LIMIT_UP_REPAIR_SEQUENCE_UNAVAILABLE"]},
+        "SUPPLY_ABSORPTION": {"status": "UNKNOWN", "reason_codes": ["SAM_SUPPLY_ABSORPTION_NEEDS_MULTI_SESSION_RECLAIM_TRACKING"]},
+        "BREAKOUT_HOLD": {"status": "NOT_EVALUATED", "reason_codes": ["SAM_TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE"]},
+        "BREAKOUT_FAILURE": {"status": "NOT_EVALUATED", "reason_codes": ["SAM_TRACKING_OUTCOME_ONLY_NOT_SIGNAL_FEATURE"]},
+        "TEMPORAL_LEADERSHIP": {"status": "UNKNOWN", "reason_codes": ["SAM_FIRST_SEAL_OR_FIRST_MOVE_TIMESTAMPS_NOT_IN_MARKET_INPUT"]},
+    }
+    setup = (stages.get("stage_candidates") or {}).get(primary_setup or "", {})
+    if primary_setup == "HIGH_LEVEL_REPAIR":
+        status = "PASS" if setup.get("status") == "PASS" and intraday_status == "PASS" else "UNKNOWN" if setup.get("status") == "PASS" else setup.get("status", "UNKNOWN")
+    elif primary_setup in {"START", "ACCELERATION", "TREND_PULLBACK"}:
+        status = "PASS" if setup.get("status") == "PASS" else setup.get("status", "UNKNOWN")
+    else:
+        status = "UNKNOWN"
+    reasons = [] if status == "PASS" else sorted({reason for event in events.values() for reason in event.get("reason_codes", []) if event.get("status") == "UNKNOWN"})
+    return _condition(status, reasons, details={"primary_setup": primary_setup, "events": events})
+
+
+def _supply_pressure(ctx, iid, end_index):
+    seed = CONFIG["research_seed_parameters"]["supply_pressure"]
+    count = seed["recent_window_sessions_including_T"]
+    if end_index is None or end_index - count + 1 < 0:
+        return _condition("UNKNOWN", ["SAM_SUPPLY_PRESSURE_WINDOW_UNAVAILABLE"], details={"upper_shadow_rows": []})
+    threshold = Fraction(str(seed["long_upper_shadow_to_range_min_inclusive"]))
+    current_close = _close_value(ctx, iid, end_index)
+    rows, long_count, unreclaimed = [], 0, 0
+    for index in range(end_index - count + 1, end_index + 1):
+        bar = _bar(ctx, ctx.sessions[index], iid)
+        open_, high, low, close = (_frac((bar or {}).get(key)) for key in ("open", "high", "low", "close"))
+        if any(value is None for value in (open_, high, low, close)) or high <= low:
+            return _condition("UNKNOWN", ["SAM_SUPPLY_PRESSURE_DAILY_PATH_UNAVAILABLE"], details={"upper_shadow_rows": rows})
+        shadow = (high - max(open_, close)) / (high - low)
+        is_long = shadow >= threshold
+        is_unreclaimed = is_long and current_close is not None and current_close < high
+        long_count += int(is_long)
+        unreclaimed += int(is_unreclaimed)
+        rows.append({
+            "session": ctx.sessions[index],
+            "upper_shadow_to_range": _number(shadow),
+            "long_upper_shadow": is_long,
+            "unreclaimed_by_observation_close": is_unreclaimed,
+        })
+    warning_min = seed["unreclaimed_recent_shadow_count_warning_min_inclusive"]
+    status = "UNKNOWN" if unreclaimed >= warning_min else "PASS"
+    reasons = ["SAM_REPEATED_UNRECLAIMED_UPPER_SHADOW_SUPPLY_WARNING"] if status == "UNKNOWN" else []
+    return _condition(status, reasons, details={
+        "upper_shadow_rows": rows,
+        "long_upper_shadow_count": long_count,
+        "unreclaimed_recent_shadow_count": unreclaimed,
+        "single_upper_shadow_policy": "NOT_CRITICAL_REJECTION_WITHOUT_REPEATED_UNRECLAIMED_SUPPLY",
+    })
+
+
+def _market_compatibility(primary_setup, market_status):
+    if not primary_setup:
+        return _condition("UNKNOWN", ["SAM_MARKET_COMPATIBILITY_WAITING_FOR_SETUP"], details={"ecosystem_state": market_status.get("ecosystem_state")})
+    state = market_status.get("ecosystem_state", "UNKNOWN")
+    if state == "UNKNOWN":
+        return _condition("UNKNOWN", market_status.get("reason_codes") or ["SAM_MARKET_CONTEXT_UNKNOWN"], details={"primary_setup": primary_setup, "ecosystem_state": state})
+    compatible = set(CONFIG["research_seed_parameters"]["market_context"]["setup_compatibility"].get(primary_setup, []))
+    if state in compatible:
+        return _condition("PASS", details={"primary_setup": primary_setup, "ecosystem_state": state, "compatible_states": sorted(compatible)})
+    return _condition("FAIL", ["SAM_MARKET_CONTEXT_INCOMPATIBLE_WITH_SETUP"], details={"primary_setup": primary_setup, "ecosystem_state": state, "compatible_states": sorted(compatible)})
+
+
+def _same_theme_context(sector, funds):
+    status = _combine((sector, funds))
+    reasons = _condition_reasons((sector, funds))
+    return _condition(status, reasons, details={
+        "sector_status": sector.get("status"),
+        "funds_status": funds.get("status"),
+        "primary_theme_id": funds.get("primary_theme_id") or sector.get("primary_theme_id"),
+        "same_theme_policy": "FUNDS_EVALUATED_ONLY_FOR_PASSING_SECTOR_THEME",
+    })
+
+
+def _critical_counterevidence(daily_path, stages, supply, trend):
+    reasons = []
+    if daily_path.get("close_limit_down") == TRUE:
+        reasons.extend(["SAM_CRITICAL_CLOSE_LIMIT_DOWN", "SAM_LATE_CYCLE_WARNING"])
+    if trend.get("trend_state") == "TREND_BROKEN":
+        reasons.append("SAM_CRITICAL_TREND_BROKEN")
+    if reasons:
+        return _condition("FAIL", sorted(set(reasons)), details={"critical_policy": "VERIFIED_HARD_COUNTEREVIDENCE_ONLY"})
+    if supply.get("status") == "UNKNOWN" and "SAM_REPEATED_UNRECLAIMED_UPPER_SHADOW_SUPPLY_WARNING" in supply.get("reason_codes", []):
+        return _condition("UNKNOWN", supply.get("reason_codes"), details={"critical_policy": "SUPPLY_WARNING_NOT_SINGLE_SHADOW_REJECTION"})
+    accel = (stages.get("stage_candidates") or {}).get("ACCELERATION", {})
+    if accel.get("setup_state") == "WEAKENING_HIGH_ACTIVITY":
+        return _condition("UNKNOWN", ["SAM_ACCEL_WEAKENING_HIGH_ACTIVITY_WATCH_ONLY"], details={"critical_policy": "WATCH_NOT_FOCUS"})
+    return _condition("PASS", details={"critical_policy": "VERIFIED_HARD_COUNTEREVIDENCE_ONLY"})
+
+
+def _decision(liquidity, trend, stages, behavioral, market_compatibility, same_theme, critical):
+    primary = stages.get("primary_stage")
+    accel = (stages.get("stage_candidates") or {}).get("ACCELERATION", {})
+    hard_failures = []
+    for condition, code in (
+        (liquidity, "SAM_DECISION_LIQUIDITY_HARD_FAIL"),
+        (trend, "SAM_DECISION_TREND_HARD_FAIL"),
+        (critical, "SAM_DECISION_CRITICAL_COUNTEREVIDENCE"),
+        (market_compatibility, "SAM_DECISION_MARKET_CONTEXT_INCOMPATIBLE"),
+        (same_theme, "SAM_DECISION_SAME_THEME_CONTEXT_KNOWN_FAIL"),
+    ):
+        if condition.get("status") == "FAIL":
+            hard_failures.append(code)
+    if stages.get("status") == "FAIL" and accel.get("setup_state") != "WEAKENING_HIGH_ACTIVITY":
+        hard_failures.append("SAM_DECISION_NO_PASSING_SETUP")
+    if hard_failures:
+        return _condition("REJECTED", sorted(set(hard_failures)), details={"decision_status": "REJECTED", "primary_setup": primary, "watch_reasons": []})
+    if accel.get("setup_state") == "WEAKENING_HIGH_ACTIVITY":
+        return _condition("WATCH", ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"], details={"decision_status": "WATCH", "primary_setup": primary, "watch_reasons": ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"]})
+    unknown_core = []
+    for condition, code in (
+        (liquidity, "SAM_DECISION_LIQUIDITY_UNKNOWN"),
+        (trend, "SAM_DECISION_TREND_UNKNOWN"),
+        (stages, "SAM_DECISION_SETUP_UNKNOWN"),
+    ):
+        if condition.get("status") == "UNKNOWN":
+            unknown_core.append(code)
+    if unknown_core:
+        return _condition("UNKNOWN", unknown_core, details={"decision_status": "UNKNOWN", "primary_setup": primary, "watch_reasons": []})
+    watch = []
+    for condition, code in (
+        (behavioral, "SAM_WATCH_BEHAVIORAL_CONFIRMATION_PENDING"),
+        (market_compatibility, "SAM_WATCH_MARKET_CONTEXT_INCOMPLETE"),
+        (same_theme, "SAM_WATCH_SAME_THEME_CONTEXT_INCOMPLETE"),
+        (critical, "SAM_WATCH_COUNTEREVIDENCE_REVIEW_PENDING"),
+    ):
+        if condition.get("status") == "UNKNOWN":
+            watch.append(code)
+    if watch:
+        return _condition("WATCH", watch, details={"decision_status": "WATCH", "primary_setup": primary, "watch_reasons": watch})
+    return _condition("FOCUS", ["SAM_FOCUS_BY_STAGE_AWARE_V2_REQUIREMENTS"], details={"decision_status": "FOCUS", "primary_setup": primary, "watch_reasons": []})
+
+
+def _setup_rank_features(row):
+    setup = row.get("primary_stage")
+    if setup == "START":
+        return {"ret1_pct": row.get("ret1_pct"), "A": row.get("A"), "RS_market_1d_pct": row.get("RS_market_1d_pct")}
+    if setup == "ACCELERATION":
+        return {"ret3_pct": row.get("ret3_pct"), "ret5_pct": row.get("ret5_pct"), "high_turnover_days_5_including_T": row.get("high_turnover_days_5_including_T")}
+    if setup == "HIGH_LEVEL_REPAIR":
+        return {"recovery_points_pct": row.get("recovery_points_pct"), "CLV": row.get("CLV"), "RS_market_1d_pct": row.get("RS_market_1d_pct")}
+    if setup == "TREND_PULLBACK":
+        return {"matched_ma_distance": (row.get("trend_strength") or {}).get("matched_ma_distance"), "RS_sector_1d_pct": row.get("RS_sector_1d_pct"), "A": row.get("A")}
+    return {}
+
+
+def _rank_key_value(value, *, ascending=False):
+    numeric = _frac(value)
+    if numeric is None:
+        return Fraction(10**9)
+    return numeric if ascending else -numeric
+
+
 def _row_score_key(row):
-    precedence = {stage: index for index, stage in enumerate(PRIMARY_STAGE_PRECEDENCE)}
-    return (
-        row.get("_reference_score_exact") is None,
-        -(row.get("_reference_score_exact") or Fraction(0)),
-        precedence.get(row.get("primary_stage"), len(precedence)),
-        row["instrument_id"],
-    )
+    setup = row.get("primary_stage")
+    features = row.get("setup_rank_features") or {}
+    if setup == "TREND_PULLBACK":
+        feature_key = (_rank_key_value(features.get("matched_ma_distance"), ascending=True), _rank_key_value(features.get("RS_sector_1d_pct")), _rank_key_value(features.get("A")))
+    else:
+        feature_key = tuple(_rank_key_value(value) for value in features.values())
+    return (feature_key, row["instrument_id"])
 
 
 def _rank_rows(rows):
-    rows.sort(key=_row_score_key)
-    for rank, row in enumerate(rows, 1):
-        row["rank"] = rank
+    rows.sort(key=lambda row: (PRIMARY_STAGE_PRECEDENCE.index(row.get("primary_stage")) if row.get("primary_stage") in PRIMARY_STAGE_PRECEDENCE else len(PRIMARY_STAGE_PRECEDENCE), _row_score_key(row)))
+    setup_counts = defaultdict(int)
+    for display_order, row in enumerate(rows, 1):
+        setup_counts[row.get("primary_stage")] += 1
+        row["setup_rank"] = setup_counts[row.get("primary_stage")]
+        row["display_order"] = display_order
+        row["rank"] = display_order
+        row["rank_semantics"] = "DETERMINISTIC_DISPLAY_ORDER_NOT_GLOBAL_SCORE"
     return rows
 
 
@@ -983,6 +1535,7 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
     selected, diagnostics = [], []
     condition_counts = defaultdict(lambda: {"PASS": 0, "FAIL": 0, "UNKNOWN": 0})
     stage_counts = {stage: {"PASS": 0, "FAIL": 0, "UNKNOWN": 0} for stage in STAGE_IDS}
+    decision_counts = {state: 0 for state in CONFIG["hard_requirements"]["final_decision_states"]}
     for iid in ctx.eligible_ids:
         security = ctx.securities[iid]
         current = _bar(ctx, ctx.observation_date, iid)
@@ -994,47 +1547,70 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
         rs_market = _relative_strength(ctx, iid, end_index, returns, market)
         sector, sector_candidates = _sector(ctx, iid, visible_themes, end_index, returns)
         funds, funds_rows = _funds(ctx, iid, visible_themes, sector_candidates, end_index)
-        stages = _stages(returns, daily_path, liquidity, trend, market_status, rs_market, sector_candidates)
+        stages = _stages(ctx, iid, end_index, returns, daily_path, liquidity, trend, market_status, rs_market, sector_candidates)
+        behavioral = _behavioral_confirmation(stages.get("primary_stage"), daily_path, stages)
+        supply = _supply_pressure(ctx, iid, end_index)
+        market_compatibility = _market_compatibility(stages.get("primary_stage"), market_status)
+        same_theme = _same_theme_context(sector, funds)
+        critical = _critical_counterevidence(daily_path, stages, supply, trend)
+        decision = _decision(liquidity, trend, stages, behavioral, market_compatibility, same_theme, critical)
+        decision_status = decision.get("decision_status", decision["status"])
+        decision_counts[decision_status] += 1
+        formal_status = "PASS" if decision_status == "FOCUS" else "FAIL" if decision_status == "REJECTED" else "UNKNOWN"
         conditions = {
             "liquidity_bottom": liquidity,
-            "stage_identification": stages,
-            "sector_linkage": sector,
-            "funds_linkage": funds,
+            "trend_state": trend,
+            "setup_identification": stages,
+            "behavioral_confirmation": behavioral,
+            "market_compatibility": market_compatibility,
+            "same_theme_context": same_theme,
+            "critical_counterevidence": critical,
         }
         for key, condition in conditions.items():
             condition_counts[key][condition["status"]] += 1
         for stage, condition in stages["stage_candidates"].items():
             stage_counts[stage][condition["status"]] += 1
-        formal_status = _combine(conditions.values())
         ref = reference.get(iid)
         return_fields = {
             f"ret{window}_pct": _pct(value)
             for window, value in returns.items()
         }
         rs_market_1 = rs_market.get("windows", {}).get("1", {}).get("rs_market_pct")
-        primary_sector = sector_candidates[0] if sector_candidates else {}
+        primary_sector = next((row for row in sector_candidates if row.get("status") == "PASS"), sector_candidates[0] if sector_candidates else {})
         rs_sector_1 = (primary_sector.get("windows") or {}).get("1", {}).get("rs_sector_pct")
         row = {
             "strategy_id": STAGE_AWARE_ID,
             "canonical_strategy_id": STAGE_AWARE_ID,
+            "legacy_read_aliases": list(LEGACY_STAGE_AWARE_IDS),
             "instrument_id": iid,
             "name": security.name,
             "observation_date": ctx.observation_date,
-            "status": formal_status,
+            "status": decision_status,
             "formal_status": formal_status,
-            "reason_codes": _condition_reasons(conditions.values()) or ["SAM_SELECTED_BY_STAGE_AWARE_FORMAL_REQUIREMENTS"],
+            "decision_status": decision_status,
+            "watch_reasons": decision.get("watch_reasons", []),
+            "reason_codes": sorted(set(decision.get("reason_codes", []) + _condition_reasons(conditions.values()))) or ["SAM_FOCUS_BY_STAGE_AWARE_V2_REQUIREMENTS"],
             "condition_statuses": {key: condition["status"] for key, condition in conditions.items()},
             "conditions": conditions,
+            "decision_layer": decision,
             "parameter_status": PARAMETER_STATUS,
             "parameter_status_label_zh": PARAMETER_STATUS_LABEL_ZH,
             "primary_stage": stages.get("primary_stage"),
             "alternate_stages": stages.get("alternate_stages", []),
             "stage_candidates": stages.get("stage_candidates", {}),
+            "legacy_stage_aliases": stages.get("legacy_stage_aliases", {}),
             "stage_label_policy": stages.get("stage_label_policy"),
             "liquidity_status": liquidity["status"],
             "sector_status": sector["status"],
             "funds_status": funds["status"],
             "funds_grade": funds.get("grade"),
+            "capital_evidence_status": funds["status"],
+            "market_compatibility_status": market_compatibility["status"],
+            "same_theme_context_status": same_theme["status"],
+            "behavioral_confirmation_status": behavioral["status"],
+            "critical_counterevidence_status": critical["status"],
+            "trend_state": trend.get("trend_state"),
+            "market_context_state": market_status.get("ecosystem_state"),
             "relative_strength_status": rs_market["status"],
             "close": _number(_bar_decimal(current, "close"), places=8),
             "comparable_close": _number(_bar_decimal(current, "comparable_close"), places=8),
@@ -1042,6 +1618,7 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "amount_cny": liquidity.get("amount_cny"),
             "turnover_fraction": liquidity.get("turnover_fraction"),
             "A": liquidity.get("amount_ratio_prior5"),
+            "high_turnover_days_5_including_T": liquidity.get("high_turnover_days_5_including_T"),
             **return_fields,
             "CLV": daily_path.get("CLV"),
             "amplitude_pct": daily_path.get("amplitude_pct"),
@@ -1055,10 +1632,16 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "shape_type": "TREND_PULLBACK" if stages.get("stage_candidates", {}).get("TREND_PULLBACK", {}).get("status") == "PASS" else None,
             "trend_strength": trend,
             "daily_path": {key: value for key, value in daily_path.items() if not key.startswith("_")},
+            "behavioral_confirmation": behavioral,
+            "supply_pressure": supply,
+            "critical_counterevidence": critical,
+            "temporal_leadership": behavioral.get("events", {}).get("TEMPORAL_LEADERSHIP"),
             "relative_strength": rs_market,
             "sector_candidates": sector_candidates,
             "funds_candidates": funds_rows,
             "market_status": market_status,
+            "market_context": market_status,
+            "theme_context_candidates": sector_candidates,
             "reference_score_policy": reference_counts["ranked_by"],
             "reference_score_status": "AVAILABLE" if ref is not None else "UNAVAILABLE",
             "S_PV_REFERENCE": ref.get("S_PV") if ref else None,
@@ -1066,17 +1649,19 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "reference_rank": ref.get("rank") if ref else None,
             "_reference_score_exact": ref.get("_S_PV") if ref else None,
         }
-        target = selected if formal_status == "PASS" else diagnostics
+        row["setup_rank_features"] = _setup_rank_features(row)
+        target = selected if decision_status == "FOCUS" else diagnostics
         target.append(row)
     _rank_rows(selected)
     selected_ids = {row["instrument_id"] for row in selected}
     rows = [_public(row) for row in selected] + [_public(row) for row in diagnostics if row["instrument_id"] not in selected_ids]
-    unknown = sum(1 for row in diagnostics if row["status"] == "UNKNOWN")
-    failed = sum(1 for row in diagnostics if row["status"] == "FAIL")
+    unknown = decision_counts["UNKNOWN"]
+    failed = decision_counts["REJECTED"]
+    watch = decision_counts["WATCH"]
     result_status = (
         "COMPLETE" if selected and ctx.universe_complete else
         "LIMITED_SCOPE" if selected else
-        "INSUFFICIENT_EVIDENCE" if unknown else
+        "INSUFFICIENT_EVIDENCE" if unknown or watch else
         "EMPTY"
     )
     return ctx, {
@@ -1088,21 +1673,28 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
         "spec_conformance": "SPEC_CONFORMANT",
         "status": result_status,
         "scope_label": "FULL_SCOPE" if ctx.universe_complete else "LIMITED_SCOPE",
-        "formal_list_policy": "STAGE_PASS_PLUS_LIQUIDITY_SECTOR_AND_FUNDS_NOT_WEAK_NO_FIXED_COUNT",
+        "formal_list_policy": "V2_FOCUS_REQUIRES_TREND_SETUP_BEHAVIOR_MARKET_SAME_THEME_FUNDS_AND_NO_CRITICAL_COUNTEREVIDENCE",
         "observation_date": ctx.observation_date,
         "decision_cutoff": ctx.cutoff.isoformat(),
         "top_ids": [row["instrument_id"] for row in selected[:top_n]],
         "qualified_ids": [row["instrument_id"] for row in selected],
+        "eligible_pool_ids": list(ctx.eligible_ids),
+        "full_eligible_pool_retained": True,
         "items": rows,
         "diagnostics": [_public(row) for row in diagnostics],
         "counts": {
             "eligible": len(ctx.eligible_ids),
             "evaluated": len(ctx.eligible_ids),
+            "focus": decision_counts["FOCUS"],
+            "watch": watch,
+            "rejected": failed,
             "passed": len(selected),
             "failed": failed,
             "unknown": unknown,
+            "decision_counts": decision_counts,
             "condition_counts": dict(condition_counts),
             "stage_counts": stage_counts,
+            "setup_counts": stage_counts,
             "visible_theme_count": len(visible_themes),
             "rejected_theme_evidence_count": len(rejected_themes),
             "reference_score_available": sum(1 for row in selected + diagnostics if row.get("reference_score") is not None),
@@ -1115,11 +1707,15 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "initial_parameters_are_not_user_rules": True,
             "initial_parameters_status_zh": PARAMETER_STATUS_LABEL_ZH,
             "stage_labels_are_research_classifications": True,
+            "setup_labels_are_research_classifications": True,
+            "product_role": CONFIG["traceability"]["product_role"],
+            "legacy_read_aliases": list(LEGACY_STAGE_AWARE_IDS),
             "old_strategies_preserved": True,
         },
         "rejected_theme_evidence": rejected_themes,
-        "tie_break": "reference_score desc, stage_precedence, instrument_id asc",
-        "market_edge": "NOT_ESTABLISHED",
+        "tie_break": "setup_rank_features within setup, display_order by setup id, instrument_id asc",
+        "rank_semantics": "DETERMINISTIC_DISPLAY_ORDER_NOT_GLOBAL_SCORE",
+        "market_edge": CONFIG["market_edge"],
         **stage_aware_source_identity(),
     }
 
@@ -1132,9 +1728,12 @@ def run_stage_aware_momentum(bundle: MarketInput, *, top_n=100, cutoff=None, _co
 def stage_aware_strategy_specs():
     return [{
         "strategy_id": STAGE_AWARE_ID,
+        "canonical_replaces": CONFIG.get("canonical_replaces"),
+        "legacy_read_aliases": list(LEGACY_STAGE_AWARE_IDS),
         "parameter_status": PARAMETER_STATUS,
         "parameter_status_label_zh": PARAMETER_STATUS_LABEL_ZH,
-        "formal_role": "FORMAL_RESEARCH_LIST_REQUIRES_STAGE_LIQUIDITY_SECTOR_AND_FUNDS",
+        "formal_role": CONFIG["traceability"]["product_role"],
+        "market_edge": CONFIG["market_edge"],
         "hard_requirements": CONFIG["hard_requirements"],
         "research_seed_parameters": CONFIG["research_seed_parameters"],
         "traceability": CONFIG["traceability"],

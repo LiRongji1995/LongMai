@@ -501,7 +501,8 @@ class CandidateService:
             result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'),
             [value for key,value in result.get('results',{}).items()
              if key in {'THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1',
-                        'SIMPLE_TREND_TEMPLATE_REFERENCE_V1','STAGE_AWARE_MOMENTUM_V1'}])
+                        'SIMPLE_TREND_TEMPLATE_REFERENCE_V1','STAGE_AWARE_MOMENTUM_V1',
+                        'STAGE_AWARE_MOMENTUM_V2'}])
         from .strategy_tracking import _visible_bars
         frozen_bars = _visible_bars(bundle, cutoff)
         if latest is not None:
@@ -548,6 +549,9 @@ class CandidateService:
         scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
                          'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
                          'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
+                         'decision_status','watch_reasons','setup_rank','display_order','rank_semantics','setup_rank_features',
+                         'trend_state','market_context_state','market_compatibility_status','same_theme_context_status',
+                         'behavioral_confirmation_status','critical_counterevidence_status','capital_evidence_status',
                          'formal_status','relative_strength_status','ret1_pct','ret3_pct','ret5_pct','ret10_pct','ret20_pct','CLV',
                          'amplitude_pct','low_return_pct','high_return_pct','close_return_pct','recovery_points_pct',
                          'low_to_close_rebound_pct','RS_market_1d_pct','RS_sector_1d_pct',
@@ -687,17 +691,27 @@ class CandidateService:
 
     def _strategy_export_rows(self, run, strategy_id, selection):
         from .strategy_tracking import authoritative_strategy_items
-        ranked = dict(authoritative_strategy_items(run))
-        if strategy_id not in ranked:
-            raise KeyError(strategy_id)
         focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
         focus_ids = set(focus.get('selected_ids') or [])
-        rows = self._selected_strategy_rows(ranked[strategy_id], focus_ids, selection)
         results = {**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}
         result = results.get(strategy_id)
         if result is None:
-            result = next(value for key, value in results.items()
-                          if (value.get('canonical_strategy_id') or value.get('strategy_id') or key) == strategy_id)
+            result = next((value for key, value in results.items()
+                           if (value.get('canonical_strategy_id') or value.get('strategy_id') or key) == strategy_id), None)
+        if result is None:
+            raise KeyError(strategy_id)
+        if result.get('strategy_id') == 'STAGE_AWARE_MOMENTUM_V2' or result.get('full_eligible_pool_retained'):
+            all_rows = list(result.get('items') or [])
+            selection = selection or 'all'
+            if selection not in {'all', 'focus', 'unselected'}:
+                raise ValueError('unknown strategy experiment selection')
+            rows = [row for row in all_rows if selection == 'all' or (row.get('decision_status') == 'FOCUS') == (selection == 'focus')]
+            ranked = [row for row in all_rows if row.get('decision_status') == 'FOCUS']
+            return result, rows, ranked, focus, focus_ids
+        ranked = dict(authoritative_strategy_items(run))
+        if strategy_id not in ranked:
+            raise KeyError(strategy_id)
+        rows = self._selected_strategy_rows(ranked[strategy_id], focus_ids, selection)
         return result, rows, ranked[strategy_id], focus, focus_ids
 
     def export_strategy_experiment_csv(self, run_id, *, strategy_id=None, selection=None):
@@ -709,7 +723,10 @@ class CandidateService:
         fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'S_DNA', 'S_THEME', 'S_PV_REFERENCE',
                   'reference_score', 'reference_rank', 'A', 'R', 'H', 'status', 'technical_status', 'theme_status', 'capital_status',
                   'hard_requirements_status', 'formal_status', 'primary_stage', 'alternate_stages', 'liquidity_status', 'sector_status',
-                  'funds_status', 'funds_grade', 'relative_strength_status', 'ret1_pct', 'ret3_pct', 'ret5_pct', 'ret10_pct', 'ret20_pct',
+                  'funds_status', 'funds_grade', 'decision_status', 'watch_reasons', 'setup_rank', 'display_order', 'rank_semantics',
+                  'trend_state', 'market_context_state', 'market_compatibility_status', 'same_theme_context_status',
+                  'behavioral_confirmation_status', 'critical_counterevidence_status', 'capital_evidence_status',
+                  'relative_strength_status', 'ret1_pct', 'ret3_pct', 'ret5_pct', 'ret10_pct', 'ret20_pct',
                   'CLV', 'amplitude_pct', 'low_return_pct', 'high_return_pct', 'close_return_pct', 'recovery_points_pct',
                   'low_to_close_rebound_pct', 'RS_market_1d_pct', 'RS_sector_1d_pct',
                   'shape_type', 'amount_cny', 'turnover_fraction', 'reason', 'reason_codes', 'selected_focus',
@@ -745,6 +762,18 @@ class CandidateService:
                 'sector_status': item.get('sector_status'),
                 'funds_status': item.get('funds_status'),
                 'funds_grade': item.get('funds_grade'),
+                'decision_status': item.get('decision_status'),
+                'watch_reasons': '|'.join(item.get('watch_reasons') or []),
+                'setup_rank': item.get('setup_rank'),
+                'display_order': item.get('display_order'),
+                'rank_semantics': item.get('rank_semantics'),
+                'trend_state': item.get('trend_state'),
+                'market_context_state': item.get('market_context_state'),
+                'market_compatibility_status': item.get('market_compatibility_status'),
+                'same_theme_context_status': item.get('same_theme_context_status'),
+                'behavioral_confirmation_status': item.get('behavioral_confirmation_status'),
+                'critical_counterevidence_status': item.get('critical_counterevidence_status'),
+                'capital_evidence_status': item.get('capital_evidence_status'),
                 'relative_strength_status': item.get('relative_strength_status'),
                 'ret1_pct': item.get('ret1_pct'),
                 'ret3_pct': item.get('ret3_pct'),

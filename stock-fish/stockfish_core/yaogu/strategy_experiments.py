@@ -530,11 +530,22 @@ def implementation_conformance(run):
 
 def source_identity():
     _assert_frozen_specs()
-    paths=[Path(__file__),ROOT/'stockfish_core/yaogu/visibility.py',ROOT/'stockfish_core/yaogu/contracts.py',ROOT/'stockfish_core/yaogu/events.py',SOURCE_LOCK_PATH]
+    paths=[
+        Path(__file__),
+        ROOT/'stockfish_core/yaogu/visibility.py',
+        ROOT/'stockfish_core/yaogu/contracts.py',
+        ROOT/'stockfish_core/yaogu/events.py',
+        ROOT/'stockfish_core/yaogu/theme_capital_trend.py',
+        ROOT/'stockfish_core/yaogu/stage_aware_momentum.py',
+        ROOT/'config/theme_capital_trend_v1.yaml',
+        ROOT/'config/stage_aware_momentum_v2.yaml',
+        SOURCE_LOCK_PATH,
+    ]
     hashes={str(p.relative_to(ROOT)).replace('\\','/'):hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     baseline=ROOT/SPEC['baseline']['config_path']
     return {'source_hash':digest(hashes),'source_file_hashes':hashes,'spec_hash':digest({'strategy':SPEC,'completion':COMPLETION}),
         'config_hash':digest(SPEC),'selection_policy_hash':digest(FOCUS_POLICY),
+        'strategy_dependency_source_hashes':{k:v for k,v in hashes.items() if k.startswith('stockfish_core/yaogu/theme_capital_trend') or k.startswith('stockfish_core/yaogu/stage_aware_momentum') or k.startswith('config/theme_capital_trend') or k.startswith('config/stage_aware_momentum')},
         'spec_source_hashes':{SPEC_PATH.name:hashlib.sha256(SPEC_PATH.read_bytes()).hexdigest(),COMPLETION_PATH.name:hashlib.sha256(COMPLETION_PATH.read_bytes()).hexdigest()},
         'frozen_daily_config_hash':hashlib.sha256(baseline.read_bytes()).hexdigest(),'upstream_source_lock':SOURCE_LOCK['upstream_research']}
 

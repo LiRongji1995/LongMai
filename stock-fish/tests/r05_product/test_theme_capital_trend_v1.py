@@ -127,7 +127,8 @@ def trend_bundle(*, amount=Decimal("600000000"), turnover=Decimal("0.08"), sessi
         _fund("TEST001", days[-1], Decimal("60000000"), Decimal("40000000"), seat="S1"),
         _fund("TEST002", days[-2], Decimal("60000000"), Decimal("30000000"), seat="S2"),
     ]
-    payloads = [("fixture-master", securities), ("fixture-bars", bars), ("fixture-theme", themes)]
+    selected_funds = default_funds if funds is None else funds
+    payloads = [("fixture-master", securities), ("fixture-bars", bars), ("fixture-theme", themes), ("fixture-funds", selected_funds)]
     return MarketInput.model_validate({
         "observation_date": days[-1],
         "sessions": days,
@@ -142,7 +143,7 @@ def trend_bundle(*, amount=Decimal("600000000"), turnover=Decimal("0.08"), sessi
         "bars": bars,
         "themes": themes,
         "receipts": [_receipt(rid, payload, days[0]) for rid, payload in payloads],
-        "funds": default_funds if funds is None else funds,
+        "funds": selected_funds,
         "coverage_type": "TEST_FIXTURE",
     }), datetime.combine(days[-1], time(20, 30), TZ)
 
@@ -158,6 +159,7 @@ def _fund(iid, day, buy, net, *, theme_id="THEME_A", layer="SUPPLIER_CLASSIFIED_
         "buy_amount_cny": buy,
         "net_amount_cny": net,
         "source_layer": layer,
+        "source_refs": ["fixture-funds"],
         **_clocks(day, time(16)),
         **({"dedupe_key": dedupe_key} if dedupe_key else {}),
     }

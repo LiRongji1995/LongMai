@@ -329,18 +329,24 @@
       const card = textNode('article', undefined, 'candidate');
       const head = textNode('div', undefined, 'card-heading');
       const identity = textNode('div');
-      identity.append(textNode('div', item.instrument_id, 'security-id'), textNode('h3', (item.name || summary.strategy_id) + ' · 第 ' + (item.rank ?? '—') + ' 名'));
+      const rankText = summary.strategy_id === 'STAGE_AWARE_MOMENTUM_V2'
+        ? `${item.primary_stage || 'NO_SETUP'} · setup #${item.setup_rank ?? '—'}`
+        : '第 ' + (item.rank ?? '—') + ' 名';
+      identity.append(textNode('div', item.instrument_id, 'security-id'), textNode('h3', (item.name || summary.strategy_id) + ' · ' + rankText));
       identity.append(
         textNode('span', focusIds.has(item.instrument_id) ? '焦点跟踪' : '未入焦点', 'badge ' + (focusIds.has(item.instrument_id) ? 'focus' : '')),
         textNode('span', summary.status || 'UNKNOWN', 'badge'),
         textNode('span', item.board_state === 'VERIFIED' ? '板事件已核验' : '板事件未核验', 'badge'),
       );
       const score = textNode('div', undefined, 'score');
-      const scoreKey = summary.strategy_id === 'DNA_RERANK_V1' ? 'S_DNA' : summary.strategy_id === 'THEME_CONTEXT_V1' ? 'S_THEME' : 'S_PV';
+      const scoreKey = summary.strategy_id === 'DNA_RERANK_V1' ? 'S_DNA' : summary.strategy_id === 'THEME_CONTEXT_V1' ? 'S_THEME' : summary.strategy_id === 'STAGE_AWARE_MOMENTUM_V2' ? 'decision_status' : 'S_PV';
       score.append(textNode('small', scoreKey), textNode('span', display(item[scoreKey])));
       head.append(identity, score);
       card.append(head);
-      card.append(textNode('p', `A ${display(item.A)} · R ${display(item.R)} · H ${display(item.H)} · ${summary.parameter_status}`));
+      const metrics = summary.strategy_id === 'STAGE_AWARE_MOMENTUM_V2'
+        ? `趋势 ${display(item.trend_state)} · 市场 ${display(item.market_context_state)} · 同题材 ${display(item.same_theme_context_status)}`
+        : `A ${display(item.A)} · R ${display(item.R)} · H ${display(item.H)} · ${summary.parameter_status}`;
+      card.append(textNode('p', metrics));
       card.append(textNode('p', '研究风险：' + (item.risk_flags || []).join(' / ') + ' · 人工风险复核尚未完成', 'caption'));
       const comps = textNode('div', undefined, 'components');
       for (const key of ['A', 'R', 'H']) {

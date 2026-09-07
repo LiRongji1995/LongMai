@@ -39,14 +39,14 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py rules
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py list
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py select --profile PV_OBSERVATION_V1 --target next-session
-./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py select --profile STAGE_AWARE_MOMENTUM_V1 --target next-session
+./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py select --profile STAGE_AWARE_MOMENTUM_V2 --target next-session
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py detail RUN_ID 601086.SH
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py export RUN_ID
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py report RUN_ID
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
-新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应 `STAGE_AWARE_MOMENTUM_V1`。它是独立研究臂，不替代旧 PV/焦点，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，并与用户硬性条件分开说明。日常可直接说：
+新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
 
 - “把下一个交易日的荐股清单给我。”
 - “给我一份当前短线强势股和市场状态报告。”
@@ -58,7 +58,7 @@
 - “比较原PV、旧焦点和阶段感知策略。”
 - “给我策略调整建议，但不要修改正式策略。”
 
-执行时先查保存 run 是否已经包含 `STAGE_AWARE_MOMENTUM_V1`；没有合格长窗价格、题材或资金证据时，输出 `INSUFFICIENT_EVIDENCE` 和具体 `UNKNOWN` 缺口，不用旧 PV 冒充阶段感知正式名单。完整规格与首轮审计见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
+执行时先查保存 run 是否已经包含 `STAGE_AWARE_MOMENTUM_V2`；没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
 2026-09-07 新增研究臂后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。
 

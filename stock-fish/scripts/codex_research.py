@@ -28,7 +28,7 @@ FOCUS = "PV_FOCUS_PREVIEW_V0.1"
 THEME_CAPITAL = "THEME_CAPITAL_TREND_V1"
 THEME_CAPITAL_TECHNICAL = "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1"
 SIMPLE_TREND = "SIMPLE_TREND_TEMPLATE_REFERENCE_V1"
-STAGE_AWARE = "STAGE_AWARE_MOMENTUM_V1"
+STAGE_AWARE = "STAGE_AWARE_MOMENTUM_V2"
 RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE)
 READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
     # R05 V4 before the additive THEME_CAPITAL_TREND_V1 experiment arms.
@@ -341,13 +341,13 @@ def report_text(saved, review, context=None, strategy_id=PV):
              "- 覆盖类型：" + str(saved.get("coverage_type")) + "；策略状态：" + str(result.get("status")) + "。",
              "- 实际名单 " + str(len(ranked)) + " 只；旧焦点 " + str(len(focus.get("selected_ids", []))) + " 只；数量来自正式条件。",
              "- 日期化合格池 " + str(counts.get("eligible")) + "；字段可评估 " + str(counts.get("evaluated")) + "；缺数 " + str(counts.get("missing")) + "。",
-             "- DAILY_V1 保持正式主策略身份；本报告是已明确选择的独立研究视图。"]
+             "- 阶段感知 V2 为当前主动核心强势股策略；旧 DAILY/PV/FOCUS 仍保持历史身份，不重写历史。"]
     if strategy_id == THEME_CAPITAL:
         lines.append("- 新版初始研究参数状态：**尚未验证**；用户硬性要求与本版初始参数必须分开理解。")
         lines.append("- 正式名单要求成交额、换手率、均线/形态、题材联动和同题材活跃资金全部 `PASS`；`UNKNOWN` 不填补。")
     if strategy_id == STAGE_AWARE:
-        lines.append("- 阶段感知初始研究参数状态：**尚未验证**；阶段标签是研究分类，不是市场事实。")
-        lines.append("- A 和 CLV 不再作为所有阶段的统一硬门槛；正式名单仍要求流动性底线、阶段识别、题材链接和资金等级达标。")
+        lines.append("- 阶段感知 V2 初始研究参数状态：**尚未验证**；setup 标签是研究分类，不是市场事实；`MARKET_EDGE=NOT_ESTABLISHED`。")
+        lines.append("- 正式 FOCUS 要求趋势、setup、行为确认、市场兼容、同题材板块/资金与关键反证全部达标；证据不足输出 WATCH/UNKNOWN。")
     if context:
         lines += ["- 目标交易日：" + context["target_session"] + "；该目标前一交易日：" + context["expected_observation_date"] + "。",
                   "- 请求时最后收盘交易日：" + context["latest_completed_session"] + "；当前报告使用最后可复用的原保存结果。"]

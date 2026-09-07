@@ -5,7 +5,7 @@
 - 各任务较新的明确授权优先；不得把本次工程交付授权扩大为以后普通研究的自动提交权限。
 - 当前为 R05 使用交接。日常先读 [执行协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md)，用户入口见 [README](README.md)，按需展开 [全面综述](stock-fish/docs/PROJECT_OVERVIEW.md)。无需用户打开网页；Codex调用现有逻辑，优先复用保存结果。不能用较早R03/R04历史记录推断当前数据就绪。
 - 默认规则入口不以账户、LLM、旧 Alpha158 或下载模型为前提。保留五族公式、权重、阈值及初始假设标记；修改语义必须登记新配置/特征版本，不覆写旧 run。
-- 当前新增阶段感知研究臂为 `STAGE_AWARE_MOMENTUM_V1`，说明见 [stock-fish/docs/STAGE_AWARE_MOMENTUM_V1.md](stock-fish/docs/STAGE_AWARE_MOMENTUM_V1.md)。它保留旧策略对照，先分阶段再解释证据；A/CLV 不作所有阶段统一硬门槛，初始参数必须标为“尚未验证”。
+- 当前阶段感知主动核心为 `STAGE_AWARE_MOMENTUM_V2`，说明见 [stock-fish/docs/STAGE_AWARE_MOMENTUM_V2.md](stock-fish/docs/STAGE_AWARE_MOMENTUM_V2.md)；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容和审计材料。V2 保留旧策略对照，先分离事实、setup、行为确认、市场/题材/资金情境和关键反证，再给出 `FOCUS/WATCH/REJECTED/UNKNOWN`；A/CLV 不作所有阶段统一硬门槛，初始参数必须标为“尚未验证”，`MARKET_EDGE=NOT_ESTABLISHED`。
 - 先校验证券身份、业务日期和父来源实际可见时间，再使用价格、主题、资金或风险字段。历史下载不能伪装成过去已经取得；未知事件不得当 FALSE，缺结果不计零收益。
 - RAW 行情、限价事件、历史资格和主题完整性分别记录。采集完成、作业成功、health 正常都不等于 DAILY_V1 就绪；未知不能伪装成合法 EMPTY。
 - stock-fish/ 与 qlib/ 保留上游源码及本项目修改。运行采用项目虚拟环境中的 pyqlib 0.9.7 wheel；未经验证不改为相邻 Qlib main 的 editable install。旧模型维持研究用途和原 hash。

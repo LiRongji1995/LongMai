@@ -1,5 +1,7 @@
 # STAGE_AWARE_MOMENTUM_V1 阶段感知强势股研究框架
 
+状态：2026-09-07 起冻结为历史只读兼容和审计材料。当前主动核心版本见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)。
+
 本文件对应用户指定的最新执行规格《StockRecommendation：阶段感知的强势股研究框架与落选反思》。它是现有系统上的增量研究臂，不替代、重命名或重写旧 DAILY、PV、焦点、DNA、THEME、`THEME_CAPITAL_TREND_V1` 及历史结果。两只指定股票是否入选不作为验收标准。
 
 ## 1. 用户硬性要求
@@ -35,7 +37,7 @@
 - 实现：[stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)。
 - 实验 profile：`STAGE_AWARE_MOMENTUM_V1`。
 - API、摘要、详情和 JSON/CSV 导出沿用现有 `strategy_experiments` 保存体系；旧 `PV_OBSERVATION_V1`、`PV_FOCUS_PREVIEW_V0.1` 和 `THEME_CAPITAL_TREND_V1` 不改名。
-- Codex 薄入口 [codex_research.py](../scripts/codex_research.py) 已加入 `STAGE_AWARE_MOMENTUM_V1`。
+- 首轮实验时 Codex 薄入口 [codex_research.py](../scripts/codex_research.py) 曾加入 `STAGE_AWARE_MOMENTUM_V1`；2026-09-07 起当前入口已切换为 `STAGE_AWARE_MOMENTUM_V2`，本文件仅保留 V1 历史语义和审计证据。
 
 ## 4. 首轮真实输入审计
 
