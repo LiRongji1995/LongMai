@@ -498,7 +498,9 @@ class CandidateService:
         daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
         result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
             result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'],
-            result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'))
+            result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'),
+            [value for key,value in result.get('results',{}).items()
+             if key in {'THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1','SIMPLE_TREND_TEMPLATE_REFERENCE_V1'}])
         from .strategy_tracking import _visible_bars
         frozen_bars = _visible_bars(bundle, cutoff)
         if latest is not None:
@@ -542,7 +544,10 @@ class CandidateService:
         self.store._put_document(connection, 'strategy_implementation_assessments', run['run_id'], assessment)
         focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
         focus_ids = set(focus.get('selected_ids') or [])
-        scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','A','R','H','status','close','open','high','low','comparable_close','comparable_basis','risk_flags','risk_review_status','board_state','limit_event_status','reason_codes'}
+        scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
+                         'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
+                         'shape_type','amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
+                         'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh'}
         header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
                       focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})
@@ -696,8 +701,10 @@ class CandidateService:
         result, items, _, focus, focus_ids = self._strategy_export_rows(run, strategy_id, selection)
         focus_by_id = {row['instrument_id']: row for row in focus.get('items', [])}
         stream = io.StringIO(newline='')
-        fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'S_DNA', 'S_THEME', 'A', 'R', 'H',
-                  'status', 'reason', 'reason_codes', 'selected_focus', 'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status']
+        fields = ['run_id', 'observation_date', 'strategy_id', 'instrument_id', 'rank', 'S_PV', 'S_DNA', 'S_THEME', 'S_PV_REFERENCE',
+                  'reference_score', 'reference_rank', 'A', 'R', 'H', 'status', 'technical_status', 'theme_status', 'capital_status',
+                  'hard_requirements_status', 'shape_type', 'amount_cny', 'turnover_fraction', 'reason', 'reason_codes', 'selected_focus',
+                  'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status', 'parameter_status_label_zh']
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for item in items:
@@ -711,10 +718,20 @@ class CandidateService:
                 'S_PV': item.get('S_PV'),
                 'S_DNA': item.get('S_DNA'),
                 'S_THEME': item.get('S_THEME'),
+                'S_PV_REFERENCE': item.get('S_PV_REFERENCE'),
+                'reference_score': item.get('reference_score'),
+                'reference_rank': item.get('reference_rank'),
                 'A': item.get('A'),
                 'R': item.get('R'),
                 'H': item.get('H'),
                 'status': item.get('status'),
+                'technical_status': item.get('technical_status'),
+                'theme_status': item.get('theme_status'),
+                'capital_status': item.get('capital_status'),
+                'hard_requirements_status': item.get('hard_requirements_status'),
+                'shape_type': item.get('shape_type'),
+                'amount_cny': item.get('amount_cny'),
+                'turnover_fraction': item.get('turnover_fraction'),
                 'reason': item.get('reason'),
                 'reason_codes': '|'.join(item.get('reason_codes') or []),
                 'selected_focus': item['instrument_id'] in focus_ids,
@@ -722,6 +739,7 @@ class CandidateService:
                 'close_location': focus_row.get('close_location'),
                 'scope_label': result.get('scope_label'),
                 'parameter_status': run.get('parameter_status'),
+                'parameter_status_label_zh': item.get('parameter_status_label_zh'),
             }
             writer.writerow({k: "'" + v if isinstance(v, str) and v[:1] in '=+-@' else v for k, v in row.items()})
         return stream.getvalue()

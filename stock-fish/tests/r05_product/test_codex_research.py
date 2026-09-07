@@ -104,6 +104,39 @@ def test_selection_export_and_report_reuse_one_saved_order_without_post(saved_ht
     assert all(payload is None for _, payload in client.calls)
 
 
+def test_theme_capital_profile_can_reuse_insufficient_evidence_view(saved_http, tmp_path):
+    saved, summary, _ = deepcopy(saved_http)
+    saved["results"] = {entry.THEME_CAPITAL: {
+        "items": [],
+        "status": "INSUFFICIENT_EVIDENCE",
+        "counts": {"eligible": 4, "evaluated": 4, "passed": 0, "unknown": 4},
+        "parameter_status_label_zh": "尚未验证",
+    }}
+    saved["export_view"].update(strategy_id=entry.THEME_CAPITAL, filtered_total=0, ranked_total=0)
+    summary["results"] = {entry.THEME_CAPITAL: {"status": "INSUFFICIENT_EVIDENCE", "item_count": 0}}
+    summary["items"] = []
+    summary["filtered_total"] = 0
+    stream = io.StringIO(newline="")
+    csv.DictWriter(stream, fieldnames=["run_id", "observation_date", "strategy_id", "instrument_id", "rank"]).writeheader()
+    client = FakeClient((saved, summary, ("\ufeff" + stream.getvalue()).encode("utf-8")))
+    bundle = entry.official_exports(client, saved["run_id"], entry.THEME_CAPITAL)
+    entry.verify_reusable(bundle[0], entry.THEME_CAPITAL)
+    result = entry.save_bundle(client, bundle, tmp_path / "theme-capital", strategy_id=entry.THEME_CAPITAL)
+    manifest = json.loads((Path(result["saved_directory"]) / "manifest.json").read_text(encoding="utf-8"))
+    report = (Path(result["saved_directory"]) / "report.md").read_text(encoding="utf-8")
+    assert manifest["strategy_id"] == entry.THEME_CAPITAL
+    assert result["research_profile"] == entry.THEME_CAPITAL
+    assert "尚未验证" in report and "INSUFFICIENT_EVIDENCE" in report
+
+
+def test_legacy_v4_pv_source_hash_is_read_only_reusable_not_new_profile(saved_http):
+    saved = deepcopy(saved_http[0])
+    saved["source_hash"] = next(iter(entry.READ_ONLY_LEGACY_PV_SOURCE_HASHES))
+    entry.verify_reusable(saved, entry.PV)
+    with pytest.raises(entry.ResearchError, match="NOT_CONFORMANT"):
+        entry.verify_reusable(saved, entry.THEME_CAPITAL)
+
+
 @pytest.mark.parametrize("corruption", ["csv_order", "source_hash", "summary_order", "count"])
 def test_export_mismatch_does_not_create_output_or_replace_previous(saved_http, tmp_path, corruption):
     client = FakeClient(saved_http)

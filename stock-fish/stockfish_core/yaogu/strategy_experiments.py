@@ -500,11 +500,16 @@ def run_theme_limitup(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=Non
     return {**run_theme_context(bundle,pv_result,top_n=top_n,cutoff=cutoff,_context=_context),
         'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
 
-def strategy_comparison(daily_summary,pv,dna,theme,focus=None):
+def strategy_comparison(daily_summary,pv,dna,theme,focus=None,extra_strategies=None):
     candidate_sets={k:set(v.get('top_ids',[])) for k,v in [('PV',pv),('DNA',dna),('THEME',theme)]}
     rows=[{'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
         'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
         'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[]))} for x in (pv,dna,theme)]
+    for x in extra_strategies or ():
+        rows.append({'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
+            'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
+            'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[])),
+            'formal_list_policy':x.get('formal_list_policy'),'parameter_status_label_zh':x.get('parameter_status_label_zh')})
     return {'comparison_version':'R05_STRATEGY_COMPARISON_V1','parameter_status':PARAMETER_STATUS,'strategies':rows,
         'focus':{'strategy_id':FOCUS_POLICY_ID,'selected_ids':(focus or {}).get('selected_ids',[]),'count':len((focus or {}).get('selected_ids',[]))},
         'overlaps':{'pv_dna':sorted(candidate_sets['PV']&candidate_sets['DNA']),'pv_theme':sorted(candidate_sets['PV']&candidate_sets['THEME']),
@@ -537,24 +542,36 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     ctx=_prepare_context(bundle,cutoff);pv=run_pv_observation(bundle,top_n=top_n,cutoff=cutoff,_context=ctx);focus=run_pv_focus_preview(pv)
     pv.update(selection_policy_id=FOCUS_POLICY_ID,focus_count=focus['count'],focus_ids=focus['selected_ids'])
     dna=run_dna_rerank(bundle,pv,top_n=top_n,cutoff=cutoff,_context=ctx);theme=run_theme_context(bundle,pv,top_n=top_n,cutoff=cutoff,_context=ctx)
+    from .theme_capital_trend import run_simple_trend_template, run_theme_capital_trend, run_theme_capital_trend_technical_only
+    theme_capital_technical=run_theme_capital_trend_technical_only(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
+    theme_capital=run_theme_capital_trend(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
+    simple_trend=run_simple_trend_template(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     identity=source_identity();input_hash=digest(bundle);deps=ctx.resolver.effective_dependencies()
     payload={'strategy_family':'R05','input_id':'market_input_'+input_hash[:16],'input_hash':input_hash,'observation_date':ctx.observation_date,
         'implementation_version':IMPLEMENTATION_VERSION,'parameter_status':PARAMETER_STATUS,'decision_cutoff':ctx.cutoff.isoformat(),'coverage_type':bundle.coverage_type,
         'audit_mode':'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type=='PROSPECTIVE_CAPTURED' else bundle.coverage_type,
         'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),'effective_input_hash':digest(deps),
         'source_refs':sorted(ctx.resolver.used),'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
-        'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme},'selection_results':{FOCUS_POLICY_ID:focus}}
-    for result in payload['results'].values():result.update(**identity,input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type)
+        'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme,
+            theme_capital_technical['strategy_id']:theme_capital_technical,
+            theme_capital['strategy_id']:theme_capital,
+            simple_trend['strategy_id']:simple_trend},
+        'selection_results':{FOCUS_POLICY_ID:focus}}
+    for result in payload['results'].values():
+        for key,value in identity.items():result.setdefault(key,value)
+        result.update(input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type)
     payload['results'][DNA_REVERSAL_ID]={**dna,'strategy_id':DNA_REVERSAL_ID,'canonical_strategy_id':DNA_ID,'compatibility_alias':True}
     payload['results'][THEME_LIMITUP_ID]={**theme,'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
-    payload['comparison']=strategy_comparison(daily_summary,pv,dna,theme,focus)
+    payload['comparison']=strategy_comparison(daily_summary,pv,dna,theme,focus,(theme_capital_technical,theme_capital,simple_trend))
     payload['run_id']=_stable_id('strategy_experiment',{k:payload[k] for k in ('input_hash','observation_date','decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash')})
     return payload
 
 def strategy_specs():
+    from .theme_capital_trend import theme_capital_strategy_specs
     return {'task_id':'R05','implementation_version':IMPLEMENTATION_VERSION,**source_identity(),
         'strategies':[{'strategy_id':'DAILY_V1','description':'原五族冻结对照，缺数据不由PV替代。','config_hash':source_identity()['frozen_daily_config_hash']},
             *[{'strategy_id':k,'parameter_status':PARAMETER_STATUS,'spec':v} for k,v in SPEC['strategies'].items()],
-            {'strategy_id':FOCUS_POLICY_ID,'selection_policy':FOCUS_POLICY,'parameter_status':PARAMETER_STATUS}]}
+            {'strategy_id':FOCUS_POLICY_ID,'selection_policy':FOCUS_POLICY,'parameter_status':PARAMETER_STATUS},
+            *theme_capital_strategy_specs()]}
 
 STRATEGY_SPECS=strategy_specs()['strategies']

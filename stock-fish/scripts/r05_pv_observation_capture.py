@@ -49,6 +49,14 @@ def csv_rows(path, rows):
             writer.writerow({key: row.get(key) for key in fields})
 
 
+def pv_count(counts, primary, fallback=None):
+    if primary in counts:
+        return counts[primary]
+    if fallback is not None and fallback in counts:
+        return counts[fallback]
+    return 0
+
+
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--cache", required=True, type=Path)
@@ -120,8 +128,8 @@ def main():
                   "market_input_path": "market-input.json", "normalization": normalization,
                   "stages": stages, "queue": queue.summary(),
                   "strategy_experiment_path": "strategy-experiments.json",
-                  "pv_status": pv["status"], "pv_ranked": pv["counts"]["ranked"],
-                  "pv_missing_required_data": pv["counts"]["missing_required_data"],
+                  "pv_status": pv["status"], "pv_ranked": pv_count(pv["counts"], "ranked", "filter_passed"),
+                  "pv_missing_required_data": pv_count(pv["counts"], "missing_required_data", "missing"),
                   "market_edge": "NOT_ESTABLISHED",
                   "remaining_requests": [{k: r[k] for k in ("request_id", "state", "attempts", "failure_category", "payload")}
                                          for r in queue.rows() if r["state"] != "COMPLETE"]}
@@ -131,7 +139,7 @@ def main():
         _write_once(args.output / "capture-report.json", report)
         csv_rows(args.output / "pv-observation-top.csv", pv.get("items", []))
         print(json.dumps({"消息": "R05量价观察采集完成", "观察日": str(day), "PV状态": pv["status"],
-                          "PV入围": pv["counts"]["ranked"], "输出": str(args.output),
+                          "PV入围": pv_count(pv["counts"], "ranked", "filter_passed"), "输出": str(args.output),
                           "市场边际": "NOT_ESTABLISHED"}, ensure_ascii=False))
 
 

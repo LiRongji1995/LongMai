@@ -6,10 +6,11 @@
 
 - [主板研究 README](stock-fish/README.md)：日常示例、启动停止、数据缺失和模型边界。
 - [Codex 日常研究协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md) 与 [项目 Agent 指引](AGENTS.md)：自然语言请求、持久化及权限。
+- [新版板块资金趋势说明](stock-fish/docs/THEME_CAPITAL_TREND_V1.md)：`THEME_CAPITAL_TREND_V1` 的硬性要求、尚未验证的初始参数、首轮真实输入审计与国芳/金健路径。
 - [全面中文项目综述](stock-fish/docs/PROJECT_OVERVIEW.md)：自包含背景、数据、全部策略与公式、跟踪口径、当前证据和新对话提示词。
 - [首用验证记录](stock-fish/docs/CODEX_FIRST_USE_VERIFICATION.md)：本次实际读取、导出、报告与相关测试结果。
 
-普通研究不自动授权修改生产代码、策略或 Git 提交推送。报告和完整导出在本机 `stock-fish/reports/codex/`，数据库与运行数据不随仓库发布。本次文档核对基础为 2026-09-07、发布 main 的 `bff8859`（运行代码同 `d88f1f0`）；后续交付提交以 Git 历史为准。
+普通研究不自动授权修改生产代码、策略或 Git 提交推送。报告和完整导出在本机 `stock-fish/reports/codex/`，数据库与运行数据不随仓库发布。新版板块资金趋势策略已独立版本化；旧 PV/焦点/DAILY 结果保留，初始参数标注 **尚未验证**。历史文档核对基础为 2026-09-07、发布 main 的 `bff8859`（运行代码同 `d88f1f0`）；当前交付提交以 Git 历史为准。
 
 下文保留较早 R03 的流程与验收记录；当前能力、实际本机实例、数据限制和使用方式以以上 R05 手册与首用验证为准。
 

@@ -25,6 +25,14 @@ if str(ROOT) not in sys.path:
 SH = ZoneInfo("Asia/Shanghai")
 PV = "PV_OBSERVATION_V1"
 FOCUS = "PV_FOCUS_PREVIEW_V0.1"
+THEME_CAPITAL = "THEME_CAPITAL_TREND_V1"
+THEME_CAPITAL_TECHNICAL = "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1"
+SIMPLE_TREND = "SIMPLE_TREND_TEMPLATE_REFERENCE_V1"
+RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND)
+READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
+    # R05 V4 before the additive THEME_CAPITAL_TREND_V1 experiment arms.
+    "cde229340f46f123246c7ce7fe9b15331dc62f2a516b19e9524390ff4858031c",
+}
 REAL_COVERAGE = {"PROSPECTIVE_CAPTURED", "RECONSTRUCTED_HISTORICAL"}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED"}
 
@@ -153,19 +161,21 @@ def prefix(run_id):
     return "/api/strategy-experiments/" + identifier(run_id)
 
 
-def summary(client, run_id, page=1, page_size=10):
+def summary(client, run_id, page=1, page_size=10, strategy_id=PV):
     return client.get(prefix(run_id) + "/summary?" + parse.urlencode(
-        {"strategy_id": PV, "selection": "all", "page": page, "page_size": page_size}))
+        {"strategy_id": identifier(strategy_id), "selection": "all", "page": page, "page_size": page_size}))
 
 
-def concise(saved):
+def concise(saved, strategy_id=PV):
     fields = ("run_id", "input_id", "observation_date", "decision_cutoff", "generated_at",
               "coverage_type", "implementation_version", "spec_hash", "source_run_hash",
               "parameter_status", "status", "counts", "filtered_total", "implementation_assessment")
     value = {key: saved.get(key) for key in fields if key in saved}
-    result = saved.get("results", {}).get(PV, {})
-    value.update(research_profile=PV, formal_primary_strategy="DAILY_V1",
-                 pv_status=result.get("status", saved.get("status")), pv_count=result.get("item_count"),
+    result = saved.get("results", {}).get(strategy_id, {})
+    pv_result = saved.get("results", {}).get(PV, {})
+    value.update(research_profile=strategy_id, formal_primary_strategy="DAILY_V1",
+                 profile_status=result.get("status", saved.get("status")), profile_count=result.get("item_count"),
+                 pv_status=pv_result.get("status", saved.get("status")), pv_count=pv_result.get("item_count"),
                  focus_count=len(saved.get("focus_ids") or []),
                  strategy_states={key: row.get("status") for key, row in saved.get("results", {}).items()},
                  excerpt=saved.get("items", [])[:10], excerpt_is_complete=(saved.get("filtered_total", 11) <= 10))
@@ -225,33 +235,34 @@ def detail_summary(item):
     return result
 
 
-def official_exports(client, run_id):
+def official_exports(client, run_id, strategy_id=PV):
     """Verify official JSON, CSV, and every saved summary page without reranking."""
     base = prefix(run_id)
-    query = "&strategy_id=" + PV + "&selection=all"
+    strategy_id = identifier(strategy_id)
+    query = "&strategy_id=" + parse.quote(strategy_id) + "&selection=all"
     json_bytes = client.raw(base + "/export?format=json" + query)
     csv_bytes = client.raw(base + "/export?format=csv" + query)
     try:
         saved = json.loads(json_bytes)
-        rows = saved["results"][PV]["items"]
+        rows = saved["results"][strategy_id]["items"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig"))))
         view = saved["export_view"]
-        if saved["run_id"] != run_id or view["strategy_id"] != PV or view["selection"] != "all":
+        if saved["run_id"] != run_id or view["strategy_id"] != strategy_id or view["selection"] != "all":
             raise ResearchError("EXPORT_IDENTITY_MISMATCH")
         expected = [(str(row["instrument_id"]), str(row["rank"])) for row in rows]
         actual = [(row["instrument_id"], row["rank"]) for row in csv_rows]
         if actual != expected or len(set(iid for iid, _ in expected)) != len(expected):
             raise ResearchError("CSV_JSON_SAVED_ORDER_MISMATCH")
-        if any(row["run_id"] != run_id or row["strategy_id"] != PV or
+        if any(row["run_id"] != run_id or row["strategy_id"] != strategy_id or
                row["observation_date"] != saved["observation_date"] for row in csv_rows):
             raise ResearchError("CSV_METADATA_MISMATCH")
-        first = summary(client, run_id, page_size=500)
+        first = summary(client, run_id, page_size=500, strategy_id=strategy_id)
         if first["source_run_hash"] != view["source_content_hash"] or first["filtered_total"] != len(rows):
             raise ResearchError("SUMMARY_EXPORT_IDENTITY_MISMATCH")
         shown = list(first["items"])
         page = first
         while page["has_next"]:
-            page = summary(client, run_id, page=page["page"] + 1, page_size=500)
+            page = summary(client, run_id, page=page["page"] + 1, page_size=500, strategy_id=strategy_id)
             if page["source_run_hash"] != first["source_run_hash"]:
                 raise ResearchError("SUMMARY_VERSION_CHANGED")
             shown.extend(page["items"])
@@ -264,23 +275,26 @@ def official_exports(client, run_id):
     return saved, json_bytes, csv_bytes, first
 
 
-def verify_reusable(saved):
+def verify_reusable(saved, strategy_id=PV):
     from stockfish_core.yaogu.strategy_experiments import implementation_conformance
 
     if saved.get("coverage_type") not in REAL_COVERAGE:
         raise ResearchError("NON_REAL_OR_UNVERIFIABLE_INPUT_NOT_FOR_DAILY_RESEARCH")
-    if implementation_conformance(saved)["status"] != "SPEC_CONFORMANT":
+    assessment = implementation_conformance(saved)
+    legacy_pv_ok = strategy_id == PV and saved.get("source_hash") in READ_ONLY_LEGACY_PV_SOURCE_HASHES
+    if assessment["status"] != "SPEC_CONFORMANT" and not legacy_pv_ok:
         raise ResearchError("SAVED_IMPLEMENTATION_NOT_CONFORMANT_WITH_LOCAL_CODE")
     if saved.get("input_id") != "market_" + str(saved.get("input_hash")):
         raise ResearchError("SAVED_INPUT_HASH_IDENTITY_MISMATCH")
     for field in ("effective_input_hash", "universe_hash", "source_hash", "config_hash"):
         if not re.fullmatch("[0-9a-f]{64}", str(saved.get(field, ""))):
             raise ResearchError("SAVED_REUSE_METADATA_INCOMPLETE")
-    if saved.get("results", {}).get(PV, {}).get("status") not in {"COMPLETE", "EMPTY", "LIMITED_SCOPE"}:
-        raise ResearchError("PV_DATA_UNAVAILABLE_NOT_A_ZERO_CANDIDATE_RESULT")
+    result = saved.get("results", {}).get(strategy_id, {})
+    if result.get("status") not in {"COMPLETE", "EMPTY", "LIMITED_SCOPE", "INSUFFICIENT_EVIDENCE"}:
+        raise ResearchError("PROFILE_DATA_UNAVAILABLE_NOT_A_ZERO_CANDIDATE_RESULT")
 
 
-def select_saved(client, context, input_id=None):
+def select_saved(client, context, input_id=None, strategy_id=PV):
     rows = saved_runs(client)
     candidates = [row for row in rows if row.get("coverage_type") in REAL_COVERAGE
                   and row.get("observation_date", "9999") < context["target_session"]
@@ -290,9 +304,9 @@ def select_saved(client, context, input_id=None):
     candidates.sort(key=lambda row: (row["observation_date"], row.get("decision_cutoff") or ""), reverse=True)
     skipped = []
     for row in candidates:
-        bundle = official_exports(client, row["run_id"])
+        bundle = official_exports(client, row["run_id"], strategy_id)
         try:
-            verify_reusable(bundle[0])
+            verify_reusable(bundle[0], strategy_id)
         except ResearchError as exc:
             skipped.append({"run_id": row["run_id"], "reason": str(exc)})
             continue
@@ -300,32 +314,44 @@ def select_saved(client, context, input_id=None):
     raise ResearchError("NO_REUSABLE_REAL_RUN_INPUT_VERIFICATION_REQUIRED")
 
 
-def report_text(saved, review, context=None):
-    result = saved["results"][PV]
+def report_text(saved, review, context=None, strategy_id=PV):
+    result = saved["results"][strategy_id]
     counts = result.get("counts") or {}
     focus = saved.get("selection_results", {}).get(FOCUS, {})
-    lines = ["# 沪深主板量价研究简报", "", "本报告由正式保存结果派生；范围仅为输入实际覆盖的沪深主板。",
+    ranked = [row for row in result.get("items", []) if row.get("rank") is not None]
+    profile_title = "沪深主板量价研究简报" if strategy_id == PV else "沪深主板新版板块资金趋势研究简报"
+    lines = ["# " + profile_title, "", "本报告由正式保存结果派生；范围仅为输入实际覆盖的沪深主板。",
              "事实与计算结果：", "",
              "- 原运行：`" + saved["run_id"] + "`；输入：`" + saved["input_id"] + "`。",
              "- 行情观察日：" + saved["observation_date"] + "；原资料决策截止：" + str(saved.get("decision_cutoff")) + "。",
              "- 原运行生成时间：" + str(saved.get("generated_at")) + "。",
              "- 资料水位：" + str(saved.get("data_watermark")) + "；生成时间不代表行情新鲜度。",
-             "- 策略：" + PV + "；实现：" + str(saved.get("implementation_version")) + "；规格：" + str(saved.get("spec_hash")) + "。",
-             "- 覆盖类型：" + str(saved.get("coverage_type")) + "；PV 状态：" + str(result.get("status")) + "。",
-             "- 完整候选 " + str(len(result["items"])) + " 只；焦点 " + str(len(focus.get("selected_ids", []))) + " 只；数量来自正式条件。",
+             "- 策略：" + strategy_id + "；实现：" + str(saved.get("implementation_version")) + "；规格：" + str(saved.get("spec_hash")) + "。",
+             "- 覆盖类型：" + str(saved.get("coverage_type")) + "；策略状态：" + str(result.get("status")) + "。",
+             "- 实际名单 " + str(len(ranked)) + " 只；旧焦点 " + str(len(focus.get("selected_ids", []))) + " 只；数量来自正式条件。",
              "- 日期化合格池 " + str(counts.get("eligible")) + "；字段可评估 " + str(counts.get("evaluated")) + "；缺数 " + str(counts.get("missing")) + "。",
-             "- DAILY_V1 保持正式主策略身份；本报告是已明确选择的独立 PV 量价研究。"]
+             "- DAILY_V1 保持正式主策略身份；本报告是已明确选择的独立研究视图。"]
+    if strategy_id == THEME_CAPITAL:
+        lines.append("- 新版初始研究参数状态：**尚未验证**；用户硬性要求与本版初始参数必须分开理解。")
+        lines.append("- 正式名单要求成交额、换手率、均线/形态、题材联动和同题材活跃资金全部 `PASS`；`UNKNOWN` 不填补。")
     if context:
         lines += ["- 目标交易日：" + context["target_session"] + "；该目标前一交易日：" + context["expected_observation_date"] + "。",
                   "- 请求时最后收盘交易日：" + context["latest_completed_session"] + "；当前报告使用最后可复用的原保存结果。"]
         if saved["observation_date"] != context["expected_observation_date"]:
             lines += ["- 目标前一交易日数据尚未体现在本名单中；这是截至上述观察日的最后可用结果，未伪称新名单。"]
     lines += ["", "## 原排序节选（最多 10 只，完整名单见同目录 JSON / CSV）", ""]
-    for row in result["items"][:10]:
-        lines.append("- " + str(row.get("rank")) + ". " + row["instrument_id"] + " " + str(row.get("name", ""))
-                     + "：A=" + str(row.get("A")) + "，R=" + str(row.get("R")) + "，H=" + str(row.get("H"))
-                     + "，S_PV=" + str(row.get("S_PV")) + "；风险标记=" + json.dumps(row.get("risk_flags", []), ensure_ascii=False)
-                     + "，风险核对状态=" + str(row.get("risk_review_status", "未提供额外结论")) + "。")
+    if not ranked:
+        lines.append("- 本策略视图没有实际排名行；若状态为 `INSUFFICIENT_EVIDENCE`，完整缺口见 source.json 的 coverage_diagnostics。")
+    for row in ranked[:10]:
+        detail = "- " + str(row.get("rank")) + ". " + row["instrument_id"] + " " + str(row.get("name", ""))
+        if strategy_id == PV:
+            detail += "：A=" + str(row.get("A")) + "，R=" + str(row.get("R")) + "，H=" + str(row.get("H")) + "，S_PV=" + str(row.get("S_PV"))
+            detail += "；风险标记=" + json.dumps(row.get("risk_flags", []), ensure_ascii=False) + "，风险核对状态=" + str(row.get("risk_review_status", "未提供额外结论"))
+        else:
+            detail += "：状态=" + str(row.get("status")) + "，参考分=" + str(row.get("reference_score"))
+            detail += "，技术/题材/资金=" + "/".join(str(row.get(k)) for k in ("technical_status", "theme_status", "capital_status"))
+            detail += "，形态=" + str(row.get("shape_type"))
+        lines.append(detail + "。")
     maturity = review.get("counts", {})
     lines += ["", "## 跟踪与限制", "",
               "- 保存复盘状态：" + str(review.get("status", "见 review.json 的分窗口结果")) + "；市场优势：" + str(review.get("market_edge", "NOT_ESTABLISHED")) + "。",
@@ -359,6 +385,7 @@ def reusable_local_bundle(root, manifest):
         try:
             old = json.loads((candidate / "manifest.json").read_text(encoding="utf-8"))
             if (old.get("run_id") != manifest["run_id"] or old.get("source_content_hash") != manifest["source_content_hash"]
+                    or old.get("strategy_id", PV) != manifest.get("strategy_id", PV)
                     or target_key(old.get("target")) != target_key(manifest.get("target"))):
                 continue
             old_files = old["files"]
@@ -385,7 +412,7 @@ def reusable_local_bundle(root, manifest):
     return None
 
 
-def save_bundle(client, bundle, output=None, context=None, with_report=True):
+def save_bundle(client, bundle, output=None, context=None, with_report=True, strategy_id=PV):
     saved, json_bytes, csv_bytes, first = bundle
     if saved.get("coverage_type") not in REAL_COVERAGE:
         raise ResearchError("NON_REAL_OR_UNVERIFIABLE_INPUT_NOT_FOR_DAILY_RESEARCH")
@@ -396,18 +423,18 @@ def save_bundle(client, bundle, output=None, context=None, with_report=True):
     files = {"source.json": json_bytes, "candidates.csv": csv_bytes}
     if with_report:
         files["review.json"] = json.dumps(review, ensure_ascii=False, indent=2).encode("utf-8")
-        files["report.md"] = report_text(saved, review, context).encode("utf-8")
+        files["report.md"] = report_text(saved, review, context, strategy_id).encode("utf-8")
     manifest = {"created_at": now.isoformat(), "api_base_url": client.base_url, "run_id": saved["run_id"],
                 "input_id": saved["input_id"], "input_hash": saved.get("input_hash"),
                 "decision_cutoff": saved.get("decision_cutoff"), "data_watermark": saved.get("data_watermark"),
                 "observation_date": saved["observation_date"], "coverage_type": saved.get("coverage_type"),
                 "spec_hash": saved.get("spec_hash"), "source_hash": saved.get("source_hash"),
                 "source_content_hash": saved["export_view"]["source_content_hash"],
-                "ranking_count": len(saved["results"][PV]["items"]), "selection": "all", "target": context,
+                "ranking_count": len(saved["results"][strategy_id]["items"]), "strategy_id": strategy_id, "selection": "all", "target": context,
                 "verification": "OFFICIAL_JSON_CSV_ALL_SUMMARY_PAGES_SAME_IDS_RANKS_COUNT_SOURCE_HASH",
                 "files": {name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()}}
     reused = reusable_local_bundle(directory.parent, manifest) if output is None else None
-    result = concise(first)
+    result = concise(first, strategy_id)
     result.update(saved_directory=str((reused or directory).resolve()), files=[*files, "manifest.json"], target=context,
                   reused_saved_run=True, reused_local_bundle=reused is not None,
                   newly_collected_data=False, newly_computed_ranking=False)
@@ -471,8 +498,8 @@ def parser():
     sub = commands.add_parser("list")
     sub.add_argument("--limit", type=int, default=20, help="历史运行摘要数量；不是股票候选显示上限")
     for name in ("select", "run"):
-        sub = commands.add_parser(name, help="只读复用保存的 PV 研究，不重复计算")
-        sub.add_argument("--profile", choices=[PV], required=True)
+        sub = commands.add_parser(name, help="只读复用保存的研究视图，不重复计算")
+        sub.add_argument("--profile", choices=RESEARCH_PROFILES, required=True)
         sub.add_argument("--target", default="next-session", help="tomorrow / next-session / YYYY-MM-DD")
         sub.add_argument("--output", type=Path)
         if name == "run":
@@ -484,6 +511,7 @@ def parser():
             sub.add_argument("instrument_id")
         if name in {"export", "report"}:
             sub.add_argument("--output", type=Path)
+            sub.add_argument("--profile", choices=RESEARCH_PROFILES, default=PV)
         if name == "track":
             sub.add_argument("--update", action="store_true", help="显式追加正式后验和研究周期，不重算原名单")
             sub.add_argument("--input-id", help="可选已登记后续资料 input_id")
@@ -516,7 +544,7 @@ def execute(args, client):
                              "coverage_counts": scalars(coverage.get("coverage") or {})},
                 "pipeline": pipeline_summary,
                 "detail_apis": ["/api/universe/coverage", "/api/candidate-data-pipeline"],
-                "formal_primary_strategy": "DAILY_V1", "research_profile_requires_explicit_selection": PV}
+                "formal_primary_strategy": "DAILY_V1", "research_profiles_require_explicit_selection": list(RESEARCH_PROFILES)}
     if args.command == "rules":
         return {"current_formal_config": pick(client.get("/api/strategy-configs/current"), ("config", "config_hash", "market_edge")),
                 "registered_experiments": client.get("/api/strategy-experiments/specs")}
@@ -526,13 +554,13 @@ def execute(args, client):
         return [concise(row) for row in client.get("/api/strategy-experiments?limit=" + str(args.limit))]
     if args.command in {"select", "run"}:
         context = calendar_context(args.target)
-        bundle, skipped = select_saved(client, context, getattr(args, "input_id", None))
-        result = save_bundle(client, bundle, args.output, context)
+        bundle, skipped = select_saved(client, context, getattr(args, "input_id", None), args.profile)
+        result = save_bundle(client, bundle, args.output, context, strategy_id=args.profile)
         result["skipped_non_reusable_runs"] = skipped
         return result
     if args.command in {"export", "report"}:
-        return save_bundle(client, official_exports(client, args.run_id), args.output,
-                           with_report=args.command == "report")
+        return save_bundle(client, official_exports(client, args.run_id, args.profile), args.output,
+                           with_report=args.command == "report", strategy_id=args.profile)
     if args.command == "detail":
         item = client.get(prefix(args.run_id) + "/items/" + identifier(args.instrument_id))
         if item.get("run_id") != args.run_id or item.get("instrument_id") != args.instrument_id:

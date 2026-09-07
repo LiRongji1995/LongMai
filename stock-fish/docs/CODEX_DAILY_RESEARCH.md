@@ -45,6 +45,18 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
+新版《StockRecommendation：板块—资金—多头趋势策略与落选复盘》对应 `THEME_CAPITAL_TREND_V1`。它是独立研究臂，不替代旧 PV/焦点；初始研究参数必须标明 **尚未验证**，并与用户硬性条件分开说明。日常可直接说：
+
+- “按新要求给我下一交易日名单。”
+- “为什么国芳集团/金健米业没有入围？”
+- “复盘最近一周：没选上的是否更好？”
+- “比较原PV、旧焦点、新策略和趋势参考。”
+- “给我策略调整建议，但不要修改正式策略。”
+
+执行时先查保存 run 是否已经包含 `THEME_CAPITAL_TREND_V1`、`THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1` 和 `SIMPLE_TREND_TEMPLATE_REFERENCE_V1`；没有合格长窗价格、题材或资金证据时，输出 `INSUFFICIENT_EVIDENCE` 和具体 `UNKNOWN` 缺口，不用旧 PV 冒充新版正式名单。完整规格与首轮审计见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
+
+2026-09-07 新增研究臂后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。
+
 `select` 会保存全量导出及事实简报；`report` 读取指定原运行生成事实简报，Codex 可在同目录另写注明推断边界的分析，不改官方 source.json。`--target tomorrow` 与 `next-session` 不同；历史原榜用 `list` 找 run 后读取详情/导出。`run --profile PV_OBSERVATION_V1 --input-id INPUT_ID` 只做精确输入复用。`capture --wait-seconds 30`、`track RUN_ID --update --input-id INPUT_ID --wait-seconds 30` 是显式写操作，不在只读查询中默认执行；等待最多 60 秒，随后用 `job JOB_ID` 继续查看。
 
 `--base-url`、`--env-file`、`--timeout` 等全局参数必须放在子命令前。默认不读取其他环境文件；需要 Key 时可选已有私有文件且只提取 `STOCKFISH_API_KEY`。输出目录可用 `--output` 指定，必须不存在；拒绝覆盖旧报告。完整响应保存在私有产物，日常回复只展开需要的字段。
