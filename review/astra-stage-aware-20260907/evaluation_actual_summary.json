@@ -1,0 +1,2487 @@
+{
+  "evidence": "ACTUAL_EXECUTION_ON_REAL_SAVED_INPUT_NOT_ARCHIVED_HISTORICAL_SIGNAL",
+  "source_input": "stock-fish\\reports\\codex\\pv_observation_20260904_rebuilt_20260907T091708\\market-input.json",
+  "input_sha256": "1c76544443958b70ba83c87a4fc78fccdb4f2144aff890e79735ac6856cb61ca",
+  "saved_old_sha256": "ad0e26fc9640aa81e6149e14208aa8f5d5362996e50f27dc31fc1304997f01be",
+  "saved_stage_sha256": "34f539b8b81bb0eb4a8dbe47d933f8022213823c2d0cc8ffd4d513b19a926e67",
+  "current_entry": "run_strategy_experiments",
+  "cutoff": "2026-09-07T09:17:11.036672+08:00",
+  "observation_date": "2026-09-04",
+  "saved_coverage_type": "PROSPECTIVE_CAPTURED",
+  "saved_audit_mode": "ARCHIVED_POINT_IN_TIME",
+  "bar_sessions": [
+    "2026-08-28",
+    "2026-08-31",
+    "2026-09-01",
+    "2026-09-02",
+    "2026-09-03",
+    "2026-09-04"
+  ],
+  "bar_count": 27587,
+  "calendar_last": "2026-09-04",
+  "themes": 0,
+  "funds": 0,
+  "available_run_inventory": [
+    {
+      "path": "stock-fish\\reports\\codex\\pv_observation_20260904_rebuilt_20260907T091708\\strategy-experiments.json",
+      "observation_date": "2026-09-04",
+      "cutoff": "2026-09-07T09:17:11.036672+08:00",
+      "sha256": "ad0e26fc9640aa81e6149e14208aa8f5d5362996e50f27dc31fc1304997f01be"
+    },
+    {
+      "path": "stock-fish\\reports\\codex\\stage_aware_momentum_v1_initial_audit_20260907T111840\\stage-aware-strategy-experiments.json",
+      "observation_date": "2026-09-04",
+      "cutoff": "2026-09-07T09:17:11.036672+08:00",
+      "sha256": "34f539b8b81bb0eb4a8dbe47d933f8022213823c2d0cc8ffd4d513b19a926e67"
+    }
+  ],
+  "cache_sqlite_inventory": [
+    {
+      "path": "stock-fish\\data\\codex-pv-cache\\request-queue.sqlite3",
+      "size_bytes": 114688,
+      "tables": [
+        "attempts",
+        "requests"
+      ],
+      "access": "SQLITE_URI_MODE_RO"
+    },
+    {
+      "path": "stock-fish\\data\\codex-pv-cache\\transport-budget.sqlite3",
+      "size_bytes": 675840,
+      "tables": [
+        "http_budgets",
+        "transport_attempts"
+      ],
+      "access": "SQLITE_URI_MODE_RO"
+    }
+  ],
+  "five_signal_days": {
+    "requested": 5,
+    "actually_available_dates": [
+      "2026-09-04"
+    ],
+    "status": "NOT_VERIFIED_ONLY_ONE_SAVED_SIGNAL_DAY",
+    "reason": "Earlier price sessions are not earlier frozen qualification snapshots or six-day-complete signal inputs; no backdating or synthetic market history."
+  },
+  "old_frozen_comparison": {
+    "PV_OBSERVATION_V1": {
+      "items": true,
+      "top_ids": true,
+      "counts": true,
+      "qualified_ids": true,
+      "complete_feature_ids": true,
+      "eligible_feature_items": true,
+      "rejected": true,
+      "missing": true,
+      "status": true
+    },
+    "DNA_RERANK_V1": {
+      "items": true,
+      "top_ids": true,
+      "counts": true,
+      "qualified_ids": true,
+      "complete_feature_ids": true,
+      "eligible_feature_items": true,
+      "rejected": true,
+      "missing": true,
+      "status": true
+    },
+    "THEME_CONTEXT_V1": {
+      "items": true,
+      "top_ids": true,
+      "counts": true,
+      "qualified_ids": true,
+      "complete_feature_ids": true,
+      "eligible_feature_items": true,
+      "rejected": true,
+      "missing": true,
+      "status": true
+    },
+    "PV_FOCUS_PREVIEW_V0.1": {
+      "items": true,
+      "selected_ids": true,
+      "count": true,
+      "selection_policy_hash": true
+    }
+  },
+  "saved_stage_comparison": {
+    "items": true,
+    "counts": true,
+    "qualified_ids": true,
+    "top_ids": true,
+    "status": true
+  },
+  "pool": {
+    "date_qualified": 3043,
+    "pv_features_complete": 3039,
+    "missing_pv_features": 4,
+    "all_stage_conditions_known": 0,
+    "pv_features_and_all_stage_conditions_known": 0,
+    "not_common_selected_intersection": true,
+    "common_pool_definition": "STRICT_DIAGNOSTIC_ALL_FOUR_STAGE_CONDITIONS_KNOWN_INCLUDING_FAIL; NOT_AN_EXISTING_CANONICAL_COMMON_DATA_COHORT"
+  },
+  "strategy_coverage": {
+    "PV_OBSERVATION_V1": {
+      "status": "LIMITED_SCOPE",
+      "actual_selected": 525,
+      "qualified_ids_count": 3043,
+      "counts": {
+        "eligible": 3043,
+        "evaluated": 3039,
+        "filter_passed": 525,
+        "missing": 4,
+        "known_rejected": 2514,
+        "field_coverage": 0.998686,
+        "quote_coverage_min": 0.98,
+        "universe_complete": false
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "DNA_RERANK_V1": {
+      "status": "INSUFFICIENT_COVERAGE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 525,
+        "evaluated": 0,
+        "insufficient": 525
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "THEME_CONTEXT_V1": {
+      "status": "INSUFFICIENT_COVERAGE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 525,
+        "evaluated": 0,
+        "insufficient": 525
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1": {
+      "status": "INSUFFICIENT_EVIDENCE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 3043,
+        "evaluated": 3043,
+        "passed": 0,
+        "failed": 2844,
+        "unknown": 199,
+        "condition_counts": {
+          "amount": {
+            "PASS": 604,
+            "FAIL": 2439,
+            "UNKNOWN": 0
+          },
+          "turnover": {
+            "PASS": 294,
+            "FAIL": 2749,
+            "UNKNOWN": 0
+          },
+          "ma_bullish": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "shape": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "theme_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "capital_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          }
+        },
+        "visible_theme_count": 0,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 3039,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 3039,
+          "missing": 4,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "THEME_CAPITAL_TREND_V1": {
+      "status": "INSUFFICIENT_EVIDENCE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 3043,
+        "evaluated": 3043,
+        "passed": 0,
+        "failed": 2844,
+        "unknown": 199,
+        "condition_counts": {
+          "amount": {
+            "PASS": 604,
+            "FAIL": 2439,
+            "UNKNOWN": 0
+          },
+          "turnover": {
+            "PASS": 294,
+            "FAIL": 2749,
+            "UNKNOWN": 0
+          },
+          "ma_bullish": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "shape": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "theme_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "capital_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          }
+        },
+        "visible_theme_count": 0,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 3039,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 3039,
+          "missing": 4,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "SIMPLE_TREND_TEMPLATE_REFERENCE_V1": {
+      "status": "INSUFFICIENT_EVIDENCE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 3043,
+        "evaluated": 3043,
+        "passed": 0,
+        "failed": 0,
+        "unknown": 3043,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 3039,
+          "missing": 4,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "STAGE_AWARE_MOMENTUM_V1": {
+      "status": "INSUFFICIENT_EVIDENCE",
+      "actual_selected": 0,
+      "qualified_ids_count": 0,
+      "counts": {
+        "eligible": 3043,
+        "evaluated": 3043,
+        "passed": 0,
+        "failed": 2844,
+        "unknown": 199,
+        "condition_counts": {
+          "liquidity_bottom": {
+            "PASS": 199,
+            "FAIL": 2844,
+            "UNKNOWN": 0
+          },
+          "stage_identification": {
+            "PASS": 648,
+            "FAIL": 0,
+            "UNKNOWN": 2395
+          },
+          "sector_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          },
+          "funds_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          }
+        },
+        "stage_counts": {
+          "START": {
+            "PASS": 525,
+            "FAIL": 2514,
+            "UNKNOWN": 4
+          },
+          "ACCELERATION": {
+            "PASS": 221,
+            "FAIL": 0,
+            "UNKNOWN": 2822
+          },
+          "HIGH_LEVEL_DIVERGENCE": {
+            "PASS": 76,
+            "FAIL": 2967,
+            "UNKNOWN": 0
+          },
+          "TREND_PULLBACK": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3043
+          }
+        },
+        "visible_theme_count": 0,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 3039,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 3039,
+          "missing": 4,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "note": "qualified_ids is not a uniform data-coverage field across strategies"
+    },
+    "PV_FOCUS_PREVIEW_V0.1": {
+      "status": "LIMITED_SCOPE",
+      "actual_selected": 17,
+      "parent_pv_count": 525
+    }
+  },
+  "stage_status": {
+    "FAIL": 2844,
+    "UNKNOWN": 199
+  },
+  "stage_condition_counts": {
+    "liquidity_bottom": {
+      "PASS": 199,
+      "FAIL": 2844,
+      "UNKNOWN": 0
+    },
+    "stage_identification": {
+      "PASS": 648,
+      "FAIL": 0,
+      "UNKNOWN": 2395
+    },
+    "sector_linkage": {
+      "PASS": 0,
+      "FAIL": 0,
+      "UNKNOWN": 3043
+    },
+    "funds_linkage": {
+      "PASS": 0,
+      "FAIL": 0,
+      "UNKNOWN": 3043
+    }
+  },
+  "stage_overlap": {
+    "number_of_pass_stages": {
+      "0": 2395,
+      "1": 528,
+      "2": 66,
+      "3": 54
+    }
+  },
+  "stage_populations": {
+    "START": {
+      "stage_pass": 525,
+      "stage_and_liquidity_pass": 92,
+      "stage_pass_outside_pv": 0,
+      "stage_pass_outside_focus": 508,
+      "stage_liquidity_outside_pv": 0,
+      "stage_liquidity_outside_focus": 86,
+      "formal_selected": 0,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    "ACCELERATION": {
+      "stage_pass": 221,
+      "stage_and_liquidity_pass": 118,
+      "stage_pass_outside_pv": 122,
+      "stage_pass_outside_focus": 210,
+      "stage_liquidity_outside_pv": 50,
+      "stage_liquidity_outside_focus": 113,
+      "formal_selected": 0,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    "HIGH_LEVEL_DIVERGENCE": {
+      "stage_pass": 76,
+      "stage_and_liquidity_pass": 47,
+      "stage_pass_outside_pv": 10,
+      "stage_pass_outside_focus": 59,
+      "stage_liquidity_outside_pv": 5,
+      "stage_liquidity_outside_focus": 41,
+      "formal_selected": 0,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    "TREND_PULLBACK": {
+      "stage_pass": 0,
+      "stage_and_liquidity_pass": 0,
+      "stage_pass_outside_pv": 0,
+      "stage_pass_outside_focus": 0,
+      "stage_liquidity_outside_pv": 0,
+      "stage_liquidity_outside_focus": 0,
+      "formal_selected": 0,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    }
+  },
+  "single_condition_ablations": [
+    {
+      "strategy": "PV_OBSERVATION_V1",
+      "removed_condition": "PV_AMOUNT_RATIO_BELOW_1_2",
+      "base_selected": 525,
+      "additional_pass": 791,
+      "new_total": 1316,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "PV_OBSERVATION_V1",
+      "removed_condition": "PV_RET5_NOT_POSITIVE",
+      "base_selected": 525,
+      "additional_pass": 278,
+      "new_total": 803,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "PV_FOCUS_PREVIEW_V0.1",
+      "removed_condition": "A_BELOW_2_0",
+      "parent_scope": "FROZEN_PV_SELECTED_PARENT_UNCHANGED",
+      "base_selected": 17,
+      "additional_pass": 12,
+      "new_total": 29,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "PV_FOCUS_PREVIEW_V0.1",
+      "removed_condition": "R_BELOW_0_10",
+      "parent_scope": "FROZEN_PV_SELECTED_PARENT_UNCHANGED",
+      "base_selected": 17,
+      "additional_pass": 43,
+      "new_total": 60,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "PV_FOCUS_PREVIEW_V0.1",
+      "removed_condition": "RAW_CLOSE_BELOW_RAW_OPEN",
+      "parent_scope": "FROZEN_PV_SELECTED_PARENT_UNCHANGED",
+      "base_selected": 17,
+      "additional_pass": 0,
+      "new_total": 17,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "PV_FOCUS_PREVIEW_V0.1",
+      "removed_condition": "CLOSE_LOCATION_BELOW_0_70",
+      "parent_scope": "FROZEN_PV_SELECTED_PARENT_UNCHANGED",
+      "base_selected": 17,
+      "additional_pass": 13,
+      "new_total": 30,
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "STAGE_AWARE_MOMENTUM_V1",
+      "removed_condition": "liquidity_bottom",
+      "base_selected": 0,
+      "additional_pass": 0,
+      "new_status_counts": {
+        "UNKNOWN": 3043
+      },
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "STAGE_AWARE_MOMENTUM_V1",
+      "removed_condition": "stage_identification",
+      "base_selected": 0,
+      "additional_pass": 0,
+      "new_status_counts": {
+        "FAIL": 2844,
+        "UNKNOWN": 199
+      },
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "STAGE_AWARE_MOMENTUM_V1",
+      "removed_condition": "sector_linkage",
+      "base_selected": 0,
+      "additional_pass": 0,
+      "new_status_counts": {
+        "FAIL": 2844,
+        "UNKNOWN": 199
+      },
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    },
+    {
+      "strategy": "STAGE_AWARE_MOMENTUM_V1",
+      "removed_condition": "funds_linkage",
+      "base_selected": 0,
+      "additional_pass": 0,
+      "new_status_counts": {
+        "FAIL": 2844,
+        "UNKNOWN": 199
+      },
+      "outcome_evaluable": 0,
+      "outcomes": "NOT_VERIFIED_NO_FUTURE_PRICES"
+    }
+  ],
+  "whole_pool_quadrants": [
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "eligible_pool": 3043,
+      "selected": 525,
+      "not_selected": 2518,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {
+        "PV_AMOUNT_RATIO_BELOW_1_2": 2236,
+        "PV_RET5_NOT_POSITIVE": 1723
+      },
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "PV_AMOUNT_RATIO_BELOW_1_2",
+            "PV_RET5_NOT_POSITIVE"
+          ],
+          "count": 1445,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_AMOUNT_RATIO_BELOW_1_2"
+          ],
+          "count": 791,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_RET5_NOT_POSITIVE"
+          ],
+          "count": 278,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_AMOUNT_MEAN5_UNAVAILABLE"
+          ],
+          "count": 4,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 2518,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {},
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "NO_STRATEGY_EVALUATED_ROW"
+          ],
+          "count": 2518,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "UNSPECIFIED_EXCLUSION"
+          ],
+          "count": 525,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {},
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "NO_STRATEGY_EVALUATED_ROW"
+          ],
+          "count": 2518,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "UNSPECIFIED_EXCLUSION"
+          ],
+          "count": 525,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {},
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "TCT_AMOUNT_BELOW_500M",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 2344,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 405,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE"
+          ],
+          "count": 199,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_AMOUNT_BELOW_500M",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE"
+          ],
+          "count": 95,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {},
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "TCT_AMOUNT_BELOW_500M",
+            "TCT_CAPITAL_WAITING_FOR_AUTHORIZED_THEME_LINKAGE",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_THEME_DATA_UNAVAILABLE",
+            "TCT_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 2344,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_CAPITAL_WAITING_FOR_AUTHORIZED_THEME_LINKAGE",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_THEME_DATA_UNAVAILABLE",
+            "TCT_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 405,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_CAPITAL_WAITING_FOR_AUTHORIZED_THEME_LINKAGE",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_THEME_DATA_UNAVAILABLE"
+          ],
+          "count": 199,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "TCT_AMOUNT_BELOW_500M",
+            "TCT_CAPITAL_WAITING_FOR_AUTHORIZED_THEME_LINKAGE",
+            "TCT_MA10_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA120_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA20_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA250_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA60_PRICE_WINDOW_INCOMPLETE",
+            "TCT_THEME_DATA_UNAVAILABLE"
+          ],
+          "count": 95,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {},
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "TCT_MA150_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA200_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA200_PRICE_WINDOW_INCOMPLETE",
+            "TCT_MA50_PRICE_WINDOW_INCOMPLETE"
+          ],
+          "count": 3043,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "eligible_pool": 3043,
+      "selected": 0,
+      "not_selected": 3043,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {
+        "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE": 3043,
+        "SAM_SECTOR_DATA_UNAVAILABLE": 3043,
+        "SAM_TURNOVER_BELOW_7PCT": 2749,
+        "SAM_AMOUNT_BELOW_500M": 2439,
+        "SAM_STAGE_ALL_CANDIDATES_UNKNOWN": 2395
+      },
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "SAM_AMOUNT_BELOW_500M",
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_STAGE_ALL_CANDIDATES_UNKNOWN",
+            "SAM_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 1991,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_AMOUNT_BELOW_500M",
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 353,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_STAGE_ALL_CANDIDATES_UNKNOWN",
+            "SAM_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 325,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE"
+          ],
+          "count": 142,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_TURNOVER_BELOW_7PCT"
+          ],
+          "count": 80,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_AMOUNT_BELOW_500M",
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE"
+          ],
+          "count": 73,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_STAGE_ALL_CANDIDATES_UNKNOWN"
+          ],
+          "count": 57,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "SAM_AMOUNT_BELOW_500M",
+            "SAM_FUNDS_WAITING_FOR_SECTOR_LINKAGE",
+            "SAM_SECTOR_DATA_UNAVAILABLE",
+            "SAM_STAGE_ALL_CANDIDATES_UNKNOWN"
+          ],
+          "count": 22,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3043,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "eligible_pool": 3043,
+      "selected": 17,
+      "not_selected": 3026,
+      "selected_up": null,
+      "selected_down": null,
+      "not_selected_up": null,
+      "not_selected_down": null,
+      "flat": null,
+      "mature_outcome_denominator": 0,
+      "missing_reference_in_eligible_pool": 4,
+      "status": "NOT_VERIFIED_NO_FUTURE_PRICES",
+      "exclusion_reason_counts_overlapping": {
+        "R_BELOW_0_10": 439,
+        "CLOSE_LOCATION_BELOW_0_70": 383,
+        "A_BELOW_2_0": 373,
+        "RAW_CLOSE_BELOW_RAW_OPEN": 134,
+        "NOT_APPLICABLE_ZERO_RANGE": 1
+      },
+      "exclusive_full_pool_exclusion_groups": [
+        {
+          "reason_codes": [
+            "PV_AMOUNT_RATIO_BELOW_1_2",
+            "PV_RET5_NOT_POSITIVE"
+          ],
+          "count": 1445,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_AMOUNT_RATIO_BELOW_1_2"
+          ],
+          "count": 791,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_RET5_NOT_POSITIVE"
+          ],
+          "count": 278,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0",
+            "CLOSE_LOCATION_BELOW_0_70",
+            "R_BELOW_0_10"
+          ],
+          "count": 174,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0",
+            "CLOSE_LOCATION_BELOW_0_70",
+            "RAW_CLOSE_BELOW_RAW_OPEN",
+            "R_BELOW_0_10"
+          ],
+          "count": 88,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0",
+            "R_BELOW_0_10"
+          ],
+          "count": 69,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "CLOSE_LOCATION_BELOW_0_70",
+            "R_BELOW_0_10"
+          ],
+          "count": 45,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "R_BELOW_0_10"
+          ],
+          "count": 43,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "CLOSE_LOCATION_BELOW_0_70",
+            "RAW_CLOSE_BELOW_RAW_OPEN",
+            "R_BELOW_0_10"
+          ],
+          "count": 20,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0",
+            "CLOSE_LOCATION_BELOW_0_70"
+          ],
+          "count": 17,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0",
+            "CLOSE_LOCATION_BELOW_0_70",
+            "RAW_CLOSE_BELOW_RAW_OPEN"
+          ],
+          "count": 13,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "CLOSE_LOCATION_BELOW_0_70"
+          ],
+          "count": 13,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "CLOSE_LOCATION_BELOW_0_70",
+            "RAW_CLOSE_BELOW_RAW_OPEN"
+          ],
+          "count": 13,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "A_BELOW_2_0"
+          ],
+          "count": 12,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "PV_AMOUNT_MEAN5_UNAVAILABLE"
+          ],
+          "count": 4,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        },
+        {
+          "reason_codes": [
+            "NOT_APPLICABLE_ZERO_RANGE"
+          ],
+          "count": 1,
+          "up": null,
+          "down": null,
+          "flat": null,
+          "mature_outcome_denominator": 0
+        }
+      ],
+      "exclusive_group_total": 3026,
+      "reason_scope": "FULL_QUALIFIED_POOL; MISSING_ROWS_RETAINED_EXPLICITLY"
+    }
+  ],
+  "price_statistics": [
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "horizon": 1,
+      "signals": 525,
+      "unique_instruments": 525,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 525,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "horizon": 2,
+      "signals": 525,
+      "unique_instruments": 525,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 525,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "horizon": 3,
+      "signals": 525,
+      "unique_instruments": 525,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 525,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "horizon": 5,
+      "signals": 525,
+      "unique_instruments": 525,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 525,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_OBSERVATION_V1",
+      "horizon": 10,
+      "signals": 525,
+      "unique_instruments": 525,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 525,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "DNA_RERANK_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CONTEXT_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "THEME_CAPITAL_TREND_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "SIMPLE_TREND_TEMPLATE_REFERENCE_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "horizon": 1,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "horizon": 2,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "horizon": 3,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "horizon": 5,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V1",
+      "horizon": 10,
+      "signals": 0,
+      "unique_instruments": 0,
+      "signal_dates": 0,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 0,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "horizon": 1,
+      "signals": 17,
+      "unique_instruments": 17,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 17,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "horizon": 2,
+      "signals": 17,
+      "unique_instruments": 17,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 17,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "horizon": 3,
+      "signals": 17,
+      "unique_instruments": 17,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 17,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "horizon": 5,
+      "signals": 17,
+      "unique_instruments": 17,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 17,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "PV_FOCUS_PREVIEW_V0.1",
+      "horizon": 10,
+      "signals": 17,
+      "unique_instruments": 17,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 17,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC",
+      "horizon": 1,
+      "signals": 3039,
+      "unique_instruments": 3039,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 3039,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC",
+      "horizon": 2,
+      "signals": 3039,
+      "unique_instruments": 3039,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 3039,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC",
+      "horizon": 3,
+      "signals": 3039,
+      "unique_instruments": 3039,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 3039,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC",
+      "horizon": 5,
+      "signals": 3039,
+      "unique_instruments": 3039,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 3039,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    },
+    {
+      "strategy_id": "ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC",
+      "horizon": 10,
+      "signals": 3039,
+      "unique_instruments": 3039,
+      "signal_dates": 1,
+      "expected_observation_dates": 1,
+      "mature_valid": 0,
+      "not_matured": 3039,
+      "missing_or_incomparable": 0,
+      "positive": 0,
+      "zero": 0,
+      "negative": 0,
+      "up_rate": null,
+      "mean_return": null,
+      "median_return": null,
+      "p10_return": null,
+      "p90_return": null,
+      "date_equal_up_rate": null,
+      "date_equal_mean_return": null,
+      "valid_result_dates": [],
+      "dates_without_valid_labels": [
+        "2026-09-04"
+      ],
+      "date_mean_range": null,
+      "uncertainty": "INSUFFICIENT_DATES_FOR_STABLE_INFERENCE_DATE_AND_EPISODE_DEPENDENCE"
+    }
+  ],
+  "paper_assumptions": {
+    "policy_id": "NEXT_OPEN_HOLD_H_PAPER_V1",
+    "parameter_status": "EXPLICIT_UNVALIDATED_RESEARCH_ASSUMPTION",
+    "buy_attempt": "SIGNAL_T_PLUS_1_OPEN",
+    "planned_exit": "ENTRY_E_PLUS_H_CLOSE",
+    "minimum_holding_sessions": 1,
+    "unsuccessful_buy": "DO_NOT_CHASE",
+    "round_trip_cost_bps": [
+      0,
+      30,
+      60
+    ],
+    "primary_cost_bps": 30,
+    "cost_allocation": "HALF_EACH_SIDE",
+    "cost_semantics": "PURE_RESEARCH_SCENARIO_NOT_CURRENT_REAL_TAX_OR_COMMISSION",
+    "slippage": "INCLUDED_IN_ASSUMED_ALL_IN_COST_NO_SEPARATE_DEDUCTION",
+    "net_return_formula": "exit_comparable_close*(1-bps/20000)/(entry_comparable_open*(1+bps/20000))-1",
+    "fill_evidence": "DAILY_NON_BOUNDARY_PAPER_MODEL_ONLY_NOT_PROOF_OF_ACTUAL_FILL",
+    "unverified_limit": "FILL_UNVERIFIED",
+    "blocked_exit": "RETAIN_OPEN_MARK_AND_TRY_LATER_VERIFIED_CLOSE",
+    "actual_order_instruction": false,
+    "account_required": false
+  },
+  "paper_results": {
+    "total_signals": 2710,
+    "attempted": 0,
+    "evaluable": 0,
+    "closed": 0,
+    "states": {
+      "NOT_MATURED": 2710
+    },
+    "coverage": null,
+    "cost_scenarios": {
+      "0": {
+        "denominator_closed": 0,
+        "win_rate": null,
+        "mean_net_return": null
+      },
+      "30": {
+        "denominator_closed": 0,
+        "win_rate": null,
+        "mean_net_return": null
+      },
+      "60": {
+        "denominator_closed": 0,
+        "win_rate": null,
+        "mean_net_return": null
+      }
+    }
+  },
+  "case_rescue_scope": "Stage/liq eligibility is a diagnostic and cannot be substituted for sector/funds-complete formal selection. No future-outcome good/bad effect is estimable.",
+  "limitations": [
+    "One signal date; pooled and date-equal remain unestimable with zero mature labels.",
+    "No repeat-security time-series independence assessment from one signal date.",
+    "Missing later calendar and future prices are not zero returns.",
+    "Main MA/sector/funds deletion cannot estimate condition contribution when source data are absent."
+  ]
+}

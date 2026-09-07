@@ -1,0 +1,319 @@
+{
+  "evidence_class": "SYNTHETIC_TEST_FIXTURE_ENGINEERING_ONLY",
+  "findings": {
+    "baseline": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG"
+    },
+    "funds_no_parent_authority": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG",
+      "fund_source_refs": [
+        null,
+        null
+      ],
+      "resolver_would_reject": [
+        "SOURCE_REFERENCE_REQUIRED"
+      ]
+    },
+    "funds_future_invalid_wrong_security_parent": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG"
+    },
+    "funds_late_capture_without_proof": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG"
+    },
+    "funds_future_window": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG",
+      "window_end": "2026-09-14",
+      "observation_date": "2026-09-11"
+    },
+    "proxy_promoted_by_boolean": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "STRONG"
+    },
+    "dedupe_conflict_depends_on_input_order": [
+      {
+        "status": "PASS",
+        "condition_statuses": {
+          "liquidity_bottom": "PASS",
+          "stage_identification": "PASS",
+          "sector_linkage": "PASS",
+          "funds_linkage": "PASS"
+        },
+        "funds_grade": "MODERATE"
+      },
+      {
+        "status": "FAIL",
+        "condition_statuses": {
+          "liquidity_bottom": "PASS",
+          "stage_identification": "PASS",
+          "sector_linkage": "PASS",
+          "funds_linkage": "FAIL"
+        },
+        "funds_grade": "WEAK"
+      }
+    ],
+    "unpublished_theme_is_fail_not_unknown": {
+      "status": "FAIL",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "FAIL",
+        "funds_linkage": "UNKNOWN"
+      },
+      "funds_grade": "UNKNOWN",
+      "sector_condition": {
+        "status": "FAIL",
+        "reason_codes": [
+          "SAM_NO_AUTHORIZED_SECTOR_LINKAGE"
+        ],
+        "primary_theme_id": null
+      }
+    },
+    "cross_theme_conjunction": {
+      "status": "PASS",
+      "condition_statuses": {
+        "liquidity_bottom": "PASS",
+        "stage_identification": "PASS",
+        "sector_linkage": "PASS",
+        "funds_linkage": "PASS"
+      },
+      "funds_grade": "MODERATE",
+      "sector_condition": {
+        "status": "PASS",
+        "reason_codes": [],
+        "primary_theme_id": "THEME_A",
+        "primary_theme_order": "theme_id_asc"
+      },
+      "funds_condition": {
+        "status": "PASS",
+        "reason_codes": [],
+        "grade": "MODERATE",
+        "primary_theme_id": "THEME_B"
+      },
+      "sector_candidates": [
+        {
+          "theme_id": "THEME_A",
+          "status": "PASS"
+        },
+        {
+          "theme_id": "THEME_B",
+          "status": "FAIL"
+        }
+      ]
+    },
+    "stage_config_run_id_collision": {
+      "same_run_id": true,
+      "run_id": "strategy_experiment_27eee7dc59ca97bc64a30d2a",
+      "same_top_source_hash": true,
+      "same_stage_config_hash": false,
+      "stage_selected_before": {
+        "eligible": 8,
+        "evaluated": 8,
+        "passed": 7,
+        "failed": 1,
+        "unknown": 0,
+        "condition_counts": {
+          "liquidity_bottom": {
+            "PASS": 8,
+            "FAIL": 0,
+            "UNKNOWN": 0
+          },
+          "stage_identification": {
+            "PASS": 8,
+            "FAIL": 0,
+            "UNKNOWN": 0
+          },
+          "sector_linkage": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "funds_linkage": {
+            "PASS": 7,
+            "FAIL": 0,
+            "UNKNOWN": 1
+          }
+        },
+        "stage_counts": {
+          "START": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "ACCELERATION": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "HIGH_LEVEL_DIVERGENCE": {
+            "PASS": 1,
+            "FAIL": 7,
+            "UNKNOWN": 0
+          },
+          "TREND_PULLBACK": {
+            "PASS": 0,
+            "FAIL": 8,
+            "UNKNOWN": 0
+          }
+        },
+        "visible_theme_count": 1,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 8,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 8,
+          "missing": 0,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "stage_selected_after": {
+        "eligible": 8,
+        "evaluated": 8,
+        "passed": 0,
+        "failed": 8,
+        "unknown": 0,
+        "condition_counts": {
+          "liquidity_bottom": {
+            "PASS": 8,
+            "FAIL": 0,
+            "UNKNOWN": 0
+          },
+          "stage_identification": {
+            "PASS": 8,
+            "FAIL": 0,
+            "UNKNOWN": 0
+          },
+          "sector_linkage": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "funds_linkage": {
+            "PASS": 0,
+            "FAIL": 7,
+            "UNKNOWN": 1
+          }
+        },
+        "stage_counts": {
+          "START": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "ACCELERATION": {
+            "PASS": 7,
+            "FAIL": 1,
+            "UNKNOWN": 0
+          },
+          "HIGH_LEVEL_DIVERGENCE": {
+            "PASS": 1,
+            "FAIL": 7,
+            "UNKNOWN": 0
+          },
+          "TREND_PULLBACK": {
+            "PASS": 0,
+            "FAIL": 8,
+            "UNKNOWN": 0
+          }
+        },
+        "visible_theme_count": 1,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 8,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 8,
+          "missing": 0,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "same_content_hash": false,
+      "storage_conflict": "ImmutableConflict"
+    },
+    "immutable_original_unchanged": true,
+    "funds_missing_from_effective_dependencies": {
+      "same_effective_input_hash": true,
+      "same_input_hash": false,
+      "fund_refs_in_source_refs": []
+    },
+    "late_reconstruction_outcome_identity": {
+      "same_logical_label_ids": false,
+      "label_count": 32,
+      "original_run_coverage": "RECONSTRUCTED_HISTORICAL",
+      "outcome_coverage": [
+        "TEST_FIXTURE"
+      ],
+      "signal_cutoff_after_evaluated_at_is_rejected": false
+    },
+    "mixed_prospective_reconstruction_review": {
+      "late_signal_cutoff": "2026-09-21T20:30:00+08:00",
+      "evaluated_at": "2026-09-11T20:30:00+08:00",
+      "late_label_status": "MATURE",
+      "late_label_return": 0.026785714285714284,
+      "mixed_counts": {
+        "outcome_observations": 2,
+        "stored_revisions": 2,
+        "mature": 2,
+        "censored_or_unavailable": 0,
+        "not_matured": 0,
+        "focus_episode_count": 0
+      },
+      "same_stock_day_two_runs_pooled": {
+        "signals": 2,
+        "unique_instruments": 1,
+        "signal_dates": 1,
+        "mature_valid": 2,
+        "not_matured": 0,
+        "missing_or_incomparable": 0,
+        "positive": 2,
+        "zero": 0,
+        "negative": 0,
+        "up_rate": 1.0,
+        "mean_return": 0.026785714285714284,
+        "median_return": 0.026785714285714284,
+        "p10_return": 0.026785714285714284,
+        "date_equal_up_rate": 1.0,
+        "date_equal_mean_return": 0.026785714285714284
+      }
+    }
+  }
+}
