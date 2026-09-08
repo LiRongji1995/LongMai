@@ -20,7 +20,7 @@ TRACKING_VERSION = 'R05_RESEARCH_EPISODE_TRACKING_V2'
 REVIEW_VERSION = 'R05_RESEARCH_FEEDBACK_V2'
 FOCUS = 'PV_FOCUS_PREVIEW_V0.1'
 STAGE_AWARE = 'STAGE_AWARE_MOMENTUM_V2'
-V2_OUTCOME_POLICY_ID = 'STAGE_AWARE_MOMENTUM_V2_SETUP_SPECIFIC_OUTCOMES_V1'
+V2_OUTCOME_POLICY_ID = 'STAGE_AWARE_MOMENTUM_V2_SETUP_SPECIFIC_OUTCOMES_V2'
 
 
 def _day(value):
@@ -176,6 +176,7 @@ def _future_state(iid, day, bars, evaluated_at, basis):
         high=str(bar.high) if bar.high is not None else None,
         low=str(bar.low) if bar.low is not None else None,
         close=str(bar.close) if bar.close is not None else None,
+        reference_prev_close=str(bar.reference_prev_close) if bar.reference_prev_close is not None else None,
         comparable_open=str(bar.comparable_open) if bar.comparable_open is not None else None,
         comparable_high=str(bar.comparable_high) if bar.comparable_high is not None else None,
         comparable_low=str(bar.comparable_low) if bar.comparable_low is not None else None,
@@ -197,6 +198,25 @@ def _first_hit(states, predicate):
     return None, None
 
 
+def _latency_milestone(*, definition, states, max_sessions, predicate, reference_level=None):
+    offset, session = _first_hit(states[:max_sessions], predicate)
+    window = states[:max_sessions]
+    all_mature = len(window) == max_sessions and all(state.get('status') != 'NOT_MATURED' for state in window)
+    unavailable = all_mature and any(state.get('status') != 'OBSERVED' for state in window) and offset is None
+    return {
+        'policy_id': V2_OUTCOME_POLICY_ID,
+        'definition': definition,
+        'max_sessions': max_sessions,
+        'reference_level': str(reference_level) if reference_level is not None else None,
+        'session_statuses': window,
+        'first_hit_session': session,
+        'sessions_to_hit': offset,
+        'result': 'HIT' if offset else 'UNAVAILABLE' if unavailable else 'NOT_HIT_WITHIN_WINDOW' if all_mature else 'NOT_MATURED',
+        'maturity_status': 'MATURE_VALID' if offset or all_mature else 'NOT_MATURED',
+        'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
+    }
+
+
 def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, bars, evaluated_at, basis, signal_bar):
     try:
         from .stage_aware_momentum import CONFIG as STAGE_AWARE_CONFIG
@@ -207,6 +227,8 @@ def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, b
     max_new_high = int((outcome_config.get('time_to_new_high') or {}).get('max_sessions', 3))
     local_peak_lookback = int((outcome_config.get('time_to_new_high') or {}).get('local_peak_lookback_sessions_excluding_T', 10))
     t_high = signal_bar.comparable_high if signal_bar is not None and signal_bar.comparable_basis == basis else None
+    t_close = signal_bar.comparable_close if signal_bar is not None and signal_bar.comparable_basis == basis else None
+    t_reference_prev_close = signal_bar.reference_prev_close if signal_bar is not None else None
     t_ohlc = {
         'open': str(signal_bar.open) if signal_bar and signal_bar.open is not None else None,
         'high': str(signal_bar.high) if signal_bar and signal_bar.high is not None else None,
@@ -233,17 +255,39 @@ def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, b
         'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
     }
 
+    turn_positive_latency = _latency_milestone(
+        definition='RAW_CLOSE_GT_SIGNAL_DAY_REFERENCE_PREV_CLOSE',
+        states=future3,
+        max_sessions=max_repair,
+        reference_level=t_reference_prev_close,
+        predicate=lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('close')) is not None and t_reference_prev_close is not None and _dec(state.get('close')) > t_reference_prev_close,
+    )
+    close_reclaim_latency = _latency_milestone(
+        definition='COMPARABLE_CLOSE_GT_SIGNAL_DAY_COMPARABLE_CLOSE',
+        states=future3,
+        max_sessions=max_repair,
+        reference_level=t_close,
+        predicate=lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_close')) is not None and t_close is not None and _dec(state.get('comparable_close')) > t_close,
+    )
+    drop_day_high_reclaim_latency = _latency_milestone(
+        definition='COMPARABLE_HIGH_GT_SIGNAL_DAY_COMPARABLE_HIGH',
+        states=future3,
+        max_sessions=max_new_high,
+        reference_level=t_high,
+        predicate=lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and t_high is not None and _dec(state.get('comparable_high')) > t_high,
+    )
+
     repair_states = future3[:max_repair]
-    first_repair, first_repair_session = _first_hit(repair_states, lambda state: _reversal_hit(state, t_high))
-    repair_all_mature = len(repair_states) == max_repair and all(state.get('status') != 'NOT_MATURED' for state in repair_states)
+    first_repair, first_repair_session = close_reclaim_latency['sessions_to_hit'], close_reclaim_latency['first_hit_session']
     repair_latency = {
         'policy_id': V2_OUTCOME_POLICY_ID,
+        'repair_definition': 'CLOSE_RECLAIM_SIGNAL_DAY_COMPARABLE_CLOSE',
         'max_sessions': max_repair,
         'session_statuses': repair_states,
         'first_repair_session': first_repair_session,
         'sessions_to_repair': first_repair,
-        'result': 'REPAIRED' if first_repair else 'NOT_REPAIRED_WITHIN_WINDOW' if repair_all_mature else 'NOT_MATURED',
-        'maturity_status': 'MATURE_VALID' if first_repair or repair_all_mature else 'NOT_MATURED',
+        'result': 'REPAIRED' if first_repair else 'NOT_REPAIRED_WITHIN_WINDOW' if close_reclaim_latency['result'] == 'NOT_HIT_WITHIN_WINDOW' else close_reclaim_latency['result'],
+        'maturity_status': close_reclaim_latency['maturity_status'],
         'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
     }
 
@@ -257,8 +301,15 @@ def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, b
     ]
     local_peak = max(local_peak_values) if local_peak_values else None
     new_high_states = future3[:max_new_high]
-    drop_high_offset, drop_high_session = _first_hit(new_high_states, lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and t_high is not None and _dec(state.get('comparable_high')) > t_high)
-    local_peak_offset, local_peak_session = _first_hit(new_high_states, lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and local_peak is not None and _dec(state.get('comparable_high')) > local_peak)
+    local_peak_reclaim_latency = _latency_milestone(
+        definition='COMPARABLE_HIGH_GT_PRE_DIVERGENCE_LOCAL_PEAK',
+        states=future3,
+        max_sessions=max_new_high,
+        reference_level=local_peak,
+        predicate=lambda state: state.get('status') == 'OBSERVED' and _dec(state.get('comparable_high')) is not None and local_peak is not None and _dec(state.get('comparable_high')) > local_peak,
+    )
+    drop_high_offset, drop_high_session = drop_day_high_reclaim_latency['sessions_to_hit'], drop_day_high_reclaim_latency['first_hit_session']
+    local_peak_offset, local_peak_session = local_peak_reclaim_latency['sessions_to_hit'], local_peak_reclaim_latency['first_hit_session']
     new_high_all_mature = len(new_high_states) == max_new_high and all(state.get('status') != 'NOT_MATURED' for state in new_high_states)
     time_to_new_high = {
         'policy_id': V2_OUTCOME_POLICY_ID,
@@ -271,6 +322,8 @@ def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, b
         'drop_day_high_sessions_to_reclaim': drop_high_offset,
         'local_peak_first_session_reached': local_peak_session,
         'local_peak_sessions_to_reclaim': local_peak_offset,
+        'drop_day_high_reclaim_latency': drop_day_high_reclaim_latency,
+        'local_peak_reclaim_latency': local_peak_reclaim_latency,
         'maturity_status': 'MATURE_VALID' if drop_high_offset or local_peak_offset or new_high_all_mature else 'NOT_MATURED',
         'parameter_status': 'INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED',
     }
@@ -304,6 +357,10 @@ def _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, b
     return {
         'policy_id': V2_OUTCOME_POLICY_ID,
         'next_session_reversal': reversal,
+        'turn_positive_latency': turn_positive_latency,
+        'close_reclaim_latency': close_reclaim_latency,
+        'drop_day_high_reclaim_latency': drop_day_high_reclaim_latency,
+        'local_peak_reclaim_latency': local_peak_reclaim_latency,
         'repair_latency': repair_latency,
         'time_to_new_high': time_to_new_high,
         'breakout_hold': breakout_hold,
@@ -410,6 +467,10 @@ def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons
                     setup_outcomes = _v2_setup_specific_outcomes(item, iid, observation_date, calendar, future, bars, evaluated_at, basis, signal_bar)
                     value['setup_specific_outcomes'] = setup_outcomes
                     value['next_session_reversal'] = setup_outcomes['next_session_reversal']
+                    value['turn_positive_latency'] = setup_outcomes['turn_positive_latency']
+                    value['close_reclaim_latency'] = setup_outcomes['close_reclaim_latency']
+                    value['drop_day_high_reclaim_latency'] = setup_outcomes['drop_day_high_reclaim_latency']
+                    value['local_peak_reclaim_latency'] = setup_outcomes['local_peak_reclaim_latency']
                     value['repair_latency'] = setup_outcomes['repair_latency']
                     value['time_to_new_high'] = setup_outcomes['time_to_new_high']
                     value['breakout_hold'] = setup_outcomes['breakout_hold']

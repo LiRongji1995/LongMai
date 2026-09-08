@@ -75,6 +75,21 @@ def load_bundle(path):
     return MarketInput.model_validate(json.loads(Path(path).read_text(encoding="utf-8")))
 
 
+def load_scheduler_state(path):
+    if path is None:
+        return {
+            "source": "ACTUAL_SCHEDULER_STATE_NOT_PROVIDED",
+            "status": "NOT_CHECKED_ACTUAL_STATE_REQUIRED",
+            "scheduler_status_trust": "NOT_ASSERTED_FROM_CLI_TEXT",
+            "market_edge": CONFIG["market_edge"],
+        }
+    value = json.loads(Path(path).read_text(encoding="utf-8"))
+    state = value.get("prospective_validation", value)
+    if state.get("source") != "ACTUAL_CANDIDATE_SCHEDULER_STATE_R10":
+        raise SystemExit("SCHEDULER_STATE_JSON_MUST_COME_FROM_ACTUAL_CANDIDATE_SCHEDULER_STATE_R10")
+    return state
+
+
 def fraction(observed, expected):
     return round(observed / expected, 6) if expected else None
 
@@ -179,6 +194,7 @@ def compact_item(row, observation_date):
         "name": row.get("name"),
         "decision_status": row.get("decision_status"),
         "primary_stage": row.get("primary_stage"),
+        "observation_bucket": row.get("observation_bucket"),
         "rank_scope": row.get("rank_scope"),
         "setup_rank": row.get("setup_rank"),
         "focus_rank": row.get("focus_rank"),
@@ -189,7 +205,11 @@ def compact_item(row, observation_date):
         "sector_level": row.get("primary_sector_level_state"),
         "sector_momentum": row.get("primary_sector_momentum_state"),
         "sector_breadth": row.get("primary_sector_breadth_state"),
+        "sector_absolute_level": row.get("primary_sector_absolute_level"),
+        "sector_relative_level": row.get("primary_sector_relative_level"),
+        "sector_market_rs_pct": row.get("primary_sector_market_rs_pct"),
         "stock_role": row.get("primary_sector_stock_role"),
+        "stock_role_evidence_coverage": row.get("primary_sector_stock_role_evidence_coverage"),
         "funds_status": row.get("funds_status"),
         "market_context_state": row.get("market_context_state"),
         "behavioral_status": row.get("behavioral_confirmation_status"),
@@ -218,16 +238,55 @@ def next_session_after(day):
     return cal.next_session(day + timedelta(days=1), inclusive=True)
 
 
+def _active_on(start, end, session):
+    return start <= session and (end is None or session < end)
+
+
+def _fund_session(row):
+    for key in ("session", "trade_date", "date", "business_date"):
+        value = row.get(key) if isinstance(row, dict) else None
+        if value:
+            try:
+                return date.fromisoformat(str(value)[:10])
+            except ValueError:
+                return None
+    return None
+
+
+def replay_bundle_for_session(bundle, session):
+    sessions = tuple(s for s in bundle.sessions if s <= session)
+    bars = tuple(b for b in bundle.bars if b.session <= session)
+    securities = tuple(
+        row for row in bundle.universe.securities
+        if _active_on(row.effective_from, row.effective_to, session)
+    )
+    universe = bundle.universe.model_copy(update={"securities": securities})
+    themes = tuple(
+        row for row in bundle.themes
+        if _active_on(row.effective_from, row.effective_to, session)
+    )
+    previous_emotions = tuple(row for row in bundle.previous_emotions if row.session <= session)
+    funds = tuple(row for row in bundle.funds if (_fund_session(row) or session) <= session)
+    return bundle.model_copy(update={
+        "observation_date": session,
+        "sessions": sessions,
+        "universe": universe,
+        "bars": bars,
+        "themes": themes,
+        "previous_emotions": previous_emotions,
+        "funds": funds,
+    })
+
+
 def run_replay(bundle, cutoff, output, *, max_sessions):
-    payload = bundle.model_dump(mode="json")
-    ctx = _prepare_context(bundle, cutoff)
-    end = _session_index(ctx)
+    visible_sessions = tuple(s for s in bundle.sessions if s <= bundle.observation_date)
+    end = len(visible_sessions) - 1 if bundle.observation_date in visible_sessions else None
     warmup = max(CONFIG["research_seed_parameters"]["trend_state"]["ma_windows"]) + CONFIG["research_seed_parameters"]["trend_state"]["slope_lookback_sessions"]
     if end is None:
         sessions = []
     else:
         start = max(warmup, end - max_sessions + 1)
-        sessions = ctx.sessions[start:end + 1]
+        sessions = visible_sessions[start:end + 1]
     if bundle.coverage_type != "RECONSTRUCTED_HISTORICAL":
         attempts = [{
             "observation_date": str(session),
@@ -262,12 +321,14 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
         }
     attempts, rows = [], []
     for session in sessions:
-        replay_payload = {**payload, "observation_date": session}
-        replay_bundle = MarketInput.model_validate(replay_payload)
+        replay_bundle = replay_bundle_for_session(bundle, session)
         replay_cutoff = datetime.combine(date.fromisoformat(str(session)), time(20, 30), SH)
         try:
             result = run_stage_aware_momentum(replay_bundle, cutoff=replay_cutoff)
             counts = result.get("counts", {})
+            condition_counts = counts.get("condition_counts", {})
+            sector_counts = condition_counts.get("sector_context", {})
+            funds_counts = condition_counts.get("capital_linkage", {})
             attempts.append({
                 "observation_date": str(session),
                 "status": result.get("status"),
@@ -276,11 +337,17 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
                 "rejected": counts.get("rejected", 0),
                 "unknown": counts.get("unknown", 0),
                 "eligible": counts.get("eligible", 0),
+                "price_trend_replay_scope_status": "EVALUATED" if counts.get("eligible", 0) else "NO_ELIGIBLE_PRICE_TREND_ROWS",
+                "full_context_replay_scope_status": "EVALUATED" if sector_counts.get("PASS", 0) and funds_counts.get("PASS", 0) else "UNKNOWN_OR_PARTIAL_CONTEXT",
+                "sector_pass": sector_counts.get("PASS", 0),
+                "capital_pass": funds_counts.get("PASS", 0),
             })
             rows.extend(compact_item(row, str(session)) for row in result.get("items", []))
         except Exception as exc:
             attempts.append({"observation_date": str(session), "status": "FAILED", "error_type": type(exc).__name__, "error": str(exc)})
     write_csv(output / "v2_historical_replay_items_compact.csv", rows)
+    price_scope = [row for row in attempts if row.get("price_trend_replay_scope_status") == "EVALUATED"]
+    full_context_scope = [row for row in attempts if row.get("full_context_replay_scope_status") == "EVALUATED"]
     return {
         "strategy_id": STAGE_AWARE_ID,
         "coverage_type": bundle.coverage_type,
@@ -295,6 +362,18 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
         "rejected_total": sum(row.get("rejected", 0) for row in attempts),
         "unknown_total": sum(row.get("unknown", 0) for row in attempts),
         "eligible_total": sum(row.get("eligible", 0) for row in attempts),
+        "scope_summary": {
+            "PRICE_TREND_REPLAY_SCOPE": {
+                "success_count": len(price_scope),
+                "eligible_total": sum(row.get("eligible", 0) for row in price_scope),
+                "coverage_rule": "long daily price/comparable basis/dated qualification sufficient; Sector/Capital may remain UNKNOWN",
+            },
+            "FULL_CONTEXT_REPLAY_SCOPE": {
+                "success_count": len(full_context_scope),
+                "eligible_total": sum(row.get("eligible", 0) for row in full_context_scope),
+                "coverage_rule": "requires visible PIT theme/sector and classified capital context, not imputed from current membership",
+            },
+        },
         "attempts": attempts,
         "compact_items_csv": str((output / "v2_historical_replay_items_compact.csv").resolve()),
         "market_edge": CONFIG["market_edge"],
@@ -308,7 +387,8 @@ def protocol(start_session, cutoff):
         "implementation_version": IMPLEMENTATION_VERSION,
         "spec_revision": SPEC_REVISION,
         "stage_aware_source_identity": stage_aware_source_identity(),
-        "start_session": str(start_session),
+        "start_session": str(start_session) if start_session else None,
+        "start_session_policy": "Set only after the first completed 20:30 EVENING_FINAL primary run; not prefilled from preliminary or reconstructed data.",
         "primary_signal_cutoff": "20:30 Asia/Shanghai EVENING_FINAL",
         "capture_stages": ["PRELIMINARY 16:10", "EVENING_FINAL 20:30", "AUCTION_REVIEW next session 09:26"],
         "eligible_universe": CONFIG["hard_requirements"]["qualified_universe"],
@@ -405,6 +485,8 @@ Completed semantic fixes:
 - Funds COMPLETE_NO_RECORD requires explicit query completeness evidence.
 - WATCH rows receive decision-tier/setup-scoped research ranks.
 - Market REPAIR requires transition evidence.
+- Market EXPANSION cannot mask major broken-board/limit-down divergence, and market momentum is UNKNOWN when evidence coverage is not comparable.
+- Sector Level stores absolute peer return and market-relative strength separately; Sector Momentum uses matched peers; Stock Role saves known/unknown feature coverage.
 - V2 outcomes append next-session reversal, repair latency, T+3 new-high, breakout and supply labels without rewriting T signal.
 
 Unresolved data gaps are documented in `V2_DATA_READINESS.md` and `V2_PROSPECTIVE_READINESS.md`.
@@ -430,11 +512,15 @@ Unresolved data gaps are documented in `V2_DATA_READINESS.md` and `V2_PROSPECTIV
 
 - audit_mode: `{replay['audit_mode']}`
 - coverage_type: `{replay['coverage_type']}`
+- replay_input_hash: `{replay.get('replay_input_hash')}`
+- replay_input_observation_date: `{replay.get('replay_input_observation_date')}`
 - replay_range: `{replay['replay_sessions'][0] if replay['replay_sessions'] else None}` to `{replay['replay_sessions'][-1] if replay['replay_sessions'] else None}`
 - attempt_count: `{replay['attempt_count']}`
 - success_count: `{replay['success_count']}`
 - Focus/Watch/Rejected/Unknown: `{replay['focus_total']}` / `{replay['watch_total']}` / `{replay['rejected_total']}` / `{replay['unknown_total']}`
 - eligible_total: `{replay['eligible_total']}`
+- PRICE_TREND_REPLAY_SCOPE successful days: `{(replay.get('scope_summary') or {}).get('PRICE_TREND_REPLAY_SCOPE', {}).get('success_count')}`
+- FULL_CONTEXT_REPLAY_SCOPE successful days: `{(replay.get('scope_summary') or {}).get('FULL_CONTEXT_REPLAY_SCOPE', {}).get('success_count')}`
 - compact_items_csv: `{replay_compact_csv}`
 - MARKET_EDGE: `{replay['market_edge']}`
 - blocker: `{replay_blocker}`
@@ -457,9 +543,15 @@ Rules: append-only outcomes, no historical-to-prospective backfill, UNKNOWN rema
     prospective_md = f"""# V2 Prospective Readiness
 
 - status: `{prospective['status']}`
+- source: `{prospective['scheduler_state_source']}`
+- next_real_primary_capture: `{prospective.get('next_real_primary_capture')}`
 - next_target_session: `{prospective['next_target_session']}`
 - signal_input_observation_date: `{prospective['signal_input_observation_date']}`
 - scheduler_status: `{prospective['scheduler_status']}`
+- scheduler_job_id: `{prospective.get('scheduler_job_id')}`
+- service_identity: `{prospective.get('service_identity')}`
+- official_primary_signal_count: `{prospective.get('official_primary_signal_count')}`
+- first_official_validation_signal_date: `{prospective.get('first_official_validation_signal_date')}`
 - blocker: `{prospective.get('blocker')}`
 - minimal_manual_action: `{prospective.get('minimal_manual_action')}`
 - MARKET_EDGE: `{prospective['market_edge']}`
@@ -504,11 +596,12 @@ Rules: append-only outcomes, no historical-to-prospective backfill, UNKNOWN rema
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--input", type=Path, default=None)
+    parser.add_argument("--replay-input", type=Path, default=None)
     parser.add_argument("--output", type=Path, required=True)
     parser.add_argument("--cutoff", default=None)
     parser.add_argument("--replay-sessions", type=int, default=20)
     parser.add_argument("--docs-dir", type=Path, default=None)
-    parser.add_argument("--scheduler-status", default="NOT_CHECKED")
+    parser.add_argument("--scheduler-state-json", type=Path, default=None)
     args = parser.parse_args()
     input_path = args.input or latest_market_input()
     bundle = load_bundle(input_path)
@@ -517,13 +610,22 @@ def main():
         cutoff = cutoff.replace(tzinfo=SH)
     ctx = _prepare_context(bundle, cutoff)
     result = run_stage_aware_momentum(bundle, cutoff=cutoff, _context=ctx)
+    scheduler_state = load_scheduler_state(args.scheduler_state_json)
     signal_date = str(bundle.observation_date)
     target_session = next_session_after(bundle.observation_date)
+    replay_input_path = args.replay_input or input_path
+    replay_bundle = load_bundle(replay_input_path)
+    replay_cutoff = cutoff
+    if replay_bundle.observation_date != bundle.observation_date:
+        replay_cutoff = datetime.combine(replay_bundle.observation_date, time(20, 30), SH)
     args.output.mkdir(parents=True, exist_ok=True)
     dump_json(args.output / "v2_signal_result_summary.json", {
         "input_path": str(input_path.resolve()),
         "input_sha256": file_sha256(input_path),
         "input_hash": digest(bundle),
+        "replay_input_path": str(replay_input_path.resolve()),
+        "replay_input_sha256": file_sha256(replay_input_path),
+        "replay_input_hash": digest(replay_bundle),
         "observation_date": signal_date,
         "decision_cutoff": cutoff.isoformat(),
         "strategy_id": STAGE_AWARE_ID,
@@ -534,15 +636,35 @@ def main():
     })
     write_csv(args.output / "v2_signal_items_compact.csv", [compact_item(row, signal_date) for row in result.get("items", [])])
     readiness = data_readiness(bundle, cutoff, result, ctx=ctx)
-    replay = run_replay(bundle, cutoff, args.output, max_sessions=args.replay_sessions)
-    proto = protocol(target_session, cutoff)
+    replay = run_replay(replay_bundle, replay_cutoff, args.output, max_sessions=args.replay_sessions)
+    replay.update({
+        "replay_input_path": str(replay_input_path.resolve()),
+        "replay_input_sha256": file_sha256(replay_input_path),
+        "replay_input_hash": digest(replay_bundle),
+        "replay_input_observation_date": str(replay_bundle.observation_date),
+        "replay_decision_cutoff": replay_cutoff.isoformat(),
+    })
+    epoch = scheduler_state.get("validation_epoch") or {}
+    start_session = epoch.get("start_session")
+    proto = protocol(start_session, cutoff)
+    official_primary_signal_count = 1 if epoch.get("first_primary_run_id") else 0
     prospective = {
-        "status": "READY_FOR_NEXT_CAPTURE" if bundle.coverage_type == "PROSPECTIVE_CAPTURED" else "CODE_READY_INPUT_NOT_PROSPECTIVE_CAPTURED",
-        "next_target_session": str(target_session),
+        "status": scheduler_state.get("status", "UNKNOWN"),
+        "scheduler_state_source": scheduler_state.get("source"),
+        "next_real_primary_capture": scheduler_state.get("next_real_primary_capture"),
+        "next_target_session": scheduler_state.get("expected_target_session") or str(target_session),
         "signal_input_observation_date": signal_date,
-        "scheduler_status": args.scheduler_status,
-        "blocker": None if bundle.coverage_type == "PROSPECTIVE_CAPTURED" else "CURRENT_INPUT_COVERAGE_TYPE_IS_NOT_PROSPECTIVE_CAPTURED",
-        "minimal_manual_action": None if args.scheduler_status not in {"NOT_CHECKED", "LOCAL_SERVICE_UNREACHABLE"} else "Start the StockFish local service/scheduler before the next scheduled capture if it is not already running.",
+        "signal_validation_role": "PROSPECTIVE_PRELIMINARY" if bundle.coverage_type == "PROSPECTIVE_CAPTURED" else "NOT_PROSPECTIVE_SIGNAL_INPUT",
+        "official_primary_signal_count": official_primary_signal_count,
+        "first_official_validation_signal_date": epoch.get("first_signal_observation_date"),
+        "scheduler_status": scheduler_state.get("status", "UNKNOWN"),
+        "scheduler_job_id": scheduler_state.get("scheduler_job_id"),
+        "scheduler_job_state": scheduler_state.get("scheduler_job_state"),
+        "scheduler_event_state": scheduler_state.get("scheduler_event_state"),
+        "service_identity": scheduler_state.get("service_identity"),
+        "validation_epoch": epoch or None,
+        "blocker": None if scheduler_state.get("status") not in {"NOT_CHECKED_ACTUAL_STATE_REQUIRED", "SCHEDULER_NOT_ATTACHED_TO_SERVICE"} else scheduler_state.get("status"),
+        "minimal_manual_action": None if scheduler_state.get("status") not in {"NOT_CHECKED_ACTUAL_STATE_REQUIRED", "SCHEDULER_NOT_ATTACHED_TO_SERVICE"} else "Start the StockFish local service with CandidateScheduler attached before the next scheduled capture.",
         "market_edge": CONFIG["market_edge"],
     }
     research = research_list(result, signal_date, target_session, args.output)
@@ -557,6 +679,7 @@ def main():
     print(json.dumps({
         "output": str(args.output.resolve()),
         "input": str(input_path.resolve()),
+        "replay_input": str(replay_input_path.resolve()),
         "observation_date": signal_date,
         "target_session": str(target_session),
         "counts": result.get("counts"),

@@ -89,6 +89,129 @@ class CandidateScheduler:
         self.service.store.put_document('candidate_observation_plans', value['plan_id'], value)
         return value
 
+    def _next_session_after(self, day):
+        later = [session for session in self.sessions if session > day]
+        return later[0] if later else None
+
+    def _primary_schedule_for(self, signal_day, config=None):
+        config = config or self.service.current_config()
+        hour, minute = map(int, config.schedule.evening.split(':'))
+        scheduled = datetime.combine(signal_day, time(hour, minute), SH)
+        return {
+            'signal_session': signal_day.isoformat(),
+            'target_session': self._next_session_after(signal_day).isoformat() if self._next_session_after(signal_day) else None,
+            'scheduled_at': scheduled.isoformat(),
+            'job_id': 'schedule_' + signal_day.isoformat() + '_EVENING',
+            'primary_signal_cutoff': config.schedule.evening + ' Asia/Shanghai EVENING_FINAL',
+            'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+        }
+
+    def ensure_primary_validation_schedule(self, now=None):
+        now = now or self.clock()
+        if now.tzinfo is None or now.utcoffset() is None:
+            raise ValueError('scheduler clock must be timezone-aware')
+        local = now.astimezone(SH)
+        config = self.service.current_config()
+        hour, minute = map(int, config.schedule.evening.split(':'))
+        today = local.date()
+        if today in self.sessions:
+            today_plan = self._primary_schedule_for(today, config)
+            today_cutoff = datetime.fromisoformat(today_plan['scheduled_at'])
+            today_event = self.service.store.get_document('candidate_schedule_events', today_plan['job_id'])
+            today_job = self.service.jobs.get(today_plan['job_id'])
+            if local <= today_cutoff or today_event is not None or today_job is not None:
+                signal_day = today
+            else:
+                signal_day = self._next_session_after(today)
+        else:
+            signal_day = min((session for session in self.sessions if session > today), default=None)
+        if signal_day is None:
+            return {'status': 'CALENDAR_COVERAGE_EXHAUSTED', 'strategy_id': 'STAGE_AWARE_MOMENTUM_V2'}
+        planned = self._primary_schedule_for(signal_day, config)
+        doc_id = 'stage_aware_primary_schedule_' + signal_day.isoformat()
+        existing = self.service.store.get_document('stage_aware_prospective_validation_schedules', doc_id)
+        if existing is None:
+            value = {
+                'schedule_id': doc_id,
+                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R10',
+                'registered_at': now.isoformat(),
+                'config_hash': config.config_hash,
+                'calendar_hash': self.calendar_hash,
+                'status': 'PERSISTENTLY_PLANNED_WAITING_FOR_CUTOFF',
+                'offline_policy': 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED_AS_PROSPECTIVE',
+                'capture_flow': [
+                    'capture/update current MarketInput',
+                    'validate cutoff',
+                    'run active STAGE_AWARE_MOMENTUM_V2',
+                    'persist immutable strategy_experiment_run',
+                    'persist full eligible rows and Focus/Watch/Rejected/Unknown counts',
+                    'register append-only tracking/outcome demand',
+                ],
+                **planned,
+                'market_edge': 'NOT_ESTABLISHED',
+            }
+            self.service.store.put_document('stage_aware_prospective_validation_schedules', doc_id, value)
+            existing = value
+        return existing
+
+    def _latest_stage_aware_primary(self, signal_day):
+        rows = [
+            row for row in self.service._all('stage_aware_prospective_primary_runs')
+            if row.get('signal_observation_date') == signal_day.isoformat()
+            and row.get('official_primary_signal_countable') is True
+        ]
+        return max(rows, key=lambda row: (row.get('decision_cutoff') or '', row.get('run_id') or ''), default=None)
+
+    def describe_state(self, now=None):
+        now = now or self.clock()
+        plan = self.plan()
+        primary = self.ensure_primary_validation_schedule(now)
+        job_id = primary.get('job_id')
+        job = self.service.jobs.get(job_id) if job_id else None
+        event = self.service.store.get_document('candidate_schedule_events', job_id) if job_id else None
+        signal_day = date.fromisoformat(primary['signal_session']) if primary.get('signal_session') else None
+        primary_run = self._latest_stage_aware_primary(signal_day) if signal_day else None
+        cutoff = datetime.fromisoformat(primary['scheduled_at']) if primary.get('scheduled_at') else None
+        if primary_run:
+            status = 'PROSPECTIVE_PRIMARY_PERSISTED'
+        elif event and event.get('status') == 'MISSED_SERVICE_OFFLINE':
+            status = 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'
+        elif job:
+            status = 'JOB_' + job['state']
+        elif cutoff and now.astimezone(SH) < cutoff:
+            status = 'PERSISTENTLY_PLANNED_WAITING_FOR_CUTOFF'
+        elif cutoff:
+            status = 'CUTOFF_REACHED_AWAITING_SCHEDULER_TICK'
+        else:
+            status = primary.get('status', 'UNKNOWN')
+        epoch = self.service.store.get_document('stage_aware_prospective_validation_epochs',
+                                                'STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH')
+        return {
+            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R10',
+            'observed_at': now.isoformat(),
+            'status': status,
+            'scheduler_class': type(self).__name__,
+            'scheduler_started_at': self.started_at.isoformat(),
+            'scheduler_thread_alive': bool(self.thread and self.thread.is_alive()),
+            'service_identity': {
+                'state_root': str(self.service.root),
+                'db_path': str(self.service.store.path),
+                'job_owner_id': self.service.jobs.owner_id,
+            },
+            'active_candidate_strategy_id': self.service.current_config().strategy_id,
+            'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+            'observation_plan': {k: plan.get(k) for k in ('plan_id','plan_version','status','requested_sessions','calendar_hash')},
+            'primary_schedule': primary,
+            'next_real_primary_capture': primary.get('scheduled_at'),
+            'expected_target_session': primary.get('target_session'),
+            'scheduler_job_id': job_id,
+            'scheduler_job_state': {k: job.get(k) for k in ('job_id','kind','state','progress','created_at','started_at','finished_at','updated_at','result','error')} if job else None,
+            'scheduler_event_state': event,
+            'prospective_primary_run': primary_run,
+            'validation_epoch': epoch,
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+
     def _event(self, event_id, value):
         self.service.store.put_document('candidate_schedule_events', event_id, value)
 
@@ -108,6 +231,7 @@ class CandidateScheduler:
             return []
         config = self.service.current_config()
         self.plan()
+        self.ensure_primary_validation_schedule(now)
         schedule = config.schedule
         results = []
         for name, scheduled_clock in [('PRELIMINARY', schedule.preliminary), ('EVENING', schedule.evening), ('AUCTION_REVIEW', schedule.auction_review)]:
@@ -127,9 +251,12 @@ class CandidateScheduler:
             if name == 'AUCTION_REVIEW':
                 previous = max((d for d in self.sessions if d < day), default=None)
                 prior = self._latest_run(previous,cutoff=now,market_session='EVENING')
-                if not prior:
+                primary = self._latest_stage_aware_primary(previous) if previous else None
+                if not prior or not primary:
                     value = {'event_id': key, 'scheduled_at': planned.isoformat(), 'observed_at': now.isoformat(),
-                             'status': 'EVENING_RUN_UNAVAILABLE', 'market_session': name, 'snapshot_created': False}
+                             'status': 'EVENING_PRIMARY_RUN_UNAVAILABLE', 'market_session': name, 'snapshot_created': False,
+                             'prior_evening_candidate_run_available': bool(prior),
+                             'prior_stage_aware_primary_run_available': bool(primary)}
                     self._event(key, value)
                     results.append(value)
                     continue

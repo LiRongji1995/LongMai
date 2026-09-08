@@ -1,6 +1,6 @@
 # Codex 日常研究操作协议
 
-核对日期：2026-09-07（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，本次实测见 [首用验证](CODEX_FIRST_USE_VERIFICATION.md)。
+核对日期：2026-09-08（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，本次实测见 [首用验证](CODEX_FIRST_USE_VERIFICATION.md)。
 
 ## 1. 请求与权限
 
@@ -46,7 +46,7 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
-新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；2026-09-07 已提升为 `R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION` / `R09_SEMANTIC_COMPLETION`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
+新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；2026-09-08 已提升为 `R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION` / `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
 
 - “把下一个交易日的荐股清单给我。”
 - “给我一份当前短线强势股和市场状态报告。”
@@ -60,7 +60,9 @@
 
 执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
-2026-09-07 R09 语义完成后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。当天盘后补取 2026-09-07 BaoStock 日线后，V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，下一目标交易会话为 2026-09-08；若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。
+2026-09-08 R10 交付后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。补取 2026-09-07 BaoStock 日线后，V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，下一目标交易会话为 2026-09-08；若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。
+
+“非正式 FOCUS”只允许作为口语解释：9.7 输入是盘后手工/预备研究输入，不是 20:30 scheduler 写入的 official primary，且 FOCUS 硬条件中长窗趋势、市场兼容、PIT 题材/资金仍为 UNKNOWN；因此只能给 next-session research list 或 WATCH queue，不能说成正式 FOCUS 推荐。
 
 `select` 会保存全量导出及事实简报；`report` 读取指定原运行生成事实简报，Codex 可在同目录另写注明推断边界的分析，不改官方 source.json。`--target tomorrow` 与 `next-session` 不同；历史原榜用 `list` 找 run 后读取详情/导出。`run --profile PV_OBSERVATION_V1 --input-id INPUT_ID` 只做精确输入复用。`capture --wait-seconds 30`、`track RUN_ID --update --input-id INPUT_ID --wait-seconds 30` 是显式写操作，不在只读查询中默认执行；等待最多 60 秒，随后用 `job JOB_ID` 继续查看。
 

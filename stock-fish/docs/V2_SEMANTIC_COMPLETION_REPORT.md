@@ -1,8 +1,8 @@
 # V2 Semantic Completion Report
 
 - strategy_id: `STAGE_AWARE_MOMENTUM_V2`
-- implementation_version: `R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION`
-- spec_revision: `R09_SEMANTIC_COMPLETION`
+- implementation_version: `R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION`
+- spec_revision: `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`
 - parameter_status: `INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED`
 - MARKET_EDGE: `NOT_ESTABLISHED`
 
@@ -19,6 +19,8 @@ Completed semantic fixes:
 - Funds COMPLETE_NO_RECORD requires explicit query completeness evidence.
 - WATCH rows receive decision-tier/setup-scoped research ranks.
 - Market REPAIR requires transition evidence.
+- Market EXPANSION cannot mask major broken-board/limit-down divergence, and market momentum is UNKNOWN when evidence coverage is not comparable.
+- Sector Level stores absolute peer return and market-relative strength separately; Sector Momentum uses matched peers; Stock Role saves known/unknown feature coverage.
 - V2 outcomes append next-session reversal, repair latency, T+3 new-high, breakout and supply labels without rewriting T signal.
 
 Unresolved data gaps are documented in `V2_DATA_READINESS.md` and `V2_PROSPECTIVE_READINESS.md`.

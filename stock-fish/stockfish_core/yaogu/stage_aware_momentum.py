@@ -27,11 +27,11 @@ CONFIG_PATH = ROOT / "config/stage_aware_momentum_v2.yaml"
 CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding="utf-8"))
 
 STAGE_AWARE_ID = CONFIG["strategy_id"]
-IMPLEMENTATION_VERSION = CONFIG.get("implementation_version", "R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION")
+IMPLEMENTATION_VERSION = CONFIG.get("implementation_version", "R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION")
 PARAMETER_STATUS = CONFIG["parameter_status"]
 PARAMETER_STATUS_LABEL_ZH = CONFIG["parameter_status_label_zh"]
 LEGACY_STAGE_AWARE_IDS = tuple(CONFIG.get("legacy_read_aliases", ()))
-SPEC_REVISION = CONFIG.get("spec_revision", "R09_SEMANTIC_COMPLETION")
+SPEC_REVISION = CONFIG.get("spec_revision", "R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION")
 STAGE_IDS = tuple(CONFIG["research_seed_parameters"]["setups"]["ids"])
 PRIMARY_STAGE_PRECEDENCE = tuple(CONFIG["research_seed_parameters"]["setups"]["display_order"])
 PRICE_WINDOWS = tuple(CONFIG["research_seed_parameters"]["price_strength_windows"])
@@ -823,57 +823,156 @@ def _market_raw_state(summary, seed):
     max_height = summary["verified_max_height"]
     if expected and coverage < coverage_min:
         return "UNKNOWN", ["SAM_MARKET_LIMIT_EVENT_COVERAGE_INSUFFICIENT"]
-    if summary["close_limit_count"] >= seed["expansion_limit_count_min_inclusive"] or (max_height is not None and max_height >= seed["expansion_max_height_min_inclusive"]):
+    expansion_strength = (
+        summary["close_limit_count"] >= seed["expansion_limit_count_min_inclusive"]
+        or (max_height is not None and max_height >= seed["expansion_max_height_min_inclusive"])
+    )
+    pressure_reasons = []
+    if summary["close_limit_down_count"] >= seed.get("divergence_close_limit_down_count_min_inclusive", 1):
+        pressure_reasons.append("SAM_MARKET_CLOSE_LIMIT_DOWN_PRESSURE")
+    if summary["touched_not_closed_count"] >= seed["divergence_touched_not_closed_count_min_inclusive"]:
+        pressure_reasons.append("SAM_MARKET_BROKEN_BOARD_PRESSURE")
+    if expansion_strength and pressure_reasons:
+        return "DIVERGENCE", ["SAM_MARKET_EXPANSION_WITH_MAJOR_DIVERGENCE_PRESSURE", *pressure_reasons]
+    if pressure_reasons:
+        return "DIVERGENCE", pressure_reasons
+    if expansion_strength:
         return "EXPANSION", []
-    if summary["close_limit_down_count"] > 0 or summary["touched_not_closed_count"] >= seed["divergence_touched_not_closed_count_min_inclusive"]:
-        return "DIVERGENCE", []
-    if summary["close_limit_count"] > 0 or summary["touched_not_closed_count"] > 0:
-        return "PARTIAL_STRENGTH", []
-    return "RETREAT", []
+    return "RETREAT", ["SAM_MARKET_PARTIAL_OR_WEAK_STRENGTH_WITHOUT_EXPANSION"]
+
+
+def _market_strength_metrics(summary, seed=None):
+    seed = seed or CONFIG["research_seed_parameters"]["market_context"]
+    known = summary.get("known_limit_event_count", 0) or 0
+    height = summary.get("verified_max_height") or 0
+    height_unit = max(1, int(seed["expansion_max_height_min_inclusive"]))
+
+    def rate(field):
+        return Fraction(summary.get(field, 0), known) if known else None
+
+    close_rate = rate("close_limit_count")
+    broken_rate = rate("touched_not_closed_count")
+    down_rate = rate("close_limit_down_count")
+    height_component = Fraction(min(height, height_unit), height_unit)
+    score = None
+    if close_rate is not None and broken_rate is not None and down_rate is not None:
+        score = close_rate * 2 + height_component - down_rate * 2 - broken_rate
+    return {
+        "close_limit_rate": close_rate,
+        "broken_board_rate": broken_rate,
+        "close_limit_down_rate": down_rate,
+        "height_component": height_component,
+        "normalized_strength_score": score,
+    }
 
 
 def _market_strength_score(summary):
-    height = summary["verified_max_height"] or 0
-    return summary["close_limit_count"] * 2 + height - summary["close_limit_down_count"] * 2 - summary["touched_not_closed_count"]
+    return _market_strength_metrics(summary)["normalized_strength_score"]
+
+
+def _market_strong_cohort_feedback(ctx, end_index, current_summary, previous_summary, seed):
+    if not previous_summary or not previous_summary.get("instrument_limits"):
+        return {"status": "UNKNOWN", "reason_codes": ["SAM_MARKET_PREVIOUS_STRONG_COHORT_UNAVAILABLE"]}
+    previous_limits = previous_summary.get("instrument_limits") or {}
+    current_limits = current_summary.get("instrument_limits") or {}
+    cohort = sorted(iid for iid, row in previous_limits.items() if row.get("close_limit_up") == TRUE)
+    if not cohort:
+        return {
+            "status": "UNKNOWN",
+            "previous_close_limit_cohort_count": 0,
+            "reason_codes": ["SAM_MARKET_PREVIOUS_CLOSE_LIMIT_COHORT_EMPTY"],
+        }
+    values = []
+    advanced = 0
+    current_known = 0
+    for iid in cohort:
+        ret = _price_return(ctx, iid, end_index, 1)
+        if ret is not None:
+            values.append(ret)
+        current = current_limits.get(iid) or {}
+        if _known_limit_flag(current.get("close_limit_up")):
+            current_known += 1
+            advanced += int(current.get("close_limit_up") == TRUE)
+    coverage = Fraction(len(values), len(cohort)) if cohort else Fraction(0)
+    coverage_min = Fraction(str(seed.get("strong_cohort_min_matched_coverage_fraction_inclusive", seed["min_limit_event_coverage_fraction_inclusive"])))
+    status = "COMPLETE" if values and coverage >= coverage_min else "INSUFFICIENT_COVERAGE" if values else "UNKNOWN"
+    return {
+        "status": status,
+        "previous_close_limit_cohort_count": len(cohort),
+        "matched_return_count": len(values),
+        "matched_coverage": _number(coverage),
+        "median_return_pct": _pct(median(values)) if status == "COMPLETE" else None,
+        "advance_close_limit_count": advanced,
+        "current_limit_event_known_count": current_known,
+        "reason_codes": [] if status == "COMPLETE" else ["SAM_MARKET_STRONG_COHORT_FEEDBACK_COVERAGE_INSUFFICIENT"],
+    }
 
 
 def _market_position_context(ctx, end_index):
     seed = CONFIG["research_seed_parameters"]["market_context"]
     current_summary = _market_day_summary(ctx, end_index, include_instruments=True)
-    previous_summary = _market_day_summary(ctx, end_index - 1, include_instruments=False) if end_index is not None and end_index > 0 else None
+    previous_summary = _market_day_summary(ctx, end_index - 1, include_instruments=True) if end_index is not None and end_index > 0 else None
     current_raw_state, current_reasons = _market_raw_state(current_summary, seed)
     previous_raw_state, previous_reasons = _market_raw_state(previous_summary, seed) if previous_summary else ("UNKNOWN", ["SAM_MARKET_PREVIOUS_SESSION_UNAVAILABLE"])
-    current_score = _market_strength_score(current_summary)
-    previous_score = _market_strength_score(previous_summary) if previous_summary else None
-    if previous_score is None:
+    current_metrics = _market_strength_metrics(current_summary, seed)
+    previous_metrics = _market_strength_metrics(previous_summary, seed) if previous_summary else {}
+    current_score = current_metrics.get("normalized_strength_score")
+    previous_score = previous_metrics.get("normalized_strength_score")
+    current_coverage = current_summary["limit_event_coverage"]
+    previous_coverage = previous_summary["limit_event_coverage"] if previous_summary else None
+    coverage_delta = abs(current_coverage - previous_coverage) if previous_coverage is not None else None
+    coverage_min = Fraction(str(seed["min_limit_event_coverage_fraction_inclusive"]))
+    max_coverage_delta = Fraction(str(seed.get("momentum_max_coverage_delta_inclusive", "0.10")))
+    momentum_band = Fraction(str(seed.get("momentum_stable_band_fraction_inclusive", "0")))
+    momentum_reasons = []
+    if previous_score is None or current_score is None:
         market_momentum = "UNKNOWN"
-    elif current_score > previous_score:
+        momentum_reasons.append("SAM_MARKET_NORMALIZED_STRENGTH_UNAVAILABLE")
+    elif min(current_coverage, previous_coverage) < coverage_min or coverage_delta > max_coverage_delta:
+        market_momentum = "UNKNOWN"
+        momentum_reasons.append("SAM_MARKET_MOMENTUM_COVERAGE_NOT_COMPARABLE")
+    elif current_score - previous_score > momentum_band:
         market_momentum = "IMPROVING"
-    elif current_score < previous_score:
+    elif previous_score - current_score > momentum_band:
         market_momentum = "WEAKENING"
     else:
         market_momentum = "STABLE"
+    strong_cohort = _market_strong_cohort_feedback(ctx, end_index, current_summary, previous_summary, seed)
+    if current_raw_state == "EXPANSION" and strong_cohort.get("status") == "COMPLETE":
+        cohort_return = _frac(strong_cohort.get("median_return_pct"))
+        if cohort_return is not None and cohort_return < 0:
+            current_raw_state = "DIVERGENCE"
+            current_reasons = [*current_reasons, "SAM_MARKET_STRONG_COHORT_FEEDBACK_NEGATIVE"]
 
     transition = {
         "previous_state": previous_raw_state,
         "current_raw_state": current_raw_state,
-        "previous_score": previous_score,
-        "current_score": current_score,
+        "previous_score": _number(previous_score) if previous_score is not None else None,
+        "current_score": _number(current_score) if current_score is not None else None,
+        "previous_normalized_metrics": {key: (_number(value) if isinstance(value, Fraction) else value) for key, value in previous_metrics.items()},
+        "current_normalized_metrics": {key: (_number(value) if isinstance(value, Fraction) else value) for key, value in current_metrics.items()},
+        "previous_coverage": _number(previous_coverage) if previous_coverage is not None else None,
+        "current_coverage": _number(current_coverage),
+        "coverage_delta": _number(coverage_delta) if coverage_delta is not None else None,
         "market_momentum": market_momentum,
+        "market_momentum_reason_codes": momentum_reasons,
         "transition_evidence": [],
     }
     if previous_summary:
-        if current_summary["close_limit_count"] > previous_summary["close_limit_count"]:
+        if market_momentum == "UNKNOWN":
+            transition["transition_evidence"].extend(momentum_reasons)
+        if market_momentum != "UNKNOWN" and current_metrics.get("close_limit_rate") is not None and previous_metrics.get("close_limit_rate") is not None and current_metrics["close_limit_rate"] > previous_metrics.get("close_limit_rate"):
             transition["transition_evidence"].append("SAM_MARKET_CLOSE_LIMIT_COUNT_IMPROVED")
-        if current_summary["touched_not_closed_count"] < previous_summary["touched_not_closed_count"]:
+        if market_momentum != "UNKNOWN" and current_metrics.get("broken_board_rate") is not None and previous_metrics.get("broken_board_rate") is not None and current_metrics["broken_board_rate"] < previous_metrics.get("broken_board_rate"):
             transition["transition_evidence"].append("SAM_MARKET_BROKEN_BOARD_COUNT_IMPROVED")
-        if current_summary["close_limit_down_count"] < previous_summary["close_limit_down_count"]:
+        if market_momentum != "UNKNOWN" and current_metrics.get("close_limit_down_rate") is not None and previous_metrics.get("close_limit_down_rate") is not None and current_metrics["close_limit_down_rate"] < previous_metrics.get("close_limit_down_rate"):
             transition["transition_evidence"].append("SAM_MARKET_CLOSE_LIMIT_DOWN_COUNT_IMPROVED")
 
-    if current_raw_state in {"EXPANSION", "DIVERGENCE", "RETREAT"}:
-        ecosystem_state, status, reasons = current_raw_state, "PASS", current_reasons
-    elif current_raw_state == "PARTIAL_STRENGTH" and previous_raw_state in {"RETREAT", "DIVERGENCE"} and transition["transition_evidence"]:
+    current_has_strength = bool(current_summary["close_limit_count"] or current_summary["touched_not_closed_count"] or current_summary["verified_max_height"])
+    if current_raw_state == "RETREAT" and previous_raw_state in {"RETREAT", "DIVERGENCE"} and market_momentum == "IMPROVING" and current_has_strength and transition["transition_evidence"]:
         ecosystem_state, status, reasons = "REPAIR", "PASS", []
+    elif current_raw_state in {"EXPANSION", "DIVERGENCE", "RETREAT"}:
+        ecosystem_state, status, reasons = current_raw_state, "PASS", current_reasons
     elif current_raw_state == "UNKNOWN":
         ecosystem_state, status, reasons = "UNKNOWN", "UNKNOWN", current_reasons
     else:
@@ -896,12 +995,18 @@ def _market_position_context(ctx, end_index):
             "unknown_limit_event_count": current_summary["unknown_limit_event_count"],
             "expected_limit_event_count": current_summary["expected_limit_event_count"],
             "limit_event_coverage": _number(current_summary["limit_event_coverage"]),
+            "close_limit_rate": _number(current_metrics["close_limit_rate"]) if current_metrics["close_limit_rate"] is not None else None,
+            "broken_board_rate": _number(current_metrics["broken_board_rate"]) if current_metrics["broken_board_rate"] is not None else None,
+            "close_limit_down_rate": _number(current_metrics["close_limit_down_rate"]) if current_metrics["close_limit_down_rate"] is not None else None,
+            "normalized_strength_score": _number(current_score) if current_score is not None else None,
         },
         "market_level": current_raw_state,
         "market_momentum": market_momentum,
+        "market_momentum_reason_codes": momentum_reasons,
         "previous_state": previous_raw_state,
         "current_raw_state": current_raw_state,
         "transition": transition,
+        "strong_cohort_feedback": strong_cohort,
         "previous_market_width": {
             key: (_number(value) if isinstance(value, Fraction) else value)
             for key, value in (previous_summary or {}).items()
@@ -958,6 +1063,8 @@ def _sector_window_stats(ctx, iid, peers, end_index, window, return_values, seed
         coverage_status = "UNKNOWN"
     usable = coverage_status == "COMPLETE"
     peer_mean = sum(valid, Fraction(0)) / len(valid) if valid and usable else None
+    market_return, market_coverage = _market_return_at(ctx, end_index, window)
+    sector_market_rs = peer_mean - market_return if peer_mean is not None and market_return is not None else None
     stock_ret = return_values.get(str(window))
     rs = stock_ret - peer_mean if stock_ret is not None and peer_mean is not None else None
     amount_changes = [value for peer in peers if (value := _amount_change(ctx, peer, end_index, window)) is not None]
@@ -968,6 +1075,9 @@ def _sector_window_stats(ctx, iid, peers, end_index, window, return_values, seed
         "coverage_status": coverage_status,
         "used_as_pass_evidence": usable,
         "peer_equal_weight_return_pct": _pct(peer_mean),
+        "market_equal_weight_return_pct": _pct(market_return),
+        "market_benchmark_coverage": _number(market_coverage.get("coverage")),
+        "sector_market_rs_pct": _pct(sector_market_rs),
         "peer_median_return_pct": _pct(median(valid)) if valid and usable else None,
         "peer_up_fraction": _number(Fraction(sum(value > 0 for value in valid), len(valid))) if valid and usable else None,
         "peer_amount_change_median_pct": _pct(median(amount_changes)) if amount_changes and usable else None,
@@ -981,28 +1091,36 @@ def _sector_momentum_stats(ctx, peers, end_index, seed):
     count = seed.get("momentum_equal_window_sessions", 3)
     coverage_min = Fraction(str(seed["min_peer_return_coverage_fraction_inclusive"]))
     band = Fraction(str(seed.get("momentum_stable_band_fraction_inclusive", 0)))
-    recent = [(peer, _price_return(ctx, peer, end_index, count)) for peer in peers]
-    previous = [(peer, _price_return(ctx, peer, end_index - count, count)) for peer in peers] if end_index is not None and end_index - count >= 0 else []
-    recent_valid = [value for _, value in recent if value is not None]
-    previous_valid = [value for _, value in previous if value is not None]
+    recent = {peer: _price_return(ctx, peer, end_index, count) for peer in peers}
+    previous = {peer: _price_return(ctx, peer, end_index - count, count) for peer in peers} if end_index is not None and end_index - count >= 0 else {}
+    recent_valid = [value for value in recent.values() if value is not None]
+    previous_valid = [value for value in previous.values() if value is not None]
+    matched = [(recent[peer], previous[peer]) for peer in peers if recent.get(peer) is not None and previous.get(peer) is not None]
     expected = len(peers)
     recent_coverage = Fraction(len(recent_valid), expected) if expected else Fraction(0)
     previous_coverage = Fraction(len(previous_valid), expected) if expected else Fraction(0)
+    matched_coverage = Fraction(len(matched), expected) if expected else Fraction(0)
+    matched_ok = bool(matched) and matched_coverage >= coverage_min
     recent_ok = bool(recent_valid) and recent_coverage >= coverage_min
     previous_ok = bool(previous_valid) and previous_coverage >= coverage_min
-    recent_mean = sum(recent_valid, Fraction(0)) / len(recent_valid) if recent_ok else None
-    previous_mean = sum(previous_valid, Fraction(0)) / len(previous_valid) if previous_ok else None
+    recent_mean = sum((pair[0] for pair in matched), Fraction(0)) / len(matched) if matched_ok else None
+    previous_mean = sum((pair[1] for pair in matched), Fraction(0)) / len(matched) if matched_ok else None
     raw = recent_mean - previous_mean if recent_mean is not None and previous_mean is not None else None
     state = _state_from_delta(raw, band, rising="STRENGTHENING", stable="STABLE", falling="WEAKENING")
-    if raw is None and (not recent_ok or not previous_ok):
+    if raw is None and not matched_ok:
         state = "UNKNOWN"
     return {
-        "calculation_id": "PEER_EQUAL_WINDOW_RECENT_MINUS_PREVIOUS_RETURN_V1",
+        "calculation_id": "PEER_MATCHED_EQUAL_WINDOW_RECENT_MINUS_PREVIOUS_RETURN_V1",
         "equal_window_sessions": count,
         "sector_momentum_state": state,
         "sector_momentum_raw_pct": _pct(raw),
         "recent_peer_return_pct": _pct(recent_mean),
         "previous_peer_return_pct": _pct(previous_mean),
+        "recent_expected": expected,
+        "previous_expected": expected,
+        "matched_peer_count": len(matched),
+        "matched_coverage": _number(matched_coverage),
+        "matched_coverage_status": "COMPLETE" if matched_ok else "INSUFFICIENT_COVERAGE" if matched else "UNKNOWN",
         "recent_coverage": {
             "expected_peer_count": expected,
             "valid_peer_count": len(recent_valid),
@@ -1015,6 +1133,7 @@ def _sector_momentum_stats(ctx, peers, end_index, seed):
             "coverage_fraction": _number(previous_coverage),
             "coverage_status": "COMPLETE" if previous_ok else "INSUFFICIENT_COVERAGE" if previous_valid else "UNKNOWN",
         },
+        "reason_codes": [] if matched_ok else ["SAM_SECTOR_MOMENTUM_MATCHED_PEER_COVERAGE_INSUFFICIENT"],
     }
 
 
@@ -1076,11 +1195,31 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
     peer_ret5_values = [value for peer in peers if (value := _price_return(ctx, peer, end_index, 5)) is not None]
     peer_ret5_mean = _frac(windows.get("5", {}).get("peer_equal_weight_return_pct"))
     peer_ret5_mean = peer_ret5_mean / 100 if peer_ret5_mean is not None else None
+    market_ret5, market_ret5_coverage = _market_return_at(ctx, end_index, 5)
+    sector_market_rs = peer_ret5_mean - market_ret5 if peer_ret5_mean is not None and market_ret5 is not None else None
     if peer_ret5_mean is None:
-        level_state = "UNKNOWN"
+        absolute_level_state = "UNKNOWN"
     elif peer_ret5_mean >= Fraction(str(seed["level_high_peer_ret5_min_inclusive"])):
-        level_state = "HIGH"
+        absolute_level_state = "HIGH"
     elif peer_ret5_mean <= Fraction(str(seed["level_low_peer_ret5_max_inclusive"])):
+        absolute_level_state = "LOW"
+    else:
+        absolute_level_state = "NORMAL"
+    relative_high = Fraction(str(seed.get("level_high_sector_market_rs_min_exclusive", "0")))
+    relative_low = Fraction(str(seed.get("level_low_sector_market_rs_max_exclusive", "0")))
+    if sector_market_rs is None:
+        relative_level_state = "UNKNOWN"
+    elif sector_market_rs > relative_high:
+        relative_level_state = "OUTPERFORMING"
+    elif sector_market_rs < relative_low:
+        relative_level_state = "UNDERPERFORMING"
+    else:
+        relative_level_state = "MARKET_IN_LINE"
+    if peer_ret5_mean is None or sector_market_rs is None:
+        level_state = "UNKNOWN"
+    elif absolute_level_state == "HIGH" and relative_level_state == "OUTPERFORMING":
+        level_state = "HIGH"
+    elif absolute_level_state == "LOW" or relative_level_state == "UNDERPERFORMING":
         level_state = "LOW"
     else:
         level_state = "NORMAL"
@@ -1112,11 +1251,26 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
         "persistent_strength_percentile_20d": _percentile_or_none(return_values.get("20"), ret20_values),
     }
     current_event = _bar_limit_event(current_bar, iid, ctx.observation_date)
-    if current_event.close_limit_up == TRUE and current_event.streak_lower_bound:
-        role_features["limit_streak_percentile"] = 100.0
-    elif _known_limit_flag(current_event.close_limit_up):
-        role_features["limit_streak_percentile"] = 50.0
+    limit_scores = []
+    target_limit_score = None
+    known_limit_members = 0
+    for member in [iid, *peers]:
+        event = _bar_limit_event(_bar(ctx, ctx.observation_date, member), member, ctx.observation_date)
+        if not _known_limit_flag(event.close_limit_up):
+            continue
+        known_limit_members += 1
+        score = event.streak_exchange if event.close_limit_up == TRUE and event.streak_exchange is not None else event.streak_lower_bound if event.close_limit_up == TRUE and event.streak_lower_bound else 1 if event.close_limit_up == TRUE else 0
+        limit_scores.append(score)
+        if member == iid:
+            target_limit_score = score
+    limit_evidence_total = len([iid, *peers])
+    limit_evidence_coverage = Fraction(known_limit_members, limit_evidence_total) if limit_evidence_total else Fraction(0)
+    if target_limit_score is not None and limit_evidence_coverage >= Fraction(str(seed["min_peer_return_coverage_fraction_inclusive"])):
+        role_features["limit_streak_percentile"] = _percentile_or_none(target_limit_score, limit_scores)
+    else:
+        role_features["limit_streak_percentile"] = None
     known_role_features = [Fraction(str(value)) for value in role_features.values() if value is not None]
+    role_feature_total = len(role_features)
     role_score = sum(known_role_features, Fraction(0)) / len(known_role_features) if len(known_role_features) >= 3 else None
     if role_score is None:
         stock_role = "UNKNOWN"
@@ -1152,6 +1306,11 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
         "peer_expected": expected,
         "sector_level_state": level_state,
         "sector_level_raw_pct": _pct(peer_ret5_mean),
+        "sector_absolute_level": absolute_level_state,
+        "sector_relative_level": relative_level_state,
+        "sector_market_rs_pct": _pct(sector_market_rs),
+        "sector_market_benchmark_ret5_pct": _pct(market_ret5),
+        "sector_market_benchmark_coverage": _number(market_ret5_coverage.get("coverage")),
         "sector_momentum_state": sector_momentum_state,
         "sector_momentum": momentum,
         "sector_breadth_fraction": _number(breadth_fraction),
@@ -1159,6 +1318,17 @@ def _sector_stats_for_theme(ctx, iid, theme, end_index, return_values):
         "stock_role": stock_role,
         "stock_role_score": _number(role_score),
         "stock_role_features": role_features,
+        "stock_role_known_feature_count": len(known_role_features),
+        "stock_role_unknown_feature_count": role_feature_total - len(known_role_features),
+        "stock_role_evidence_coverage": _number(Fraction(len(known_role_features), role_feature_total)) if role_feature_total else None,
+        "limit_streak_evidence": {
+            "same_theme_member_count": limit_evidence_total,
+            "known_limit_event_member_count": known_limit_members,
+            "coverage_fraction": _number(limit_evidence_coverage),
+            "target_limit_streak_score": target_limit_score,
+            "status": "COMPLETE" if role_features.get("limit_streak_percentile") is not None else "UNKNOWN",
+            "reason_codes": [] if role_features.get("limit_streak_percentile") is not None else ["SAM_ROLE_LIMIT_STREAK_PEER_EVIDENCE_INSUFFICIENT"],
+        },
         "temporal_leadership": {"status": "UNKNOWN", "reason_codes": ["SAM_INTRADAY_FIRST_SEAL_TIMESTAMPS_NOT_IN_MARKET_INPUT"]},
         "setup_compatibility": compatibility,
         "context_status": "SUPPORTIVE" if any(row["context_status"] == "SUPPORTIVE" for row in compatibility.values()) else "NEGATIVE" if any(row["context_status"] == "NEGATIVE" for row in compatibility.values()) else "UNKNOWN" if any(row["context_status"] == "UNKNOWN" for row in compatibility.values()) else "NEUTRAL",
@@ -2085,7 +2255,12 @@ def _decision(liquidity, trend, stages, behavioral, market_compatibility, same_t
     if behavioral.get("status") == "FAIL":
         return _condition("WATCH", ["SAM_WATCH_BEHAVIORAL_CONFIRMATION_FAILED_FOR_SETUP"], details={"decision_status": "WATCH", "primary_setup": primary, "watch_reasons": ["SAM_WATCH_BEHAVIORAL_CONFIRMATION_FAILED_FOR_SETUP"]})
     if not primary and accel.get("setup_state") == "WEAKENING_HIGH_ACTIVITY":
-        return _condition("WATCH", ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"], details={"decision_status": "WATCH", "primary_setup": primary, "watch_reasons": ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"]})
+        return _condition("WATCH", ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"], details={
+            "decision_status": "WATCH",
+            "primary_setup": primary,
+            "observation_bucket": "WEAKENING_HIGH_ACTIVITY_OBSERVATION",
+            "watch_reasons": ["SAM_WATCH_WEAKENING_HIGH_ACTIVITY"],
+        })
     unknown_core = []
     for condition, code in (
         (liquidity, "SAM_DECISION_LIQUIDITY_UNKNOWN"),
@@ -2150,7 +2325,7 @@ def _rank_rows(rows):
     setup_counts = defaultdict(int)
     for display_order, row in enumerate(rows, 1):
         decision_tier = row.get("decision_status") or row.get("status")
-        setup_id = row.get("primary_stage") or "NO_PASSING_SETUP"
+        setup_id = row.get("primary_stage") or row.get("observation_bucket") or "NO_PASSING_SETUP"
         rank_key = (decision_tier, setup_id)
         setup_counts[rank_key] += 1
         tier_rank = setup_counts[rank_key]
@@ -2240,6 +2415,7 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "formal_status": formal_status,
             "decision_status": decision_status,
             "watch_reasons": decision.get("watch_reasons", []),
+            "observation_bucket": decision.get("observation_bucket"),
             "reason_codes": sorted(set(decision.get("reason_codes", []) + _condition_reasons(conditions.values()))) or ["SAM_FOCUS_BY_STAGE_AWARE_V2_REQUIREMENTS"],
             "condition_statuses": {key: condition["status"] for key, condition in conditions.items()},
             "conditions": conditions,
@@ -2279,6 +2455,12 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
             "primary_sector_momentum_state": primary_sector.get("sector_momentum_state"),
             "primary_sector_breadth_state": primary_sector.get("breadth_state"),
             "primary_sector_stock_role": primary_sector.get("stock_role"),
+            "primary_sector_absolute_level": primary_sector.get("sector_absolute_level"),
+            "primary_sector_relative_level": primary_sector.get("sector_relative_level"),
+            "primary_sector_market_rs_pct": primary_sector.get("sector_market_rs_pct"),
+            "primary_sector_stock_role_known_feature_count": primary_sector.get("stock_role_known_feature_count"),
+            "primary_sector_stock_role_unknown_feature_count": primary_sector.get("stock_role_unknown_feature_count"),
+            "primary_sector_stock_role_evidence_coverage": primary_sector.get("stock_role_evidence_coverage"),
             "close": _number(_bar_decimal(current, "close"), places=8),
             "comparable_close": _number(_bar_decimal(current, "comparable_close"), places=8),
             "comparable_basis": (current or {}).get("comparable_basis"),

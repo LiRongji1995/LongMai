@@ -68,6 +68,36 @@ def test_full_directory_discovers_non_limitup_families_not_max6(tmp_path):
     assert len(p.last_report['structure_candidate_ids'])>6
 
 
+def test_v2_full_universe_long_history_demand_independent_of_daily_candidates(tmp_path):
+    b,c=fixtures();calls=[]
+    p=MainboardPipeline(tmp_path/'cache',executor=source(b,calls),normalizer=normalizer(b),
+                        budget=RequestBudget(max_requests=1000,max_seconds=60,minimum_interval_seconds=0))
+    p.capture(tmp_path/'capture',c,observation_date=b.observation_date)
+
+    requested_market_days = {params['date'] for ep, params in calls if ep == 'market_daily'}
+    assert requested_market_days == {str(day) for day in b.sessions}
+    assert p.last_report['v2_long_history']['universe_policy'] == 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING'
+    assert p.last_report['v2_long_history']['requested_sessions'] == len(b.sessions)
+    assert p.last_report['v2_long_history']['requested_sessions'] > 22
+
+
+def test_v2_ma250_capture_resumes_market_daily_from_cache(tmp_path):
+    b,c=fixtures();calls=[]
+    root = tmp_path/'shared'
+    p=MainboardPipeline(root/'cache',executor=source(b,calls),normalizer=normalizer(b),
+                        budget=RequestBudget(max_requests=1000,max_seconds=60,minimum_interval_seconds=0))
+    p.capture(root/'first',c,observation_date=b.observation_date)
+    first_market_calls = sum(ep == 'market_daily' for ep, _ in calls)
+
+    p=MainboardPipeline(root/'cache',executor=source(b,calls),normalizer=normalizer(b),
+                        budget=RequestBudget(max_requests=1000,max_seconds=60,minimum_interval_seconds=0))
+    p.capture(root/'second',c,observation_date=b.observation_date)
+
+    assert first_market_calls == len(b.sessions)
+    assert sum(ep == 'market_daily' for ep, _ in calls) == first_market_calls
+    assert p.last_report['queue']['cache_hits_this_run'] >= len(b.sessions)
+
+
 def test_reversing_directory_order_does_not_change_discovery_scope(tmp_path):
     b,c=fixtures();reports=[]
     for reverse in (False,True):

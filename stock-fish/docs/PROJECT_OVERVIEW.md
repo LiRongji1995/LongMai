@@ -4,18 +4,20 @@
 
 ## 1. 文档身份、核验基础与版本
 
-**最后核对：2026-09-07，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R09_SEMANTIC_COMPLETION`；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
+**最后核对：2026-09-08，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。此前运行服务、发布检出和首用验证仍是历史证据，不等于本次 D 盘克隆已经重启或替换了旧服务。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
 
 | 对象 | 核对基础及含义 |
 |---|---|
 | 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮开始时 `main` 为 `53e6c5d 重构阶段感知核心策略 V2` |
 | 本轮核心版本 | `STAGE_AWARE_MOMENTUM_V2`；配置 [stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，说明 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)；V1 只读历史说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
 | 历史运行证据 | 旧 `D:/StockRecommendation` 服务与发布检出证据保留为历史核对材料；其 PID、端口和镜像身份是当时事实，使用前必须重新核对 |
-| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；本轮核心实现 `R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION`，spec `R09_SEMANTIC_COMPLETION`；新增初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
+| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；本轮核心实现 `R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION`，spec `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`；初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
 
 开发工作区、发布检出与运行进程分别核验。本次任务只提交当前授权文件，不覆盖私人数据库、缓存、报告或旧运行目录。正式 DAILY、旧 PV、旧焦点、DNA、THEME 的规则与历史结果保留；新增策略不以国芳集团或金健米业是否入选作为验收标准。
 
 本轮新增交付文档：[V2_SEMANTIC_COMPLETION_REPORT.md](V2_SEMANTIC_COMPLETION_REPORT.md)、[V2_DATA_READINESS.md](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT.md](V2_HISTORICAL_REPLAY_REPORT.md)、[V2_PROSPECTIVE_VALIDATION_PROTOCOL.md](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)、[V2_PROSPECTIVE_READINESS.md](V2_PROSPECTIVE_READINESS.md)。2026-09-07 盘后已实际补取 BaoStock 当日日线并组装 `PROSPECTIVE_CAPTURED` 输入：主板 9.7 bar 覆盖 4600 条，V2 eligible 3041，FOCUS 0，WATCH 40，REJECTED 2887，UNKNOWN 114；下一目标交易会话为 2026-09-08。该结果是研究队列，不是交易建议或市场优势证明。
+
+R10 还使用 BaoStock 官方 source docs、深交所主板代码区间公告和真实 request-cache receipt 组装 `RECONSTRUCTED_HISTORICAL` 输入：2026-09-07 单日 replay `success_count=1`，`PRICE_TREND_REPLAY_SCOPE` 成功 1 天，`FULL_CONTEXT_REPLAY_SCOPE` 因 PIT 题材/资金缺失仍为 0。真实 scheduler state 为 `ACTUAL_CANDIDATE_SCHEDULER_STATE_R10`，已登记 `schedule_2026-09-08_EVENING`，等待 2026-09-08 20:30 形成首个 official primary，目标交易会话为 2026-09-09。
 
 实验模块加载时检验批准配置的字节 SHA-256：`r05_strategy_experiments.yaml` 为 `8cd729cab31f80ec84d6486c733165360ba264fc3efb2d70c0c69f5a78148462`，`r05_completion_requirements.yaml` 为 `203325cad6cde76ca9399353af163e9b122b73b1ab2d3c8ecbfd1878fb3f5e11`。冻结 DAILY 配置为 `5863af482cc396a000477fdfcfe694aac162a935ece7fa11279a2e3ecc0376b6`。上游研究版本与批准文件锁见 [r05_source_lock.json](../config/r05_source_lock.json)。这些哈希标识内容，不是抵御具有完整本机写权限者的安全认证。
 

@@ -217,6 +217,12 @@ def captured_at(bundle,stamp):
     universe=bundle.universe.model_copy(update={**clocks,'securities':tuple(s.model_copy(update=clocks) for s in bundle.universe.securities)})
     return bundle.model_copy(update={'universe':universe,'bars':tuple(b.model_copy(update=clocks) for b in bundle.bars),'themes':tuple(t.model_copy(update=clocks) for t in bundle.themes),'receipts':tuple(r.model_copy(update=clocks) for r in bundle.receipts)})
 
+
+def stage_aware_primary_doc(run):
+    return {'run_id':run.run_id,'signal_observation_date':str(run.observation_date),
+        'decision_cutoff':run.decision_cutoff.isoformat(),'official_primary_signal_countable':True}
+
+
 def test_scheduler_three_times_durable_dedup_and_real_late_cutoff(product,market,monkeypatch):
     from stockfish_core.yaogu.scheduler import CandidateScheduler
     import stockfish_core.yaogu.candidate_service as service_module
@@ -249,6 +255,7 @@ def test_scheduler_three_times_durable_dedup_and_real_late_cutoff(product,market
     run2=core.candidates.get_run(second['result']['candidate_run_id'])
     assert run2.revision==2 and run2.parent_run_id==run1.run_id and run2.market_session=='EVENING'
     assert run2.decision_cutoff.second==7 and len(captures)==2
+    core.store.put_document('stage_aware_prospective_primary_runs', run2.run_id, stage_aware_primary_doc(run2))
     next_day=min(d for d in scheduler.sessions if d>market[0].observation_date)
     clock.current=clock.current.replace(year=next_day.year,month=next_day.month,day=next_day.day,hour=9,minute=26,second=0)
     auction=next(e for e in scheduler.tick() if e['market_session']=='AUCTION_REVIEW')

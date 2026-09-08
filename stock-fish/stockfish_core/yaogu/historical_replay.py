@@ -55,7 +55,11 @@ def verify_capture(root,result):
     can never promote modified checkpoint rows into new trusted source records.
     """
     rid=result['request_receipt_id']
-    receipt_path=Path(root)/'cache'/'raw'/(rid+'.receipt.json')
+    base=Path(root)
+    candidates=[base/'cache'/'raw'/(rid+'.receipt.json')]
+    candidates.extend(sorted((base/'raw').glob('**/raw/'+rid+'.receipt.json')))
+    receipt_path=next((p for p in candidates if p.is_file()),None)
+    if receipt_path is None:raise FileNotFoundError('ORIGINAL_RECEIPT_ARCHIVE_MISSING:'+rid)
     original=json.loads(receipt_path.read_text(encoding='utf-8'))
     embedded=[r for r in result['receipts'] if r.get('receipt_id')==rid]
     identity={k:v for k,v in original.items() if k!='receipt_id'}
@@ -82,7 +86,7 @@ def source_policy(source_dir):
     root=Path(source_dir)
     required=('baostock-home.md','baostock-DailyUpdates.md','baostock-StockBasicInfoAPI.md',
               'baostock-stockBasic.md','baostock-factorInfo.md','baostock-adjustment.pdf',
-              'szse-mainboard-merger.html','szse-stock-rules.pdf','sse-calendar.html','szse-calendar.html')
+              'szse-mainboard-merger.html','szse-stock-rules.pdf')
     for name in required:
         if not (root/name).is_file():raise ValueError('HISTORICAL_SOURCE_DOCUMENT_MISSING:'+name)
     home=(root/'baostock-home.md').read_text(encoding='utf-8')
@@ -102,6 +106,10 @@ def source_policy(source_dir):
             'stock_basic_role':'ORIGINAL_IPO_DATE_AND_TYPE_CORROBORATION_NOT_CURRENT_ST_OR_CURRENT_NAME',
             'revision_limitation':'HISTORICAL_RECONSTRUCTION_WITH_CURRENT_VENDOR_REVISIONS_NOT_ARCHIVED_PIT',
             'limit_prices':'UNVERIFIED_NO_RULE_DERIVATION_IN_THIS_ADAPTER'}
+    calendar_docs=('sse-calendar.html','szse-calendar.html')
+    result['source_documents'].update({name:{'path':str((root/name).resolve()),'sha256':file_hash(root/name)}
+                                       for name in calendar_docs if (root/name).is_file()})
+    result['calendar_authority']='ACTUAL_PROVIDER_CALENDAR_CHECKPOINT_REQUIRED_FOR_REPLAY_OPTIONAL_EXCHANGE_CALENDAR_DOCS_ARE_AUDIT_ATTACHMENTS'
     extra=('sse-code-guide-20260831.docx','sse-code-guide-20260831-notice.html','sse-stock-rules-20260424.docx','sse-code-guide-receipts.json')
     if all((root/name).is_file() for name in extra):
         with zipfile.ZipFile(root/extra[0]) as archive:
@@ -127,8 +135,7 @@ class HistoricalReplayAssembler:
         self.root=Path(capture_dir);self.policy=policy
         for item in policy['source_documents'].values():
             if file_hash(item['path'])!=item['sha256']:raise ValueError('SOURCE_DOCUMENT_HASH_MISMATCH')
-        self.results=[json.loads(p.read_text(encoding='utf-8')) for p in (self.root/'checkpoints').glob('*.json')]
-        self.results.sort(key=lambda x:x['completed_at'])
+        self.results=self._load_capture_results()
         self.raw={};self.masters={};self.basic={};self.factors=defaultdict(list);self.original_refs={}
         self.calendar=();self.integrity={}
         for r in self.results:
@@ -162,6 +169,18 @@ class HistoricalReplayAssembler:
         if not self.calendar:raise ValueError('ACTUAL_EXCHANGE_CALENDAR_REQUIRED')
         if not self.basic:raise ValueError('ACTUAL_SECURITY_IPO_FACTS_REQUIRED')
         self.policy_hash=digest(policy)
+
+    def _load_capture_results(self):
+        """Read legacy checkpoints and durable request-queue result documents."""
+        loaded=[];seen=set()
+        for folder in ('checkpoints','results'):
+            for path in sorted((self.root/folder).glob('*.json')):
+                result=json.loads(path.read_text(encoding='utf-8'))
+                key=result.get('request_receipt_id') or digest([result.get('endpoint'),result.get('parameters'),result.get('completed_at')])
+                if key in seen:continue
+                seen.add(key);loaded.append(result)
+        loaded.sort(key=lambda x:x.get('completed_at',''))
+        return loaded
 
     def build(self,observation_date,*,history_sessions=26,include_security_history=False):
         day=_day(observation_date)

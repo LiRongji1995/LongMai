@@ -55,6 +55,22 @@ def checkpoint(root,endpoint,day=None):
     raise AssertionError('fixture checkpoint missing')
 
 
+def move_capture_to_request_queue_layout(root,result):
+    receipt=result['receipts'][0]
+    legacy=root/'cache/raw'
+    target=root/'raw'/result['request_id']/'1'/'raw'
+    target.mkdir(parents=True,exist_ok=True)
+    (legacy/(receipt['receipt_id']+'.receipt.json')).replace(target/(receipt['receipt_id']+'.receipt.json'))
+    (legacy/(receipt['content_hash']+'.raw.json')).replace(target/(receipt['content_hash']+'.raw.json'))
+
+
+def move_result_to_request_queue_results(root,path):
+    target=root/'results'/path.name
+    target.parent.mkdir(parents=True,exist_ok=True)
+    path.replace(target)
+    return target
+
+
 def test_verified_capture_preserves_clocks_and_truncates_future_prices_actions(tmp_path):
     policy=fixture_capture(tmp_path)
     assembler=HistoricalReplayAssembler(tmp_path,policy)
@@ -70,6 +86,28 @@ def test_verified_capture_preserves_clocks_and_truncates_future_prices_actions(t
         actual=normalized[source['normalized_receipt_id']];original=originals[source['original_receipt_id']]
         assert actual.first_seen_at==datetime.fromisoformat(original['first_seen_at'])
         assert actual.ingested_at==datetime.fromisoformat(original['ingested_at'])
+
+
+def test_verified_capture_accepts_actual_request_queue_archive_layout(tmp_path):
+    policy=fixture_capture(tmp_path)
+    _,result=checkpoint(tmp_path,'market_daily','2026-09-02')
+    move_capture_to_request_queue_layout(tmp_path,result)
+    assembler=HistoricalReplayAssembler(tmp_path,policy)
+    receipt_id=result['request_receipt_id']
+
+    assert '/raw/' in assembler.integrity[receipt_id]['receipt_path'].replace('\\','/')
+    assert assembler.build('2026-09-02')[0].coverage_type=='RECONSTRUCTED_HISTORICAL'
+
+
+def test_reconstruction_reads_durable_request_queue_result_documents(tmp_path):
+    policy=fixture_capture(tmp_path)
+    path,result=checkpoint(tmp_path,'market_daily','2026-09-02')
+    move_capture_to_request_queue_layout(tmp_path,result)
+    move_result_to_request_queue_results(tmp_path,path)
+    assembler=HistoricalReplayAssembler(tmp_path,policy)
+
+    assert result['request_receipt_id'] in assembler.integrity
+    assert assembler.build('2026-09-02')[0].coverage_type=='RECONSTRUCTED_HISTORICAL'
 
 
 def test_only_dated_certified_szse_subset_no_limits_invented(tmp_path):

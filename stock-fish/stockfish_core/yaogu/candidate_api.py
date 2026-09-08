@@ -265,5 +265,11 @@ def register_candidate_routes(app, service):
 
     @app.get('/api/candidate-schedule')
     def candidate_schedule():
+        state = service.scheduler.describe_state() if getattr(service, 'scheduler', None) is not None else {
+            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R10',
+            'status': 'SCHEDULER_NOT_ATTACHED_TO_SERVICE',
+            'service_identity': {'state_root': str(service.root), 'db_path': str(service.store.path)},
+            'market_edge': 'NOT_ESTABLISHED',
+        }
         return jsonify(plans=service._all('candidate_observation_plans'), events=service._all('candidate_schedule_events')[-100:],
-                       service_required=True, missed_capture_policy='NO_BACKDATED_SNAPSHOT')
+                       prospective_validation=state, service_required=True, missed_capture_policy='NO_BACKDATED_SNAPSHOT')

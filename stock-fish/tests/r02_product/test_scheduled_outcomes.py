@@ -179,3 +179,55 @@ def test_observation_plan_does_not_invent_2027_exchange_calendar(observer):
     assert plan['sessions']==['2026-12-31']
     assert plan['outcome_schedule']['deduplication']==['run_id','evaluation_exchange_session','input_id']
     assert plan['observations']=='FUTURE_NOT_OBSERVED'
+
+
+def test_evening_capture_persists_stage_aware_v2_primary_run(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(20,30),TZ)
+    captured=future_input(bundle,day).model_copy(update={'coverage_type':'PROSPECTIVE_CAPTURED'})
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *args:captured,clock=clock)
+    events=scheduler.tick()
+    evening=next(e for e in events if e['market_session']=='EVENING')
+
+    done=wait_job(client,evening['job_id'])
+
+    assert done['state']=='SUCCEEDED',done
+    run_id=done['result']['stage_aware_primary_run_id']
+    run=core.candidates.strategy_experiment(run_id)
+    assert run['prospective_validation']['validation_role']=='PROSPECTIVE_PRIMARY'
+    assert run['prospective_validation']['official_primary_signal_countable'] is True
+    primary=core.candidates.store.get_document('stage_aware_prospective_primary_runs',run_id)
+    assert primary['scheduler_job_id']==evening['job_id']
+    epoch=core.candidates.store.get_document('stage_aware_prospective_validation_epochs','STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH')
+    assert epoch['first_primary_run_id']==run_id
+    assert scheduler.describe_state(clock.current)['status']=='PROSPECTIVE_PRIMARY_PERSISTED'
+
+
+def test_missed_evening_capture_cannot_be_backfilled_as_prospective_primary(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(20,40),TZ)
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *a:pytest.fail('missed primary must not capture'),clock=clock)
+
+    events=scheduler.tick()
+    evening=next(e for e in events if e['market_session']=='EVENING')
+
+    assert evening['status']=='MISSED_SERVICE_OFFLINE'
+    assert core.candidates._all('stage_aware_prospective_primary_runs')==[]
+    assert scheduler.describe_state(clock.current)['status']=='MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'
+
+
+def test_auction_review_requires_prior_stage_aware_primary_run(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(20,30),TZ)
+    captured=future_input(bundle,day)  # TEST_FIXTURE is not countable prospective primary.
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *args:captured,clock=clock)
+    evening=next(e for e in scheduler.tick() if e['market_session']=='EVENING')
+    assert wait_job(client,evening['job_id'])['state']=='SUCCEEDED'
+    assert core.candidates._all('stage_aware_prospective_primary_runs')==[]
+
+    following=next_session(captured);clock.current=datetime.combine(following,time(9,26),TZ)
+    auction=next(e for e in scheduler.tick() if e['market_session']=='AUCTION_REVIEW')
+
+    assert auction['status']=='EVENING_PRIMARY_RUN_UNAVAILABLE'
+    assert auction['prior_evening_candidate_run_available'] is True
+    assert auction['prior_stage_aware_primary_run_available'] is False

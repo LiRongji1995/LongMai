@@ -315,7 +315,7 @@ class CandidateService:
             'effective_input_hash':result.effective_input_hash})})
         result = result.model_copy(update={'semantic_hash':business_semantic_hash(result)})
         ctx.check_cancelled()
-        ctx.update(.9, '规则计算完成；原子保存候选事实与任务终态')
+        ctx.update(.85, '规则计算完成；准备原子保存候选事实与任务终态')
         value = result.model_dump(mode='json')
         terminal = {'candidate_run_id': result.run_id, 'run_id': result.run_id,
                     'quality': result.status, 'status': 'complete', 'count': len(result.items)}
@@ -326,6 +326,19 @@ class CandidateService:
         activation_allowed = activation is not None and activation_validation.status in {'COMPLETE', 'EMPTY'}
         if activation is not None:
             terminal['activated'] = activation_allowed
+        strategy_primary_result = None
+        if payload.get('market_session') == 'EVENING':
+            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 20:30 primary research run')
+            strategy_primary_result = self._build_strategy_experiment_result(
+                payload['input_id'], bundle, cutoff, config,
+                market_session='EVENING',
+                validation_role='PROSPECTIVE_PRIMARY',
+                primary_signal_cutoff='20:30 Asia/Shanghai EVENING_FINAL',
+                scheduler_job_id=ctx.job_id,
+            )
+            terminal['strategy_primary_run_id'] = strategy_primary_result['run_id']
+            terminal['stage_aware_primary_run_id'] = strategy_primary_result['run_id']
+            terminal['stage_aware_primary_validation_role'] = 'PROSPECTIVE_PRIMARY'
         def publish(connection):
             self.store._put_document(connection, 'candidate_runs', result.run_id, value)
             self.store._put_document(connection, 'candidate_run_summaries', result.run_id,
@@ -342,6 +355,8 @@ class CandidateService:
                     {'candidate_run_id': result.run_id, 'input_id': payload['input_id'], 'actual_cutoff': payload['decision_cutoff'],
                      'coverage_type': bundle.coverage_type, 'snapshot_is_backdated': False,
                      'activated': activation_allowed, 'consumer_status': result.status})
+            if strategy_primary_result is not None:
+                self._write_strategy_result(connection, strategy_primary_result, created_at=payload['decision_cutoff'])
         return ctx.complete(terminal, publish)
 
     def _publication_authority(self, run_id):
@@ -484,17 +499,26 @@ class CandidateService:
         return self.jobs.submit('strategy_experiments', {'input_id': resolved,
             'cutoff': utc_now().isoformat()}, job_id=job_id)
 
-    def _strategy_experiment_job(self, ctx):
-        payload=ctx.payload
-        _,bundle=self.input(payload['input_id'])
-        config=self.current_config()
-        cutoff=datetime.fromisoformat(payload['cutoff'])
-        ctx.update(.25,'运行量价观察控制组、股性复排和题材上下文实验')
+    def _stage_aware_target_session(self, bundle):
+        sessions = sorted(date.fromisoformat(str(day)[:10]) for day in bundle.sessions)
+        later = [day for day in sessions if day > bundle.observation_date]
+        if later:
+            return later[0]
+        try:
+            from ..observed_data import exchange_calendar_2026
+            later = [day for day in sorted(exchange_calendar_2026().sessions) if day > bundle.observation_date]
+            return later[0] if later else None
+        except Exception:
+            return None
+
+    def _build_strategy_experiment_result(self, input_id, bundle, cutoff, config, *, market_session=None,
+                                          validation_role='MANUAL_OR_REPLAY', primary_signal_cutoff=None,
+                                          scheduler_job_id=None):
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
-        result['input_id']=payload['input_id']
+        result['input_id']=input_id
         result['generated_at']=utc_now().isoformat()
-        latest=self._latest_input_publication(payload['input_id'])
+        latest=self._latest_input_publication(input_id)
         daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
         result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
             result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'],
@@ -526,17 +550,101 @@ class CandidateService:
             'strategy_id':'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC', 'status':'COMPLETE' if baseline_items else 'UNAVAILABLE',
             'rank_semantics':'INSTRUMENT_ID_ORDER_NOT_SELECTION_RANK', 'items':baseline_items,
             'cohort_rule':'FROZEN_DATED_ELIGIBLE_UNIVERSE_WITH_SIGNAL_COMPARABLE_CLOSE',
-            'input_id':payload['input_id'], 'decision_cutoff':cutoff.isoformat()}}
+            'input_id':input_id, 'decision_cutoff':cutoff.isoformat()}}
+        stage_aware = result.get('results', {}).get('STAGE_AWARE_MOMENTUM_V2') or {}
+        counts = stage_aware.get('counts') or {}
+        official_primary = (
+            validation_role == 'PROSPECTIVE_PRIMARY'
+            and market_session == 'EVENING'
+            and bundle.coverage_type == 'PROSPECTIVE_CAPTURED'
+        )
+        result['prospective_validation'] = {
+            'protocol_id': 'VALIDATION_PROTOCOL_V2',
+            'validation_role': validation_role,
+            'official_primary_signal_countable': official_primary,
+            'preliminary_not_counted': validation_role == 'PROSPECTIVE_PRELIMINARY',
+            'market_session': market_session,
+            'primary_signal_cutoff': primary_signal_cutoff,
+            'scheduler_job_id': scheduler_job_id,
+            'signal_observation_date': str(bundle.observation_date),
+            'target_session': str(self._stage_aware_target_session(bundle)) if self._stage_aware_target_session(bundle) else None,
+            'coverage_type': bundle.coverage_type,
+            'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+            'stage_aware_counts': {
+                'focus': counts.get('focus', 0),
+                'watch': counts.get('watch', 0),
+                'rejected': counts.get('rejected', 0),
+                'unknown': counts.get('unknown', 0),
+                'eligible': counts.get('eligible', 0),
+            },
+            'historical_vs_prospective_separation': 'RECONSTRUCTED_HISTORICAL_NEVER_COUNTS_AS_PROSPECTIVE_PRIMARY',
+            'market_edge': 'NOT_ESTABLISHED',
+        }
         result['content_hash']=digest({k:v for k,v in result.items() if k!='content_hash'})
+        return result
+
+    def _write_strategy_result(self, connection, result, *, created_at):
+        self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
+        self._write_strategy_projection(connection, result)
+        self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
+            {'run_id': result['run_id'], 'observation_date': result['observation_date'], 'horizons': [1,2,3,4,5,10,20],
+             'created_at': created_at, 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1',
+             'stage_aware_primary_role': (result.get('prospective_validation') or {}).get('validation_role')})
+        prospective = result.get('prospective_validation') or {}
+        if prospective.get('official_primary_signal_countable'):
+            primary = {
+                'run_id': result['run_id'],
+                'input_id': result.get('input_id'),
+                'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+                'implementation_version': ((result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}).get('implementation_version'),
+                'spec_revision': ((result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}).get('spec_revision'),
+                'signal_observation_date': prospective.get('signal_observation_date'),
+                'target_session': prospective.get('target_session'),
+                'decision_cutoff': result.get('decision_cutoff') or result.get('cutoff'),
+                'market_session': prospective.get('market_session'),
+                'primary_signal_cutoff': prospective.get('primary_signal_cutoff'),
+                'scheduler_job_id': prospective.get('scheduler_job_id'),
+                'coverage_type': prospective.get('coverage_type'),
+                'counts': prospective.get('stage_aware_counts'),
+                'official_primary_signal_countable': True,
+                'market_edge': 'NOT_ESTABLISHED',
+                'append_only_policy': 'OUTCOMES_APPEND_ONLY_SIGNAL_RUN_IMMUTABLE',
+            }
+            self.store._put_document(connection, 'stage_aware_prospective_primary_runs', result['run_id'], primary)
+            epoch_id = 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH'
+            existing = connection.execute("SELECT * FROM documents WHERE namespace=? AND document_id=?",
+                                          ('stage_aware_prospective_validation_epochs', epoch_id)).fetchone()
+            if existing is None:
+                epoch = {
+                    'epoch_id': epoch_id,
+                    'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+                    'status': 'ACTIVE',
+                    'first_primary_run_id': result['run_id'],
+                    'first_signal_observation_date': prospective.get('signal_observation_date'),
+                    'start_session': prospective.get('target_session'),
+                    'started_at': utc_now().isoformat(),
+                    'primary_signal_cutoff': prospective.get('primary_signal_cutoff'),
+                    'checkpoints_signal_sessions': [5,20,60,120],
+                    'no_tuning_rule': True,
+                    'historical_vs_prospective_separation': 'RECONSTRUCTED_HISTORICAL_NOT_COUNTED',
+                    'market_edge': 'NOT_ESTABLISHED',
+                }
+                self.store._put_document(connection, 'stage_aware_prospective_validation_epochs', epoch_id, epoch)
+
+    def _strategy_experiment_job(self, ctx):
+        payload=ctx.payload
+        _,bundle=self.input(payload['input_id'])
+        config=self.current_config()
+        cutoff=datetime.fromisoformat(payload['cutoff'])
+        ctx.update(.25,'运行量价观察控制组、股性复排和题材上下文实验')
+        result = self._build_strategy_experiment_result(payload['input_id'], bundle, cutoff, config,
+            market_session=payload.get('market_session'), validation_role=payload.get('validation_role', 'MANUAL_OR_REPLAY'),
+            primary_signal_cutoff=payload.get('primary_signal_cutoff'), scheduler_job_id=payload.get('scheduler_job_id'))
         terminal={'strategy_experiment_run_id':result['run_id'],'run_id':result['run_id'],
             'status':'complete','quality':result['results']['PV_OBSERVATION_V1']['status'],
             'pv_count':len(result['results']['PV_OBSERVATION_V1'].get('items',()))}
         def write(connection):
-            self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
-            self._write_strategy_projection(connection, result)
-            self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
-                {'run_id': result['run_id'], 'observation_date': result['observation_date'], 'horizons': [1,2,3,4,5,10,20],
-                 'created_at': payload['cutoff'], 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1'})
+            self._write_strategy_result(connection, result, created_at=payload['cutoff'])
         return ctx.complete(terminal, write)
 
     def _write_strategy_projection(self, connection, run):
@@ -548,15 +656,18 @@ class CandidateService:
         focus_ids = set(focus.get('selected_ids') or [])
         scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
                          'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
-                         'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
-                         'decision_status','watch_reasons','setup_rank','display_order','rank_semantics','setup_rank_features',
-                         'trend_state','market_context_state','market_compatibility_status','same_theme_context_status',
+                          'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
+                          'decision_status','watch_reasons','observation_bucket','setup_rank','display_order','rank_semantics','setup_rank_features',
+                          'trend_state','market_context_state','market_compatibility_status','same_theme_context_status',
                          'behavioral_confirmation_status','critical_counterevidence_status','capital_evidence_status',
                          'formal_status','relative_strength_status','ret1_pct','ret3_pct','ret5_pct','ret10_pct','ret20_pct','CLV',
                          'amplitude_pct','low_return_pct','high_return_pct','close_return_pct','recovery_points_pct',
                          'low_to_close_rebound_pct','RS_market_1d_pct','RS_sector_1d_pct',
                          'amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
-                         'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh'}
+                          'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh',
+                          'primary_sector_absolute_level','primary_sector_relative_level','primary_sector_market_rs_pct',
+                          'primary_sector_stock_role_known_feature_count','primary_sector_stock_role_unknown_feature_count',
+                          'primary_sector_stock_role_evidence_coverage'}
         header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
                       focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})

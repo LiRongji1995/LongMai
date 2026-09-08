@@ -267,9 +267,15 @@ class SQLiteStore:
     @staticmethod
     def _blob_hash(connection, table, rowid):
         checksum = hashlib.sha256()
-        with connection.blobopen(table, 'payload', rowid, readonly=True) as blob:
-            while chunk := blob.read(1024 * 1024):
-                checksum.update(chunk)
+        if hasattr(connection, 'blobopen'):
+            with connection.blobopen(table, 'payload', rowid, readonly=True) as blob:
+                while chunk := blob.read(1024 * 1024):
+                    checksum.update(chunk)
+        else:
+            row = connection.execute(f'SELECT payload FROM {table} WHERE rowid=?', (rowid,)).fetchone()
+            if row is None:
+                raise IntegrityError('persisted document missing during hash verification')
+            checksum.update(row['payload'].encode('utf-8'))
         return checksum.hexdigest()
 
     def verified_document_metadata(self, namespace: str, document_id: str, *, expected_hash=None):
@@ -297,8 +303,14 @@ class SQLiteStore:
                 return None
             if expected_hash is not None and row['content_hash'] != expected_hash:
                 raise IntegrityError('persisted document content address mismatch')
-            with connection.blobopen('documents', 'payload', row['rowid'], readonly=True) as blob:
-                raw = blob.read()
+            if hasattr(connection, 'blobopen'):
+                with connection.blobopen('documents', 'payload', row['rowid'], readonly=True) as blob:
+                    raw = blob.read()
+            else:
+                payload = connection.execute('SELECT payload FROM documents WHERE rowid=?', (row['rowid'],)).fetchone()
+                if payload is None:
+                    raise IntegrityError('persisted document missing during read verification')
+                raw = payload['payload'].encode('utf-8')
             if hashlib.sha256(raw).hexdigest() != row['content_hash']:
                 raise IntegrityError('persisted document hash mismatch')
             return raw

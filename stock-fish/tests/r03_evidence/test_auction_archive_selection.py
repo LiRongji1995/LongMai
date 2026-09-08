@@ -10,6 +10,11 @@ from tests.r02_product.test_independent_time_boundaries import tiny_fixture,quot
 from tests.r03_evidence.test_consumer_visibility import auction_context
 
 
+def stage_aware_primary_doc(run):
+    return {'run_id':run.run_id,'signal_observation_date':str(run.observation_date),
+        'decision_cutoff':run.decision_cutoff.isoformat(),'official_primary_signal_countable':True}
+
+
 @pytest.mark.parametrize('bad_kind',['0930','foreign_instrument','future_receipt'])
 def test_registered_later_archive_cannot_hide_prior_valid_0925_in_scheduler(tmp_path,bad_kind):
     store=SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3')
@@ -17,6 +22,7 @@ def test_registered_later_archive_cannot_hide_prior_valid_0925_in_scheduler(tmp_
         service=CandidateService(store,jobs,tmp_path/'TEST_FIXTURE_state',allow_test_fixture=True)
         run,_=tiny_fixture();run=run.model_copy(update={'market_session':'EVENING'})
         publish_fixture(service,run)
+        service.store.put_document('stage_aware_prospective_primary_runs', run.run_id, stage_aware_primary_doc(run))
         q=quote();good=auction_context(q)
         first=service.register_auction((q,),**good)
         bad=q.model_copy(update={'instrument_id':'OTHER'}) if bad_kind=='foreign_instrument' else quote(minute=30) if bad_kind=='0930' else q

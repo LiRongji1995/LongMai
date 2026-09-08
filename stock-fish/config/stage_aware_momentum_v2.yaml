@@ -1,7 +1,7 @@
 strategy_id: STAGE_AWARE_MOMENTUM_V2
 version: 2
-spec_revision: R09_SEMANTIC_COMPLETION
-implementation_version: R09_STAGE_AWARE_MOMENTUM_V2_SEMANTIC_COMPLETION
+spec_revision: R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION
+implementation_version: R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION
 specification_name: "StockRecommendation active stage-aware strong-stock core strategy"
 canonical_replaces: STAGE_AWARE_MOMENTUM_V1
 legacy_read_aliases:
@@ -133,9 +133,13 @@ research_seed_parameters:
   market_context:
     min_benchmark_coverage_fraction_inclusive: 0.60
     min_limit_event_coverage_fraction_inclusive: 0.60
+    momentum_max_coverage_delta_inclusive: 0.10
+    momentum_stable_band_fraction_inclusive: 0.001
     expansion_limit_count_min_inclusive: 15
     expansion_max_height_min_inclusive: 3
+    divergence_close_limit_down_count_min_inclusive: 1
     divergence_touched_not_closed_count_min_inclusive: 10
+    strong_cohort_min_matched_coverage_fraction_inclusive: 0.60
     states: [EXPANSION, DIVERGENCE, REPAIR, RETREAT, UNKNOWN]
     setup_compatibility:
       START: [EXPANSION, REPAIR, UNKNOWN]
@@ -153,6 +157,8 @@ research_seed_parameters:
     strong_gain_return_1d_min_inclusive: 0.07
     level_high_peer_ret5_min_inclusive: 0.08
     level_low_peer_ret5_max_inclusive: 0
+    level_high_sector_market_rs_min_exclusive: 0
+    level_low_sector_market_rs_max_exclusive: 0
     momentum_equal_window_sessions: 3
     momentum_stable_band_fraction_inclusive: 0.001
     breadth_broad_up_fraction_min_inclusive: 0.60
@@ -231,7 +237,7 @@ research_seed_parameters:
     display_order_not_investment_priority: true
     setup_order: [START, ACCELERATION, HIGH_LEVEL_REPAIR, TREND_PULLBACK]
   tracking_outcomes:
-    version: V2_SETUP_SPECIFIC_OUTCOMES_V1
+    version: V2_SETUP_SPECIFIC_OUTCOMES_V2
     next_session_reversal:
       definition: VERIFIED_CLOSE_LIMIT_UP_OR_T_PLUS_1_CLOSE_GT_T_HIGH
       parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED

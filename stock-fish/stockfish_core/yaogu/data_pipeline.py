@@ -15,7 +15,7 @@ from .contracts import MarketInput, digest
 from .request_queue import RequestQueue, RequestBudget
 from .provider_requests import execute_request, FIELD_VERSION
 
-PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R04_STAGE_AWARE_V2_READINESS'
+PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R05_STAGE_AWARE_V2_LONG_HISTORY_REPLAY'
 SH = ZoneInfo('Asia/Shanghai')
 
 
@@ -219,9 +219,10 @@ class MainboardPipeline:
             calendar_source = 'CAPTURED_PROVIDER_CALENDAR' if sessions and sessions[-1] == day else 'REGISTERED_2026_FALLBACK'
             if calendar_source != 'CAPTURED_PROVIDER_CALENDAR':
                 sessions = tuple(s for s in registered if s <= day)
-            structure_start = sessions[max(0, len(sessions)-22)]
             stage_aware_history_sessions = stage_aware_history_sessions_required()
             history_start = sessions[max(0, len(sessions)-stage_aware_history_sessions)]
+            structure_start = sessions[max(0, len(sessions)-22)]
+            v2_long_history_start = history_start
             demand = published_outcome_demand(self.service, day, sessions)
             missing_listing=[]
             for r in initial:
@@ -238,10 +239,15 @@ class MainboardPipeline:
             plan = {'pipeline_version': PIPELINE_VERSION, 'captured_at': now.isoformat(), 'observation_date': str(day),
                     'master_instrument_ids': ids, 'master_observed_count': len(ids),
                     'minimum_structure_sessions': 22, 'scoring_history_sessions': stage_aware_history_sessions,
+                    'v2_long_history_start': str(v2_long_history_start),
                     'scoring_history_basis': 'STAGE_AWARE_V2_MA250_PLUS_SLOPE_WARMUP_PLUS_60_SIGNAL_REPLAY_SESSIONS',
+                    'v2_long_history_universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
+                    'v2_long_history_data_policy': 'ALL_MARKET_DAILY_BY_EXCHANGE_SESSION_PLUS_ALL_DIRECTORY_ADJUSTMENT_FACTORS',
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
                     'initial_estimate': {'full_pool_structure_members': len(ids),
-                        'full_pool_raw_daily_requests': sum(structure_start <= s <= day for s in sessions),
+                        'full_pool_raw_daily_requests': sum(v2_long_history_start <= s <= day for s in sessions),
+                        'historical_security_master_requests': sum(v2_long_history_start <= s <= day for s in sessions),
+                        'historical_security_basic_all_requests': 1,
                         'current_direct_limit_batches': (len(ids)+19)//20,
                         'full_pool_adjustment_factor_batches': (len(ids)+99)//100,
                         'basic_directory_batches': (len(missing_listing)+99)//100, 'published_outcome_objects': len(demand),
@@ -314,7 +320,10 @@ class MainboardPipeline:
             # date response supplies every directory member's RAW row, with
             # identity joins and missing-day checks left to the consumer.
             structures = [add('market_daily', {'date':str(s)}, 'StructureHistoryCapture', current=s==day)
-                          for s in sessions if structure_start <= s <= day]
+                          for s in sessions if v2_long_history_start <= s <= day]
+            structures += [add('master_all', {'date':str(s)}, 'HistoricalSecurityReplayCapture', current=s==day)
+                           for s in sessions if v2_long_history_start <= s <= day]
+            structures.append(add('stock_basic_all', {}, 'HistoricalSecurityReplayCapture', current=True))
             # The installed provider publishes cumulative back-adjustment
             # factors. The adapter's versioned formula is independently checked
             # against HFQ samples; it rejects conflicting historical factors.
@@ -397,6 +406,17 @@ class MainboardPipeline:
                 'frozen_config_hash': check.config_hash,
                 'scope': 'FULL_MAINBOARD_DIRECTORY_DISCOVERY_WITH_PERSISTENT_PENDING_REQUESTS',
                 'master_ids': ids, 'structure_candidate_ids': candidate_ids, 'frozen_peer_ids': peer_ids,
+                'v2_long_history': {
+                    'required_history_sessions': stage_aware_history_sessions,
+                    'requested_start': str(v2_long_history_start),
+                    'requested_end': str(day),
+                    'requested_sessions': sum(v2_long_history_start <= s <= day for s in sessions),
+                    'universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
+                    'raw_daily_endpoint': 'market_daily',
+                    'raw_daily_request_granularity': 'ONE_REQUEST_PER_EXCHANGE_SESSION_ALL_MARKET_ROWS',
+                    'adjustment_factor_policy': 'ALL_DIRECTORY_IDS_BATCHED_INDEPENDENTLY_OF_DAILY_CANDIDATE_IDS',
+                    'historical_security_policy': 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE',
+                },
                 'published_outcome_demand': demand, 'stages': stages, 'queue': queue_summary,
                 'consumer_status': check.status, 'consumer_coverage': check.coverage,
                 'consumer_emotion': check.emotion.model_dump(mode='json'),

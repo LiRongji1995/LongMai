@@ -7,7 +7,7 @@ from pathlib import Path
 import argparse
 import json
 import sys
-from datetime import datetime
+from datetime import date, datetime
 from zoneinfo import ZoneInfo
 
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
@@ -20,8 +20,10 @@ p.add_argument('--output',required=True)
 p.add_argument('--max-requests',type=int,default=128)
 p.add_argument('--max-seconds',type=float,default=600)
 p.add_argument('--rounds',type=int,default=1,help='执行多轮有界续跑，输出到 output/round-XXX；默认保持单输出目录契约。')
+p.add_argument('--observation-date',default=None,help='显式锁定交易日 YYYY-MM-DD；默认使用当前时钟下最近交易日。')
 args=p.parse_args()
 out=Path(args.output)
+observation_date=date.fromisoformat(args.observation_date) if args.observation_date else None
 if not 1<=args.rounds<=20:
     raise SystemExit('rounds 必须在 1..20 范围内')
 if out.exists():
@@ -32,7 +34,7 @@ runs=[]
 for index in range(args.rounds):
     target=out if args.rounds==1 else out / f'round-{index+1:03d}'
     pipeline=MainboardPipeline(args.cache,budget=RequestBudget(max_requests=args.max_requests,max_seconds=args.max_seconds))
-    bundle=pipeline.capture(target,datetime.now(ZoneInfo('Asia/Shanghai')),progress=progress)
+    bundle=pipeline.capture(target,datetime.now(ZoneInfo('Asia/Shanghai')),observation_date=observation_date,progress=progress)
     report=pipeline.last_report
     summary={'round':index+1,'capture_report':str(target/'capture-report.json'),
         'consumer_status':report['consumer_status'],'coverage_type':bundle.coverage_type,

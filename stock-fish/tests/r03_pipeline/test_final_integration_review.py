@@ -71,12 +71,13 @@ def test_suspension_censor_does_not_hide_other_tradable_session_event_gap():
 
 
 class SchedulerReadService:
-    def __init__(self,tmp_path,rows):
-        self.store=SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3');self.rows=rows;self.submissions=[]
+    def __init__(self,tmp_path,rows,primary_rows=()):
+        self.store=SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3');self.rows=rows;self.primary_rows=list(primary_rows);self.submissions=[]
         self.jobs=SimpleNamespace(register=lambda *a:None,get=lambda key:None)
     def current_config(self):return StrategyConfig()
     def _all(self,kind):
         if kind=='candidate_runs':return [r.model_dump(mode='json') for r in self.rows]
+        if kind=='stage_aware_prospective_primary_runs':return list(self.primary_rows)
         return []
     def get_run(self,rid):return next(r for r in self.rows if r.run_id==rid)
     def list_runs(self,limit):return list(reversed(self.rows[-limit:]))
@@ -88,7 +89,9 @@ def test_recent_other_revisions_do_not_hide_last_evening_run_from_auction(tmp_pa
     evening,_=tiny_fixture()
     others=[evening.model_copy(update={'run_id':'TEST_OTHER_'+str(i),'market_session':'ON_DEMAND',
         'generated_at':evening.generated_at+timedelta(seconds=i+1)}) for i in range(101)]
-    service=SchedulerReadService(tmp_path,[evening,*others])
+    primary={'run_id':evening.run_id,'signal_observation_date':str(evening.observation_date),
+        'decision_cutoff':evening.decision_cutoff.isoformat(),'official_primary_signal_countable':True}
+    service=SchedulerReadService(tmp_path,[evening,*others],[primary])
     scheduler=CandidateScheduler(service,clock=lambda:at(SESSIONS[1],9))
     result=scheduler.tick(at(SESSIONS[1],9,26))
     assert service.submissions==[evening.run_id]

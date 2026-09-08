@@ -99,6 +99,118 @@ def test_sector_momentum_compares_recent_and_previous_equal_windows():
     assert momentum["sector_momentum_state"] == "WEAKENING"
 
 
+def test_market_expansion_cannot_mask_severe_divergence():
+    summary = {
+        "instrument_limits": {},
+        "close_limit_count": 30,
+        "touched_not_closed_count": 25,
+        "close_limit_down_count": 3,
+        "verified_max_height": 5,
+        "known_limit_event_count": 100,
+        "unknown_limit_event_count": 0,
+        "expected_limit_event_count": 100,
+        "limit_event_coverage": sam.Fraction(1),
+    }
+
+    state, reasons = sam._market_raw_state(summary, {})
+
+    assert state == "DIVERGENCE"
+    assert "SAM_MARKET_EXPANSION_WITH_MAJOR_DIVERGENCE_PRESSURE" in reasons
+
+
+def test_market_momentum_unknown_when_only_evidence_coverage_changes(monkeypatch):
+    bundle, cutoff = trend_bundle()
+    ctx = sam._prepare_context(bundle, cutoff)
+    end_index = sam._session_index(ctx)
+
+    def fake_summary(ctx_arg, end_index_arg, *, include_instruments=False):
+        coverage = sam.Fraction(3, 5) if end_index_arg == end_index - 1 else sam.Fraction(1)
+        known = 60 if end_index_arg == end_index - 1 else 100
+        return {
+            "instrument_limits": {},
+            "close_limit_count": int(known * 0.10),
+            "touched_not_closed_count": int(known * 0.05),
+            "close_limit_down_count": 0,
+            "verified_max_height": 1,
+            "known_limit_event_count": known,
+            "unknown_limit_event_count": 100 - known,
+            "expected_limit_event_count": 100,
+            "limit_event_coverage": coverage,
+        }
+
+    monkeypatch.setattr(sam, "_market_day_summary", fake_summary)
+    market = sam._market_position_context(ctx, end_index)
+
+    assert market["market_momentum"] == "UNKNOWN"
+    assert "SAM_MARKET_MOMENTUM_COVERAGE_NOT_COMPARABLE" in market["market_momentum_reason_codes"]
+
+
+def test_sector_momentum_requires_matched_peer_cohort(monkeypatch):
+    seed = {
+        "momentum_equal_window_sessions": 3,
+        "min_peer_return_coverage_fraction_inclusive": 0.50,
+        "momentum_stable_band_fraction_inclusive": 0.001,
+    }
+
+    def fake_price_return(ctx_arg, peer, end_index_arg, window_arg):
+        if end_index_arg == 10 and peer in {"A", "B"}:
+            return sam.Fraction(1, 10)
+        if end_index_arg == 7 and peer in {"C", "D"}:
+            return sam.Fraction(1, 20)
+        return None
+
+    monkeypatch.setattr(sam, "_price_return", fake_price_return)
+    momentum = sam._sector_momentum_stats(object(), ["A", "B", "C", "D"], 10, seed)
+
+    assert momentum["recent_coverage"]["coverage_status"] == "COMPLETE"
+    assert momentum["previous_coverage"]["coverage_status"] == "COMPLETE"
+    assert momentum["matched_peer_count"] == 0
+    assert momentum["sector_momentum_state"] == "UNKNOWN"
+
+
+def test_sector_relative_level_distinguishes_broad_market_rally():
+    bundle, cutoff = trend_bundle()
+    payload = _payload(bundle)
+    for member in [security["instrument_id"] for security in payload["universe"]["securities"]]:
+        _set_tail_closes(payload, member, ("20", "20.4", "20.8", "21.2", "21.6", "22.0"))
+    row = _row(run_stage_aware_momentum(type(bundle).model_validate(payload), cutoff=cutoff))
+
+    sector = row["sector_candidates"][0]
+    assert sector["sector_absolute_level"] == "HIGH"
+    assert sector["sector_relative_level"] == "MARKET_IN_LINE"
+    assert sector["sector_level_state"] == "NORMAL"
+
+
+def test_limit_streak_role_feature_is_peer_percentile_not_constant():
+    from tests.yaogu.fixtures import make_bundle
+
+    bundle, cutoff = make_bundle(7)
+    row = _row(run_stage_aware_momentum(bundle, cutoff=cutoff))
+    sector = row["sector_candidates"][0]
+
+    assert sector["stock_role_features"]["limit_streak_percentile"] not in {50.0, 100.0}
+    assert sector["limit_streak_evidence"]["status"] == "COMPLETE"
+    assert sector["stock_role_known_feature_count"] + sector["stock_role_unknown_feature_count"] == len(sector["stock_role_features"])
+
+
+def test_limit_streak_role_feature_unknown_when_peer_limit_evidence_sparse():
+    from tests.yaogu.fixtures import make_bundle
+
+    bundle, cutoff = make_bundle(7)
+    payload = _payload(bundle)
+    latest = payload["sessions"][-1]
+    for row in payload["bars"]:
+        if row["session"] == latest and row["instrument_id"] != "TEST000":
+            row["limit_verified"] = False
+            row["limit_up"] = None
+            row["limit_down"] = None
+    result = _row(run_stage_aware_momentum(type(bundle).model_validate(payload), cutoff=cutoff))
+    sector = result["sector_candidates"][0]
+
+    assert sector["stock_role_features"]["limit_streak_percentile"] is None
+    assert sector["limit_streak_evidence"]["status"] == "UNKNOWN"
+
+
 def test_sector_coverage_is_independent_per_window():
     bundle, cutoff = trend_bundle()
     payload = _payload(bundle)
@@ -282,9 +394,8 @@ def test_market_repair_requires_transition_evidence(monkeypatch):
     monkeypatch.setattr(sam, "_market_day_summary", fake_summary)
     market = sam._market_position_context(ctx, sam._session_index(ctx))
 
-    assert market["current_raw_state"] == "PARTIAL_STRENGTH"
-    assert market["ecosystem_state"] == "UNKNOWN"
-    assert "SAM_MARKET_REPAIR_TRANSITION_EVIDENCE_UNAVAILABLE" in market["reason_codes"]
+    assert market["current_raw_state"] == "RETREAT"
+    assert market["ecosystem_state"] == "RETREAT"
 
 
 def _bundle_and_run_for_outcomes(*, repaired=True):
@@ -298,7 +409,7 @@ def _bundle_and_run_for_outcomes(*, repaired=True):
     if repaired:
         _set_bar(t1, open_="9.90", high="10.90", low="9.80", close="10.80", reference_prev_close="9.80")
     else:
-        _set_bar(t1, open_="9.80", high="10.10", low="9.60", close="9.90", reference_prev_close="9.80")
+        _set_bar(t1, open_="9.70", high="10.10", low="9.60", close="9.70", reference_prev_close="9.80")
     t2 = next(row for row in payload["bars"] if row["instrument_id"] == "TEST000" and row["session"] == days[-2])
     _set_bar(t2, open_="10.00", high="10.20", low="9.70", close="10.00", reference_prev_close=t1["close"])
     t3 = next(row for row in payload["bars"] if row["instrument_id"] == "TEST000" and row["session"] == days[-1])
@@ -335,6 +446,10 @@ def test_t1_reversal_is_future_outcome_only_and_does_not_mutate_signal():
     outcome = labels[0]["next_session_reversal"]
     assert outcome["result"] is True
     assert outcome["maturity_status"] == "MATURE_VALID"
+    assert labels[0]["repair_latency"]["repair_definition"] == "CLOSE_RECLAIM_SIGNAL_DAY_COMPARABLE_CLOSE"
+    assert labels[0]["turn_positive_latency"]["result"] == "HIT"
+    assert labels[0]["close_reclaim_latency"]["result"] == "HIT"
+    assert labels[0]["drop_day_high_reclaim_latency"]["result"] == "HIT"
     assert "next_session_reversal" not in run["results"][STAGE_AWARE_ID]["items"][0]
 
 
