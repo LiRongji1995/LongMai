@@ -1,4 +1,6 @@
-# V2 Prospective Readiness
+# V2 Prospective Readiness — R11 历史快照
+
+以下 PID、epoch 与调度状态仅为 R11 当时记录。R12 已迁移到登记的单进程 Waitress 服务；当前带时间核验见 [R12_PROSPECTIVE_INTEGRITY_REPORT.md](R12_PROSPECTIVE_INTEGRITY_REPORT.md)，实际 cutoff 协议见 [V2_PROSPECTIVE_VALIDATION_PROTOCOL.md](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)。不可用本页旧 PID 或存活标记推断当前服务状态。
 
 - status: `READY_AND_RUNNING_WAITING_FOR_CUTOFF`
 - source: `ACTUAL_CANDIDATE_SCHEDULER_STATE_R11`

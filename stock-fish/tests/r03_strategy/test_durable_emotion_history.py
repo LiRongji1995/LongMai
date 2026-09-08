@@ -96,11 +96,13 @@ def test_latest_visible_day_revision_and_new_config_do_not_mix(tmp_path,monkeypa
     b,c=make_bundle();clock=FixtureClock(c);monkeypatch.setattr(module,'utc_now',clock)
     service=open_service(tmp_path)
     try:
-        days=b.sessions[-4:];prior=[]
-        for day in days[:3]:prior.append(publish(service,b,clock,day)[0])
+        days=b.sessions[-4:];prior=[];registered_inputs={}
+        for day in days[:3]:
+            published,input_id=publish(service,b,clock,day)
+            prior.append(published);registered_inputs[day]=input_id
         # A later run on the same past session is not three separate days.
         clock.current=datetime.combine(days[-1],time(21),TZ)
-        old_input='market_'+digest(b.model_copy(update={'observation_date':days[-2]}))
+        old_input=registered_inputs[days[-2]]
         late=finish(service,service.submit(CandidateRequest(input_id=old_input)))
         clock.current=datetime.combine(days[-1],time(20,30),TZ)
         today=b.model_copy(update={'observation_date':days[-1]})

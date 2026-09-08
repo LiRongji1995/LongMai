@@ -11,7 +11,8 @@ from tests.r03_evidence.test_consumer_visibility import auction_context
 
 
 def stage_aware_primary_doc(run):
-    return {'run_id':run.run_id,'signal_observation_date':str(run.observation_date),
+    from stockfish_core.yaogu.validation_identity import current_validation_identity
+    return {**current_validation_identity(),'run_id':run.run_id,'signal_observation_date':str(run.observation_date),
         'decision_cutoff':run.decision_cutoff.isoformat(),'official_primary_signal_countable':True}
 
 

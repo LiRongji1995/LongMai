@@ -30,6 +30,8 @@ def _fmt(value: Any, *, pct: bool = False) -> str:
 
 def _score_band(score: float | None, status: str | None) -> str:
     if score is None:
+        if status == "N_A_SIGNAL_DATA_UNAVAILABLE":
+            return "Signal data unavailable"
         if status == "N_A_NO_SELECTION":
             return "NO FOCUS SIGNAL"
         if status == "NOT_MATURED":
@@ -93,8 +95,12 @@ def _daily_scorecard(document: dict[str, Any] | None) -> str:
         _line(f"Outperform Rate: {_fmt(focus.get('outperform_market_rate'), pct=True)}", 520, 272, size=14),
         _line("Selection Score is a percentile, not a trading win rate.", 32, 330, size=12, color="#64716f"),
         _line("MARKET_EDGE=NOT_ESTABLISHED", 32, 354, size=12, weight=700, color="#64716f"),
+        _line(f"Validation Epoch: {(document or {}).get('validation_epoch_id', 'N/A')}", 32, 384, size=10, color="#64716f"),
+        _line(f"Actual Signal Cutoff: {(document or {}).get('actual_decision_cutoff') or (document or {}).get('decision_cutoff') or 'N/A'}", 32, 407, size=12, color="#64716f"),
+        _line(f"Data Quality Status: {(document or {}).get('data_quality_status', 'N/A')}", 32, 430, size=12, color="#64716f"),
+        _line(f"Implementation: {(document or {}).get('signal_implementation_version', 'N/A')} / {(document or {}).get('signal_spec_revision', 'N/A')}", 32, 453, size=10, color="#64716f"),
     ]
-    return _svg(760, 390, "\n".join(body))
+    return _svg(760, 480, "\n".join(body))
 
 
 def _rolling_series(daily: list[dict[str, Any]], length: int) -> list[float | None]:
@@ -186,7 +192,9 @@ def _setup_heatmap(document: dict[str, Any] | None) -> str:
             score = record.get("score") if record else None
             status = record.get("score_status") if record else "Pending"
             color = "#e7ece3" if score is None else "#164f42" if score >= 60 else "#dca54c" if score >= 40 else "#fff0df"
-            text = status if score is None else str(round(float(score)))
+            missing_labels = {"N_A_SIGNAL_DATA_UNAVAILABLE": "Data unavailable", "N_A_NO_SELECTION": "N/A",
+                              "NOT_MATURED": "Pending", "INSUFFICIENT_BENCHMARK_COVERAGE": "Low coverage"}
+            text = missing_labels.get(status, status) if score is None else str(round(float(score)))
             body.append(f'<rect x="{x0 + j * w}" y="{y0 + i * h}" width="{w - 8}" height="{h - 8}" fill="{color}" stroke="#dde1d9"/>')
             body.append(_line(text, x0 + j * w + 70, y0 + i * h + 31, size=12, weight=700, anchor="middle", color="#24372f"))
     body.append(_line("WEAKENING_HIGH_ACTIVITY_OBSERVATION is not a formal setup score.", 32, 340, size=12, color="#64716f"))
@@ -225,8 +233,9 @@ def write_score_artifacts(output_dir: str | Path, *, latest_document: dict[str, 
     root = Path(output_dir)
     root.mkdir(parents=True, exist_ok=True)
     reconstructed_history = reconstructed_history or {}
+    display_document = latest_document or {"validation_epoch_id": official_history.get("validation_epoch_id") or "N/A"}
     files = {
-        "DAILY_RECOMMENDATION_SCORECARD.svg": _daily_scorecard(latest_document),
+        "DAILY_RECOMMENDATION_SCORECARD.svg": _daily_scorecard(display_document),
         "DAILY_SCORE_TREND.svg": _daily_score_trend(official_history, "DAILY_SCORE_TREND · OFFICIAL_PROSPECTIVE only"),
         "FOCUS_VS_WATCH.svg": _focus_vs_watch(official_history, "FOCUS_VS_WATCH · OFFICIAL_PROSPECTIVE only"),
         "SETUP_SCORE_HEATMAP.svg": _setup_heatmap(latest_document),
@@ -250,6 +259,15 @@ def write_score_artifacts(output_dir: str | Path, *, latest_document: dict[str, 
         "",
         f"- score_spec_id: `DAILY_RECOMMENDATION_SCORE_V1`",
         f"- latest_evidence_type: `{(latest_document or {}).get('evidence_type', 'NO_SCORE_REVISION')}`",
+        f"- validation_epoch_id: `{(latest_document or {}).get('validation_epoch_id', official_history.get('validation_epoch_id', 'N/A'))}`",
+        f"- signal_implementation_version: `{(latest_document or {}).get('signal_implementation_version', 'N/A')}`",
+        f"- signal_spec_revision: `{(latest_document or {}).get('signal_spec_revision', 'N/A')}`",
+        f"- actual_signal_cutoff: `{(latest_document or {}).get('actual_decision_cutoff') or (latest_document or {}).get('decision_cutoff') or 'N/A'}`",
+        f"- data_quality_status: `{(latest_document or {}).get('data_quality_status', 'N/A')}`",
+        f"- primary_capture_attempted_days: `{official_history.get('primary_capture_attempted_days', 0)}`",
+        f"- evaluable_official_signal_days: `{official_history.get('evaluable_official_signal_days', 0)}`",
+        f"- data_unavailable_primary_days: `{official_history.get('data_unavailable_primary_days', 0)}`",
+        f"- valid_no_focus_days: `{official_history.get('valid_no_focus_days', 0)}`",
         f"- headline_status: `{headline.get('score_status', (latest_document or {}).get('headline_status', 'N/A'))}`",
         f"- headline_score: `{headline.get('score')}`",
         f"- official_signal_days: `{official_history.get('official_signal_days', 0)}`",

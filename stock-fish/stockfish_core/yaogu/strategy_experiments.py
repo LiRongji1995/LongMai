@@ -3,7 +3,7 @@ from __future__ import annotations
 import hashlib
 import json
 from collections import defaultdict
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, datetime, time
 from decimal import Decimal, InvalidOperation, localcontext
 from fractions import Fraction
@@ -112,6 +112,9 @@ class _ExperimentContext:
     rejected_evidence: list
     cutoff: datetime
     themes: list
+    # Scalar feature reuse is scoped to this exact immutable input and cutoff.
+    # It prevents cross-instrument loops from thrashing the bounded row cache.
+    scalar_cache: dict = field(default_factory=dict,compare=False,repr=False)
 
 def _revision_key(row):return (row.source_published_at,row.ingested_at,row.first_seen_at)
 
@@ -137,7 +140,8 @@ def _qualification(state,day,sessions):
 def _prepare_context(bundle,cutoff=None):
     cutoff=stamp(cutoff) if cutoff is not None else datetime.combine(bundle.observation_date,time.max,ZoneInfo('Asia/Shanghai'))
     day=bundle.observation_date;sessions=[s for s in bundle.sessions if s<=day]
-    resolver=EvidenceResolver(bundle.receipts,cutoff=cutoff,coverage_type=bundle.coverage_type,sessions=bundle.sessions,observation_date=day)
+    from .history_artifacts import history_resolver, InstrumentBars
+    resolver=history_resolver(bundle,cutoff=cutoff)
     rejected=[];groups=defaultdict(list)
     for s in bundle.universe.securities:groups[s.instrument_id].append(s)
     states={};eligible=[];excluded=[];unknown=[]
@@ -155,7 +159,7 @@ def _prepare_context(bundle,cutoff=None):
     expected=max(bundle.universe.expected_count or 0,len(groups));absent=max(0,expected-len(groups))
     universe_complete=bool(bundle.universe.complete and universe_proof.allowed and not unknown and not absent and day<=cutoff.astimezone(ZoneInfo('Asia/Shanghai')).date())
     bar_groups=defaultdict(list)
-    for b in bundle.bars:
+    for b in (() if bundle.history_artifact_ref else bundle.bars):
         if b.session>day:continue
         if b.quality=='INVALID':
             rejected.append({'kind':'BAR','instrument_id':b.instrument_id,'session':str(b.session),'reason_codes':['INVALID_PRICE_QUALITY']});continue
@@ -167,6 +171,7 @@ def _prepare_context(bundle,cutoff=None):
         row=_select_revision(rows)
         if row is not None:bars.setdefault(session,{})[iid]=row.model_dump()
         else:rejected.append({'kind':'BAR','instrument_id':iid,'session':session,'reason_codes':['CONFLICTING_PRICE_REVISION']})
+    if bundle.history_artifact_ref:bars=InstrumentBars(bundle,resolver,rejected)
     tg=defaultdict(list)
     for t in bundle.themes:
         proof=resolver.resolve(t,session=day,require_complete=True)
@@ -181,7 +186,9 @@ def _prepare_context(bundle,cutoff=None):
         'universe_evidence_reason_codes':list(universe_proof.reason_codes)}
     return _ExperimentContext(bundle,str(day),list(map(str,sessions)),eligible,bars,universe_complete,resolver,states,partition,rejected,cutoff,themes)
 
-def _bar(ctx,session,iid):return ctx.bars_by_session.get(str(session),{}).get(iid)
+def _bar(ctx,session,iid):
+    if hasattr(ctx.bars_by_session,'bar'):return ctx.bars_by_session.bar(session,iid)
+    return ctx.bars_by_session.get(str(session),{}).get(iid)
 def _prior_sessions(ctx,count):return ctx.sessions[-count:] if len(ctx.sessions)>=count else []
 
 def _valid_ohlc(current):
@@ -534,6 +541,7 @@ def source_identity():
         Path(__file__),
         ROOT/'stockfish_core/yaogu/visibility.py',
         ROOT/'stockfish_core/yaogu/contracts.py',
+        ROOT/'stockfish_core/yaogu/history_artifacts.py',
         ROOT/'stockfish_core/yaogu/events.py',
         ROOT/'stockfish_core/yaogu/theme_capital_trend.py',
         ROOT/'stockfish_core/yaogu/stage_aware_momentum.py',
@@ -559,12 +567,14 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     theme_capital=run_theme_capital_trend(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     simple_trend=run_simple_trend_template(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     stage_aware=run_stage_aware_momentum(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
+    from .history_artifacts import history_identity
     identity=source_identity();input_hash=digest(bundle);deps=ctx.resolver.effective_dependencies()
     payload={'strategy_family':'R05','input_id':'market_input_'+input_hash[:16],'input_hash':input_hash,'observation_date':ctx.observation_date,
         'implementation_version':IMPLEMENTATION_VERSION,'parameter_status':PARAMETER_STATUS,'decision_cutoff':ctx.cutoff.isoformat(),'coverage_type':bundle.coverage_type,
         'audit_mode':'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type=='PROSPECTIVE_CAPTURED' else bundle.coverage_type,
         'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),'effective_input_hash':digest(deps),
         'source_refs':sorted(ctx.resolver.used),'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
+        **history_identity(bundle),
         'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme,
             theme_capital_technical['strategy_id']:theme_capital_technical,
             theme_capital['strategy_id']:theme_capital,
@@ -573,7 +583,7 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
         'selection_results':{FOCUS_POLICY_ID:focus}}
     for result in payload['results'].values():
         for key,value in identity.items():result.setdefault(key,value)
-        result.update(input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type)
+        result.update(input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type,**history_identity(bundle))
     payload['results'][DNA_REVERSAL_ID]={**dna,'strategy_id':DNA_REVERSAL_ID,'canonical_strategy_id':DNA_ID,'compatibility_alias':True}
     payload['results'][THEME_LIMITUP_ID]={**theme,'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
     payload['comparison']=strategy_comparison(daily_summary,pv,dna,theme,focus,(theme_capital_technical,theme_capital,simple_trend,stage_aware))

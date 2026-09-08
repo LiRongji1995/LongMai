@@ -1,6 +1,10 @@
 [CmdletBinding()]
 param(
     [string]$Root = $PSScriptRoot,
+    [ValidateRange(0, 65535)][int]$Port = 0,
+    [string]$DatabasePath = '',
+    [string]$StateRoot = '',
+    [switch]$AdoptExisting,
     [ValidateRange(5, 300)][int]$TimeoutSeconds = 90
 )
 
@@ -13,7 +17,19 @@ $App = Join-Path $Repository 'app.py'
 $LogDirectory = Join-Path $Root 'logs'
 $WorkDirectory = Join-Path $Root 'work'
 $StateFile = Join-Path $WorkDirectory 'stockfish-process.json'
-$HealthUrl = 'http://127.0.0.1:8000/api/health'
+$ServiceConfigFile = Join-Path $WorkDirectory 'stockfish-service.json'
+if (Test-Path -LiteralPath $ServiceConfigFile) {
+    $serviceConfig = Get-Content -LiteralPath $ServiceConfigFile -Raw | ConvertFrom-Json
+    if ($Port -eq 0) { $Port = [int]$serviceConfig.Port }
+    if (-not $DatabasePath) { $DatabasePath = [string]$serviceConfig.DatabasePath }
+    if (-not $StateRoot) { $StateRoot = [string]$serviceConfig.StateRoot }
+}
+if ($Port -eq 0) { $Port = 8000 }
+if (-not $DatabasePath) { $DatabasePath = if ($env:STOCKFISH_DB_PATH) { $env:STOCKFISH_DB_PATH } else { Join-Path $Repository 'data/stockfish.sqlite3' } }
+if (-not $StateRoot) { $StateRoot = if ($env:STOCKFISH_STATE_DIR) { $env:STOCKFISH_STATE_DIR } else { Join-Path $Repository 'data/core' } }
+$DatabasePath = [System.IO.Path]::GetFullPath($DatabasePath)
+$StateRoot = [System.IO.Path]::GetFullPath($StateRoot)
+$HealthUrl = "http://127.0.0.1:$Port/api/health"
 $VenvConfiguration = Join-Path $Repository '.venv\pyvenv.cfg'
 $BasePython = $null
 if (Test-Path -LiteralPath $VenvConfiguration -PathType Leaf) {
@@ -55,7 +71,7 @@ function New-ProcessRecord($Process) {
 
 function Get-Listeners {
     # Enumerate listeners without treating an unused port as a command failure.
-    return @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq 8000 })
+    return @(Get-NetTCPConnection -State Listen -ErrorAction Stop | Where-Object { $_.LocalPort -eq $Port })
 }
 
 function Test-Health {
@@ -75,6 +91,11 @@ function Test-Health {
         foreach ($component in @('application', 'tracker', 'jobs')) {
             if ($health.components.$component.status -ne 'healthy') { return $false }
         }
+        if ([System.IO.Path]::GetFullPath($health.components.tracker.path) -ine $DatabasePath) { return $false }
+        $script:ScheduleProbe = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/api/candidate-schedule" -Headers $healthHeaders -TimeoutSec 10
+        $runtime = $script:ScheduleProbe.prospective_validation
+        if (-not $runtime.scheduler_thread_alive) { return $false }
+        if ([System.IO.Path]::GetFullPath($runtime.service_identity.state_root) -ine (Join-Path $StateRoot 'yaogu')) { return $false }
         return $true
     } catch { return $false }
 }
@@ -110,7 +131,8 @@ function Update-ChildRecords($State) {
     }
 }
 
-$mutex = [System.Threading.Mutex]::new($false, 'Local\StockRecommendation-StockFish-8000')
+$rootStamp = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Root.ToLowerInvariant()))).Substring(0, 20)
+$mutex = [System.Threading.Mutex]::new($false, ('Local\StockRecommendation-StockFish-' + $rootStamp))
 $lockTaken = $false
 try {
     try { $lockTaken = $mutex.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }
@@ -136,23 +158,52 @@ try {
         $verified = @($state.Processes | ForEach-Object { Get-VerifiedProcess $_ } | Where-Object { $null -ne $_ })
     }
     $listeners = @(Get-Listeners)
+    if ($verified.Count -eq 0 -and $listeners.Count -gt 0 -and $AdoptExisting) {
+        $ownedProcesses = @($listeners | Select-Object -ExpandProperty OwningProcess -Unique | ForEach-Object { Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $_) })
+        if (@($ownedProcesses | Where-Object { -not (Test-AppCommand $_) }).Count -gt 0 -or -not (Test-Health)) {
+            throw 'Existing listener does not match the exact repository, DB, state root and live scheduler. It was not adopted or stopped.'
+        }
+        if ([int]$script:ScheduleProbe.prospective_validation.service_identity.process_id -notin @($ownedProcesses.ProcessId)) {
+            throw 'Health process identity does not match the listening process.'
+        }
+        foreach ($child in @($ownedProcesses)) {
+            $parent = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + [int]$child.ParentProcessId)
+            if ($parent -and (Test-AppCommand $parent) -and [datetime]$parent.CreationDate -le [datetime]$child.CreationDate) { $ownedProcesses = @($parent) + $ownedProcesses }
+        }
+        $state = [pscustomobject]@{
+            Version = 2; Python = $Python; App = $App; RepositoryRoot = $Root
+            DatabasePath = $DatabasePath; StateRoot = $StateRoot; Port = $Port; HealthUrl = $HealthUrl
+            StartedAtUtc = [datetime]::UtcNow.ToString('o'); AdoptedExisting = $true
+            StdoutLog = ''; StderrLog = ''; SchedulerIdentity = $script:ScheduleProbe.prospective_validation.service_identity
+            Processes = @($ownedProcesses | Sort-Object CreationDate,ProcessId -Unique | ForEach-Object { New-ProcessRecord $_ })
+        }
+        Save-State $state
+        $verified = $ownedProcesses
+    }
     if ($verified.Count -eq 0) {
         if ($listeners.Count -gt 0) {
             $owners = ($listeners | Select-Object -ExpandProperty OwningProcess -Unique) -join ', '
-            throw "Port 8000 is already occupied (PID $owners). No process was stopped. Use that application's own stop command or resolve the port conflict."
+            throw "Port $Port is already occupied (PID $owners). No process was stopped."
         }
         $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
         $suffix = [guid]::NewGuid().ToString('N').Substring(0, 8)
         $stdoutLog = Join-Path $LogDirectory "stockfish-$stamp-$suffix.stdout.log"
         $stderrLog = Join-Path $LogDirectory "stockfish-$stamp-$suffix.stderr.log"
         # -X utf8 and -u affect only this Python process; no environment or policy changes.
-        $launched = Start-Process -FilePath $Python -ArgumentList @('-X', 'utf8', '-u', ('"' + $App + '"')) -WorkingDirectory $Repository -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
+        $env:STOCKFISH_DB_PATH = $DatabasePath
+        $env:STOCKFISH_STATE_DIR = $StateRoot
+        $launched = Start-Process -FilePath $Python -ArgumentList @('-X', 'utf8', '-u', ('"' + $App + '"'), '--port', $Port) -WorkingDirectory $Repository -WindowStyle Hidden -RedirectStandardOutput $stdoutLog -RedirectStandardError $stderrLog -PassThru
         $launchProcess = Get-CimInstance Win32_Process -Filter ('ProcessId = ' + $launched.Id)
         if ($null -eq $launchProcess -or -not (Test-AppCommand $launchProcess)) {
             throw "StockFish exited before its process identity could be recorded. Read $stderrLog"
         }
         $state = [pscustomobject]@{
-            Version = 1
+            Version = 2
+            RepositoryRoot = $Root
+            DatabasePath = $DatabasePath
+            StateRoot = $StateRoot
+            Port = $Port
+            SchedulerIdentity = $null
             Python = $Python
             App = $App
             HealthUrl = $HealthUrl
@@ -174,9 +225,12 @@ try {
         $verifiedIds = @($verified | ForEach-Object { [int]$_.ProcessId })
         $listeners = @(Get-Listeners)
         $foreignListeners = @($listeners | Where-Object { [int]$_.OwningProcess -notin $verifiedIds })
-        if ($foreignListeners.Count -gt 0) { throw 'Port 8000 belongs to another process. No process was stopped. Inspect the logs and process state.' }
+        if ($foreignListeners.Count -gt 0) { throw "Port $Port belongs to another process. No process was stopped. Inspect the logs and process state." }
         if ($listeners.Count -gt 0 -and (Test-Health)) {
-            Write-Host "StockFish is ready: http://127.0.0.1:8000 (PID $($verifiedIds -join ', '))"
+            $state | Add-Member -NotePropertyName SchedulerIdentity -NotePropertyValue $script:ScheduleProbe.prospective_validation.service_identity -Force
+            Save-State $state
+            [pscustomobject]@{ Version = 1; RepositoryRoot = $Root; Port = $Port; DatabasePath = $DatabasePath; StateRoot = $StateRoot } | ConvertTo-Json | Set-Content -LiteralPath $ServiceConfigFile -Encoding UTF8
+            Write-Host "StockFish is ready: http://127.0.0.1:$Port (PID $($verifiedIds -join ', '))"
             Write-Host "Stop: & '$Root\Stop-StockFish.ps1'"
             Write-Host "Logs: & '$Root\Logs-StockFish.ps1' -Follow"
             return

@@ -13,14 +13,14 @@ DAYS=['2026-08-27','2026-08-28','2026-08-31','2026-09-01','2026-09-02','2026-09-
 CODES=['sz.000001','sh.600000','sz.300001']
 
 
-def write_capture(root,endpoint,parameters,rows):
+def write_capture(root,endpoint,parameters,rows,*,provider='baostock'):
     raw={'status':'COMPLETE','pagination_complete':True,'rows':rows,
          'coverage':{'cursor_exhausted':True,'evidence_class':'TEST_FIXTURE_ENGINEERING_ONLY'},
          'field_version':'BAOSTOCK_00.9.30_R03_V1','first_seen_at':datetime.now(timezone.utc).isoformat(),
          'gaps':[],'failure_category':None,'error_code':None,'diagnostics':[],'source_url':'https://baostock.com/'}
-    receipt=archive_receipt(root/'cache/raw','baostock',endpoint,parameters,raw,status='COMPLETE',pagination_complete=True,
+    receipt=archive_receipt(root/'cache/raw',provider,endpoint,parameters,raw,status='COMPLETE',pagination_complete=True,
                             field_version=raw['field_version'],source_url='https://baostock.com/',first_seen_at=raw['first_seen_at'])
-    result={**raw,'request_id':digest([endpoint,parameters]),'provider':'baostock','endpoint':endpoint,
+    result={**raw,'request_id':digest([endpoint,parameters]),'provider':provider,'endpoint':endpoint,
             'parameters':parameters,'receipts':[receipt],'request_receipt_id':receipt['receipt_id'],
             'completed_at':receipt['ingested_at']}
     path=root/'checkpoints'/(result['request_id']+'.json');path.parent.mkdir(parents=True,exist_ok=True)
@@ -190,3 +190,106 @@ def test_sse_delisting_prefix_and_szse_suffix_are_distinct(tmp_path):
     for iid in ('000001.SZ','600000.SH'):
         assert named(first)[iid].delisting_period is True
         assert named(second)[iid].delisting_period is False
+
+
+def test_registered_batched_stock_basic_satisfies_identity_without_all_endpoint(tmp_path):
+    policy=fixture_capture(tmp_path)
+    path,result=checkpoint(tmp_path,'stock_basic_all');path.unlink()
+    for row in result['rows']:
+        write_capture(tmp_path,'stock_basic',{'codes':[row['code']]},[row])
+    assembler=HistoricalReplayAssembler(tmp_path,policy)
+    bundle,audit=assembler.build('2026-09-02')
+    state=next(s for s in bundle.universe.securities if s.instrument_id=='000001.SZ')
+    assert state.board=='MAIN' and state.listed_on==date(2010,1,1)
+    assert {assembler.original_refs[r['original_receipt_id']]['endpoint'] for r in audit['sources']
+            if r['normalized_receipt_id'] in state.source_refs}>={'stock_basic','master_all','market_daily'}
+
+
+def test_exchange_original_ipo_alternative_never_uses_current_membership_for_past_scope(tmp_path):
+    policy=fixture_capture(tmp_path)
+    path,_=checkpoint(tmp_path,'stock_basic_all');path.unlink()
+    write_capture(tmp_path,'master_szse',{},[
+        {'A股代码':'000001','A股上市日期':'2010-01-01','板块':'主板','A股简称':'FUTURE_CURRENT_NAME'},
+        {'A股代码':'000002','A股上市日期':'2010-01-01','板块':'主板','A股简称':'CURRENT_ONLY'}],provider='akshare')
+    assembler=HistoricalReplayAssembler(tmp_path,policy)
+    bundle,audit=assembler.build('2026-09-02')
+    states={s.instrument_id:s for s in bundle.universe.securities}
+    assert states['000001.SZ'].board=='MAIN' and states['000001.SZ'].name=='TEST_DATED_NAME'
+    assert '000002.SZ' not in states
+    assert bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' and not bundle.universe.complete
+    assert any(assembler.original_refs[s['original_receipt_id']]['endpoint']=='master_szse' for s in audit['sources'])
+
+
+def test_conflicting_registered_original_identity_facts_remain_unknown(tmp_path):
+    policy=fixture_capture(tmp_path)
+    write_capture(tmp_path,'master_szse',{},[{'A股代码':'000001','A股上市日期':'2011-01-01','板块':'主板'}],provider='akshare')
+    bundle,audit=HistoricalReplayAssembler(tmp_path,policy).build('2026-09-02')
+    assert not any(s.instrument_id=='000001.SZ' for s in bundle.universe.securities)
+    assert any(g['reason']=='CONFLICTING_REGISTERED_IDENTITY_FACTS' for g in audit['gaps'])
+
+
+def test_reconstruction_streams_normalized_history_into_existing_artifact_store(tmp_path):
+    from stockfish_core.storage import SQLiteStore
+    from stockfish_core.yaogu.history_artifacts import HistoryArtifactStore,iter_bars
+    policy=fixture_capture(tmp_path/'capture')
+    owner=HistoryArtifactStore(SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3'))
+    bundle,audit=HistoricalReplayAssembler(tmp_path/'capture',policy).build(DAYS[-1],history_sessions=20,history_store=owner)
+    assert bundle.history_artifact_hash and bundle.history_artifact_ref=='history_'+bundle.history_artifact_hash
+    assert len(bundle.bars)<audit['normalized_history_bar_count']
+    assert len(list(iter_bars(bundle)))==audit['normalized_history_bar_count']
+    assert all(bar.source_refs for bar in iter_bars(bundle))
+
+
+@pytest.mark.parametrize('empty_current_capture',[False,True])
+def test_r12_real_replay_entry_records_contract_blockers_and_reconstructed_identity(tmp_path,monkeypatch,empty_current_capture):
+    import importlib.util,sys
+    from stockfish_core.storage import SQLiteStore
+    capture=tmp_path/'TEST_FIXTURE_capture';fixture_capture(capture)
+    if empty_current_capture:
+        write_capture(capture,'master_all',{'date':DAYS[-1]},[])
+        write_capture(capture,'market_daily',{'date':DAYS[-1],'adjustflag':'3'},[])
+    db=tmp_path/'TEST_FIXTURE.sqlite3';SQLiteStore(db)
+    script=Path(__file__).resolve().parents[2]/'scripts'/'r12_historical_replay.py'
+    spec=importlib.util.spec_from_file_location('r12_replay_entry_TEST_FIXTURE',script)
+    module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
+    output=tmp_path/'result'
+    monkeypatch.setattr(sys,'argv',[str(script),'--cache',str(capture),'--source-docs',str(capture/'source-docs'),
+        '--db',str(db),'--output',str(output),'--sessions','1','--observation-date',DAYS[-1]])
+    module.main()
+    report=json.loads((output/'V2_HISTORICAL_REPLAY_REPORT.json').read_text(encoding='utf-8'))
+    assert report['attempt_count']==1 and report['failed_count']==0 and report['source_constructed_count']==1
+    assert report['evaluable_signal_day_count']==0
+    attempt=report['attempts'][0]
+    assert attempt['dated_master_capture_present'] is True
+    assert attempt['current_raw_price_capture_present'] is True
+    assert attempt['dated_master_available_nonempty'] is (not empty_current_capture)
+    assert attempt['dated_master_available'] is (not empty_current_capture)
+    assert attempt['current_raw_price_available_nonempty'] is (not empty_current_capture)
+    assert attempt['current_raw_price_available'] is (not empty_current_capture)
+    assert attempt['successful_core_price_response_sessions']==len(DAYS)
+    assert attempt['nonempty_core_price_sessions']==len(DAYS)-int(empty_current_capture)
+    assert attempt['captured_core_price_sessions']==attempt['nonempty_core_price_sessions']
+    if empty_current_capture:
+        assert 'EMPTY_RAW_DAILY_RESPONSE_DOES_NOT_PROVE_CURRENT_PRICE' in attempt['source_contract_blockers']
+        assert attempt['empty_core_price_sessions']==[DAYS[-1]]
+        assert attempt['eligible']==0
+    saved=json.loads((output/DAYS[-1]/'signal-run.json').read_text(encoding='utf-8'))
+    assert saved['coverage_type']=='RECONSTRUCTED_HISTORICAL'
+    assert saved['official_validation_signal_countable'] is False
+    assert saved['source_identity']['history_artifact_hash']==saved['history_artifact_hash']
+
+
+def test_replay_source_contract_distinguishes_missing_empty_and_nonempty_sessions():
+    from types import SimpleNamespace
+    from scripts.r12_historical_replay import source_contract
+    days=[date(2026,9,2),date(2026,9,3),date(2026,9,4)]
+    assembler=SimpleNamespace(calendar=days,raw={days[0]:{'rows':[{'TEST_FIXTURE':True}]},days[2]:{'rows':[]}},
+        masters={days[2]:{'rows':[]}},basic={},identity_conflicts=set(),factors={})
+    actual=source_contract(assembler,days[-1],3)
+    assert actual['successful_core_price_response_sessions']==2
+    assert actual['nonempty_core_price_sessions']==actual['captured_core_price_sessions']==1
+    assert actual['missing_core_price_sessions']==['2026-09-03']
+    assert actual['empty_core_price_sessions']==['2026-09-04']
+    assert actual['unavailable_core_price_sessions']==['2026-09-03','2026-09-04']
+    assert actual['dated_master_capture_present'] and actual['current_raw_price_capture_present']
+    assert not actual['dated_master_available'] and not actual['current_raw_price_available']

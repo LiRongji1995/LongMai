@@ -51,11 +51,13 @@ class OutcomeObservation(Frozen):
 
 
 def _states(bundle: MarketInput, iid: str, day: date, cutoff: datetime, resolver=None):
-    resolver=resolver or EvidenceResolver(bundle.receipts,cutoff=cutoff,coverage_type=bundle.coverage_type,sessions=bundle.sessions)
+    from .history_artifacts import history_resolver
+    resolver=resolver or history_resolver(bundle,cutoff=cutoff,allow_future_sessions=True)
     outer=bundle.universe.model_dump(mode='json',exclude={'securities'})
     if not resolver.is_visible(outer,require_complete=True):
         return None
-    records = [s for s in bundle.universe.securities if s.instrument_id == iid and s.effective_from <= day
+    from .history_artifacts import iter_history_securities
+    records = [s for s in iter_history_securities(bundle,instrument_id=iid,start=day,end=day) if s.instrument_id == iid and s.effective_from <= day
                and (s.effective_to is None or day < s.effective_to)
                and resolver.is_visible(s,instrument_id=iid,session=day,require_complete=True)]
     if not records:
@@ -68,6 +70,9 @@ def _states(bundle: MarketInput, iid: str, day: date, cutoff: datetime, resolver
 
 
 def _bar_map(bundle: MarketInput, cutoff: datetime,resolver=None):
+    if bundle.history_artifact_ref:
+        from .history_artifacts import OutcomeBarMapping
+        return OutcomeBarMapping(bundle,cutoff,resolver=resolver,strict_ingested=True)
     result = {}
     resolver=resolver or EvidenceResolver(bundle.receipts,cutoff=cutoff,coverage_type=bundle.coverage_type,sessions=bundle.sessions)
     for bar in bundle.bars:
@@ -114,7 +119,8 @@ def evaluate_outcomes(run: CandidateRun, bundle: MarketInput, evaluated_at: date
     if run.observation_date not in calendar:
         raise ValueError('original observation date missing from calendar')
     future = calendar[calendar.index(run.observation_date) + 1:]
-    resolver=EvidenceResolver(bundle.receipts,cutoff=evaluated_at,coverage_type=bundle.coverage_type,sessions=bundle.sessions)
+    from .history_artifacts import history_resolver
+    resolver=history_resolver(bundle,cutoff=evaluated_at,allow_future_sessions=True)
     bars = _bar_map(bundle, evaluated_at,resolver)
     results = []
     for item in run.items:

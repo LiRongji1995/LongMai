@@ -9,17 +9,20 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import datetime
 from itertools import combinations
-from math import comb
+from math import comb, isfinite, sqrt
 import random
 from statistics import median
 from typing import Any
 
 from .contracts import digest
 from .stage_aware_momentum import STAGE_AWARE_ID
-from .strategy_tracking import authoritative_strategy_items, select_label_revisions
+from .strategy_tracking import authoritative_strategy_items
+from .validation_identity import (
+    SCORE_IMPLEMENTATION_VERSION, official_primary_capture_for_run,
+    official_signal_countable, signal_data_quality, validation_identity_for_run, current_score_spec_identity,
+)
 
 SCORE_SPEC_ID = "DAILY_RECOMMENDATION_SCORE_V1"
-SCORE_IMPLEMENTATION_VERSION = "R11_VALIDATION_SCORING"
 SELECTION_RETURN_POLICY_ID = "SELECTION_CLOSE_TO_CLOSE_EQUAL_WEIGHT_RETURN_V1"
 BENCHMARK_POLICY_ID = "SAME_SIGNAL_DAY_FROZEN_ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_V1"
 SAMPLING_POLICY_ID = "SAME_M_WITHOUT_REPLACEMENT_DETERMINISTIC_RANDOM_BASKETS_V1"
@@ -107,14 +110,17 @@ class Cohort:
     evidence_role: str
     ids: tuple[str, ...]
     official_recommendation_score: bool
+    cohort_policy_id: str = "DECISION_TIER_COHORT"
 
 
 def evidence_type_for_run(run: dict[str, Any]) -> str:
     prospective = run.get("prospective_validation") or {}
-    if prospective.get("official_primary_signal_countable") is True:
-        return OFFICIAL_PROSPECTIVE
-    if run.get("coverage_type") == RECONSTRUCTED_HISTORICAL:
+    if (run.get("coverage_type") == RECONSTRUCTED_HISTORICAL
+            or prospective.get("coverage_type") == RECONSTRUCTED_HISTORICAL
+            or run.get("audit_mode") == "HISTORICAL_RECONSTRUCTION"):
         return RECONSTRUCTED_HISTORICAL
+    if official_signal_countable(run):
+        return OFFICIAL_PROSPECTIVE
     return PRELIMINARY_RESEARCH
 
 
@@ -136,7 +142,13 @@ def _cohorts(items: list[dict[str, Any]]) -> list[Cohort]:
         for setup in SETUP_IDS:
             ids = tuple(row["instrument_id"] for row in items
                         if row.get("decision_status") == tier and row.get("primary_stage") == setup)
-            result.append(Cohort(f"{score_name}:{setup}", setup, f"{score_name}_SETUP_BREAKDOWN", ids, tier == "FOCUS"))
+            result.append(Cohort(f"{score_name}:{setup}", setup, f"{score_name}_SETUP_BREAKDOWN", ids, False,
+                                 "PRIMARY_SETUP_COHORT"))
+    for setup in SETUP_IDS:
+        ids = tuple(row["instrument_id"] for row in items
+                    if ((row.get("stage_candidates") or {}).get(setup) or {}).get("status") == "PASS")
+        result.append(Cohort(f"ALL_PASSING_SETUP:{setup}", setup, "ALL_PASSING_SETUP_RESEARCH_ONLY", ids, False,
+                             "ALL_PASSING_SETUP_COHORT"))
     weakening = tuple(row["instrument_id"] for row in items
                       if row.get("decision_status") == "WATCH"
                       and row.get("observation_bucket") == "WEAKENING_HIGH_ACTIVITY_OBSERVATION")
@@ -148,18 +160,62 @@ def _cohorts(items: list[dict[str, Any]]) -> list[Cohort]:
     return result
 
 
-def _latest_labels(outcomes: list[dict[str, Any]], evaluated_at: datetime) -> list[dict[str, Any]]:
-    return [
-        row for row in select_label_revisions(outcomes, evaluated_at)
-        if row.get("strategy_id") == STAGE_AWARE_ID and row.get("label_kind", "SIGNAL") == "SIGNAL"
-    ]
+def _latest_labels(run: dict[str, Any], outcomes: list[dict[str, Any]], evaluated_at: datetime,
+                   horizons: tuple[int, ...], item_ids: tuple[str, ...]) -> list[dict[str, Any]]:
+    """Select only this frozen signal's labels, with an order-independent tie break.
+
+    Outcome producers bind the parent strategy run identity; that source hash
+    includes the stage implementation and configuration.  Missing identity is
+    not a wildcard.  Optional explicit stage bindings must match when present.
+    """
+    expected = {
+        "run_id": run.get("run_id"), "strategy_id": STAGE_AWARE_ID,
+        "observation_date": run.get("observation_date"),
+        "implementation_version": run.get("implementation_version"),
+        "implementation_source_hash": run.get("source_hash"),
+        "config_hash": run.get("config_hash"),
+        "spec_hash": run.get("spec_hash") or run.get("strategy_spec_hash"),
+    }
+    if any(value is None or value == "" for value in expected.values()):
+        return []
+    full_identity = validation_identity_for_run(run)
+    grouped: dict[tuple[str, str, int], list[dict[str, Any]]] = {}
+    for row in outcomes:
+        if any(row.get(key) != value for key, value in expected.items()):
+            continue
+        if any(key in row and row[key] != full_identity[key] for key in (
+            "signal_implementation_version", "signal_spec_revision", "signal_config_hash", "signal_source_hash")):
+            continue
+        if (row.get("label_kind", "SIGNAL") != "SIGNAL" or row.get("instrument_id") not in item_ids
+                or not row.get("observation_id")):
+            continue
+        try:
+            horizon = int(row["horizon"])
+            if horizon not in horizons or _dt(row["evaluated_at"]) > evaluated_at:
+                continue
+        except (KeyError, TypeError, ValueError):
+            continue
+        grouped.setdefault((row["run_id"], row["instrument_id"], horizon), []).append(row)
+    selected = []
+    for key in sorted(grouped):
+        revisions = grouped[key]
+        valid = [row for row in revisions if _label_return(row) is not None]
+        selected.append(max(valid or revisions, key=lambda row: (
+            _dt(row["evaluated_at"]), str(row.get("observation_id") or ""), digest(row))))
+    return selected
 
 
 def _label_return(row: dict[str, Any] | None) -> float | None:
     if not row or row.get("status") == "NOT_MATURED":
         return None
     value = (row.get("metrics") or {}).get("close_reference_change")
-    return float(value) if value is not None else None
+    if value is None:
+        return None
+    try:
+        number = float(value)
+    except (ValueError, TypeError):
+        return None
+    return number if isfinite(number) else None
 
 
 def _status_for_selected(selected_labels: list[dict[str, Any] | None], selected_returns: list[float], m: int) -> str | None:
@@ -182,10 +238,18 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
     horizons = tuple(dict.fromkeys(int(h) for h in horizons))
     if any(h <= 0 for h in horizons):
         raise ValueError("score horizons must be positive")
-    items = _stage_aware_items(run)
+    if random_basket_count <= 0 or exact_enumeration_limit < 0:
+        raise ValueError("invalid percentile sampling configuration")
+    items = sorted(_stage_aware_items(run), key=lambda row: row["instrument_id"])
     item_ids = tuple(row["instrument_id"] for row in items)
-    labels = _latest_labels(outcomes, evaluated_at)
-    by_key = {(row["instrument_id"], int(row["horizon"])): row for row in labels}
+    labels = _latest_labels(run, outcomes, evaluated_at, horizons, item_ids)
+    by_key = {(row["run_id"], row["instrument_id"], int(row["horizon"])): row for row in labels}
+    validation_identity = validation_identity_for_run(run)
+    if validation_identity["score_spec_identity"] != current_score_spec_identity():
+        # Old epochs remain readable, but a new binary must not silently apply
+        # different score semantics to an identity frozen with the old scorer.
+        raise ValueError("FROZEN_SCORE_SPEC_UNAVAILABLE_READ_ONLY_EPOCH")
+    quality = signal_data_quality(run)
     outcome_identity_rows = [{
         "observation_id": row.get("observation_id"),
         "logical_label_id": row.get("logical_label_id"),
@@ -201,14 +265,13 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
         int(row.get("horizon") or 0),
         str(row.get("observation_id") or ""),
     ))
-    outcome_revision_identity = digest({
-        "evaluated_at": evaluated_at.isoformat(),
-        "labels": outcome_identity_rows,
-    })
     records = []
     evidence_type = evidence_type_for_run(run)
     for horizon in horizons:
-        eligible_labels = [by_key.get((iid, horizon)) for iid in item_ids]
+        outcome_revision_identity = digest({
+            "labels": [row for row in outcome_identity_rows if int(row["horizon"]) == horizon],
+        })
+        eligible_labels = [by_key.get((run["run_id"], iid, horizon)) for iid in item_ids]
         eligible_returns = [_label_return(row) for row in eligible_labels]
         benchmark_returns = [value for value in eligible_returns if value is not None]
         benchmark_n = len(item_ids)
@@ -216,13 +279,14 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
         benchmark_coverage = _coverage(benchmark_valid_n, benchmark_n)
         market_return = _mean(benchmark_returns)
         for cohort in _cohorts(items):
-            selected_labels = [by_key.get((iid, horizon)) for iid in cohort.ids]
+            selected_labels = [by_key.get((run["run_id"], iid, horizon)) for iid in cohort.ids]
             selected_returns = [_label_return(row) for row in selected_labels]
             selected_returns = [value for value in selected_returns if value is not None]
             m = len(cohort.ids)
             valid_m = len(selected_returns)
             selected_coverage = _coverage(valid_m, m)
-            score_status = _status_for_selected(selected_labels, selected_returns, m)
+            score_status = (_status_for_selected(selected_labels, selected_returns, m) if quality["signal_evaluable"]
+                            else "N_A_SIGNAL_DATA_UNAVAILABLE")
             baskets: list[float] = []
             sampling = {
                 "sampling_mode": None,
@@ -234,6 +298,8 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
             }
             seed_identity = {
                 "score_spec_id": SCORE_SPEC_ID,
+                "score_implementation_version": SCORE_IMPLEMENTATION_VERSION,
+                "validation_epoch_id": validation_identity["validation_epoch_id"],
                 "signal_run_id": run.get("run_id"),
                 "selection_tier": cohort.selection_tier,
                 "setup_id": cohort.setup_id,
@@ -241,6 +307,8 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
                 "outcome_revision_identity": outcome_revision_identity,
                 "benchmark_policy_id": BENCHMARK_POLICY_ID,
                 "sampling_policy_id": SAMPLING_POLICY_ID,
+                "random_basket_count": random_basket_count,
+                "exact_enumeration_limit": exact_enumeration_limit,
             }
             observed = _mean(selected_returns)
             score = None
@@ -258,6 +326,15 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
                 )
                 score = _percentile_score(observed, baskets)
                 score_status = "COMPLETE"
+            mc_standard_error = None
+            if score is not None and sampling["sampling_mode"] == "DETERMINISTIC_MONTE_CARLO":
+                # Each independent basket contributes 0, 0.5 (tie), or 1 to
+                # the percentile estimate.  Report SE in score points (0-100).
+                contributions = [1.0 if value < observed else 0.5 if value == observed else 0.0 for value in baskets]
+                mean_contribution = score / 100
+                k = len(contributions)
+                mc_standard_error = (100 * sqrt(sum((value - mean_contribution) ** 2 for value in contributions)
+                                                / (k - 1) / k)) if k > 1 else None
             best = max(selected_returns) if selected_returns else None
             worst = min(selected_returns) if selected_returns else None
             median_return = median(selected_returns) if selected_returns else None
@@ -270,6 +347,7 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
                 "score_id": "score_" + digest(score_identity),
                 "score_spec_id": SCORE_SPEC_ID,
                 "score_implementation_version": SCORE_IMPLEMENTATION_VERSION,
+                **validation_identity,
                 "strategy_id": STAGE_AWARE_ID,
                 "signal_run_id": run.get("run_id"),
                 "signal_observation_date": run.get("observation_date"),
@@ -277,6 +355,8 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
                 "selection_tier": cohort.selection_tier,
                 "setup_id": cohort.setup_id,
                 "evidence_role": cohort.evidence_role,
+                "cohort_policy_id": cohort.cohort_policy_id,
+                **quality,
                 "official_recommendation_score": cohort.official_recommendation_score and evidence_type == OFFICIAL_PROSPECTIVE,
                 "horizon": horizon,
                 "horizon_label": f"D+{horizon}",
@@ -298,6 +378,9 @@ def compute_score_records(run: dict[str, Any], outcomes: list[dict[str, Any]], e
                 "benchmark_coverage": benchmark_coverage,
                 "benchmark_min_coverage": benchmark_min_coverage,
                 "random_basket_count": sampling["random_basket_count"],
+                "percentile_sampling_mode": sampling["sampling_mode"],
+                "K": sampling["random_basket_count"] if score is not None else 0,
+                "percentile_mc_standard_error": _score_value(mc_standard_error),
                 "random_seed_identity": seed_identity,
                 "random_seed_hash": digest(seed_identity),
                 "sampling_policy": sampling,
@@ -327,15 +410,23 @@ def build_score_revision(run: dict[str, Any], outcomes: list[dict[str, Any]], ev
         benchmark_min_coverage=benchmark_min_coverage,
         exact_enumeration_limit=exact_enumeration_limit,
     )
+    validation_identity = validation_identity_for_run(run)
+    quality = signal_data_quality(run)
+    countable = official_signal_countable(run)
     outcome_revision_identity = digest(sorted({row["outcome_revision_identity"] for row in records}))
     score_run_identity = {
         "score_spec_id": SCORE_SPEC_ID,
+        "score_implementation_version": SCORE_IMPLEMENTATION_VERSION,
+        "validation_epoch_id": validation_identity["validation_epoch_id"],
         "strategy_id": STAGE_AWARE_ID,
         "signal_run_id": run.get("run_id"),
         "outcome_revision_identity": outcome_revision_identity,
         "benchmark_policy_id": BENCHMARK_POLICY_ID,
         "sampling_policy_id": SAMPLING_POLICY_ID,
         "horizons": list(horizons),
+        "random_basket_count": random_basket_count,
+        "benchmark_min_coverage": benchmark_min_coverage,
+        "exact_enumeration_limit": exact_enumeration_limit,
     }
     score_run_id = "recommendation_score_" + digest(score_run_identity)
     existing_revisions = list(existing_revisions or [])
@@ -344,13 +435,14 @@ def build_score_revision(run: dict[str, Any], outcomes: list[dict[str, Any]], ev
             return existing
     group_id = "recommendation_score_group_" + digest({
         "score_spec_id": SCORE_SPEC_ID,
+        "validation_epoch_id": validation_identity["validation_epoch_id"],
         "strategy_id": STAGE_AWARE_ID,
         "signal_run_id": run.get("run_id"),
     })
     existing_group = [row for row in existing_revisions if row.get("score_revision_group_id") == group_id]
     headline = next((row for row in records if row["selection_tier"] == FOCUS_SCORE and row["horizon"] == 1), None)
     value = {
-        "schema_version": "R11_DAILY_RECOMMENDATION_SCORE_REVISION_V1",
+        "schema_version": "R12_DAILY_RECOMMENDATION_SCORE_REVISION_V1",
         "score_run_id": score_run_id,
         "score_revision_group_id": group_id,
         "revision": len(existing_group) + 1,
@@ -358,12 +450,17 @@ def build_score_revision(run: dict[str, Any], outcomes: list[dict[str, Any]], ev
         "maturity_status": "COMPLETE" if headline and headline["score_status"] == "COMPLETE" else (headline or {}).get("score_status", "UNKNOWN"),
         "score_spec_id": SCORE_SPEC_ID,
         "score_implementation_version": SCORE_IMPLEMENTATION_VERSION,
+        **validation_identity,
         "strategy_id": STAGE_AWARE_ID,
         "signal_run_id": run.get("run_id"),
         "signal_observation_date": run.get("observation_date"),
         "decision_cutoff": run.get("decision_cutoff") or run.get("cutoff"),
+        "actual_decision_cutoff": (run.get("prospective_validation") or {}).get("actual_decision_cutoff") or run.get("decision_cutoff") or run.get("cutoff"),
         "evidence_type": evidence_type_for_run(run),
-        "official_primary_signal_countable": ((run.get("prospective_validation") or {}).get("official_primary_signal_countable") is True),
+        "official_primary_capture": official_primary_capture_for_run(run),
+        "official_validation_signal_countable": countable,
+        "official_primary_signal_countable": countable,
+        **quality,
         "headline_horizon": 1,
         "headline_score": (headline or {}).get("score"),
         "headline_status": (headline or {}).get("score_status"),
@@ -389,9 +486,11 @@ def build_score_revision(run: dict[str, Any], outcomes: list[dict[str, Any]], ev
 
 def flatten_score_documents(documents: list[dict[str, Any]], *, tier: str | None = None,
                             setup: str | None = None, horizon: int | None = None,
-                            evidence_type: str | None = None) -> list[dict[str, Any]]:
+                            evidence_type: str | None = None, validation_epoch_id: str | None = None) -> list[dict[str, Any]]:
     rows = []
     for document in documents:
+        if validation_epoch_id is not None and document.get("validation_epoch_id") != validation_epoch_id:
+            continue
         if evidence_type is not None and document.get("evidence_type") != evidence_type:
             continue
         for row in document.get("records") or []:
@@ -402,24 +501,48 @@ def flatten_score_documents(documents: list[dict[str, Any]], *, tier: str | None
             if horizon is not None and int(row.get("horizon")) != int(horizon):
                 continue
             rows.append({**row, "score_run_id": document.get("score_run_id"), "revision": document.get("revision"),
-                         "generated_at": document.get("generated_at")})
+                         "generated_at": document.get("generated_at"), "validation_epoch_id": document.get("validation_epoch_id")})
     return rows
 
 
-def summarize_score_history(documents: list[dict[str, Any]], *, evidence_type: str = OFFICIAL_PROSPECTIVE) -> dict[str, Any]:
-    scoped = [row for row in documents if row.get("evidence_type") == evidence_type]
+def summarize_score_history(documents: list[dict[str, Any]], *, evidence_type: str = OFFICIAL_PROSPECTIVE,
+                             validation_epoch_id: str | None = None) -> dict[str, Any]:
+    # Service callers pass the installed active epoch explicitly.  Pure offline
+    # consumers default to the newest frozen epoch in their provided documents.
+    relevant = [row for row in documents if row.get("evidence_type") == evidence_type
+                or evidence_type == OFFICIAL_PROSPECTIVE and row.get("official_primary_capture") is True]
+    if validation_epoch_id is None and relevant:
+        latest = max(relevant, key=lambda row: (row.get("signal_observation_date") or "", row.get("generated_at") or "",
+                                               row.get("revision") or 0, row.get("score_run_id") or ""))
+        validation_epoch_id = latest.get("validation_epoch_id")
+    scoped = [row for row in relevant if row.get("validation_epoch_id") == validation_epoch_id]
     by_day: dict[str, dict[str, Any]] = {}
     for document in sorted(scoped, key=lambda row: (row.get("signal_observation_date") or "", row.get("revision") or 0, row.get("generated_at") or "")):
         day = document.get("signal_observation_date")
         if day:
             by_day[day] = document
     daily = []
+    operational = {"primary_capture_attempted_days": 0, "evaluable_official_signal_days": 0,
+                   "data_unavailable_primary_days": 0, "valid_no_focus_days": 0}
     for day, document in by_day.items():
         focus = next((row for row in document.get("records", []) if row["selection_tier"] == FOCUS_SCORE and row["horizon"] == 1), None)
         watch = next((row for row in document.get("records", []) if row["selection_tier"] == WATCH_RESEARCH_SCORE and row["horizon"] == 1), None)
+        attempted = document.get("official_primary_capture") is True
+        evaluable = document.get("signal_evaluable") is True and (focus or {}).get("score_status") != "N_A_SIGNAL_DATA_UNAVAILABLE"
+        if attempted:
+            operational["primary_capture_attempted_days"] += 1
+            if evaluable and document.get("official_validation_signal_countable") is True:
+                operational["evaluable_official_signal_days"] += 1
+            else:
+                operational["data_unavailable_primary_days"] += 1
+        if not evaluable or (evidence_type == OFFICIAL_PROSPECTIVE and document.get("official_validation_signal_countable") is not True):
+            continue
+        if (focus or {}).get("score_status") == "N_A_NO_SELECTION":
+            operational["valid_no_focus_days"] += 1
         daily.append({
             "signal_observation_date": day,
             "score_run_id": document.get("score_run_id"),
+            "validation_epoch_id": document.get("validation_epoch_id"),
             "focus_score": focus.get("score") if focus else None,
             "focus_status": focus.get("score_status") if focus else None,
             "watch_score": watch.get("score") if watch else None,
@@ -427,32 +550,36 @@ def summarize_score_history(documents: list[dict[str, Any]], *, evidence_type: s
             "focus_M": focus.get("M") if focus else 0,
             "focus_valid_M": focus.get("valid_M") if focus else 0,
             "benchmark_coverage": focus.get("benchmark_coverage") if focus else None,
+            "focus_selection_return": focus.get("equal_weight_return") if focus else None,
             "focus_excess_return": focus.get("excess_return") if focus else None,
             "watch_excess_return": watch.get("excess_return") if watch else None,
             "focus_watch_score_gap": focus.get("score") - watch.get("score") if focus and watch and focus.get("score") is not None and watch.get("score") is not None else None,
             "focus_watch_excess_gap": focus.get("excess_return") - watch.get("excess_return") if focus and watch and focus.get("excess_return") is not None and watch.get("excess_return") is not None else None,
         })
-    valid_focus = [row for row in daily if row["focus_score"] is not None]
-    valid_excess = [row for row in daily if row["focus_excess_return"] is not None]
+    valid_focus = [row for row in daily if row["focus_status"] == "COMPLETE" and row["focus_score"] is not None]
     focus_nonempty_days = sum((row.get("focus_M") or 0) > 0 for row in daily)
     m_values = [row.get("focus_M") or 0 for row in daily]
 
     def rolling(length: int) -> dict[str, Any]:
         selected_scores = valid_focus[-length:]
-        selected_excess = valid_excess[-length:]
+        selected_excess = [row for row in selected_scores if row["focus_excess_return"] is not None]
+        selected_returns = [row["focus_selection_return"] for row in selected_scores if row["focus_selection_return"] is not None]
         return {
             "window_signal_days": length,
             "valid_score_days": len(selected_scores),
             "mean_score": _score_value(_mean([row["focus_score"] for row in selected_scores])) if selected_scores else None,
             "mean_excess_return": _metric(_mean([row["focus_excess_return"] for row in selected_excess])) if selected_excess else None,
-            "median_daily_return": _metric(median([row["focus_excess_return"] for row in selected_excess])) if selected_excess else None,
+            "median_daily_selection_return": _metric(median(selected_returns)) if selected_returns else None,
+            "median_daily_excess_return": _metric(median([row["focus_excess_return"] for row in selected_excess])) if selected_excess else None,
             "policy": ROLLING_POLICY_ID,
         }
 
     return {
-        "schema_version": "R11_RECOMMENDATION_SCORE_HISTORY_SUMMARY_V1",
+        "schema_version": "R12_RECOMMENDATION_SCORE_HISTORY_SUMMARY_V1",
         "score_spec_id": SCORE_SPEC_ID,
         "evidence_type": evidence_type,
+        "validation_epoch_id": validation_epoch_id,
+        **operational,
         "official_signal_days": len(daily),
         "focus_nonempty_days": focus_nonempty_days,
         "focus_signal_coverage": focus_nonempty_days / len(daily) if daily else None,

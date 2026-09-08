@@ -1,3 +1,22 @@
+# R12 持久本机服务（2026-09-08）
+
+本节优先于下方历史部署记录。当前实际仓库 D:/stockfish-qlib-quant-system，业务目录 stock-fish。同一既有权威数据库 stock-fish/data/stockfish.sqlite3，state root stock-fish/data/core；不新建第二套业务库。R12 长历史 artifact 也在此 SQLiteStore。升级前用 SQLite 在线备份或停服一致性备份保存既有库。
+
+```powershell
+pwsh -NoProfile -File ./Start-StockFish.ps1 -Port 8001 -DatabasePath ./stock-fish/data/stockfish.sqlite3 -StateRoot ./stock-fish/data/core
+Invoke-RestMethod http://127.0.0.1:8001/api/health
+Invoke-RestMethod http://127.0.0.1:8001/api/candidate-schedule
+& ./stock-fish/.venv/Scripts/python.exe ./stock-fish/scripts/r12_post_cutoff_check.py
+```
+
+启动脚本把明确配置保存到忽略的 work/stockfish-service.json，随后启动不传参数也复用同一端口/DB/state。work/stockfish-process.json 登记 PID、创建时间、repo、DB、state、port、scheduler thread identity。Waitress 单进程四个 HTTP 线程，任务仍由同一 DB 锁保护的单 worker 执行；禁用 reloader，不开启第二 scheduler。重复启动核验并复用已登记进程。停止使用 Stop-StockFish.ps1，只处理精确命令行与创建时间匹配的进程。8000 的无关进程不受影响。
+
+原未登记实例只有 -AdoptExisting 显式模式在 app/interpreter、监听 PID、健康返回 DB/state、存活 scheduler 全部匹配时才可登记；不同身份直接拒绝。日志在 logs/，服务独立于 Codex 任务存活，Windows 关机/登出后的恢复仍需要运行启动脚本；本轮未建立系统级自动登录启动任务。
+
+20:30 触发采用实际完成 cutoff；真实协议与截止后核验见 [V2_PROSPECTIVE_VALIDATION_PROTOCOL](stock-fish/docs/V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)。行情 quality 与健康状态分别核验，SUCCEEDED 只证明诊断/结果已保存，不证明数据可评价。历史迁移与原始回执、运行数据库、token 均不提交 Git。
+
+---
+
 # R05 本次统一整改与历史回放（2026-09-06）
 
 本节优先于下方历史记录。本次在同一业务目录完成 F01—F13 规格整改，保持 R05。当前入口见 [R05 说明](stock-fish/docs/R05_RECTIFICATION_AND_REPLAY.md)、[业务基线](stock-fish/ENGINEERING_BASELINE.md)、[数据及 Docker 核验](stock-fish/docs/R05_DATA_AND_DOCKER_RECTIFICATION.md)。旧报告的统计数、公式和 daemon 状态只反映旧运行。
@@ -119,7 +138,7 @@ pwsh -NoProfile -File ./Logs-StockFish.ps1 -Root $ProjectRoot -Follow
 pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root $ProjectRoot
 ~~~
 
-三个脚本的 -Root 默认为脚本所在目录，支持从其他目录显式管理同一部署。日志和进程登记位于 <Root>/logs/ 和 <Root>/work/。脚本核验 PID、创建时间和命令行，不终止无关进程。默认固定检查 8000 端口；同一数据库或端口不要运行第二实例，不启用调试 reloader 或多 worker。
+三个脚本的 -Root 默认为脚本所在目录，支持从其他目录显式管理同一部署。日志和进程登记位于 <Root>/logs/ 和 <Root>/work/。脚本核验 PID、创建时间和命令行，不终止无关进程。默认端口 8000；已登记部署按 work/stockfish-service.json 核对配置端口；同一数据库或端口不要运行第二实例，不启用调试 reloader 或多 worker。
 
 服务关闭时不会继续采集。中断任务保留历史并标为 INTERRUPTED，显式重试建立新任务。失败不覆盖旧 active；候选发布和成功任务终态在同一事务中保存。
 

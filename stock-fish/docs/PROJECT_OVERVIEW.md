@@ -4,25 +4,25 @@
 
 ## 1. 文档身份、核验基础与版本
 
-**最后核对：2026-09-08，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R11_VALIDATION_SCORING`，并新增只读评价消费者 `DAILY_RECOMMENDATION_SCORE_V1`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
+**最后核对：2026-09-08，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R12_INTEGRITY_HISTORY`，并新增只读评价消费者 `DAILY_RECOMMENDATION_SCORE_V1`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
 
 | 对象 | 核对基础及含义 |
 |---|---|
-| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮在 `main` 上完成并生成 R11 review bundle |
+| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮在 `main` 上完成，推送并核对远端后从最终 commit 字节生成 R12 review bundle |
 | 本轮核心版本 | `STAGE_AWARE_MOMENTUM_V2`；配置 [stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，说明 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)；V1 只读历史说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
 | 每日成绩版本 | `DAILY_RECOMMENDATION_SCORE_V1`；实现 [recommendation_scoring.py](../stockfish_core/yaogu/recommendation_scoring.py)，说明 [DAILY_RECOMMENDATION_SCORE_V1.md](DAILY_RECOMMENDATION_SCORE_V1.md)；仅读保存的信号和追加 outcome，不参与策略计算 |
 | 历史运行证据 | 旧 `D:/StockRecommendation` 服务与发布检出证据保留为历史核对材料；其 PID、端口和镜像身份是当时事实，使用前必须重新核对 |
-| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；当前核心实现 `R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING`，spec `R11_VALIDATION_SCORING`；初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
+| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；当前核心实现 `R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY`，spec `R12_INTEGRITY_HISTORY`；初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
 
 开发工作区、发布检出与运行进程分别核验。本次任务只提交当前授权文件，不覆盖私人数据库、缓存、报告或旧运行目录。正式 DAILY、旧 PV、旧焦点、DNA、THEME 的规则与历史结果保留；新增策略不以国芳集团或金健米业是否入选作为验收标准。
 
-本轮新增交付文档：[V2_SEMANTIC_COMPLETION_REPORT.md](V2_SEMANTIC_COMPLETION_REPORT.md)、[V2_DATA_READINESS.md](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT.md](V2_HISTORICAL_REPLAY_REPORT.md)、[V2_PROSPECTIVE_VALIDATION_PROTOCOL.md](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)、[V2_PROSPECTIVE_READINESS.md](V2_PROSPECTIVE_READINESS.md)、[DAILY_RECOMMENDATION_SCORE_V1.md](DAILY_RECOMMENDATION_SCORE_V1.md)。R11 真实输出目录为 `stock-fish/reports/codex/r11_validation_scoring_20260908_20260908_122302/`，scorecard 输出在其 `recommendation-score/` 子目录。
+本轮 R12 修复跨 signal run outcome 污染，epoch 绑定完整 signal/protocol/score 身份，并区分不可评价日期与合法无推荐。交易参数、Setup、优先级、Focus gate 均保持 V2。交付说明见 [R12_SCORE_INTEGRITY_REPORT](R12_SCORE_INTEGRITY_REPORT.md)、[R12_HISTORY_ARTIFACT_REPORT](R12_HISTORY_ARTIFACT_REPORT.md)、[R12_PROSPECTIVE_INTEGRITY_REPORT](R12_PROSPECTIVE_INTEGRITY_REPORT.md)、[MEMORY_PROFILE](MEMORY_PROFILE.md)、[V2_DATA_READINESS](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT](V2_HISTORICAL_REPLAY_REPORT.md) 与 [V2_PROSPECTIVE_VALIDATION_PROTOCOL](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)。
 
-R11 bounded capture 在当前库上实际推进 request queue，但未形成可激活的完整 daily 输入：第一轮人工取消，第二轮在真实队列进展后因 `MemoryError` 终止；队列状态从 `COMPLETE=31/PARTIAL=1/PENDING=797/PENDING_NETWORK=3` 推进到 `COMPLETE=64/PARTIAL=2/PARTIAL_NETWORK=1/PENDING=1121/PENDING_NETWORK=6`。最新 2026-09-08 `PROSPECTIVE_CAPTURED` input hash 为 `b7bfe39df96b574b357348f3a506ea1e4edfa519a7053103976c132be6ff12c1`，但当前 consumer readiness 为 `actual_daily_ready=false`，V2 eligible/FOCUS/WATCH 均为 0。
+历史架构在同一权威 SQLiteStore 保存不可变内容寻址行与会话 manifest；日 MarketInput 保存近期证据与历史 ref/hash，按证券读取长期窗口。512×315 合成基准峰值 RSS 从约 2.59 GB 降至约 160 MB。真实 321,622,653-byte 旧输入已流式迁移，迁移峰值约 131 MB；此测量与合成旧路径基准分开报告。每日增量复用旧行，不重复持久化整个315日历史。
 
-R11 replay 只按真实可评估天数报告：本轮没有可核验 `RECONSTRUCTED_HISTORICAL` MarketInput 或带 `stock_basic_all` 的 source-policy replay supply，不能把 2026-09-08 `PROSPECTIVE_CAPTURED` 输入倒填历史。因此 20 个 replay attempts 中 `source_constructed_count=0`、`evaluable_signal_day_count=0`、`unevaluable_signal_day_count=20`、`failed_count=0`，旧 `success_count` 仅保留为 `evaluable_signal_day_count` 的兼容别名。R10 的重建 replay 产物只作为历史审计材料，不计入 R11 prospective validation。
+本轮最近20日真实重建尝试已有1日构造，但当前仍无可评价的 price/trend 日。缺失日期化 master、当日 RAW 和连续核心历史窗口仍是实际证据阻塞；theme/capital 不完整不会阻塞 price/trend scope，历史数据不进入正式前瞻计数。队列逻辑请求按 provider/endpoint/规范参数/session 去重并优先当前身份、价格与长期核心历史，保留已有尝试与原预算。
 
-真实 scheduler state 为 `ACTUAL_CANDIDATE_SCHEDULER_STATE_R11`，当前本机验证服务因 8000 端口被占用运行在 `127.0.0.1:8001`，使用同一 DB/state；调度线程存活，状态为 `READY_AND_RUNNING_WAITING_FOR_CUTOFF`，等待 2026-09-08 20:30 形成首个可计数 official primary，目标交易会话为 2026-09-09。`DAILY_RECOMMENDATION_SCORE_V1` 目前没有已保存 score revision，官方 prospective score days 为 0，scorecard 显示 `NO_SCORE_REVISION/N/A`。
+持久服务使用单进程 Waitress、登记端口 `127.0.0.1:8001`、既有 DB/state 与唯一 scheduler。20:30 是触发时点，协议 SCHEDULED_2030_ACTUAL_COMPLETION 使用实际采集完成 cutoff，当前运行/epoch/计数以 [R12_PROSPECTIVE_INTEGRITY_REPORT](R12_PROSPECTIVE_INTEGRITY_REPORT.md) 的带时间核验为准。不可提前声明首个可计数正式信号；运行状态 API 与截止后只读检查入口均保留。
 
 实验模块加载时检验批准配置的字节 SHA-256：`r05_strategy_experiments.yaml` 为 `8cd729cab31f80ec84d6486c733165360ba264fc3efb2d70c0c69f5a78148462`，`r05_completion_requirements.yaml` 为 `203325cad6cde76ca9399353af163e9b122b73b1ab2d3c8ecbfd1878fb3f5e11`。冻结 DAILY 配置为 `5863af482cc396a000477fdfcfe694aac162a935ece7fa11279a2e3ecc0376b6`。上游研究版本与批准文件锁见 [r05_source_lock.json](../config/r05_source_lock.json)。这些哈希标识内容，不是抵御具有完整本机写权限者的安全认证。
 

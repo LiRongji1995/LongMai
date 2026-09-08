@@ -20,10 +20,13 @@ SH = ZoneInfo('Asia/Shanghai')
 
 class CandidateScheduler:
     OBSERVATION_PLAN_VERSION = 'FORWARD_OBSERVATION_PLAN_R03_V3'
-    SCHEDULER_STATE_SOURCE = 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R11'
+    SCHEDULER_STATE_SOURCE = 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R12'
     MAX_OUTCOME_SUBMISSIONS_PER_TICK = 5
     def __init__(self, service, *, capture=None, clock=utc_now, interval=20):
         self.service, self.clock, self.interval = service, clock, interval
+        existing_scheduler = getattr(service, 'scheduler', None)
+        if existing_scheduler and existing_scheduler.thread and existing_scheduler.thread.is_alive():
+            raise RuntimeError('CANDIDATE_SCHEDULER_ALREADY_RUNNING_FOR_SERVICE')
         self.started_at = clock()
         self.capture = capture or self._capture
         self.custom_capture = capture is not None
@@ -96,15 +99,18 @@ class CandidateScheduler:
         return later[0] if later else None
 
     def _primary_schedule_for(self, signal_day, config=None):
+        from .validation_identity import current_validation_identity
         config = config or self.service.current_config()
+        identity = current_validation_identity()
         hour, minute = map(int, config.schedule.evening.split(':'))
         scheduled = datetime.combine(signal_day, time(hour, minute), SH)
         return {
             'signal_session': signal_day.isoformat(),
             'target_session': self._next_session_after(signal_day).isoformat() if self._next_session_after(signal_day) else None,
             'scheduled_at': scheduled.isoformat(),
-            'job_id': 'schedule_' + signal_day.isoformat() + '_EVENING',
-            'primary_signal_cutoff': config.schedule.evening + ' Asia/Shanghai EVENING_FINAL',
+            'job_id': 'schedule_' + signal_day.isoformat() + '_EVENING_' + identity['validation_epoch_id'],
+            'primary_signal_cutoff': 'SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
+            **identity,
             'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
         }
 
@@ -130,12 +136,12 @@ class CandidateScheduler:
         if signal_day is None:
             return {'status': 'CALENDAR_COVERAGE_EXHAUSTED', 'strategy_id': 'STAGE_AWARE_MOMENTUM_V2'}
         planned = self._primary_schedule_for(signal_day, config)
-        doc_id = 'stage_aware_primary_schedule_' + signal_day.isoformat()
+        doc_id = 'stage_aware_primary_schedule_' + signal_day.isoformat() + '_' + planned['validation_epoch_id']
         existing = self.service.store.get_document('stage_aware_prospective_validation_schedules', doc_id)
         if existing is None:
             value = {
                 'schedule_id': doc_id,
-                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R11',
+                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R12',
                 'registered_at': now.isoformat(),
                 'config_hash': config.config_hash,
                 'calendar_hash': self.calendar_hash,
@@ -154,13 +160,25 @@ class CandidateScheduler:
             }
             self.service.store.put_document('stage_aware_prospective_validation_schedules', doc_id, value)
             existing = value
+        epoch_id = planned['validation_epoch_id']
+        if self.service.store.get_document('stage_aware_prospective_validation_epochs', epoch_id) is None:
+            from .validation_identity import current_validation_identity
+            self.service.store.put_document('stage_aware_prospective_validation_epochs', epoch_id, {
+                'epoch_id': epoch_id, **current_validation_identity(),
+                'status': 'REGISTERED_IMMUTABLE_IDENTITY',
+                'registered_at': now.isoformat(), 'checkpoints_signal_sessions': [5,20,60,120],
+                'market_edge': 'NOT_ESTABLISHED',
+            })
         return existing
 
     def _latest_stage_aware_primary(self, signal_day):
+        from .validation_identity import current_validation_identity
+        epoch_id = current_validation_identity()['validation_epoch_id']
         rows = [
             row for row in self.service._all('stage_aware_prospective_primary_runs')
             if row.get('signal_observation_date') == signal_day.isoformat()
             and row.get('official_primary_signal_countable') is True
+            and row.get('validation_epoch_id') == epoch_id
         ]
         return max(rows, key=lambda row: (row.get('decision_cutoff') or '', row.get('run_id') or ''), default=None)
 
@@ -180,8 +198,12 @@ class CandidateScheduler:
             readiness_blockers.append('SCHEDULER_THREAD_NOT_ALIVE')
         if not job_id:
             readiness_blockers.append('PRIMARY_SCHEDULE_NOT_REGISTERED')
+        validation_state = self.service.validation_state(primary.get('validation_epoch_id'))
+        latest_capture = validation_state.get('latest_primary_capture')
         if primary_run:
             status = 'PROSPECTIVE_PRIMARY_PERSISTED'
+        elif latest_capture and latest_capture.get('signal_observation_date') == primary.get('signal_session'):
+            status = 'PRIMARY_CAPTURE_PERSISTED_SIGNAL_DATA_UNAVAILABLE'
         elif event and event.get('status') == 'MISSED_SERVICE_OFFLINE':
             status = 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'
         elif job:
@@ -196,8 +218,9 @@ class CandidateScheduler:
             status = primary.get('status', 'UNKNOWN')
         if status in {'PROSPECTIVE_PRIMARY_PERSISTED', 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'}:
             readiness_blockers = []
-        epoch = self.service.store.get_document('stage_aware_prospective_validation_epochs',
-                                                'STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH')
+        epoch = validation_state['epoch']
+        import psutil
+        process = psutil.Process()
         return {
             'source': self.SCHEDULER_STATE_SOURCE,
             'observed_at': now.isoformat(),
@@ -211,6 +234,12 @@ class CandidateScheduler:
                 'db_path': str(self.service.store.path),
                 'job_owner_id': self.service.jobs.owner_id,
                 'process_id': os.getpid(),
+                'process_creation_time': datetime.fromtimestamp(process.create_time(), SH).isoformat(),
+                'repo_root': str(Path(__file__).resolve().parents[3]),
+                'port': getattr(self.service, 'runtime_port', None),
+                'scheduler_thread_name': self.thread.name if self.thread else None,
+                'scheduler_thread_ident': self.thread.ident if self.thread else None,
+                'scheduler_thread_native_id': self.thread.native_id if self.thread else None,
             },
             'active_candidate_strategy_id': self.service.current_config().strategy_id,
             'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
@@ -223,6 +252,10 @@ class CandidateScheduler:
             'scheduler_event_state': event,
             'prospective_primary_run': primary_run,
             'validation_epoch': epoch,
+            'validation_state': validation_state,
+            'validation_epoch_id': validation_state['validation_epoch_id'],
+            'primary_cutoff_policy_id': primary.get('primary_cutoff_policy_id'),
+            'latest_primary_capture': latest_capture,
             'market_edge': 'NOT_ESTABLISHED',
         }
 
@@ -253,11 +286,13 @@ class CandidateScheduler:
             planned = datetime.combine(day, time(hour, minute), SH)
             if planned > now:
                 continue
-            key = 'schedule_' + day.isoformat() + '_' + name
+            primary_identity = self._primary_schedule_for(day, config) if name == 'EVENING' else None
+            key = primary_identity['job_id'] if primary_identity else 'schedule_' + day.isoformat() + '_' + name
             if self.service.store.get_document('candidate_schedule_events', key) is not None or self.service.jobs.get(key) is not None:
                 continue
             if planned < self.started_at:
                 value = {'event_id': key, 'scheduled_at': planned.isoformat(), 'observed_at': now.isoformat(),
+                         **({'validation_epoch_id': primary_identity['validation_epoch_id']} if primary_identity else {}),
                          'status': 'MISSED_SERVICE_OFFLINE', 'market_session': name, 'snapshot_created': False}
                 self._event(key, value)
                 results.append(value)
@@ -288,8 +323,11 @@ class CandidateScheduler:
             else:
                 job = self.service.jobs.submit('scheduled_candidate_capture', {'scheduled_at': planned.isoformat(),
                      'actual_requested_at': now.isoformat(), 'market_session': name, 'session': day.isoformat(),
+                     **({'validation_epoch_id': primary_identity['validation_epoch_id']} if primary_identity else {}),
                      'config_hash': config.config_hash}, job_id=key)
+            from .validation_identity import current_validation_identity
             value = {'event_id': key, 'scheduled_at': planned.isoformat(), 'observed_at': now.isoformat(),
+                     **({key: value for key, value in primary_identity.items() if key not in {'job_id', 'scheduled_at'}} if primary_identity else current_validation_identity()),
                      'status': 'SUBMITTED', 'market_session': name, 'job_id': job['job_id'], 'snapshot_created': False}
             self._event(key, value)
             results.append(value)
@@ -444,20 +482,38 @@ class CandidateScheduler:
     def _capture_job(self, ctx):
         payload = ctx.payload
         now = self.clock()
+        from .validation_identity import current_validation_identity
+        expected_epoch = payload.get('validation_epoch_id')
+        if payload.get('market_session') == 'EVENING' and expected_epoch != current_validation_identity()['validation_epoch_id']:
+            raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_BEFORE_CAPTURE')
         ctx.update(.05, '按真实接收时间采集已允许的公开数据；不回填旧时点')
         archive = self.service.root / 'raw_captures' / ctx.job_id
         bundle = self.capture(archive, now) if self.custom_capture else self._capture(archive, now, ctx)
+        capture_completed_at = self.clock()
         ctx.check_cancelled()
         if bundle.observation_date.isoformat() != payload['session']:
             raise ValueError('captured market date does not match scheduled session')
         input_id = self.service.register_input(bundle, activate=False)
         actual_cutoff = self.clock()
+        if expected_epoch and expected_epoch != current_validation_identity()['validation_epoch_id']:
+            raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_CAPTURE')
+        scheduled = datetime.fromisoformat(payload['scheduled_at']) if payload.get('scheduled_at') else None
+        if scheduled and now < scheduled:
+            raise ValueError('PRIMARY_CAPTURE_BEFORE_SCHEDULED_TRIGGER')
+        timing = {'scheduled_at': payload.get('scheduled_at'),
+            'capture_started_at': now.isoformat(), 'capture_completed_at': capture_completed_at.isoformat(),
+            'actual_decision_cutoff': actual_cutoff.isoformat(),
+            'capture_latency_seconds': (capture_completed_at-now).total_seconds(),
+            'start_latency_seconds': (now-scheduled).total_seconds() if scheduled else None,
+            'decision_latency_seconds': (actual_cutoff-scheduled).total_seconds() if scheduled else None,
+            'scheduled_validation_epoch_id': expected_epoch,
+            'primary_cutoff_policy_id': 'SCHEDULED_2030_ACTUAL_COMPLETION'}
         parent = self._latest_run(bundle.observation_date,cutoff=actual_cutoff)
         config = self.service.config(payload['config_hash'])
         candidate_payload = {'input_id': input_id, 'config_hash': config.config_hash,
             'profile': 'FUNDS_V1' if config.funds_primary else 'DAILY_V1', 'decision_cutoff': actual_cutoff.isoformat(),
             'market_session': payload['market_session'], 'parent_run_id': parent.run_id if parent else None,
-            'revision': parent.revision + 1 if parent else 1}
+            'revision': parent.revision + 1 if parent else 1, 'capture_timing': timing}
         activation = {'input_id': input_id, 'observation_date': bundle.observation_date.isoformat(),
                       'activated_at': actual_cutoff.isoformat(), 'coverage_type': bundle.coverage_type}
         # Raw files may have been prepared already. Activation, candidate authority

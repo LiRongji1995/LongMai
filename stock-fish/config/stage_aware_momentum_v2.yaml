@@ -1,7 +1,7 @@
 strategy_id: STAGE_AWARE_MOMENTUM_V2
 version: 2
-spec_revision: R11_VALIDATION_SCORING
-implementation_version: R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING
+spec_revision: R12_INTEGRITY_HISTORY
+implementation_version: R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY
 specification_name: "StockRecommendation active stage-aware strong-stock core strategy"
 canonical_replaces: STAGE_AWARE_MOMENTUM_V1
 legacy_read_aliases:

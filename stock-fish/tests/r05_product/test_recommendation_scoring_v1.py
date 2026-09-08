@@ -35,11 +35,37 @@ def _run(rows, *, coverage_type="PROSPECTIVE_CAPTURED", official=True, validatio
         "prospective_validation": {
             "validation_role": validation_role,
             "official_primary_signal_countable": official,
+            "official_primary_capture": official,
+            "official_validation_signal_countable": official,
+            "input_integrity_valid": True,
+            "signal_run_persisted": True,
+            "market_session": "EVENING",
+            "coverage_type": coverage_type,
+            "signal_observation_date": "2026-09-08",
+            "stage_aware_strategy_id": STAGE_AWARE_ID,
+            "protocol_id": "EXACT_PRIMARY_CUTOFF_V1",
+            "primary_cutoff_policy_id": "EXACT_2030",
+            "scheduler_job_id": "TEST_FIXTURE_EVENING",
+            "scheduled_at": "2026-09-08T20:30:00+08:00",
+            "capture_started_at": "2026-09-08T20:29:00+08:00",
+            "capture_completed_at": "2026-09-08T20:29:50+08:00",
+            "actual_decision_cutoff": "2026-09-08T20:30:00+08:00",
+            "capture_latency_seconds": 50,
+            "decision_latency_seconds": 0,
+        },
+        "qualification": {
+            "eligible_ids": [row["instrument_id"] for row in rows],
+            "master_expected": len(rows), "identity_observed": len(rows),
+            "identity_absent": 0, "eligibility_unknown": 0,
+            "universe_evidence_reason_codes": [],
+            "selected_records": [{"instrument_id": row["instrument_id"], "source_refs": ["TEST_FIXTURE"]} for row in rows],
         },
         "results": {
             STAGE_AWARE_ID: {
                 "strategy_id": STAGE_AWARE_ID,
                 "canonical_strategy_id": STAGE_AWARE_ID,
+                "scope_label": "FULL_SCOPE",
+                "counts": {"eligible": len(rows), "evaluated": len(rows)},
                 "items": rows,
             }
         },
@@ -56,6 +82,7 @@ def _row(iid, status, setup="START", rank=1):
         "primary_stage": setup,
         "comparable_close": "10",
         "comparable_basis": "TEST",
+        "condition_statuses": {"liquidity_bottom": "PASS", "trend_state": "PASS", "setup_identification": "PASS"},
     }
 
 
@@ -272,9 +299,10 @@ def test_recommendation_score_api_reads_saved_revision_and_does_not_accept_formu
         core.store.put_document("recommendation_score_revisions", score["score_run_id"], score)
         client = create_app(core).test_client()
 
-        latest = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1")
-        overridden = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1&random_basket_count=1")
-        by_run = client.get("/api/recommendation-scores/" + run["run_id"] + "?tier=FOCUS_SCORE&horizon=1")
+        scope = "&validation_epoch_id=" + score["validation_epoch_id"]
+        latest = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1" + scope)
+        overridden = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1&random_basket_count=1" + scope)
+        by_run = client.get("/api/recommendation-scores/" + run["run_id"] + "?tier=FOCUS_SCORE&horizon=1" + scope)
 
         assert latest.status_code == overridden.status_code == by_run.status_code == 200
         assert latest.json["latest"]["score_spec_id"] == SCORE_SPEC_ID

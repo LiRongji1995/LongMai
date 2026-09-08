@@ -13,6 +13,8 @@ from zoneinfo import ZoneInfo
 sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from stockfish_core.yaogu.data_pipeline import MainboardPipeline
 from stockfish_core.yaogu.request_queue import RequestBudget
+from stockfish_core.storage import SQLiteStore
+from stockfish_core.yaogu.history_artifacts import HistoryArtifactStore
 
 p=argparse.ArgumentParser(description=__doc__)
 p.add_argument('--cache',required=True)
@@ -21,6 +23,7 @@ p.add_argument('--max-requests',type=int,default=128)
 p.add_argument('--max-seconds',type=float,default=600)
 p.add_argument('--rounds',type=int,default=1,help='执行多轮有界续跑，输出到 output/round-XXX；默认保持单输出目录契约。')
 p.add_argument('--observation-date',default=None,help='显式锁定交易日 YYYY-MM-DD；默认使用当前时钟下最近交易日。')
+p.add_argument('--db',default=None,help='既有项目权威 SQLite DB；默认 STOCKFISH_DB_PATH 或项目 data/stockfish.sqlite3。')
 args=p.parse_args()
 out=Path(args.output)
 observation_date=date.fromisoformat(args.observation_date) if args.observation_date else None
@@ -31,9 +34,14 @@ if out.exists():
 def progress(value):
     print(json.dumps({k:value[k] for k in ('requested','states','network_requests_this_run','cache_hits_this_run','elapsed_seconds')},ensure_ascii=False),flush=True)
 runs=[]
+import os
+database=Path(args.db or os.environ.get('STOCKFISH_DB_PATH') or Path(__file__).resolve().parents[1]/'data'/'stockfish.sqlite3').resolve()
+if not database.is_file():
+    raise SystemExit('既有权威 DB 不存在；使用 --db 明确指定，不能为 history 创建第二套数据库')
+history_store=HistoryArtifactStore(SQLiteStore(database))
 for index in range(args.rounds):
     target=out if args.rounds==1 else out / f'round-{index+1:03d}'
-    pipeline=MainboardPipeline(args.cache,budget=RequestBudget(max_requests=args.max_requests,max_seconds=args.max_seconds))
+    pipeline=MainboardPipeline(args.cache,budget=RequestBudget(max_requests=args.max_requests,max_seconds=args.max_seconds),history_store=history_store)
     bundle=pipeline.capture(target,datetime.now(ZoneInfo('Asia/Shanghai')),observation_date=observation_date,progress=progress)
     report=pipeline.last_report
     summary={'round':index+1,'capture_report':str(target/'capture-report.json'),

@@ -103,3 +103,15 @@ def test_trend_and_coverage_name_missingness_and_rolling_policy(tmp_path):
     assert "60D rolling" in trend
     assert "official signal days: 2" in coverage
     assert "focus signal coverage: 50.00%" in coverage
+
+
+def test_data_unavailable_scorecard_preserves_cutoff_epoch_and_never_claims_no_focus(tmp_path):
+    run = _run([])
+    doc = build_score_revision(run, [], datetime(2026, 9, 15, 20, 30, tzinfo=SH))
+    _write(tmp_path, doc, [doc])
+    scorecard = (tmp_path / "DAILY_RECOMMENDATION_SCORECARD.svg").read_text(encoding="utf-8")
+    assert "Signal data unavailable" in scorecard
+    assert "NO FOCUS SIGNAL" not in scorecard
+    assert doc["validation_epoch_id"] in scorecard
+    assert doc["actual_decision_cutoff"] in scorecard
+    assert "Data Quality Status: SIGNAL_DATA_UNAVAILABLE" in scorecard

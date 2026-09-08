@@ -167,8 +167,9 @@ def run(bundle: MarketInput | dict, config=None, cutoff=None, profile='DAILY_V1'
     day=bundle.observation_date
     sessions=tuple(d for d in bundle.sessions if d<=day)
     previous_day=sessions[-2] if len(sessions)>1 else None
-    resolver=EvidenceResolver(bundle.receipts,cutoff=cutoff,coverage_type=bundle.coverage_type,sessions=bundle.sessions,observation_date=day)
-    probe=EvidenceResolver(bundle.receipts,cutoff=cutoff,coverage_type=bundle.coverage_type,sessions=bundle.sessions,observation_date=day)
+    from .history_artifacts import history_resolver, iter_bars, iter_history_securities, history_identity
+    resolver=history_resolver(bundle,cutoff=cutoff)
+    probe=history_resolver(bundle,cutoff=cutoff)
     envelope=bundle.universe.model_dump(mode='json',exclude={'securities'})
     envelope_visible=resolver.is_visible(envelope)
     expected_count=bundle.universe.expected_count if envelope_visible else None
@@ -196,7 +197,7 @@ def run(bundle: MarketInput | dict, config=None, cutoff=None, profile='DAILY_V1'
     research_pool=[i for i,s in current_states.items() if qualification(s,day,sessions,config,True) is None]
     dependency_ids=set(current_pool)|set(previous_pool)|set(research_pool)
     bars_by={}
-    visible_bars=sorted((b for b in bundle.bars if b.session<=day and b.instrument_id in dependency_ids and probe.is_visible(b,instrument_id=b.instrument_id,session=b.session,require_session=True)),key=lambda b:(b.session,b.instrument_id,b.ingested_at))
+    visible_bars=sorted((b for b in (() if bundle.history_artifact_ref else bundle.bars) if b.session<=day and b.instrument_id in dependency_ids and probe.is_visible(b,instrument_id=b.instrument_id,session=b.session,require_session=True)),key=lambda b:(b.session,b.instrument_id,b.ingested_at))
     for b in visible_bars:bars_by[(b.instrument_id,b.session)]=b
     for b in bars_by.values():resolver.resolve(b,instrument_id=b.instrument_id,session=b.session,require_session=True)
     features={};event_series={};excluded=[];unavailable=[]
@@ -208,10 +209,20 @@ def run(bundle: MarketInput | dict, config=None, cutoff=None, profile='DAILY_V1'
         reference_state=state or previous_states.get(iid)
         stock_sessions=tuple(d for d in sessions if reference_state is not None and d>=reference_state.listed_on)
         if not stock_sessions:continue
-        bars=[bars_by.get((iid,d)) for d in stock_sessions]
+        item_identity=identity
+        if bundle.history_artifact_ref:
+            selected={}
+            for b in sorted(iter_bars(bundle,instrument_id=iid,end=day),key=lambda b:(b.session,b.ingested_at)):
+                if probe.is_visible(b,instrument_id=iid,session=b.session,require_session=True):selected[b.session]=b
+            for b in selected.values():resolver.resolve(b,instrument_id=iid,session=b.session,require_session=True)
+            bars=[selected.get(d) for d in stock_sessions]
+            for d in (day,previous_day):
+                if d in selected:bars_by[(iid,d)]=selected[d]
+            item_identity=HistoricalSecurityIndex(tuple(s for s in iter_history_securities(bundle,instrument_id=iid,end=day) if 'OUTCOME_ONLY' not in s.risk_flags and probe.is_visible(s,instrument_id=iid)),resolver)
+        else:bars=[bars_by.get((iid,d)) for d in stock_sessions]
         events=[]
         for d,b in zip(stock_sessions,bars):
-            status=identity.at(iid,d)
+            status=item_identity.at(iid,d)
             event=limit_event(b,iid,d,bool(status and status.suspended))
             if status is None or status.suspended is None or status.st is None:
                 event=event.model_copy(update={**{k:'UNKNOWN' for k in ('close_limit_up','close_limit_down','touched_limit_up','touched_not_closed','one_price_up')},'quality':'HISTORICAL_STATUS_UNKNOWN'})
@@ -337,7 +348,7 @@ def run(bundle: MarketInput | dict, config=None, cutoff=None, profile='DAILY_V1'
     source_hash=digest({p.relative_to(package).as_posix():digest(p.read_text(encoding='utf-8')) for p in sorted(package.rglob('*.py'))})
     universe_hash=digest({'envelope':envelope if envelope_visible else None,'states':{i:s.model_dump(mode='json') for i,s in current_states.items()},'partition':emotion.coverage})
     dependencies={'contract_version':'R03_EFFECTIVE_INPUT_V1','observation_date':day.isoformat(),
-        'evidence':evidence,'calendar_sessions':[d.isoformat() for d in sessions],
+        'evidence':evidence,'calendar_sessions':[d.isoformat() for d in sessions],**history_identity(bundle),
         'configuration':config.model_dump(mode='json'),'coverage_type':bundle.coverage_type,
         'universe_partition':emotion.coverage,'emotion_history':effective_history(history_selection),
         'funds':funds_dependencies,'profile':profile,'membership_as_of':membership_day.isoformat(),

@@ -6,7 +6,7 @@ from enum import Enum
 import hashlib
 import json
 from typing import Any, Literal
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field, PrivateAttr, field_validator, model_validator
 
 CoverageType = Literal['PROSPECTIVE_CAPTURED', 'RECONSTRUCTED_HISTORICAL', 'UNVERIFIABLE_AS_OF', 'TEST_FIXTURE']
 FAMILIES = ('ONE_TO_TWO', 'TWO_TO_THREE', 'HIGH_BOARD', 'TREND_NM', 'REBOUND_SETUP')
@@ -229,9 +229,20 @@ class MarketInput(Frozen):
     coverage_type: CoverageType
     previous_emotions: tuple[MarketEmotionSnapshot, ...] = ()
     funds: tuple[dict[str, Any], ...] = ()
+    history_artifact_ref: str | None = None
+    history_artifact_hash: str | None = None
+    _history_store: Any = PrivateAttr(default=None)
 
     @model_validator(mode='after')
     def calendar(self):
+        if bool(self.history_artifact_ref) != bool(self.history_artifact_hash):
+            raise ValueError('history artifact reference and hash must be paired')
+        if self.history_artifact_hash and self.history_artifact_ref != 'history_' + self.history_artifact_hash:
+            raise ValueError('history artifact reference does not match content hash')
+        if self.history_artifact_hash:
+            import re
+            if not re.fullmatch('[0-9a-f]{64}',self.history_artifact_hash):
+                raise ValueError('history artifact requires lowercase SHA256')
         if tuple(sorted(set(self.sessions))) != self.sessions:
             raise ValueError('sessions must be unique ascending exchange sessions')
         if self.observation_date not in self.sessions:

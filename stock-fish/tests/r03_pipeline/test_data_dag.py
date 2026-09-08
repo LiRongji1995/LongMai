@@ -29,6 +29,10 @@ def source(bundle, calls, reverse=False, fail=None):
         if endpoint=='mainboard_sse':
             rows=[{'证券代码':s.instrument_id[:6]} for s in bundle.universe.securities]
             if reverse:rows.reverse()
+        elif endpoint=='master_szse':
+            # Real complete exchange identity scope cannot contain zero rows.
+            # This fixture's one SZSE identity is explicitly outside MAIN.
+            rows=[{'A股代码':'300001','板块':'创业板','A股上市日期':'2009-01-01'}]
         elif endpoint=='calendar':rows=[{'calendar_date':str(s),'is_trading_day':'1'} for s in bundle.sessions]
         elif endpoint=='concept_list':rows=[{'theme_id':t.theme_id} for t in bundle.themes]
         elif endpoint=='concept_members':rows=[{'instrument_id':iid} for t in bundle.themes if t.theme_id==params['symbol'] for iid in t.member_ids]
@@ -96,6 +100,30 @@ def test_v2_ma250_capture_resumes_market_daily_from_cache(tmp_path):
     assert first_market_calls == len(b.sessions)
     assert sum(ep == 'market_daily' for ep, _ in calls) == first_market_calls
     assert p.last_report['queue']['cache_hits_this_run'] >= len(b.sessions)
+
+
+def test_repeated_capture_later_hour_reuses_same_logical_pending_and_completed(tmp_path):
+    from datetime import timedelta
+    b,c=fixtures();calls=[];counts=[]
+    for index,clock in enumerate((c,c+timedelta(hours=3))):
+        p=MainboardPipeline(tmp_path/'cache',executor=source(b,calls),normalizer=normalizer(b),
+            budget=RequestBudget(max_requests=3,max_seconds=60,minimum_interval_seconds=0))
+        p.capture(tmp_path/str(index),clock,observation_date=b.observation_date)
+        counts.append(p.last_report['queue']['stored_request_rows'])
+    assert counts[0]==counts[1]
+    assert sum(ep=='mainboard_sse' for ep,_ in calls)==1
+
+
+def test_current_daily_and_long_history_execute_before_limits_themes_and_optional(tmp_path):
+    b,c=fixtures();calls=[]
+    p=MainboardPipeline(tmp_path/'cache',executor=source(b,calls),normalizer=normalizer(b),
+        budget=RequestBudget(max_requests=1000,max_seconds=60,minimum_interval_seconds=0))
+    p.capture(tmp_path/'capture',c,observation_date=b.observation_date)
+    endpoints=[ep for ep,_ in calls]
+    assert next(params['date'] for ep,params in calls if ep=='market_daily')==str(b.observation_date)
+    last_history=max(i for i,ep in enumerate(endpoints) if ep=='market_daily')
+    assert last_history < endpoints.index('daily_limits_eastmoney') < endpoints.index('concept_list')
+    assert endpoints.index('concept_list') < min(i for i,ep in enumerate(endpoints) if ep.startswith('tushare_'))
 
 
 def test_reversing_directory_order_does_not_change_discovery_scope(tmp_path):

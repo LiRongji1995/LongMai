@@ -61,7 +61,7 @@ def _theme_type(name,endpoint):
     if re.search(r'融资融券|沪股通|深股通|沪深股通|昨日|涨停|连板|次新|新股|ST板|风险警示|MSCI|富时|标准普尔|沪深300|上证50|中证\d+|机构重仓|社保重仓|基金重仓|证金持股|专精特新',name,re.I):return 'QUALIFICATION'
     return 'EVENT'
 
-def normalize_capture_with_report(results,observation_date,now,sessions):
+def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None):
     day=_date(observation_date)
     if day is None or now.tzinfo is None:raise ValueError('OBSERVATION_DATE_AND_AWARE_CLOCK_REQUIRED')
     sessions=tuple(sorted({_date(s) for s in sessions if _date(s) is not None and _date(s)<=day}))
@@ -227,7 +227,16 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         observations[iid]=dict(instrument_id=iid,exchange={'SH':'SSE','SZ':'SZSE','BJ':'BSE'}.get(iid[-2:],'UNKNOWN'),board='UNKNOWN',
             security_type='UNKNOWN',listed_on=_date(row['ipoDate']),name=str(row.get('code_name') or ''),source=rid)
         outcome_only.append(iid)
-    securities=[];bars=[];limit_proofs=[];identity_proofs=[];fields=dict(historical_isST=0,historical_tradestatus=0,reference_prev_close=0,turnover_fraction=0,
+    history_writer=history_store.writer(tuple(receipts.values())) if history_store is not None else None
+    recent_start=[s for s in sessions if s<=day][-min(6,len([s for s in sessions if s<=day]))]
+    class RecentRows(list):
+        def __init__(self):super().__init__();self.total=0;self.instrument_ids=set()
+        def append(self,row):
+            self.total+=1;self.instrument_ids.add(row.instrument_id)
+            if history_writer is not None:history_writer.append(row)
+            row_day=row.session if isinstance(row,DailyBar) else row.effective_from
+            if history_writer is None or row_day>=recent_start:super().append(row)
+    securities=RecentRows();bars=RecentRows();limit_proofs=[];identity_proofs=[];fields=dict(historical_isST=0,historical_tradestatus=0,reference_prev_close=0,turnover_fraction=0,
         adjusted_comparable_rows=0,raw_rows=len(history),raw_mainboard_rows=0,verified_current_limit_rows=0,direct_published_limit_rows=0,
         vendor_pool_rule_cross_validated_limit_rows=0,outcome_only_raw_rows=0)
     for iid,master in sorted(observations.items()):
@@ -363,7 +372,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
     session_index={d:i for i,d in enumerate(sessions)};coalesced=[];last_session=None
     excluded_from_signature={'effective_from','effective_to','event_time'}
     for state in sorted(securities,key=lambda s:(s.instrument_id,s.effective_from,s.ingested_at)):
-        if coalesced and state.instrument_id==coalesced[-1].instrument_id and last_session in session_index and state.effective_from in session_index and session_index[state.effective_from]==session_index[last_session]+1 and state.model_dump(exclude=excluded_from_signature)==coalesced[-1].model_dump(exclude=excluded_from_signature):
+        if history_writer is None and coalesced and state.instrument_id==coalesced[-1].instrument_id and last_session in session_index and state.effective_from in session_index and session_index[state.effective_from]==session_index[last_session]+1 and state.model_dump(exclude=excluded_from_signature)==coalesced[-1].model_dump(exclude=excluded_from_signature):
             coalesced[-1]=coalesced[-1].model_copy(update={'effective_to':state.effective_to})
         else:coalesced.append(state)
         last_session=state.effective_from
@@ -375,9 +384,9 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         dict(field='historical_delisting_period',status='UNKNOWN',reason='CURRENT_OFFICIAL_EXCLUSION_SET_AND_CURRENT_SHORT_NAME_RULE_NOT_BACKFILLED',impact='HISTORICAL_QUALIFICATION_UNKNOWN'),
         dict(field='historical_board_identity',status='PARTIAL',reason='CURRENT_EXCHANGE_ROSTER_AND_LISTING_DATE_RETAINED_HISTORICAL_ISST_TRADESTATUS_RETAINED_BOARD_PIT_NOT_CERTIFIED',impact='HISTORICAL_QUALIFICATION'),
         dict(field='historical_source_publication_time',status='UNKNOWN',reason='ACTUAL_FIRST_SEEN_RETAINED_NO_RETROACTIVE_PIT_PUBLICATION_PROOF',impact='OLD_CUTOFF_REPLAY_ONLY_CURRENT_CAPTURE_CAN_USE_HISTORY')])
-    if fields['adjusted_comparable_rows']<len(bars):gaps.append(dict(field='comparable_price_basis',status='PARTIAL',reason='COMPARABLE_SOURCE_MISSING_OR_REJECTED_SEE_PER_INSTRUMENT_GAPS',
+    if fields['adjusted_comparable_rows']<bars.total:gaps.append(dict(field='comparable_price_basis',status='PARTIAL',reason='COMPARABLE_SOURCE_MISSING_OR_REJECTED_SEE_PER_INSTRUMENT_GAPS',
         accepted_methods=['SAME_PROVIDER_RAW_TIMES_VERIFIED_BACK_ADJUST_FACTOR','SINGLE_CAPTURE_HFQ_FLAG1'],
-        missing_or_rejected_rows=len(bars)-fields['adjusted_comparable_rows'],impact='V_L_G_RETURNS'))
+        missing_or_rejected_rows=bars.total-fields['adjusted_comparable_rows'],impact='V_L_G_RETURNS'))
     if not themes:gaps.append(dict(field='current_theme_members',status='UNAVAILABLE',reason='NO_COMPLETE_CURRENT_RESEARCH_THEME_CAPTURE',impact='T_L'))
     fund_records=defaultdict(list);money_results={}
     # Failed requests remain visible as failures, so do not restrict this scan
@@ -444,10 +453,12 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
         funds.append(dict(instrument_id=iid,provider='TUSHARE',money_definition='TUSHARE_ACTIVE_LARGE_AND_EXTRA_LARGE_ORDERS_GE_200K_CNY_R05_V1',
             definition_version='FUNDS_EVIDENCE_V1',money_status='UNAVAILABLE',disclosure_status='WINDOW_UNVERIFIED',disclosure_complete=False,
             source_refs=refs,public_summary_records=records,reason_codes=['DISCLOSURE_WINDOW_AND_COMMON_THREE_SESSION_AUTHORITY_REQUIRED'],**_derived_clock(source_by,refs,day)))
-    bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type='PROSPECTIVE_CAPTURED')
+    history_identity=history_writer.finish() if history_writer is not None else {}
+    bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type='PROSPECTIVE_CAPTURED',**history_identity)
+    if history_store is not None:bundle._history_store=history_store
     report=dict(normalization_version='R03_SOURCE_ASSEMBLY_V1',fields_retained=fields,master_identity_count=len(masters),
         mainboard_identity_count=sum(m['board']=='MAIN' for m in masters.values()),current_master_complete=universe.complete,
-        raw_instrument_count=len({b.instrument_id for b in bars}),themes=len(themes),gaps=gaps,limit_cross_validation=limit_proofs,current_identity_proofs=identity_proofs,
+        raw_instrument_count=len(bars.instrument_ids),themes=len(themes),gaps=gaps,limit_cross_validation=limit_proofs,current_identity_proofs=identity_proofs,
         outcome_only_instrument_ids=sorted(outcome_only),malformed_master_rows=malformed_master_count,funds_public_summary_rows=sum(map(len,fund_records.values())),funds_score_authorized_families=0,
         legitimate_empty_permitted=False,empty_block_reason='UNVERIFIED_REQUIRED_EVENTS_OR_SHARED_COMPONENTS',
         actual_capture_cutoff=now.isoformat(),historical_download_not_historical_publication=True)
@@ -467,7 +478,8 @@ def normalize_capture_with_report(results,observation_date,now,sessions):
             'rows':len(r.get('rows',[])),'request_receipt_id':r.get('request_receipt_id'),'http_attempts':r.get('coverage',{}).get('http_attempts'),
             'parameters':r.get('parameters')} for r in results if r['endpoint']==ep],
         'status_if_no_attempt':'NOT_ATTEMPTED'} for ep,definition in TUSHARE_ENDPOINTS.items()]
+    if history_writer is not None:report['history_artifact']={**history_identity,'artifact_version':'CONTENT_ADDRESSED_HISTORY_ARTIFACT_V1','total_bar_rows':bars.total,'daily_recent_bar_rows':len(bars),'new_row_bytes':history_writer.added_bytes,'new_rows':history_writer.added_rows}
     return bundle,report
 
-def normalize_capture(results,observation_date,now,sessions):
-    return normalize_capture_with_report(results,observation_date,now,sessions)[0]
+def normalize_capture(results,observation_date,now,sessions,*,history_store=None):
+    return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store)[0]

@@ -73,6 +73,7 @@
   function scoreBand(record) {
     if (!record || record.score === null || record.score === undefined) {
       if (record?.score_status === 'N_A_NO_SELECTION') return 'N/A · NO FOCUS SIGNAL';
+      if (record?.score_status === 'N_A_SIGNAL_DATA_UNAVAILABLE') return 'N/A · SIGNAL DATA UNAVAILABLE';
       if (record?.score_status === 'NOT_MATURED') return 'Pending';
       if (record?.score_status?.includes('COVERAGE')) return 'Partial / Insufficient Coverage';
       return 'Not available yet';
@@ -120,6 +121,11 @@
     metrics.append(textNode('span', 'Latest saved score revision'));
     metrics.append(textNode('strong', latestDoc ? latestDoc.evidence_type : 'NO_SCORE_REVISION'));
     metrics.append(textNode('p', latestDoc ? `${latestDoc.signal_observation_date} · ${latestDoc.headline_status} · ${latestDoc.score_spec_id}` : '暂无保存 score revision。'));
+    const validation = data.validation;
+    const epochIdentity = validation?.identity || {};
+    const primary = validation?.latest_primary_capture;
+    metrics.append(textNode('p', `Validation Epoch ${validation?.validation_epoch_id || '未登记'} · ${epochIdentity.signal_implementation_version || ''} / ${epochIdentity.signal_spec_revision || ''}`, 'caption'));
+    metrics.append(textNode('p', `Evidence Type ${latestDoc?.evidence_type || primary?.coverage_type || 'NO_SIGNAL'} · Actual Signal Cutoff ${latestDoc?.decision_cutoff || primary?.actual_decision_cutoff || '尚未发生'} · Data Quality Status ${latestDoc?.data_quality_status || primary?.signal_data_quality?.data_quality_status || 'NO_SIGNAL'}`, 'caption'));
     metrics.append(textNode('p', focusD1 ? `FOCUS M ${focusD1.M} · Selection ${displayPct(focusD1.equal_weight_return)} · Excess ${displayPct(focusD1.excess_return)} · Hit ${displayPct(focusD1.hit_rate)} · Outperform ${displayPct(focusD1.outperform_market_rate)}` : 'FOCUS D+1 尚无可显示记录。'));
     root.append(metrics);
 
@@ -145,7 +151,8 @@
     const watch = textNode('article', undefined, 'scorecard-panel');
     const watchD1 = scoreRecord(latestDoc, 'WATCH_RESEARCH_SCORE', 1);
     watch.append(textNode('span', 'Focus vs Watch'));
-    watch.append(textNode('strong', focusD1 && watchD1 && focusD1.score != null && watchD1.score != null ? display(focusD1.score - watchD1.score) : 'Pending'));
+    const comparisonUnavailable = [focusD1, watchD1].some(record => record?.score_status?.startsWith('N_A'));
+    watch.append(textNode('strong', focusD1 && watchD1 && focusD1.score != null && watchD1.score != null ? display(focusD1.score - watchD1.score) : comparisonUnavailable ? 'N/A' : 'Pending'));
     watch.append(textNode('p', watchD1 ? `WATCH Research D+1 ${display(watchD1.score)} · ${watchD1.score_status} · 不作为正式推荐成绩` : 'WATCH research score 尚不可用。'));
     root.append(watch);
 
@@ -170,7 +177,8 @@
     const coverage = textNode('article', undefined, 'scorecard-panel');
     coverage.append(textNode('span', 'Signal / data coverage'));
     coverage.append(textNode('strong', officialHistory?.official_signal_days ? displayPct(officialHistory.focus_signal_coverage) : 'N/A'));
-    coverage.append(textNode('p', officialHistory?.official_signal_days ? `focus days ${officialHistory.focus_nonempty_days}/${officialHistory.official_signal_days} · mean M ${display(officialHistory.mean_M)} · median M ${display(officialHistory.median_M)}` : 'M=0 日期计入 coverage denominator，但不进入 rolling score mean。'));
+    coverage.append(textNode('p', officialHistory?.official_signal_days ? `focus days ${officialHistory.focus_nonempty_days}/${officialHistory.official_signal_days} · mean M ${display(officialHistory.mean_M)} · median M ${display(officialHistory.median_M)}` : '仅可评价且真实 FOCUS=0 的日期计入覆盖分母；数据不可评价日单列。'));
+    coverage.append(textNode('p', `Primary attempts ${validation?.primary_capture_attempted_days ?? 0} · Evaluable signals ${validation?.evaluable_official_signal_days ?? 0} · Data unavailable ${validation?.data_unavailable_primary_days ?? 0} · Valid no focus ${validation?.valid_no_focus_days ?? 0}`, 'caption'));
     root.append(coverage);
   }
 

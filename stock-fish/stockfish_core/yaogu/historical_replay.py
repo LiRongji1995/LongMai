@@ -21,7 +21,7 @@ from .contracts import DailyBar,HistoricalTimeProof,MarketInput,SecurityRecord,S
 from .provider_comparability import comparable_rows
 
 SH=ZoneInfo('Asia/Shanghai')
-VERSION='R05_DATED_BAOSTOCK_RECONSTRUCTION_V1'
+VERSION='R12_DATED_REGISTERED_IDENTITY_RECONSTRUCTION_V1'
 
 
 def file_hash(path):return hashlib.sha256(Path(path).read_bytes()).hexdigest()
@@ -104,6 +104,9 @@ def source_policy(source_dir):
             'capture_clock':'ORIGINAL_FIRST_SEEN_AND_INGESTED_RETAINED',
             'current_master_role':'CROSS_CHECK_ONLY_NOT_HISTORICAL_MEMBERSHIP',
             'stock_basic_role':'ORIGINAL_IPO_DATE_AND_TYPE_CORROBORATION_NOT_CURRENT_ST_OR_CURRENT_NAME',
+            'registered_original_identity_alternatives':[
+                'BAOSTOCK_STOCK_BASIC_ALL_OR_EXPLICIT_STOCK_BASIC_BATCH',
+                'EXCHANGE_A_SHARE_DIRECTORY_ORIGINAL_LISTING_DATE_AND_TYPE_CORROBORATION_ONLY'],
             'revision_limitation':'HISTORICAL_RECONSTRUCTION_WITH_CURRENT_VENDOR_REVISIONS_NOT_ARCHIVED_PIT',
             'limit_prices':'UNVERIFIED_NO_RULE_DERIVATION_IN_THIS_ADAPTER'}
     calendar_docs=('sse-calendar.html','szse-calendar.html')
@@ -137,6 +140,7 @@ class HistoricalReplayAssembler:
             if file_hash(item['path'])!=item['sha256']:raise ValueError('SOURCE_DOCUMENT_HASH_MISMATCH')
         self.results=self._load_capture_results()
         self.raw={};self.masters={};self.basic={};self.factors=defaultdict(list);self.original_refs={}
+        identity_facts=defaultdict(list);self.identity_conflicts=set()
         self.calendar=();self.integrity={}
         for r in self.results:
             if r['status'] not in ('COMPLETE','PARTIAL'):continue
@@ -155,9 +159,24 @@ class HistoricalReplayAssembler:
                 d=_day(r['parameters']['date'])
                 if len({x.get('code') for x in r['rows']})!=len(r['rows']):raise ValueError('DUPLICATE_DATED_SECURITY')
                 self.masters[d]=r
-            elif endpoint=='stock_basic_all' and r['status']=='COMPLETE' and r['pagination_complete']:
+            elif endpoint in ('stock_basic_all','stock_basic') and r['status']=='COMPLETE' and r['pagination_complete'] and r['provider']=='baostock':
                 if len({x.get('code') for x in r['rows']})!=len(r['rows']):raise ValueError('DUPLICATE_BASIC_SECURITY')
-                self.basic={x['code']:(x,rid) for x in r['rows']}
+                for row in r['rows']:
+                    if _iid(row.get('code')) and _day(row.get('ipoDate')):
+                        identity_facts[row['code']].append((row,rid))
+            elif (endpoint in ('mainboard_sse','master_szse') and r['status']=='COMPLETE' and r['pagination_complete']
+                  and r['provider']=='akshare' and 'EXCHANGE_A_SHARE_DIRECTORY_ORIGINAL_LISTING_DATE_AND_TYPE_CORROBORATION_ONLY'
+                  in policy.get('registered_original_identity_alternatives',())):
+                # Only immutable original listing facts and A-share type are
+                # corroborated here. Past existence/name/ST/suspension still
+                # require that session's master_all AND dated RAW evidence.
+                for row in r['rows']:
+                    code=str(row.get('证券代码') if endpoint=='mainboard_sse' else row.get('A股代码') or '')
+                    listing=_day(row.get('上市日期') if endpoint=='mainboard_sse' else row.get('A股上市日期'))
+                    if len(code)!=6 or not code.isdigit() or listing is None:continue
+                    code=('sh.' if endpoint=='mainboard_sse' else 'sz.')+code
+                    identity_facts[code].append(({'code':code,'ipoDate':str(listing),'type':'1',
+                        'original_fact_contract':'EXCHANGE_A_SHARE_DIRECTORY_ORIGINAL_LISTING_DATE_ONLY'},rid))
             elif endpoint=='adjustment_factors':
                 grouped=defaultdict(list)
                 for row in r['rows']:grouped[row.get('code')].append(row)
@@ -166,9 +185,17 @@ class HistoricalReplayAssembler:
                 if r['status']=='COMPLETE' and r['pagination_complete']:success.update(r['parameters']['codes'])
                 for code in success:
                     self.factors[code].append((grouped[code],rid,r['parameters']['end_date'],r['parameters']['start_date']))
+        for code,facts in identity_facts.items():
+            if len({(_day(row['ipoDate']),str(row.get('type'))) for row,_ in facts})!=1:
+                self.identity_conflicts.add(code)
+            else:
+                # Registered BaoStock rows keep their existing exact contract;
+                # otherwise use a verified exchange original-listing fact.
+                self.basic[code]=min(facts,key=lambda fact:(self.original_refs[fact[1]]['endpoint'] not in ('stock_basic','stock_basic_all'),fact[1]))
         if not self.calendar:raise ValueError('ACTUAL_EXCHANGE_CALENDAR_REQUIRED')
-        if not self.basic:raise ValueError('ACTUAL_SECURITY_IPO_FACTS_REQUIRED')
-        self.policy_hash=digest(policy)
+        if not self.basic:raise ValueError('ACTUAL_SECURITY_IPO_FACTS_REQUIRED_REGISTERED_ALTERNATIVES_EXHAUSTED')
+        self.policy_hash=digest({**{k:v for k,v in policy.items() if k not in ('verified_at','source_documents')},
+            'source_documents':{name:{'sha256':document['sha256']} for name,document in policy['source_documents'].items()}})
 
     def _load_capture_results(self):
         """Read legacy checkpoints and durable request-queue result documents."""
@@ -182,7 +209,7 @@ class HistoricalReplayAssembler:
         loaded.sort(key=lambda x:x.get('completed_at',''))
         return loaded
 
-    def build(self,observation_date,*,history_sessions=26,include_security_history=False):
+    def build(self,observation_date,*,history_sessions=26,include_security_history=False,history_store=None):
         day=_day(observation_date)
         if day not in self.calendar:raise ValueError('NOT_IN_ACTUAL_EXCHANGE_CALENDAR')
         previous=[d for d in self.calendar if d<=day]
@@ -199,12 +226,13 @@ class HistoricalReplayAssembler:
             content=digest(rows)
             rid='historical_'+digest([VERSION,endpoint,str(business_day),content,origin,self.policy_hash])
             doc={'master_all':'StockBasicInfoAPI','original_ipo_facts':'stockBasic','adjustment_factors':'factorInfo'}.get(endpoint,'DailyUpdates')
-            source_url='https://www.baostock.com/?file='+doc+'.md'
+            source_url=(base.get('source_url') if endpoint=='original_ipo_facts' and original['provider']!='baostock'
+                        else 'https://www.baostock.com/?file='+doc+'.md')
             publication=datetime.combine(business_day,time(clock_hour,clock_minute),SH)
             proof=HistoricalTimeProof(policy_id=VERSION,source_url=source_url,evidence_hash=digest({'policy':self.policy_hash,'origin':origin,'rows':content}),
                 event_time_basis='SOURCE_DATED_EVENT_RECORD',publication_time_basis='SOURCE_DOCUMENTED_RELEASE_RULE',
                 applies_from=date(1990,1,1),applies_to=day,evidence_refs=(origin,*tuple(x['sha256'] for x in self.policy['source_documents'].values())),verified_at=seen)
-            value=SourceReceipt(receipt_id=rid,provider='baostock',dataset=endpoint,content_hash=content,field_version=VERSION,
+            value=SourceReceipt(receipt_id=rid,provider=original['provider'],dataset=endpoint,content_hash=content,field_version=VERSION,
                 row_count=len(rows),pagination_complete=True,status='COMPLETE',source_url=source_url,source_type=endpoint,
                 parameters={'original_endpoint':original['endpoint'],'original_parameters_hash':digest(original['parameters']),
                             'business_date':str(business_day),'reconstruction_policy_hash':self.policy_hash},
@@ -241,7 +269,9 @@ class HistoricalReplayAssembler:
             converted[code],quality=comparable_rows(_iid(code),raw_rows,{},captures)
             if quality not in ('VERIFIED_PROVIDER_FACTOR_DEFINITION',):
                 gaps.append({'instrument_id':_iid(code),'field':'COMPARABLE_PRICE','reason':quality})
-        bars=[]
+        bars=[];bar_count=0
+        writer=history_store.writer() if history_store is not None else None
+        recent_start=price_days[max(0,len(price_days)-6)]
         for code,rows in raw_by.items():
             for d,(raw,rr) in rows:
                 values={key:_number(raw.get(source)) for key,source in [('open','open'),('high','high'),('low','low'),('close','close'),
@@ -253,25 +283,33 @@ class HistoricalReplayAssembler:
                 invalid=any(values[k] is None or values[k]<=0 for k in ('open','high','low','close','reference_prev_close'))
                 if invalid:
                     gaps.append({'instrument_id':_iid(code),'session':str(d),'field':'RAW_PRICE','reason':'INVALID_OHLC_OR_REFERENCE'});continue
-                bars.append(DailyBar(instrument_id=_iid(code),session=d,**values,**comparable,source_refs=refs,**clocks))
+                bar=DailyBar(instrument_id=_iid(code),session=d,**values,**comparable,source_refs=refs,**clocks)
+                bar_count+=1
+                if writer is not None:writer.append(bar)
+                if writer is None or d>=recent_start:bars.append(bar)
         securities=[];master_refs=[]
         for d in security_days:
             master=self.masters.get(d)
             if master is None:
                 gaps.append({'session':str(d),'field':'DATED_SECURITY_EXISTENCE','reason':'NO_SUCCESSFUL_DATED_MASTER'});continue
             mr=receipt('master_all',d,master['rows'],master['request_receipt_id']);master_refs.append(mr)
-            ipo_rows=[{'code':code,'ipoDate':b['ipoDate'],'type':b.get('type'),
-                       'type_semantics':'CURRENT_CORROBORATION_ONLY_NOT_DATED_HISTORICAL_TYPE'}
-                      for code,(b,origin) in self.basic.items() if _day(b.get('ipoDate')) and _day(b['ipoDate'])<=d]
-            origin=next(iter(self.basic.values()))[1]
-            ir=receipt('original_ipo_facts',d,ipo_rows,origin,clock_hour=0,clock_minute=0)
+            ipo_groups=defaultdict(list);ipo_refs={}
+            for code,(b,origin) in self.basic.items():
+                if _day(b.get('ipoDate')) and _day(b['ipoDate'])<=d:
+                    ipo_groups[origin].append({'code':code,'ipoDate':b['ipoDate'],'type':b.get('type'),
+                        'type_semantics':'CURRENT_CORROBORATION_ONLY_NOT_DATED_HISTORICAL_TYPE'})
+            for origin,ipo_rows in ipo_groups.items():
+                ir=receipt('original_ipo_facts',d,ipo_rows,origin,clock_hour=0,clock_minute=0)
+                ipo_refs.update({row['code']:ir for row in ipo_rows})
             for row in master['rows']:
                 code=row.get('code');iid=_iid(code)
                 if iid is None:continue
                 base=self.basic.get(code,(None,None))[0];raw=dated_states.get((code,d));ipo=_day(base.get('ipoDate')) if base else None
                 if ipo is None:
-                    gaps.append({'instrument_id':iid,'session':str(d),'field':'ORIGINAL_IPO_DATE','reason':'UNKNOWN_IPO'});continue
-                refs=(mr,ir,*((raw_refs[d],) if d in raw_refs else ()))
+                    gaps.append({'instrument_id':iid,'session':str(d),'field':'ORIGINAL_IPO_DATE',
+                        'reason':'CONFLICTING_REGISTERED_IDENTITY_FACTS' if code in self.identity_conflicts else 'UNKNOWN_IPO'});continue
+                if code not in ipo_refs:continue
+                refs=(mr,ipo_refs[code],*((raw_refs[d],) if d in raw_refs else ()))
                 name=str(row.get('code_name') or '')
                 # Historical A-share existence, stock type and a dated exchange
                 # namespace authority must all agree. Current master is unused.
@@ -286,10 +324,12 @@ class HistoricalReplayAssembler:
                 delisting=(name.startswith('退市') if code.startswith('sh.') else name.endswith('退')) if name and main else None
                 clocks={'event_time':datetime.combine(d,time(15),SH),'source_published_at':max(receipts[x].source_published_at for x in refs),
                         'first_seen_at':max(receipts[x].first_seen_at for x in refs),'ingested_at':max(receipts[x].ingested_at for x in refs)}
-                securities.append(SecurityRecord(instrument_id=iid,exchange={'sz':'SZSE','sh':'SSE','bj':'BSE'}[code[:2]],
+                security=SecurityRecord(instrument_id=iid,exchange={'sz':'SZSE','sh':'SSE','bj':'BSE'}[code[:2]],
                     board=board,security_type=typ,listed_on=ipo,effective_from=d,effective_to=d+timedelta(days=1),
                     st=st,suspended=suspended,delisting_period=delisting,name=name,source_refs=refs,
-                    risk_flags=('HISTORICAL_RECONSTRUCTION_VENDOR_REVISION_RISK',),**clocks))
+                    risk_flags=('HISTORICAL_RECONSTRUCTION_VENDOR_REVISION_RISK',),**clocks)
+                if writer is not None:writer.append(security)
+                if writer is None or d>=recent_start:securities.append(security)
         if not master_refs:
             # A missing source is not a fabricated empty successful master.
             clock=datetime.combine(day,time(20),SH)
@@ -300,12 +340,18 @@ class HistoricalReplayAssembler:
                 complete=False,expected_count=len({_iid(x.get('code')) for x in self.masters[day]['rows']} - {None}) if day in self.masters else None,
                 source_refs=refs,event_time=datetime.combine(day,time(15),SH),source_published_at=max(receipts[x].source_published_at for x in refs),
                 first_seen_at=max(receipts[x].first_seen_at for x in refs),ingested_at=max(receipts[x].ingested_at for x in refs))
+        artifact_identity={}
+        if writer is not None:
+            writer.receipts={rid:r.model_dump(mode='json') for rid,r in receipts.items()}
+            artifact_identity=writer.finish()
         bundle=MarketInput(observation_date=day,sessions=self.calendar,universe=universe,bars=tuple(bars),receipts=tuple(receipts.values()),
-                           coverage_type='RECONSTRUCTED_HISTORICAL')
+                           coverage_type='RECONSTRUCTED_HISTORICAL',**artifact_identity)
+        if history_store is not None:bundle._history_store=history_store
         audit={'normalizer_version':VERSION,'source_policy_hash':self.policy_hash,'actual_generated_at':seen.isoformat(),
                'signal_information_max_session':str(day),'future_price_rows_in_signal':sum(b.session>day for b in bars),
                'raw_security_records':len(securities),'unique_security_codes':len({s.instrument_id for s in securities}),
                'raw_price_rows_before_explicit_scope':raw_total,'raw_price_rows_outside_explicit_scope':outside_price_scope,
+               'normalized_history_bar_count':bar_count,'daily_inline_bar_count':len(bars),**artifact_identity,
                'sources':sources,'gaps':gaps,'scope':'DATED_SSE_AND_SZSE_MAINBOARD_CERTIFIED_SUBSET_OTHER_IDENTITY_UNKNOWN' if sse_known else 'DATED_SZSE_MAINBOARD_CERTIFIED_SUBSET_OTHER_IDENTITY_UNKNOWN',
                'archived_point_in_time':False,'original_capture_clocks_modified':False,'input_hash':digest(bundle)}
         return bundle,audit

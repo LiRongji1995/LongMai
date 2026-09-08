@@ -54,6 +54,9 @@ def _sessions(bundle):
 
 
 def _visible_bars(bundle, evaluated_at):
+    if bundle.history_artifact_ref:
+        from .history_artifacts import OutcomeBarMapping
+        return OutcomeBarMapping(bundle,evaluated_at)
     resolver = EvidenceResolver(bundle.receipts, cutoff=evaluated_at, coverage_type=bundle.coverage_type, sessions=bundle.sessions)
     grouped = {}
     for bar in bundle.bars:

@@ -58,7 +58,7 @@ def main():
     if now.tzinfo is None:
         now = now.replace(tzinfo=SH)
     state = read_http(args.base_url) if args.base_url else read_local(now)
-    if state.get("source") != "ACTUAL_CANDIDATE_SCHEDULER_STATE_R11":
+    if state.get("source") != "ACTUAL_CANDIDATE_SCHEDULER_STATE_R12":
         raise SystemExit("UNEXPECTED_SCHEDULER_STATE_SOURCE")
     dump_json(args.output, state)
     print(json.dumps({

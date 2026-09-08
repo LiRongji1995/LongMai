@@ -125,6 +125,15 @@ def _turnover_fraction(bar):
 
 
 def _ma_value(ctx, iid, end_index, window):
+    cache=getattr(ctx,'scalar_cache',None)
+    key=('MA_VALUE',iid,end_index,window)
+    if cache is not None and key in cache:return cache[key]
+    value=_ma_value_uncached(ctx,iid,end_index,window)
+    if cache is not None:cache[key]=value
+    return value
+
+
+def _ma_value_uncached(ctx, iid, end_index, window):
     if end_index is None or end_index - window + 1 < 0:
         return None, f"TCT_MA{window}_WINDOW_UNAVAILABLE"
     rows = [_bar(ctx, session, iid) for session in ctx.sessions[end_index - window + 1 : end_index + 1]]
@@ -278,6 +287,15 @@ def _shape_condition(ctx, iid, end_index):
 
 
 def _window_return(ctx, iid, end_index, lookback):
+    cache=getattr(ctx,'scalar_cache',None)
+    key=('WINDOW_RETURN',iid,end_index,lookback)
+    if cache is not None and key in cache:return cache[key]
+    value=_window_return_uncached(ctx,iid,end_index,lookback)
+    if cache is not None:cache[key]=value
+    return value
+
+
+def _window_return_uncached(ctx, iid, end_index, lookback):
     if end_index is None or end_index - lookback < 0:
         return None
     current = _bar(ctx, ctx.sessions[end_index], iid)
@@ -289,6 +307,15 @@ def _window_return(ctx, iid, end_index, lookback):
 
 
 def _amount_change(ctx, iid, end_index, lookback):
+    cache=getattr(ctx,'scalar_cache',None)
+    key=('AMOUNT_CHANGE',iid,end_index,lookback)
+    if cache is not None and key in cache:return cache[key]
+    value=_amount_change_uncached(ctx,iid,end_index,lookback)
+    if cache is not None:cache[key]=value
+    return value
+
+
+def _amount_change_uncached(ctx, iid, end_index, lookback):
     if end_index is None or end_index - lookback < 0:
         return None
     current = _amount_fraction(_bar(ctx, ctx.sessions[end_index], iid))

@@ -104,6 +104,7 @@ def register_candidate_routes(app, service):
             'setup': request.args.get('setup') or None,
             'horizon': request.args.get('horizon') or None,
             'evidence_type': request.args.get('evidence_type') or None,
+            'validation_epoch_id': request.args.get('validation_epoch_id') or None,
         }
 
     @app.get('/api/recommendation-scores/latest')
@@ -288,7 +289,7 @@ def register_candidate_routes(app, service):
     @app.get('/api/candidate-schedule')
     def candidate_schedule():
         state = service.scheduler.describe_state() if getattr(service, 'scheduler', None) is not None else {
-            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R11',
+            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R12',
             'status': 'SCHEDULER_NOT_ATTACHED_TO_SERVICE',
             'scheduler_thread_alive': False,
             'readiness_blockers': ['SCHEDULER_NOT_ATTACHED_TO_SERVICE'],

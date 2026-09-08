@@ -198,8 +198,11 @@ def test_evening_capture_persists_stage_aware_v2_primary_run(observer):
     assert run['prospective_validation']['official_primary_signal_countable'] is True
     primary=core.candidates.store.get_document('stage_aware_prospective_primary_runs',run_id)
     assert primary['scheduler_job_id']==evening['job_id']
-    epoch=core.candidates.store.get_document('stage_aware_prospective_validation_epochs','STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH')
-    assert epoch['first_primary_run_id']==run_id
+    epoch=core.candidates.store.get_document('stage_aware_prospective_validation_epochs',run['validation_epoch_id'])
+    assert epoch['validation_epoch_id']==run['validation_epoch_id']
+    assert primary['official_primary_capture'] is True
+    assert primary['official_validation_signal_countable'] is True
+    assert core.candidates.validation_state()['evaluable_official_signal_days']==1
     assert scheduler.describe_state(clock.current)['status']=='PROSPECTIVE_PRIMARY_PERSISTED'
 
 
@@ -211,7 +214,7 @@ def test_describe_state_distinguishes_persisted_plan_from_live_scheduler(observe
     state=scheduler.describe_state(clock.current)
 
     assert state['status']=='PLANNED_BUT_NO_LIVE_SCHEDULER'
-    assert state['source']=='ACTUAL_CANDIDATE_SCHEDULER_STATE_R11'
+    assert state['source']=='ACTUAL_CANDIDATE_SCHEDULER_STATE_R12'
     assert state['scheduler_thread_alive'] is False
     assert 'SCHEDULER_THREAD_NOT_ALIVE' in state['readiness_blockers']
     assert state['service_identity']['process_id']
@@ -261,3 +264,59 @@ def test_auction_review_requires_prior_stage_aware_primary_run(observer):
     assert auction['status']=='EVENING_PRIMARY_RUN_UNAVAILABLE'
     assert auction['prior_evening_candidate_run_available'] is True
     assert auction['prior_stage_aware_primary_run_available'] is False
+
+
+def test_r12_failed_price_source_primary_is_capture_but_not_countable(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(20,30),TZ)
+    captured=future_input(bundle,day,missing=True).model_copy(update={'coverage_type':'PROSPECTIVE_CAPTURED'})
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *args:captured,clock=clock)
+    evening=next(e for e in scheduler.tick() if e['market_session']=='EVENING')
+    done=wait_job(client,evening['job_id'])
+    assert done['state']=='SUCCEEDED',done
+    run=core.candidates.strategy_experiment(done['result']['stage_aware_primary_run_id'])
+    prospective=run['prospective_validation']
+    assert prospective['official_primary_capture'] is True
+    assert prospective['official_validation_signal_countable'] is False
+    assert run['signal_data_quality']['data_quality_status']=='SIGNAL_DATA_UNAVAILABLE'
+    state=core.candidates.validation_state()
+    assert state['primary_capture_attempted_days']==1
+    assert state['evaluable_official_signal_days']==0
+    assert state['data_unavailable_primary_days']==1
+    assert state['valid_no_focus_days']==0
+    assert scheduler.describe_state(clock.current)['status']=='PRIMARY_CAPTURE_PERSISTED_SIGNAL_DATA_UNAVAILABLE'
+
+
+def test_r12_delayed_capture_reports_actual_cutoff_and_immutable_epoch(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(20,30),TZ)
+    captured=future_input(bundle,day).model_copy(update={'coverage_type':'PROSPECTIVE_CAPTURED'})
+    def delayed_capture(*args):
+        clock.current+=timedelta(minutes=8)
+        return captured
+    scheduler=CandidateScheduler(core.candidates,capture=delayed_capture,clock=clock)
+    initial=scheduler.ensure_primary_validation_schedule()
+    epoch_before=core.candidates.store.get_document('stage_aware_prospective_validation_epochs',initial['validation_epoch_id'])
+    evening=next(e for e in scheduler.tick() if e['market_session']=='EVENING')
+    done=wait_job(client,evening['job_id'])
+    assert done['state']=='SUCCEEDED',done
+    run=core.candidates.strategy_experiment(done['result']['stage_aware_primary_run_id'])
+    prospective=run['prospective_validation']
+    assert prospective['scheduled_at'].endswith('20:30:00+08:00')
+    assert prospective['capture_completed_at'].endswith('20:38:00+08:00')
+    assert prospective['actual_decision_cutoff']==run['decision_cutoff']
+    assert prospective['decision_latency_seconds']==480
+    assert prospective['primary_cutoff_policy_id']=='SCHEDULED_2030_ACTUAL_COMPLETION'
+    assert core.candidates.store.get_document('stage_aware_prospective_validation_epochs',initial['validation_epoch_id'])==epoch_before
+
+
+def test_r12_service_rejects_second_live_scheduler(observer):
+    client,core,bundle,clock,saved,_=observer
+    clock.current=datetime.combine(next_session(bundle),time(19),TZ)
+    scheduler=CandidateScheduler(core.candidates,clock=clock,interval=.05)
+    try:
+        scheduler.start()
+        with pytest.raises(RuntimeError,match='SCHEDULER_ALREADY_RUNNING'):
+            CandidateScheduler(core.candidates,clock=clock)
+    finally:
+        scheduler.stop()

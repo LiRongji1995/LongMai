@@ -138,7 +138,10 @@ class CandidateService:
 
     def register_input(self, bundle: MarketInput, *, activate=False):
         """Local administrator only; no HTTP route accepts evidence or trust labels."""
+        from .history_artifacts import compact_input, bind_history
+        bundle = compact_input(bundle, self.store)
         bundle = MarketInput.model_validate(bundle.model_dump(mode='json'))
+        bundle = bind_history(bundle, self.store)
         if bundle.coverage_type == 'TEST_FIXTURE' and not self.allow_test_fixture:
             raise ValueError('test fixtures require an explicitly isolated service')
         input_id = 'market_' + digest(bundle)
@@ -173,6 +176,8 @@ class CandidateService:
         if raw is None:
             raise UnavailableError('RULE_INPUT_MISSING_OR_CORRUPT', 'candidate')
         bundle = MarketInput.model_validate_json(raw)
+        from .history_artifacts import bind_history
+        bundle = bind_history(bundle, self.store)
         if bundle.coverage_type == 'TEST_FIXTURE' and not self.allow_test_fixture:
             raise UnavailableError('FIXTURE_NOT_ALLOWED_IN_USER_HISTORY', 'candidate')
         if observation_date is not None and bundle.observation_date != observation_date:
@@ -328,13 +333,14 @@ class CandidateService:
             terminal['activated'] = activation_allowed
         strategy_primary_result = None
         if payload.get('market_session') == 'EVENING':
-            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 20:30 primary research run')
+            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 primary；保留实际资料截止')
             strategy_primary_result = self._build_strategy_experiment_result(
                 payload['input_id'], bundle, cutoff, config,
                 market_session='EVENING',
                 validation_role='PROSPECTIVE_PRIMARY',
-                primary_signal_cutoff='20:30 Asia/Shanghai EVENING_FINAL',
+                primary_signal_cutoff='SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
                 scheduler_job_id=ctx.job_id,
+                capture_timing=payload.get('capture_timing'),
             )
             terminal['strategy_primary_run_id'] = strategy_primary_result['run_id']
             terminal['stage_aware_primary_run_id'] = strategy_primary_result['run_id']
@@ -354,7 +360,8 @@ class CandidateService:
                 self.store._put_document(connection, 'candidate_capture_results', ctx.job_id,
                     {'candidate_run_id': result.run_id, 'input_id': payload['input_id'], 'actual_cutoff': payload['decision_cutoff'],
                      'coverage_type': bundle.coverage_type, 'snapshot_is_backdated': False,
-                     'activated': activation_allowed, 'consumer_status': result.status})
+                     'activated': activation_allowed, 'consumer_status': result.status,
+                     **(payload.get('capture_timing') or {})})
             if strategy_primary_result is not None:
                 self._write_strategy_result(connection, strategy_primary_result, created_at=payload['decision_cutoff'])
         return ctx.complete(terminal, publish)
@@ -513,7 +520,7 @@ class CandidateService:
 
     def _build_strategy_experiment_result(self, input_id, bundle, cutoff, config, *, market_session=None,
                                           validation_role='MANUAL_OR_REPLAY', primary_signal_cutoff=None,
-                                          scheduler_job_id=None):
+                                          scheduler_job_id=None, capture_timing=None):
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
         result['input_id']=input_id
@@ -559,9 +566,18 @@ class CandidateService:
             and bundle.coverage_type == 'PROSPECTIVE_CAPTURED'
         )
         result['prospective_validation'] = {
-            'protocol_id': 'VALIDATION_PROTOCOL_V2',
+            'protocol_id': 'SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
+            'primary_cutoff_policy_id': 'SCHEDULED_2030_ACTUAL_COMPLETION',
             'validation_role': validation_role,
-            'official_primary_signal_countable': official_primary,
+            'official_primary_capture': official_primary,
+            'official_primary_signal_countable': False,
+            'official_validation_signal_countable': False,
+            # Every caller already loaded this ID through input(), which checks
+            # immutable stored bytes. Authorized emotion enrichment is separate.
+            'input_integrity_valid': True,
+            'signal_run_persisted': False,
+            **(capture_timing or {}),
+            'actual_decision_cutoff': cutoff.isoformat(),
             'preliminary_not_counted': validation_role == 'PROSPECTIVE_PRELIMINARY',
             'market_session': market_session,
             'primary_signal_cutoff': primary_signal_cutoff,
@@ -580,10 +596,37 @@ class CandidateService:
             'historical_vs_prospective_separation': 'RECONSTRUCTED_HISTORICAL_NEVER_COUNTS_AS_PROSPECTIVE_PRIMARY',
             'market_edge': 'NOT_ESTABLISHED',
         }
+        from .validation_identity import validation_identity_for_run, signal_data_quality
+        identity = validation_identity_for_run(result)
+        scheduled_epoch = (capture_timing or {}).get('scheduled_validation_epoch_id')
+        if scheduled_epoch and identity['validation_epoch_id'] != scheduled_epoch:
+            raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_SIGNAL_EVALUATION')
+        result.update(identity)
+        result['prospective_validation'].update(identity)
+        # Different capture roles/protocols cannot collide with a manual run.
+        result['run_id'] = 'strategy_experiment_' + digest({
+            'signal_id': result['run_id'], 'validation_epoch_id': identity['validation_epoch_id'],
+            'validation_role': validation_role, 'market_session': market_session,
+            'scheduler_job_id': scheduler_job_id,
+        })
+        result['signal_data_quality'] = signal_data_quality(result)
         result['content_hash']=digest({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
     def _write_strategy_result(self, connection, result, *, created_at):
+        from .validation_identity import (validation_identity_for_run, signal_data_quality,
+            official_primary_capture_for_run, official_signal_countable)
+        prospective = result.get('prospective_validation') or {}
+        prospective['signal_run_persisted'] = True
+        result['prospective_validation'] = prospective
+        prospective['official_primary_capture'] = official_primary_capture_for_run(result)
+        prospective['official_validation_signal_countable'] = (
+            prospective['official_primary_capture'] and signal_data_quality(result)['signal_evaluable'])
+        prospective['official_validation_signal_countable'] = official_signal_countable(result)
+        prospective['official_primary_signal_countable'] = prospective['official_validation_signal_countable']
+        result['signal_data_quality'] = signal_data_quality(result)
+        result['content_hash'] = digest({k:v for k,v in result.items() if k != 'content_hash'})
+        # These flags are visible only if this transaction and job success commit.
         self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
         self._write_strategy_projection(connection, result)
         self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
@@ -591,13 +634,14 @@ class CandidateService:
              'created_at': created_at, 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1',
              'stage_aware_primary_role': (result.get('prospective_validation') or {}).get('validation_role')})
         prospective = result.get('prospective_validation') or {}
-        if prospective.get('official_primary_signal_countable'):
+        if prospective.get('official_primary_capture'):
+            primary_identity = validation_identity_for_run(result)
             primary = {
                 'run_id': result['run_id'],
                 'input_id': result.get('input_id'),
                 'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
-                'implementation_version': ((result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}).get('implementation_version'),
-                'spec_revision': ((result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}).get('spec_revision'),
+                'implementation_version': primary_identity['signal_implementation_version'],
+                'spec_revision': primary_identity['signal_spec_revision'],
                 'signal_observation_date': prospective.get('signal_observation_date'),
                 'target_session': prospective.get('target_session'),
                 'decision_cutoff': result.get('decision_cutoff') or result.get('cutoff'),
@@ -606,20 +650,28 @@ class CandidateService:
                 'scheduler_job_id': prospective.get('scheduler_job_id'),
                 'coverage_type': prospective.get('coverage_type'),
                 'counts': prospective.get('stage_aware_counts'),
-                'official_primary_signal_countable': True,
+                'official_primary_capture': True,
+                'official_primary_signal_countable': prospective['official_primary_signal_countable'],
+                'official_validation_signal_countable': prospective['official_validation_signal_countable'],
+                'signal_data_quality': result['signal_data_quality'],
+                **primary_identity,
+                **{key: prospective.get(key) for key in ('scheduled_at','capture_started_at','capture_completed_at',
+                    'actual_decision_cutoff','start_latency_seconds','capture_latency_seconds','decision_latency_seconds',
+                    'scheduled_validation_epoch_id')},
                 'market_edge': 'NOT_ESTABLISHED',
                 'append_only_policy': 'OUTCOMES_APPEND_ONLY_SIGNAL_RUN_IMMUTABLE',
             }
             self.store._put_document(connection, 'stage_aware_prospective_primary_runs', result['run_id'], primary)
-            epoch_id = 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH'
+            epoch_id = result['validation_epoch_id']
             existing = connection.execute("SELECT * FROM documents WHERE namespace=? AND document_id=?",
                                           ('stage_aware_prospective_validation_epochs', epoch_id)).fetchone()
             if existing is None:
                 epoch = {
                     'epoch_id': epoch_id,
                     'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
-                    'status': 'ACTIVE',
-                    'first_primary_run_id': result['run_id'],
+                    'status': 'REGISTERED_IMMUTABLE_IDENTITY',
+                    **validation_identity_for_run(result),
+                    'first_primary_capture_run_id': result['run_id'],
                     'first_signal_observation_date': prospective.get('signal_observation_date'),
                     'start_session': prospective.get('target_session'),
                     'started_at': utc_now().isoformat(),
@@ -630,6 +682,36 @@ class CandidateService:
                     'market_edge': 'NOT_ESTABLISHED',
                 }
                 self.store._put_document(connection, 'stage_aware_prospective_validation_epochs', epoch_id, epoch)
+
+    def validation_state(self, validation_epoch_id=None):
+        from .validation_identity import current_validation_identity
+        current = current_validation_identity()
+        selected_id = validation_epoch_id or current['validation_epoch_id']
+        registered = self.store.get_document('stage_aware_prospective_validation_epochs', selected_id)
+        identity = current if selected_id == current['validation_epoch_id'] else registered
+        rows = [row for row in self._all('stage_aware_prospective_primary_runs')
+                if row.get('validation_epoch_id') == selected_id and row.get('official_primary_capture') is True]
+        attempted = {row['signal_observation_date'] for row in rows}
+        failed_capture_days = set()
+        # A failed capture has no signal row, but remains operational evidence.
+        from .scheduler import SH
+        for job in self._all('candidate_schedule_events'):
+            if job.get('validation_epoch_id') == selected_id and job.get('market_session') == 'EVENING' and job.get('status') != 'MISSED_SERVICE_OFFLINE':
+                attempt_day = datetime.fromisoformat(job['scheduled_at']).astimezone(SH).date().isoformat()
+                attempted.add(attempt_day)
+                saved_job = self.jobs.get(job.get('job_id') or job['event_id'])
+                if saved_job and saved_job['state'] in {'FAILED','CANCELLED','INTERRUPTED'}:
+                    failed_capture_days.add(attempt_day)
+        evaluable = {row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is True}
+        no_focus = {row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is True and (row.get('counts') or {}).get('focus') == 0}
+        unavailable = ({row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is not True} | failed_capture_days) - evaluable
+        return {'validation_epoch_id': selected_id, 'current_validation_epoch_id': current['validation_epoch_id'],
+            'identity': identity, 'epoch': registered, 'read_only': True,
+            'primary_capture_attempted_days': len(attempted), 'evaluable_official_signal_days': len(evaluable),
+            'data_unavailable_primary_days': len(unavailable), 'valid_no_focus_days': len(no_focus),
+            'failed_primary_capture_days': len(failed_capture_days),
+            'capture_without_persisted_signal_days': len(attempted - {row['signal_observation_date'] for row in rows}),
+            'latest_primary_capture': max(rows, key=lambda row: (row['signal_observation_date'], row.get('decision_cutoff') or ''), default=None)}
 
     def _strategy_experiment_job(self, ctx):
         payload=ctx.payload
@@ -668,7 +750,8 @@ class CandidateService:
                           'primary_sector_absolute_level','primary_sector_relative_level','primary_sector_market_rs_pct',
                           'primary_sector_stock_role_known_feature_count','primary_sector_stock_role_unknown_feature_count',
                           'primary_sector_stock_role_evidence_coverage'}
-        header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance')}
+        header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance',
+            'validation_epoch_id','signal_implementation_version','signal_spec_revision','signal_config_hash','signal_source_hash','primary_cutoff_policy_id','prospective_validation','signal_data_quality')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
                       focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})
         for sid, rows in authoritative_strategy_items(run):
@@ -983,16 +1066,20 @@ class CandidateService:
         self.strategy_experiment(run_id)
         return [v for v in self._all('strategy_trading_session_observations') if v.get('run_id') == run_id]
 
-    def recommendation_scores(self, *, limit=20, offset=0, tier=None, setup=None, horizon=None, evidence_type=None):
+    def recommendation_scores(self, *, limit=20, offset=0, tier=None, setup=None, horizon=None, evidence_type=None, validation_epoch_id=None):
         from .recommendation_scoring import flatten_score_documents, summarize_score_history, OFFICIAL_PROSPECTIVE
         if not 1 <= limit <= 1000 or offset < 0:
             raise ValueError('invalid score page size')
         horizon_value = int(horizon) if horizon not in (None, '') else None
+        validation = self.validation_state(validation_epoch_id)
+        validation_epoch_id = validation['validation_epoch_id']
         documents = sorted(self._all('recommendation_score_revisions'),
                            key=lambda row: (row.get('signal_observation_date') or '', row.get('revision') or 0, row.get('generated_at') or '', row.get('score_run_id') or ''),
                            reverse=True)
         filtered = []
         for document in documents:
+            if document.get('validation_epoch_id') != validation_epoch_id:
+                continue
             if evidence_type and document.get('evidence_type') != evidence_type:
                 continue
             rows = flatten_score_documents([document], tier=tier, setup=setup, horizon=horizon_value)
@@ -1004,36 +1091,41 @@ class CandidateService:
                 filtered.append(document)
         page = filtered[offset:offset + limit]
         return {
-            'schema_version': 'R11_RECOMMENDATION_SCORE_LIST_API_V1',
+            'schema_version': 'R12_RECOMMENDATION_SCORE_LIST_API_V1',
             'score_spec_id': 'DAILY_RECOMMENDATION_SCORE_V1',
             'items': page,
             'total_matching_documents': len(filtered),
             'limit': limit,
             'offset': offset,
             'has_next': offset + limit < len(filtered),
-            'filters': {'tier': tier, 'setup': setup, 'horizon': horizon_value, 'evidence_type': evidence_type},
-            'official_history': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE),
+            'filters': {'tier': tier, 'setup': setup, 'horizon': horizon_value, 'evidence_type': evidence_type, 'validation_epoch_id': validation_epoch_id},
+            'validation': validation,
+            'official_history': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE, validation_epoch_id=validation_epoch_id),
             'market_edge': 'NOT_ESTABLISHED',
         }
 
-    def latest_recommendation_scores(self, *, tier=None, setup=None, horizon=None, evidence_type=None):
+    def latest_recommendation_scores(self, *, tier=None, setup=None, horizon=None, evidence_type=None, validation_epoch_id=None):
         from .recommendation_scoring import summarize_score_history, OFFICIAL_PROSPECTIVE, RECONSTRUCTED_HISTORICAL
-        values = self.recommendation_scores(limit=1, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type)
+        values = self.recommendation_scores(limit=1, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type, validation_epoch_id=validation_epoch_id)
+        validation_epoch_id = values['filters']['validation_epoch_id']
         documents = self._all('recommendation_score_revisions')
         return {
-            'schema_version': 'R11_RECOMMENDATION_SCORE_LATEST_API_V1',
+            'schema_version': 'R12_RECOMMENDATION_SCORE_LATEST_API_V1',
             'latest': values['items'][0] if values['items'] else None,
             'filters': values['filters'],
-            'official_prospective_score': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE),
-            'reconstructed_historical_score': summarize_score_history(documents, evidence_type=RECONSTRUCTED_HISTORICAL),
+            'validation': values['validation'],
+            'official_prospective_score': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE, validation_epoch_id=validation_epoch_id),
+            'reconstructed_historical_score': summarize_score_history(documents, evidence_type=RECONSTRUCTED_HISTORICAL, validation_epoch_id=validation_epoch_id),
             'score_spec_id': 'DAILY_RECOMMENDATION_SCORE_V1',
             'authority': 'SAVED_SCORE_REVISION_DOCUMENTS_ONLY_NO_CLIENT_RECOMPUTATION',
             'market_edge': 'NOT_ESTABLISHED',
         }
 
-    def recommendation_scores_for_run(self, run_id, *, tier=None, setup=None, horizon=None, evidence_type=None):
-        self.strategy_experiment(run_id)
-        result = self.recommendation_scores(limit=1000, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type)
+    def recommendation_scores_for_run(self, run_id, *, tier=None, setup=None, horizon=None, evidence_type=None, validation_epoch_id=None):
+        run = self.strategy_experiment(run_id)
+        from .validation_identity import validation_identity_for_run
+        validation_epoch_id = validation_epoch_id or validation_identity_for_run(run)['validation_epoch_id']
+        result = self.recommendation_scores(limit=1000, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type, validation_epoch_id=validation_epoch_id)
         result['items'] = [row for row in result['items'] if row.get('signal_run_id') == run_id]
         result['total_matching_documents'] = len(result['items'])
         result['run_id'] = run_id
@@ -1364,6 +1456,10 @@ class CandidateService:
                 _,full_input=self.input(input_id)
                 bar_rows,theme_snapshots=len(full_input.bars),len(full_input.themes)
                 security_rows=len(full_input.universe.securities)
+                if full_input.history_artifact_ref:
+                    manifest = full_input._history_store.manifest(full_input.history_artifact_ref, full_input.history_artifact_hash)
+                    bar_rows = sum(part['bar_count'] for part in manifest['partitions'])
+                    security_rows = sum(part['row_count'] - part['bar_count'] for part in manifest['partitions'])
                 bundle=full_input.model_copy(update={
                     'bars':tuple(b for b in full_input.bars if b.session==full_input.observation_date),
                     'universe':full_input.universe.model_copy(update={'securities':()}),
@@ -1390,6 +1486,8 @@ class CandidateService:
                     'observation_date': bundle.observation_date.isoformat(), 'coverage_type': bundle.coverage_type,
                     'universe_declared_complete': bundle.universe.complete, 'universe_declared_count': bundle.universe.expected_count,
                     'security_rows': security_rows, 'bar_rows': bar_rows, 'theme_snapshots': theme_snapshots,
+                    'history_artifact_ref': bundle.history_artifact_ref, 'history_artifact_hash': bundle.history_artifact_hash,
+                    'current_preview_bar_rows': len(bundle.bars), 'row_count_scope': 'EFFECTIVE_HISTORY_PLUS_RECENT_PIT_DEDUPLICATED',
                     'current_event_previews': previews, 'preview_semantics': 'RAW_FACTS_NOT_FULL_STRATEGY_CANDIDATES',
                     'receipts': [r.model_dump(mode='json') for r in bundle.receipts],
                     'coverage': runs[0].coverage if runs else None,

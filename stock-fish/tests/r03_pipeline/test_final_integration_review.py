@@ -89,7 +89,8 @@ def test_recent_other_revisions_do_not_hide_last_evening_run_from_auction(tmp_pa
     evening,_=tiny_fixture()
     others=[evening.model_copy(update={'run_id':'TEST_OTHER_'+str(i),'market_session':'ON_DEMAND',
         'generated_at':evening.generated_at+timedelta(seconds=i+1)}) for i in range(101)]
-    primary={'run_id':evening.run_id,'signal_observation_date':str(evening.observation_date),
+    from stockfish_core.yaogu.validation_identity import current_validation_identity
+    primary={**current_validation_identity(),'run_id':evening.run_id,'signal_observation_date':str(evening.observation_date),
         'decision_cutoff':evening.decision_cutoff.isoformat(),'official_primary_signal_countable':True}
     service=SchedulerReadService(tmp_path,[evening,*others],[primary])
     scheduler=CandidateScheduler(service,clock=lambda:at(SESSIONS[1],9))

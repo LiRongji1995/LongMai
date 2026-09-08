@@ -7,7 +7,7 @@ hash before reuse; partial pages remain explicit partial work.
 from __future__ import annotations
 
 from dataclasses import dataclass
-from datetime import date, datetime, timezone, timedelta
+from datetime import date, datetime, timezone, timedelta, time as wall_time
 import json
 from pathlib import Path
 import sqlite3
@@ -19,7 +19,58 @@ from ..jobs import _ServiceLock
 from .contracts import digest
 
 
-QUEUE_VERSION = 'MAINBOARD_REQUEST_QUEUE_R03_V1'
+QUEUE_VERSION = 'MAINBOARD_REQUEST_QUEUE_R12_V2'
+LOGICAL_REQUEST_VERSION = 'PROVIDER_ENDPOINT_PARAMETERS_SESSION_V1'
+NONEMPTY_CORE_ENDPOINTS = {'mainboard_sse','master_szse','master_all','market_daily','calendar'}
+FINAL_SESSION_RELEASE_CLOCKS = {'market_daily':(17,30),'master_all':(17,30),
+    'spot_all':(15,0),'spot_sina':(15,0),'daily_limits_eastmoney':(15,0),'limit_up_pool':(15,0)}
+
+
+def normalized_parameters(parameters):
+    """Normalize transport-equivalent dates and unordered security batches."""
+    import re
+    def normalize(value, key=None):
+        if isinstance(value, dict):
+            return {str(k): normalize(v, str(k)) for k, v in sorted(value.items())}
+        if isinstance(value, (list, tuple)):
+            values = [normalize(v) for v in value]
+            if key == 'codes':
+                def code(item):
+                    match = re.fullmatch(r'(sh|sz|bj)\.(\d{6})', str(item), re.IGNORECASE)
+                    return match.group(2)+'.'+match.group(1).upper() if match else str(item).upper()
+                return sorted(set(code(item) for item in values))
+            return values
+        if key in {'date','trade_date','start_date','end_date','suspend_date','resume_date','ann_date'} and value not in (None,''):
+            text = str(value)
+            if re.fullmatch(r'\d{8}', text):
+                text = text[:4]+'-'+text[4:6]+'-'+text[6:]
+            return date.fromisoformat(text[:10]).isoformat()
+        return value
+    return normalize(parameters)
+
+
+def logical_identity(endpoint, parameters, definition_version, *, cache_epoch=None, provider=None, session=None):
+    from .provider_requests import ENDPOINTS
+    params = normalized_parameters(parameters)
+    # A dated endpoint already declares its session. An undated current
+    # snapshot uses its capture business day, never the wall-clock hour.
+    business_session = params.get('date') or params.get('trade_date') or session or cache_epoch
+    if business_session is not None:
+        try: business_session = date.fromisoformat(str(business_session)[:10]).isoformat()
+        except ValueError: business_session = str(business_session)
+    return {'logical_identity_version': LOGICAL_REQUEST_VERSION, 'endpoint': endpoint,
+            'provider': provider or ENDPOINTS.get(endpoint, {}).get('provider', endpoint.split('.')[0]),
+            'parameters': params, 'session': business_session, 'definition_version': definition_version}
+
+
+def capture_priority(endpoint):
+    if endpoint in {'calendar','mainboard_sse','master_szse','stock_basic','stock_basic_all','master_all',
+                    'spot_all','spot_sina','delisting_sse'}: return 0
+    if endpoint in {'market_daily','history'}: return 1
+    if endpoint in {'adjustment_factors','history_adjusted'}: return 2
+    if endpoint in {'daily_limits_eastmoney','limit_up_pool'}: return 3
+    if endpoint.startswith(('concept_','industry_')): return 4
+    return 5
 
 
 @dataclass(frozen=True)
@@ -46,11 +97,13 @@ class RequestBudget:
 
 
 class RequestQueue:
-    def __init__(self, root, *, budget=None, monotonic=time.monotonic, sleeper=time.sleep):
+    def __init__(self, root, *, budget=None, monotonic=time.monotonic, sleeper=time.sleep,
+                 wall_clock=lambda:datetime.now(timezone.utc)):
         self.root = Path(root).resolve()
         self.root.mkdir(parents=True, exist_ok=True)
         self.budget = budget or RequestBudget()
         self.monotonic, self.sleeper = monotonic, sleeper
+        self.wall_clock = wall_clock
         self.lock = _ServiceLock(self.root / 'request-queue.lock')
         self.connection = sqlite3.connect(self.root / 'request-queue.sqlite3')
         self.connection.row_factory = sqlite3.Row
@@ -62,7 +115,10 @@ class RequestQueue:
             CREATE TABLE IF NOT EXISTS attempts (
                 request_id TEXT NOT NULL, attempt INTEGER NOT NULL, state TEXT NOT NULL,
                 result_path TEXT, result_hash TEXT, recorded_at TEXT NOT NULL,
-                PRIMARY KEY(request_id,attempt));''')
+                PRIMARY KEY(request_id,attempt));
+            CREATE TABLE IF NOT EXISTS logical_requests (
+                logical_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE);''')
+        self._register_legacy_identities()
         self.connection.execute("UPDATE requests SET state='PENDING',failure_category='INTERRUPTED' WHERE state='RUNNING'")
         self.connection.commit()
         self.started = monotonic()
@@ -74,6 +130,27 @@ class RequestQueue:
                                     minimum_interval=self.budget.minimum_interval_seconds)
         self.last_call = {}
         self.requested_ids = set()
+        self.attempted_ids = set()
+
+    def _register_legacy_identities(self):
+        """Reuse legacy work without deleting receipts or rewriting attempts.
+
+        Previously hourly requests remain immutable audit records. One stable
+        alias selects the newest complete response, otherwise resumable work.
+        """
+        grouped = {}
+        for row in self.connection.execute('SELECT * FROM requests'):
+            payload = json.loads(row['payload'])
+            identity = logical_identity(payload['endpoint'], payload['parameters'], payload['definition_version'],
+                cache_epoch=payload.get('cache_epoch'), provider=payload.get('provider'), session=payload.get('session'))
+            logical_id = 'request_' + digest(identity)
+            grouped.setdefault(logical_id, []).append(row)
+        for logical_id, rows in grouped.items():
+            winner = max(rows, key=lambda r: (r['state']=='COMPLETE', r['result_path'] is not None,
+                                             r['updated_at'], r['request_id']))
+            self.connection.execute('INSERT OR IGNORE INTO logical_requests VALUES(?,?)',
+                                    (logical_id, winner['request_id']))
+        self.connection.commit()
 
     def close(self):
         self.connection.close()
@@ -89,19 +166,58 @@ class RequestQueue:
     def timestamp():
         return datetime.now(timezone.utc).isoformat()
 
-    def enqueue(self, endpoint, parameters, *, stage, definition_version, dependencies=(), cache_epoch=None):
+    def enqueue(self, endpoint, parameters, *, stage, definition_version, dependencies=(), cache_epoch=None,
+                provider=None, session=None, priority=None):
         # Stage is provenance, not identity: one history response can satisfy
         # breadth, structure, scoring and outcome dependencies without re-fetch.
-        identity = {'endpoint': endpoint, 'parameters': parameters,
-                    'definition_version': definition_version, 'queue_version': QUEUE_VERSION, 'cache_epoch': cache_epoch}
-        request_id = 'request_' + digest(identity)
-        payload = dict(identity, stage=stage, dependencies=sorted(set(dependencies)))
+        identity = logical_identity(endpoint, parameters, definition_version, cache_epoch=cache_epoch,
+                                    provider=provider, session=session)
+        logical_id = 'request_' + digest(identity)
+        alias = self.connection.execute('SELECT request_id FROM logical_requests WHERE logical_id=?', (logical_id,)).fetchone()
+        request_id = alias['request_id'] if alias else logical_id
+        priority = capture_priority(endpoint) if priority is None else priority
+        if isinstance(priority, bool) or not isinstance(priority, int) or not 0 <= priority <= 5:
+            raise ValueError('CAPTURE_PRIORITY_MUST_BE_P0_TO_P5')
+        payload = dict(identity, stage=stage, stages=[stage], priority=priority,
+                       dependencies=sorted(set(dependencies)-{request_id}))
         existing = self.connection.execute('SELECT * FROM requests WHERE request_id=?', (request_id,)).fetchone()
+        if existing is not None and existing['state']=='COMPLETE' and (endpoint in NONEMPTY_CORE_ENDPOINTS or endpoint in FINAL_SESSION_RELEASE_CLOCKS):
+            cached=self.read_result(existing)
+            refresh_reason=None
+            if endpoint in NONEMPTY_CORE_ENDPOINTS and (not cached or not cached.get('rows')):
+                refresh_reason='SOURCE_SCOPE_EMPTY'
+            elif endpoint in FINAL_SESSION_RELEASE_CLOCKS and identity['session']:
+                from zoneinfo import ZoneInfo
+                maturity=datetime.combine(date.fromisoformat(identity['session']),
+                    wall_time(*FINAL_SESSION_RELEASE_CLOCKS[endpoint]),ZoneInfo('Asia/Shanghai'))
+                authority=next((r for r in (cached or {}).get('receipts',())
+                    if r.get('receipt_id')==(cached or {}).get('request_receipt_id')), {})
+                captured=authority.get('first_seen_at') or (cached or {}).get('completed_at') or existing['updated_at']
+                try:captured=datetime.fromisoformat(captured.replace('Z','+00:00'))
+                except (ValueError,TypeError):captured=None
+                if self.wall_clock()>=maturity and (captured is None or captured.tzinfo is None or captured<maturity):
+                    refresh_reason='PRE_FINAL_CAPTURE'
+            if refresh_reason:
+                # Empty market/identity scope is not proof of an evaluated
+                # exchange universe. Retry at a later explicit capture using
+                # this same logical request and preserved attempt sequence.
+                self.connection.execute("UPDATE requests SET state='PENDING',failure_category=? WHERE request_id=?", (refresh_reason,request_id))
+                self.connection.commit()
+                existing=self.connection.execute('SELECT * FROM requests WHERE request_id=?',(request_id,)).fetchone()
         if existing is None:
             self.connection.execute('INSERT INTO requests(request_id,payload,state,updated_at) VALUES(?,?,?,?)',
                                     (request_id, json.dumps(payload, sort_keys=True), 'PENDING', self.timestamp()))
+            self.connection.execute('INSERT INTO logical_requests VALUES(?,?)', (logical_id, request_id))
             self.connection.commit()
-        elif endpoint.startswith('tushare_') and existing['failure_category']=='AUTH':
+        else:
+            prior = json.loads(existing['payload'])
+            payload.update(priority=min(priority, prior.get('priority', priority)) if request_id in self.requested_ids else priority,
+                stages=sorted(set(prior.get('stages', [prior.get('stage', stage)])) | {stage}),
+                dependencies=sorted((set(prior.get('dependencies', ())) | set(dependencies))-{request_id}))
+            self.connection.execute('UPDATE requests SET payload=? WHERE request_id=?',
+                                    (json.dumps(payload, sort_keys=True), request_id))
+            self.connection.commit()
+        if existing is not None and endpoint.startswith('tushare_') and existing['failure_category']=='AUTH':
             import os
             if os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'):
                 # A previously missing credential is a changed prerequisite.
@@ -110,7 +226,7 @@ class RequestQueue:
                 self.connection.execute("UPDATE requests SET state='PENDING',failure_category='AUTH_RECOVERED',updated_at=? WHERE request_id=?",
                                         (self.timestamp(),request_id))
                 self.connection.commit()
-        elif existing['state'] == 'COMPLETE' and request_id not in self.requested_ids:
+        elif existing is not None and existing['state'] == 'COMPLETE' and request_id not in self.requested_ids:
             self.read_result(existing)  # Verify bytes before counting a cache hit.
             self.cache_hits += 1
         self.requested_ids.add(request_id)
@@ -129,8 +245,15 @@ class RequestQueue:
 
     def rows(self, ids=None):
         selected = set(ids) if ids is not None else self.requested_ids
-        return [dict(r) for r in self.connection.execute('SELECT * FROM requests ORDER BY request_id')
-                if r['request_id'] in selected]
+        def order(row):
+            p = json.loads(row['payload'])
+            session = p['parameters'].get('date', p['parameters'].get('end_date', ''))
+            try: ordinal = date.fromisoformat(session).toordinal()
+            except (ValueError, TypeError): ordinal = 0
+            return (p.get('priority', capture_priority(p['endpoint'])),
+                    p['endpoint'] == 'master_all', -ordinal, row['request_id'])
+        return sorted((dict(r) for r in self.connection.execute('SELECT * FROM requests')
+                       if r['request_id'] in selected), key=order)
 
     def results(self, ids=None):
         values=[]
@@ -235,7 +358,9 @@ class RequestQueue:
         for row in self.rows(selected):
             if row['state'] in ('COMPLETE', 'BLOCKED'):
                 continue
-            if row['attempts'] >= self.budget.max_attempts and row['failure_category'] not in ('BUDGET','INTERRUPTED','AUTH_RECOVERED'):
+            if row['failure_category'] in ('SOURCE_SCOPE_EMPTY','PRE_FINAL_CAPTURE') and row['request_id'] in self.attempted_ids:
+                continue
+            if row['attempts'] >= self.budget.max_attempts and row['failure_category'] not in ('BUDGET','INTERRUPTED','AUTH_RECOVERED','SOURCE_SCOPE_EMPTY','PRE_FINAL_CAPTURE'):
                 self.connection.execute("UPDATE requests SET state='BLOCKED' WHERE request_id=?", (row['request_id'],))
                 self.connection.commit()
                 continue
@@ -266,6 +391,7 @@ class RequestQueue:
                                     (self.timestamp(), row['request_id']))
             self.connection.commit()
             self.calls += 1
+            self.attempted_ids.add(row['request_id'])
             self.retry_attempts += bool(row['attempts'])
             self.last_call[provider] = self.monotonic()
             archive = self.root / 'raw' / row['request_id'] / str(row['attempts'] + 1)
@@ -286,6 +412,10 @@ class RequestQueue:
             result = dict(result, queue_request_id=row['request_id'], request_definition_version=payload['definition_version'])
             self.pages += result.get('coverage',{}).get('pages_this_run',0)
             complete = result.get('status') == 'COMPLETE'
+            if complete and payload['endpoint'] in NONEMPTY_CORE_ENDPOINTS and not result.get('rows'):
+                complete=False
+                result=dict(result,failure_category='SOURCE_SCOPE_EMPTY',
+                    error_code='NONEMPTY_DATED_CORE_SCOPE_NOT_ESTABLISHED')
             if result.get('coverage', {}).get('pagination_complete') is False or result.get('pagination_complete') is False:
                 complete = False
             authority = [r for r in result.get('receipts', ()) if r.get('receipt_id') == result.get('request_receipt_id')]
@@ -314,7 +444,14 @@ class RequestQueue:
     def summary(self):
         rows = self.rows()
         counts = {s: sum(r['state'] == s for r in rows) for s in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
-        return {'queue_version': QUEUE_VERSION, 'requested': len(rows), 'states': counts,
+        stored = list(self.connection.execute('SELECT state FROM requests'))
+        logical = list(self.connection.execute('SELECT r.state FROM requests r JOIN logical_requests l ON l.request_id=r.request_id'))
+        return {'queue_version': QUEUE_VERSION, 'logical_identity_version': LOGICAL_REQUEST_VERSION,
+                'requested': len(rows), 'states': counts,
+                'stored_request_rows':len(stored), 'active_logical_requests':len(logical),
+                'legacy_duplicate_rows_preserved':len(stored)-len(logical),
+                'active_logical_states':{s:sum(r['state']==s for r in logical) for s in counts},
+                'priority_policy':'P0_CURRENT_IDENTITY_PRICE_P1_HISTORY_P2_COMPARABILITY_P3_LIMITS_P4_THEME_P5_ENRICHMENT',
                 'task_attempts_this_run': self.calls,
                 'http_attempts_this_run': self.transport_counts().get('HTTP',0),
                 'network_requests_this_run': self.transport_counts().get('HTTP',0),

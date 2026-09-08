@@ -35,7 +35,8 @@ function Get-VerifiedProcess($Record) {
     return $null
 }
 
-$mutex = [System.Threading.Mutex]::new($false, 'Local\StockRecommendation-StockFish-8000')
+$rootStamp = [Convert]::ToHexString([System.Security.Cryptography.SHA256]::HashData([Text.Encoding]::UTF8.GetBytes($Root.ToLowerInvariant()))).Substring(0, 20)
+$mutex = [System.Threading.Mutex]::new($false, ('Local\StockRecommendation-StockFish-' + $rootStamp))
 $lockTaken = $false
 try {
     try { $lockTaken = $mutex.WaitOne(10000) } catch [System.Threading.AbandonedMutexException] { $lockTaken = $true }

@@ -12,10 +12,10 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .contracts import MarketInput, digest
-from .request_queue import RequestQueue, RequestBudget
+from .request_queue import RequestQueue, RequestBudget, capture_priority
 from .provider_requests import execute_request, FIELD_VERSION
 
-PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R05_STAGE_AWARE_V2_LONG_HISTORY_REPLAY'
+PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R12_STABLE_SESSION_PRIORITY_V1'
 SH = ZoneInfo('Asia/Shanghai')
 
 
@@ -169,11 +169,16 @@ def tushare_request_plan(day, sessions):
 
 
 class MainboardPipeline:
-    def __init__(self, root, *, service=None, config=None, executor=execute_request, normalizer=None, budget=None):
+    def __init__(self, root, *, service=None, config=None, executor=execute_request, normalizer=None, budget=None,
+                 history_store=None):
         self.root, self.service, self.executor = Path(root), service, executor
         self.normalizer = normalizer
         self.config = config if config is not None else service.current_config() if service else None
         self.budget = budget or RequestBudget()
+        self.history_store = history_store
+        if self.history_store is None and service is not None and hasattr(service, 'store'):
+            from .history_artifacts import HistoryArtifactStore
+            self.history_store = HistoryArtifactStore(service.store)
 
     def capture(self, output_dir, now, *, observation_date=None, checkpoint=lambda: None, progress=lambda _: None):
         if now.tzinfo is None or now.utcoffset() is None:
@@ -187,13 +192,17 @@ class MainboardPipeline:
             raise ValueError('VERIFIED_OBSERVATION_SESSION_REQUIRED')
         output = Path(output_dir)
         output.mkdir(parents=True, exist_ok=True)
-        epoch = local.strftime('%Y-%m-%dT%H')
+        epoch = str(day)
         started = datetime.now(SH)
         stages = []
         with RequestQueue(self.root, budget=self.budget) as queue:
             def add(endpoint, parameters, stage, *, current=False):
+                priority = capture_priority(endpoint)
+                if endpoint == 'market_daily' and parameters.get('date') == str(day): priority = 0
+                if endpoint == 'master_all' and parameters.get('date') != str(day): priority = 1
+                if endpoint == 'stock_basic_all': priority = 1
                 return queue.enqueue(endpoint, parameters, stage=stage, definition_version=FIELD_VERSION,
-                                     cache_epoch=epoch if current else None)
+                                     cache_epoch=epoch if current else None, priority=priority)
 
             def drain(stage, ids):
                 before = queue.calls;http_before=queue.transport_counts().get('HTTP',0)
@@ -261,14 +270,11 @@ class MainboardPipeline:
                       for i in range(0, len(missing_listing), 100)]
             breadth = [add('master_all', {'date': str(day)}, 'MarketBreadthCapture', current=True),
                        add('spot_all', {}, 'MarketBreadthCapture', current=True)]
+            current_price = add('market_daily', {'date': str(day)}, 'CurrentDailyPriceCapture', current=True)
             current_status_evidence = [add('delisting_sse', {}, 'MainBoardMasterCapture', current=True)]
             theme_list = add('concept_list', {}, 'CurrentThemeCapture', current=True)
-            drain('CurrentIdentityAndBreadth', breadth + basics + current_status_evidence + [theme_list])
+            drain('CurrentIdentityAndBreadth', breadth + basics + current_status_evidence + [current_price])
             selected_theme_endpoint = 'concept_members'
-            if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
-                theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
-                selected_theme_endpoint = 'concept_members_sina'
-                drain('CurrentThemeRegisteredAlternative', [theme_list])
             if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([breadth[-1]])):
                 alternate_spot = add('spot_sina', {}, 'MarketBreadthCapture', current=True)
                 drain('MarketBreadthRegisteredAlternative', [alternate_spot])
@@ -339,10 +345,11 @@ class MainboardPipeline:
             outcome_ids=sorted({item['instrument_id'] for item in demand})
             outcome_requests += [add('stock_basic', {'codes':outcome_ids[i:i+100]}, 'PublishedCandidateOutcomeCapture', current=True)
                                  for i in range(0,len(outcome_ids),100)]
-            # Mature results have their own demand priority; losing candidates
-            # do not wait for inclusion in today's discovery pool.
-            drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
+            # All P0 current inputs precede P1 full-market history; comparison
+            # bases are P2. Optional context cannot spend this core budget.
             drain('StructureHistoryCapture', structures)
+            # Mature results remain explicit demand even for former losers.
+            drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
             # Price/amount completeness is independent of optional board-event
             # evidence; quote-by-quote calls cannot consume PV's initial budget.
             import os
@@ -353,8 +360,12 @@ class MainboardPipeline:
                 # zero HTTP, instead of hundreds of identical auth failures.
                 ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
             ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
-            drain('TushareOptionalEnrichment',ts_ids)
             drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
+            drain('CurrentThemeDirectory', [theme_list])
+            if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
+                theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
+                selected_theme_endpoint = 'concept_members_sina'
+                drain('CurrentThemeRegisteredAlternative', [theme_list])
             directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
             theme_requests = []
             for theme in directory:
@@ -362,11 +373,14 @@ class MainboardPipeline:
                 if symbol:
                     theme_requests.append(add(selected_theme_endpoint, {'symbol':str(symbol)}, 'CurrentThemeCapture', current=True))
             drain('CurrentThemeCapture', theme_requests)
+            drain('TushareOptionalEnrichment',ts_ids)
             normalize = self.normalizer
             if normalize is None:
                 from .provider_normalization import normalize_capture_with_report
                 normalize = normalize_capture_with_report
-            bundle = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions)
+            import inspect
+            normalization_options = {'history_store': self.history_store} if self.history_store is not None and 'history_store' in inspect.signature(normalize).parameters else {}
+            bundle = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions, **normalization_options)
             if isinstance(bundle, tuple):
                 bundle, gaps = bundle
             else:
@@ -390,7 +404,7 @@ class MainboardPipeline:
                 for iid in candidate_ids:
                     funds.append(add('money_flow', {'stock':iid[:6], 'market':iid[-2:].lower()}, 'OptionalFundsCapture', current=True))
             drain('OptionalFundsCapture', funds)
-            normalized = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions)
+            normalized = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions, **normalization_options)
             if isinstance(normalized, tuple):
                 bundle, gaps = normalized
             else:
@@ -403,6 +417,8 @@ class MainboardPipeline:
                 'completed_at': actual_cutoff.isoformat(), 'observation_date': str(day),
                 'raw_bundle_hash': digest(bundle), 'input_id': 'market_'+digest(bundle),
                 'coverage_type': bundle.coverage_type,
+                'history_artifact_ref':bundle.history_artifact_ref,
+                'history_artifact_hash':bundle.history_artifact_hash,
                 'frozen_config_hash': check.config_hash,
                 'scope': 'FULL_MAINBOARD_DIRECTORY_DISCOVERY_WITH_PERSISTENT_PENDING_REQUESTS',
                 'master_ids': ids, 'structure_candidate_ids': candidate_ids, 'frozen_peer_ids': peer_ids,
