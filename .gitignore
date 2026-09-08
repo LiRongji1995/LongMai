@@ -26,6 +26,7 @@ dist/
 /logs/
 /work/
 /publish/
+/reports/
 /stock-fish/qlib-zh/DATA/
 /stock-fish/qlib-zh/mlruns/
 /stock-fish/batch_results/

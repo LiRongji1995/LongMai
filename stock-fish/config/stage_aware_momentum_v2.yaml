@@ -1,7 +1,7 @@
 strategy_id: STAGE_AWARE_MOMENTUM_V2
 version: 2
-spec_revision: R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION
-implementation_version: R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION
+spec_revision: R11_VALIDATION_SCORING
+implementation_version: R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING
 specification_name: "StockRecommendation active stage-aware strong-stock core strategy"
 canonical_replaces: STAGE_AWARE_MOMENTUM_V1
 legacy_read_aliases:

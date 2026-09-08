@@ -6,6 +6,7 @@ from ..common import utc_now, UnavailableError
 
 from .candidate_service import CandidateRequest
 from .config import StrategyConfig
+from .data_pipeline import PIPELINE_VERSION
 
 
 def register_candidate_routes(app, service):
@@ -97,6 +98,27 @@ def register_candidate_routes(app, service):
     def strategy_experiment_review(run_id):
         return jsonify(service.strategy_review(run_id, full=request.args.get('full') in {'1','true'}))
 
+    def score_filters():
+        return {
+            'tier': request.args.get('tier') or None,
+            'setup': request.args.get('setup') or None,
+            'horizon': request.args.get('horizon') or None,
+            'evidence_type': request.args.get('evidence_type') or None,
+        }
+
+    @app.get('/api/recommendation-scores/latest')
+    def latest_recommendation_scores():
+        return jsonify(service.latest_recommendation_scores(**score_filters()))
+
+    @app.get('/api/recommendation-scores')
+    def recommendation_scores():
+        return jsonify(service.recommendation_scores(limit=int(request.args.get('limit', 20)),
+            offset=int(request.args.get('offset', 0)), **score_filters()))
+
+    @app.get('/api/recommendation-scores/<signal_run_id>')
+    def recommendation_scores_for_run(signal_run_id):
+        return jsonify(service.recommendation_scores_for_run(signal_run_id, **score_filters()))
+
     @app.post('/api/research-episodes/<episode_id>/archive')
     def archive_research_episode(episode_id):
         value = body()
@@ -124,7 +146,7 @@ def register_candidate_routes(app, service):
     def data_pipeline_status():
         values = service._all('candidate_pipeline_attempts')
         return jsonify(latest=values[-1] if values else None, service_required=True,
-                       pipeline_version='MAINBOARD_DATA_DAG_R03_V1', scope='FULL_MAINBOARD',
+                       pipeline_version=PIPELINE_VERSION, scope='FULL_MAINBOARD',
                        resume_policy='PERSISTENT_REQUEST_QUEUE_FINITE_BUDGET_NO_FALSE_COMPLETION')
 
     @app.post('/api/candidate-data-pipeline/capture')
@@ -266,8 +288,10 @@ def register_candidate_routes(app, service):
     @app.get('/api/candidate-schedule')
     def candidate_schedule():
         state = service.scheduler.describe_state() if getattr(service, 'scheduler', None) is not None else {
-            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R10',
+            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R11',
             'status': 'SCHEDULER_NOT_ATTACHED_TO_SERVICE',
+            'scheduler_thread_alive': False,
+            'readiness_blockers': ['SCHEDULER_NOT_ATTACHED_TO_SERVICE'],
             'service_identity': {'state_root': str(service.root), 'db_path': str(service.store.path)},
             'market_edge': 'NOT_ESTABLISHED',
         }

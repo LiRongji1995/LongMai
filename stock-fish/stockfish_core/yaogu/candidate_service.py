@@ -955,21 +955,90 @@ class CandidateService:
         run = self.strategy_experiment(payload['run_id'])
         _, bundle = self.input(payload['input_id'])
         from .strategy_tracking import evaluate_strategy_experiment_outcomes, build_strategy_feedback_report
+        from .recommendation_scoring import build_score_revision
+        evaluated_at = datetime.fromisoformat(payload['evaluated_at'])
         values = evaluate_strategy_experiment_outcomes(run, bundle, datetime.fromisoformat(payload['evaluated_at']),
                                                        horizons=tuple(payload.get('horizons') or (1, 2, 3, 4, 5, 10, 20)))
-        report = build_strategy_feedback_report(run, self._all('strategy_trading_session_observations') + values,
-            self._all('strategy_tracking_runs'), datetime.fromisoformat(payload['evaluated_at']),
+        all_outcomes = self._all('strategy_trading_session_observations') + values
+        report = build_strategy_feedback_report(run, all_outcomes,
+            self._all('strategy_tracking_runs'), evaluated_at,
             runs=self._all('strategy_experiment_runs'), sessions=bundle.sessions)
+        score, score_error = None, None
+        try:
+            score = build_score_revision(run, all_outcomes, evaluated_at, existing_revisions=self._all('recommendation_score_revisions'))
+        except Exception as exc:
+            score_error = {'code': 'RECOMMENDATION_SCORE_FAILED', 'type': type(exc).__name__}
         def write(connection):
             for value in values:
                 self.store._put_document(connection, 'strategy_trading_session_observations', value['observation_id'], value)
             self._write_research_review(connection, report)
+            if score is not None:
+                self.store._put_document(connection, 'recommendation_score_revisions', score['score_run_id'], score)
         return ctx.complete({'run_id': run['run_id'], 'observations': len(values),
-                             'horizon_unit': 'exchange_trading_sessions'}, write)
+                             'horizon_unit': 'exchange_trading_sessions',
+                             'recommendation_score_run_id': score.get('score_run_id') if score else None,
+                             'recommendation_score_error': score_error}, write)
 
     def strategy_outcomes(self, run_id):
         self.strategy_experiment(run_id)
         return [v for v in self._all('strategy_trading_session_observations') if v.get('run_id') == run_id]
+
+    def recommendation_scores(self, *, limit=20, offset=0, tier=None, setup=None, horizon=None, evidence_type=None):
+        from .recommendation_scoring import flatten_score_documents, summarize_score_history, OFFICIAL_PROSPECTIVE
+        if not 1 <= limit <= 1000 or offset < 0:
+            raise ValueError('invalid score page size')
+        horizon_value = int(horizon) if horizon not in (None, '') else None
+        documents = sorted(self._all('recommendation_score_revisions'),
+                           key=lambda row: (row.get('signal_observation_date') or '', row.get('revision') or 0, row.get('generated_at') or '', row.get('score_run_id') or ''),
+                           reverse=True)
+        filtered = []
+        for document in documents:
+            if evidence_type and document.get('evidence_type') != evidence_type:
+                continue
+            rows = flatten_score_documents([document], tier=tier, setup=setup, horizon=horizon_value)
+            if tier or setup or horizon_value is not None:
+                if not rows:
+                    continue
+                filtered.append({**document, 'records': rows})
+            else:
+                filtered.append(document)
+        page = filtered[offset:offset + limit]
+        return {
+            'schema_version': 'R11_RECOMMENDATION_SCORE_LIST_API_V1',
+            'score_spec_id': 'DAILY_RECOMMENDATION_SCORE_V1',
+            'items': page,
+            'total_matching_documents': len(filtered),
+            'limit': limit,
+            'offset': offset,
+            'has_next': offset + limit < len(filtered),
+            'filters': {'tier': tier, 'setup': setup, 'horizon': horizon_value, 'evidence_type': evidence_type},
+            'official_history': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE),
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+
+    def latest_recommendation_scores(self, *, tier=None, setup=None, horizon=None, evidence_type=None):
+        from .recommendation_scoring import summarize_score_history, OFFICIAL_PROSPECTIVE, RECONSTRUCTED_HISTORICAL
+        values = self.recommendation_scores(limit=1, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type)
+        documents = self._all('recommendation_score_revisions')
+        return {
+            'schema_version': 'R11_RECOMMENDATION_SCORE_LATEST_API_V1',
+            'latest': values['items'][0] if values['items'] else None,
+            'filters': values['filters'],
+            'official_prospective_score': summarize_score_history(documents, evidence_type=OFFICIAL_PROSPECTIVE),
+            'reconstructed_historical_score': summarize_score_history(documents, evidence_type=RECONSTRUCTED_HISTORICAL),
+            'score_spec_id': 'DAILY_RECOMMENDATION_SCORE_V1',
+            'authority': 'SAVED_SCORE_REVISION_DOCUMENTS_ONLY_NO_CLIENT_RECOMPUTATION',
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+
+    def recommendation_scores_for_run(self, run_id, *, tier=None, setup=None, horizon=None, evidence_type=None):
+        self.strategy_experiment(run_id)
+        result = self.recommendation_scores(limit=1000, tier=tier, setup=setup, horizon=horizon, evidence_type=evidence_type)
+        result['items'] = [row for row in result['items'] if row.get('signal_run_id') == run_id]
+        result['total_matching_documents'] = len(result['items'])
+        result['run_id'] = run_id
+        result['has_next'] = False
+        return result
 
     def submit_strategy_tracking(self, run_id, input_id=None, *, horizons=None, job_id=None):
         run = self.strategy_experiment(run_id)
@@ -987,6 +1056,7 @@ class CandidateService:
         run = self.strategy_experiment(payload['run_id'])
         _, bundle = self.input(payload['input_id'])
         from .strategy_tracking import OutcomeContext, build_strategy_feedback_report, build_strategy_tracking
+        from .recommendation_scoring import build_score_revision
         evaluated_at = datetime.fromisoformat(payload['evaluated_at'])
         context = OutcomeContext(bundle, evaluated_at)
         tracking = build_strategy_tracking(run, bundle, evaluated_at,
@@ -1002,6 +1072,11 @@ class CandidateService:
         review = build_strategy_feedback_report(run, outcomes, self._all('strategy_tracking_runs') + [tracking],
                                                 datetime.fromisoformat(payload['evaluated_at']),
                                                 runs=self._all('strategy_experiment_runs'), sessions=bundle.sessions)
+        score, score_error = None, None
+        try:
+            score = build_score_revision(run, outcomes, evaluated_at, existing_revisions=self._all('recommendation_score_revisions'))
+        except Exception as exc:
+            score_error = {'code': 'RECOMMENDATION_SCORE_FAILED', 'type': type(exc).__name__}
         def write(connection):
             for value in new_outcomes + tracking['shadow_outcomes']:
                 self.store._put_document(connection, 'strategy_trading_session_observations', value['observation_id'], value)
@@ -1014,9 +1089,13 @@ class CandidateService:
                 self.store._put_document(connection, 'research_episode_observations', obs_id, value)
             self.store._put_document(connection, 'strategy_tracking_runs', tracking['tracking_run_id'], tracking)
             self._write_research_review(connection, review)
+            if score is not None:
+                self.store._put_document(connection, 'recommendation_score_revisions', score['score_run_id'], score)
         return ctx.complete({'run_id': run['run_id'], 'tracking_run_id': tracking['tracking_run_id'],
                              'episodes': tracking['episode_count'], 'observations': tracking['observation_count'],
-                             'review_id': review['review_id']}, write)
+                             'review_id': review['review_id'],
+                             'recommendation_score_run_id': score.get('score_run_id') if score else None,
+                             'recommendation_score_error': score_error}, write)
 
     def strategy_tracking(self, run_id):
         self.strategy_experiment(run_id)

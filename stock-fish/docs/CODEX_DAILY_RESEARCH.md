@@ -19,7 +19,7 @@
 
 ## 2. 每次执行的最短路径
 
-1. 读取本协议及所需配置。先 GET `/api/health`，只汇报应用、作业、研究、跟踪与模型状态；不要输出环境、密钥或无关旧组合任务。地址默认 `http://127.0.0.1:8000/`，只接受已核实的本机实例。
+1. 读取本协议及所需配置。先 GET `/api/health`，只汇报应用、作业、研究、跟踪与模型状态；不要输出环境、密钥或无关旧组合任务。地址必须来自当轮实际核验；历史默认是 `http://127.0.0.1:8000/`，R11 本机验证因 8000 被占用使用 `http://127.0.0.1:8001/`。
 2. 读取交易所日历和真实保存运行。分别列出请求目标交易日、最后可用观察日、生成时间、决策截止与输入水位。日历超出覆盖时停止推断，不按周一至周五猜节假日。
 3. 优先复用保存结果。核对 input_id/input_hash、策略/配置、实现一致性、截止和覆盖；旧输入已有不匹配结果时解释差异，不自行覆盖或悄悄再算。历史查询无需满足当前实现版本，仍必须保留原版本。
 4. 需要新资料才使用现有采集入口；检查是否有在途任务，单次有界执行并等待或返回 job_id。HTTP 202 只是已受理，SUCCEEDED 也不等于数据合格；必须另看质量、激活和覆盖。鉴权失败不循环重试。
@@ -46,7 +46,7 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
-新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；2026-09-08 已提升为 `R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION` / `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
+新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；2026-09-08 已提升为 `R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING` / `R11_VALIDATION_SCORING`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
 
 - “把下一个交易日的荐股清单给我。”
 - “给我一份当前短线强势股和市场状态报告。”
@@ -56,11 +56,12 @@
 - “哪些股票属于趋势整理？”
 - “最近一周没选上的股票是不是反而更强？”
 - “比较原PV、旧焦点和阶段感知策略。”
+- “给我最近一次 DAILY_RECOMMENDATION_SCORE_V1 成绩卡。”
 - “给我策略调整建议，但不要修改正式策略。”
 
 执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
-2026-09-08 R10 交付后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。补取 2026-09-07 BaoStock 日线后，V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，下一目标交易会话为 2026-09-08；若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。
+2026-09-08 R11 交付后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。R10 的 2026-09-07 V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。R11 的 2026-09-08 bounded capture input hash 为 `b7bfe39df96b574b357348f3a506ea1e4edfa519a7053103976c132be6ff12c1`，但当前 eligible/FOCUS/WATCH 均为 0，等待 20:30 official primary。
 
 “非正式 FOCUS”只允许作为口语解释：9.7 输入是盘后手工/预备研究输入，不是 20:30 scheduler 写入的 official primary，且 FOCUS 硬条件中长窗趋势、市场兼容、PIT 题材/资金仍为 UNKNOWN；因此只能给 next-session research list 或 WATCH queue，不能说成正式 FOCUS 推荐。
 
@@ -76,7 +77,10 @@
 | 规则与保存运行 | GET `/api/strategy-configs/current`、`/api/strategy-experiments/specs`、`/api/strategy-experiments` |
 | 指定 run 的摘要、详情、导出 | GET `/api/strategy-experiments/<run_id>/summary`、`/items/<instrument_id>`、`/export` |
 | 原运行跟踪与评价 | GET 同一 run 的 `/tracking`、`/outcomes`、`/review`；有新合格输入时 POST 现有更新入口 |
+| 每日推荐成绩 | GET `/api/recommendation-scores/latest`、`/api/recommendation-scores`、`/api/recommendation-scores/<run_id>`；只读保存的 score revision，不接受公式覆盖参数 |
 | 有界采集和运行 | POST `/api/candidate-data-pipeline/capture`、`/api/strategy-experiments/run`；GET `/api/jobs/<job_id>` 检查终态 |
+
+`DAILY_RECOMMENDATION_SCORE_V1` 是表现观察，不是策略输入。它只在 outcome 成熟且保存了 score revision 后显示分数；没有 FOCUS、未成熟、benchmark coverage 不足或没有 official primary 时，显示 `N/A/NOT_MATURED/INSUFFICIENT_BENCHMARK_COVERAGE/NO_SCORE_REVISION`，不得把缺失当 0，也不得用 score 自动调参。
 
 `selection=all` 是全名单，`focus` 是额外门槛通过者，不是全名单前 N 名。正式导出 JSON 中实现 source_hash 与名单源内容哈希不同，按 `export_view.source_content_hash` 对照运行 source_run_hash，不能把不同用途的哈希判作失败。
 
@@ -84,7 +88,7 @@
 
 ## 4. 启停、自动步骤和持久化
 
-本机已核实运行目录是 `D:/StockRecommendation/stock-fish`，发布目录是 `D:/StockRecommendation/publish/stockfish-qlib-quant-system`，二者不能仅凭目录名视为同一实例。2026-09-07 使用本地 Python 服务，浏览器地址 [http://127.0.0.1:8000/](http://127.0.0.1:8000/)。
+本机历史运行目录是 `D:/StockRecommendation/stock-fish`，发布目录是 `D:/StockRecommendation/publish/stockfish-qlib-quant-system`，二者不能仅凭目录名视为同一实例。R11 当前验证在 `D:/stockfish-qlib-quant-system/stock-fish` 启动本地 Python 服务；因 8000 被其他进程占用，验证地址为 [http://127.0.0.1:8001/](http://127.0.0.1:8001/)。
 
 电脑重启后，可直接对 Codex 说“核对并启动 StockFish，读取上次名单”。由 Codex 先查正确实例；没有运行时按现有根目录 `Start-StockFish.ps1` 启动，停止用 `Stop-StockFish.ps1`。本机命令为 `pwsh -NoProfile -File D:/StockRecommendation/Start-StockFish.ps1` 和对应 Stop 脚本。发布检出脚本支持 `-Root`，但本机发布目录没有现成运行环境/私有数据，不能误启动空库替代现用库。详细部署见仓库根目录 DEPLOYMENT.md。
 

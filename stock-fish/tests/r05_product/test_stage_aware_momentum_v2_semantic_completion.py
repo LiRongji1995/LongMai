@@ -211,6 +211,62 @@ def test_limit_streak_role_feature_unknown_when_peer_limit_evidence_sparse():
     assert sector["limit_streak_evidence"]["status"] == "UNKNOWN"
 
 
+def _liquidity_row(*, amount, turnover):
+    bundle, cutoff = trend_bundle()
+    payload = _payload(bundle)
+    last = payload["sessions"][-1]
+    row = next(row for row in payload["bars"] if row["instrument_id"] == "TEST000" and row["session"] == last)
+    row["amount_cny"] = Decimal(str(amount)) if amount is not None else None
+    row["turnover_fraction"] = float(Decimal(str(turnover))) if turnover is not None else None
+    bundle = type(bundle).model_validate(payload)
+    return _row(run_stage_aware_momentum(bundle, cutoff=cutoff))
+
+
+def test_liquidity_hard_fail_takes_precedence_over_unknown_turnover():
+    row = _liquidity_row(amount="499999999.99", turnover=None)
+
+    assert row["liquidity_status"] == "FAIL"
+    assert row["status"] == "REJECTED"
+    assert "SAM_DECISION_LIQUIDITY_HARD_FAIL" in row["reason_codes"]
+    assert row["status"] != "WATCH"
+
+
+def test_liquidity_amount_pass_turnover_unknown_is_unknown():
+    row = _liquidity_row(amount="500000000", turnover=None)
+
+    assert row["liquidity_status"] == "UNKNOWN"
+    assert row["conditions"]["liquidity_bottom"]["reason_codes"] == ["SAM_TURNOVER_UNAVAILABLE"]
+
+
+def test_liquidity_amount_fail_turnover_pass_is_fail():
+    row = _liquidity_row(amount="499999999.99", turnover="0.07")
+
+    assert row["liquidity_status"] == "FAIL"
+    assert row["conditions"]["liquidity_bottom"]["reason_codes"] == ["SAM_AMOUNT_BELOW_500M"]
+
+
+def test_liquidity_amount_and_turnover_pass():
+    row = _liquidity_row(amount="500000000", turnover="0.07")
+
+    assert row["liquidity_status"] == "PASS"
+    assert row["conditions"]["liquidity_bottom"]["reason_codes"] == []
+
+
+def test_liquidity_fail_is_rejected_before_behavioral_watch():
+    decision = sam._decision(
+        sam._condition("FAIL", ["SAM_AMOUNT_BELOW_500M"]),
+        sam._condition("PASS"),
+        sam._condition("PASS", details={"primary_stage": "HIGH_LEVEL_REPAIR", "stage_candidates": {}}),
+        sam._condition("FAIL", ["SAM_INTRADAY_WEAK_TO_STRONG_NOT_CONFIRMED_FROM_DAILY_OHLC"]),
+        sam._condition("PASS"),
+        sam._condition("PASS"),
+        sam._condition("PASS"),
+    )
+
+    assert decision["decision_status"] == "REJECTED"
+    assert "SAM_DECISION_LIQUIDITY_HARD_FAIL" in decision["reason_codes"]
+
+
 def test_sector_coverage_is_independent_per_window():
     bundle, cutoff = trend_bundle()
     payload = _payload(bundle)

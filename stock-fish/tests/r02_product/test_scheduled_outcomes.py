@@ -203,6 +203,36 @@ def test_evening_capture_persists_stage_aware_v2_primary_run(observer):
     assert scheduler.describe_state(clock.current)['status']=='PROSPECTIVE_PRIMARY_PERSISTED'
 
 
+def test_describe_state_distinguishes_persisted_plan_from_live_scheduler(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(19),TZ)
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *a:pytest.fail('no capture before cutoff'),clock=clock)
+
+    state=scheduler.describe_state(clock.current)
+
+    assert state['status']=='PLANNED_BUT_NO_LIVE_SCHEDULER'
+    assert state['source']=='ACTUAL_CANDIDATE_SCHEDULER_STATE_R11'
+    assert state['scheduler_thread_alive'] is False
+    assert 'SCHEDULER_THREAD_NOT_ALIVE' in state['readiness_blockers']
+    assert state['service_identity']['process_id']
+
+
+def test_started_scheduler_reports_ready_and_running_before_evening_cutoff(observer):
+    client,core,bundle,clock,saved,_=observer
+    day=next_session(bundle);clock.current=datetime.combine(day,time(19),TZ)
+    scheduler=CandidateScheduler(core.candidates,capture=lambda *a:pytest.fail('no evening capture before cutoff'),clock=clock,interval=1)
+    try:
+        scheduler.start()
+
+        state=scheduler.describe_state(clock.current)
+
+        assert state['status']=='READY_AND_RUNNING_WAITING_FOR_CUTOFF'
+        assert state['scheduler_thread_alive'] is True
+        assert state['readiness_blockers']==[]
+    finally:
+        scheduler.stop()
+
+
 def test_missed_evening_capture_cannot_be_backfilled_as_prospective_primary(observer):
     client,core,bundle,clock,saved,_=observer
     day=next_session(bundle);clock.current=datetime.combine(day,time(20,40),TZ)

@@ -3,6 +3,7 @@ import time
 import pytest
 
 from stockfish_core.api import create_app
+from stockfish_core.yaogu.data_pipeline import PIPELINE_VERSION
 from tests.integration.core_fixture import fixture_service, DECISION, IIDS
 
 
@@ -82,6 +83,14 @@ def test_missing_job_and_model_never_fake_success(api):
     response = client.post("/api/analyze", json={"instruments": ["600000.SH"], "model_id": "missing"})
     assert response.status_code == 503
     assert response.json["quality"] == "UNAVAILABLE"
+
+
+def test_candidate_data_pipeline_status_exposes_registered_pipeline_version(api):
+    client, _, _, _ = api
+    response = client.get("/api/candidate-data-pipeline")
+    assert response.status_code == 200
+    assert response.json["pipeline_version"] == PIPELINE_VERSION
+    assert response.json["resume_policy"] == "PERSISTENT_REQUEST_QUEUE_FINITE_BUDGET_NO_FALSE_COMPLETION"
 
 
 def test_quant_only_missing_features_is_failed_with_saved_diagnostics(api):

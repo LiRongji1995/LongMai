@@ -389,7 +389,9 @@ def _liquidity(ctx, iid, end_index):
         reasons.append("SAM_TURNOVER_UNAVAILABLE")
     elif turnover < turnover_threshold:
         reasons.append("SAM_TURNOVER_BELOW_7PCT")
-    status = "UNKNOWN" if any(reason.endswith("UNAVAILABLE") for reason in reasons) else "FAIL" if reasons else "PASS"
+    hard_fail_reasons = [reason for reason in reasons if not reason.endswith("UNAVAILABLE")]
+    unknown_reasons = [reason for reason in reasons if reason.endswith("UNAVAILABLE")]
+    status = "FAIL" if hard_fail_reasons else "UNKNOWN" if unknown_reasons else "PASS"
 
     prior5_amount = _prior_values(ctx, iid, end_index, 5, _amount_fraction)
     prior10_amount = _prior_values(ctx, iid, end_index, 10, _amount_fraction)

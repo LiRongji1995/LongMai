@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 from datetime import date, datetime, time
+import os
 import json
 from pathlib import Path
 import threading
@@ -19,6 +20,7 @@ SH = ZoneInfo('Asia/Shanghai')
 
 class CandidateScheduler:
     OBSERVATION_PLAN_VERSION = 'FORWARD_OBSERVATION_PLAN_R03_V3'
+    SCHEDULER_STATE_SOURCE = 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R11'
     MAX_OUTCOME_SUBMISSIONS_PER_TICK = 5
     def __init__(self, service, *, capture=None, clock=utc_now, interval=20):
         self.service, self.clock, self.interval = service, clock, interval
@@ -133,7 +135,7 @@ class CandidateScheduler:
         if existing is None:
             value = {
                 'schedule_id': doc_id,
-                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R10',
+                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R11',
                 'registered_at': now.isoformat(),
                 'config_hash': config.config_hash,
                 'calendar_hash': self.calendar_hash,
@@ -172,31 +174,43 @@ class CandidateScheduler:
         signal_day = date.fromisoformat(primary['signal_session']) if primary.get('signal_session') else None
         primary_run = self._latest_stage_aware_primary(signal_day) if signal_day else None
         cutoff = datetime.fromisoformat(primary['scheduled_at']) if primary.get('scheduled_at') else None
+        thread_alive = bool(self.thread and self.thread.is_alive())
+        readiness_blockers = []
+        if not thread_alive:
+            readiness_blockers.append('SCHEDULER_THREAD_NOT_ALIVE')
+        if not job_id:
+            readiness_blockers.append('PRIMARY_SCHEDULE_NOT_REGISTERED')
         if primary_run:
             status = 'PROSPECTIVE_PRIMARY_PERSISTED'
         elif event and event.get('status') == 'MISSED_SERVICE_OFFLINE':
             status = 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'
         elif job:
             status = 'JOB_' + job['state']
+        elif not thread_alive and cutoff:
+            status = 'PLANNED_BUT_NO_LIVE_SCHEDULER'
         elif cutoff and now.astimezone(SH) < cutoff:
-            status = 'PERSISTENTLY_PLANNED_WAITING_FOR_CUTOFF'
+            status = 'READY_AND_RUNNING_WAITING_FOR_CUTOFF'
         elif cutoff:
             status = 'CUTOFF_REACHED_AWAITING_SCHEDULER_TICK'
         else:
             status = primary.get('status', 'UNKNOWN')
+        if status in {'PROSPECTIVE_PRIMARY_PERSISTED', 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'}:
+            readiness_blockers = []
         epoch = self.service.store.get_document('stage_aware_prospective_validation_epochs',
                                                 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_VALIDATION_EPOCH')
         return {
-            'source': 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R10',
+            'source': self.SCHEDULER_STATE_SOURCE,
             'observed_at': now.isoformat(),
             'status': status,
             'scheduler_class': type(self).__name__,
             'scheduler_started_at': self.started_at.isoformat(),
-            'scheduler_thread_alive': bool(self.thread and self.thread.is_alive()),
+            'scheduler_thread_alive': thread_alive,
+            'readiness_blockers': readiness_blockers,
             'service_identity': {
                 'state_root': str(self.service.root),
                 'db_path': str(self.service.store.path),
                 'job_owner_id': self.service.jobs.owner_id,
+                'process_id': os.getpid(),
             },
             'active_candidate_strategy_id': self.service.current_config().strategy_id,
             'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',

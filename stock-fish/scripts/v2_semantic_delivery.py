@@ -49,6 +49,16 @@ from stockfish_core.yaogu.stage_aware_momentum import (
 
 SH = ZoneInfo("Asia/Shanghai")
 
+REPLAY_STATUS_TAXONOMY = {
+    "INPUT_STATUS": ["EVALUATED", "EVALUATED_LIMITED_SCOPE", "SOURCE_UNAVAILABLE", "INSUFFICIENT_HISTORY", "INSUFFICIENT_IDENTITY", "INSUFFICIENT_SOURCE_SCOPE", "FAILED"],
+    "UNIVERSE_STATUS": ["EVALUATED", "EVALUATED_LIMITED_SCOPE", "SOURCE_UNAVAILABLE", "INSUFFICIENT_IDENTITY", "FAILED"],
+    "PRICE_TREND_DATA_STATUS": ["EVALUATED", "EVALUATED_LIMITED_SCOPE", "SOURCE_UNAVAILABLE", "INSUFFICIENT_HISTORY", "INSUFFICIENT_IDENTITY", "INSUFFICIENT_SOURCE_SCOPE", "FAILED"],
+    "CONTEXT_DATA_STATUS": ["EVALUATED", "EVALUATED_LIMITED_SCOPE", "SOURCE_UNAVAILABLE", "UNKNOWN_OR_PARTIAL_CONTEXT", "FAILED"],
+    "STRATEGY_STATUS": ["EVALUATED", "EVALUATED_EMPTY", "SOURCE_UNAVAILABLE", "INSUFFICIENT_HISTORY", "INSUFFICIENT_IDENTITY", "INSUFFICIENT_SOURCE_SCOPE", "FAILED"],
+    "evaluable_signal_day_rule": "historical input constructed, signal-day universe scope determinable, eligible_count > 0, and strategy evaluation actually occurred",
+    "empty_day_rule": "EMPTY is legal only after an evaluated universe/scope; source or identity unavailability is not EMPTY",
+}
+
 
 def dump_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
@@ -85,8 +95,8 @@ def load_scheduler_state(path):
         }
     value = json.loads(Path(path).read_text(encoding="utf-8"))
     state = value.get("prospective_validation", value)
-    if state.get("source") != "ACTUAL_CANDIDATE_SCHEDULER_STATE_R10":
-        raise SystemExit("SCHEDULER_STATE_JSON_MUST_COME_FROM_ACTUAL_CANDIDATE_SCHEDULER_STATE_R10")
+    if state.get("source") != "ACTUAL_CANDIDATE_SCHEDULER_STATE_R11":
+        raise SystemExit("SCHEDULER_STATE_JSON_MUST_COME_FROM_ACTUAL_CANDIDATE_SCHEDULER_STATE_R11")
     return state
 
 
@@ -291,6 +301,11 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
         attempts = [{
             "observation_date": str(session),
             "status": "BLOCKED_INPUT_NOT_RECONSTRUCTED_HISTORICAL",
+            "input_status": "SOURCE_UNAVAILABLE",
+            "universe_status": "SOURCE_UNAVAILABLE",
+            "price_trend_data_status": "SOURCE_UNAVAILABLE",
+            "context_data_status": "SOURCE_UNAVAILABLE",
+            "strategy_status": "FAILED",
             "focus": 0,
             "watch": 0,
             "rejected": 0,
@@ -299,6 +314,7 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
             "blocker": "PROSPECTIVE_CAPTURED_INPUT_CANNOT_BE_REPLAYED_AS_HISTORICAL_SOURCE_TIME_PROOF",
         } for session in sessions]
         write_csv(output / "v2_historical_replay_items_compact.csv", [])
+        dump_json(output / "v2_historical_replay_status_taxonomy.json", REPLAY_STATUS_TAXONOMY)
         return {
             "strategy_id": STAGE_AWARE_ID,
             "coverage_type": bundle.coverage_type,
@@ -307,6 +323,10 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
             "warmup_sessions_required_before_first_signal": warmup,
             "replay_sessions": [str(s) for s in sessions],
             "attempt_count": len(attempts),
+            "source_constructed_count": 0,
+            "evaluable_signal_day_count": 0,
+            "unevaluable_signal_day_count": len(attempts),
+            "failed_count": 0,
             "success_count": 0,
             "blocked_count": len(attempts),
             "focus_total": 0,
@@ -315,8 +335,9 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
             "unknown_total": 0,
             "eligible_total": 0,
             "attempts": attempts,
+            "status_taxonomy": REPLAY_STATUS_TAXONOMY,
             "compact_items_csv": str((output / "v2_historical_replay_items_compact.csv").resolve()),
-            "objective_blocker": "No RECONSTRUCTED_HISTORICAL MarketInput or verified historical source-policy supply directory is available in this workspace; using the 2026-09-07 PROSPECTIVE_CAPTURED input for past cutoffs would correctly hide all late-captured rows.",
+            "objective_blocker": f"No RECONSTRUCTED_HISTORICAL MarketInput or verified historical source-policy supply directory is available in this workspace; using the {bundle.observation_date} {bundle.coverage_type} input for past cutoffs would correctly hide all late-captured rows.",
             "market_edge": CONFIG["market_edge"],
         }
     attempts, rows = [], []
@@ -329,25 +350,78 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
             condition_counts = counts.get("condition_counts", {})
             sector_counts = condition_counts.get("sector_context", {})
             funds_counts = condition_counts.get("capital_linkage", {})
+            eligible = counts.get("eligible", 0)
+            active_universe_count = len(replay_bundle.universe.securities)
+            current_bars = sum(1 for bar in replay_bundle.bars if bar.session == session)
+            if not replay_bundle.sessions or session not in replay_bundle.sessions:
+                input_status = "SOURCE_UNAVAILABLE"
+            elif active_universe_count == 0:
+                input_status = "INSUFFICIENT_IDENTITY"
+            elif current_bars == 0:
+                input_status = "INSUFFICIENT_SOURCE_SCOPE"
+            else:
+                input_status = "EVALUATED_LIMITED_SCOPE" if not replay_bundle.universe.complete else "EVALUATED"
+            if active_universe_count == 0:
+                universe_status = "INSUFFICIENT_IDENTITY"
+            elif not replay_bundle.universe.complete:
+                universe_status = "EVALUATED_LIMITED_SCOPE"
+            else:
+                universe_status = "EVALUATED"
+            if eligible > 0:
+                price_status = "EVALUATED"
+                strategy_status = "EVALUATED"
+            elif input_status in {"SOURCE_UNAVAILABLE", "INSUFFICIENT_IDENTITY", "INSUFFICIENT_SOURCE_SCOPE"}:
+                price_status = input_status
+                strategy_status = input_status
+            else:
+                price_status = "EVALUATED"
+                strategy_status = "EVALUATED_EMPTY"
+            context_status = "EVALUATED" if sector_counts.get("PASS", 0) and funds_counts.get("PASS", 0) else (
+                "EVALUATED_LIMITED_SCOPE" if eligible > 0 else price_status
+            )
+            replay_day_status = "EVALUATED" if eligible > 0 else strategy_status
             attempts.append({
                 "observation_date": str(session),
-                "status": result.get("status"),
+                "status": replay_day_status,
+                "strategy_result_status": result.get("status"),
+                "input_status": input_status,
+                "universe_status": universe_status,
+                "price_trend_data_status": price_status,
+                "context_data_status": context_status,
+                "strategy_status": strategy_status,
                 "focus": counts.get("focus", 0),
                 "watch": counts.get("watch", 0),
                 "rejected": counts.get("rejected", 0),
                 "unknown": counts.get("unknown", 0),
-                "eligible": counts.get("eligible", 0),
-                "price_trend_replay_scope_status": "EVALUATED" if counts.get("eligible", 0) else "NO_ELIGIBLE_PRICE_TREND_ROWS",
+                "eligible": eligible,
+                "active_universe_count": active_universe_count,
+                "current_session_bar_count": current_bars,
+                "price_trend_replay_scope_status": "EVALUATED" if eligible > 0 else price_status,
                 "full_context_replay_scope_status": "EVALUATED" if sector_counts.get("PASS", 0) and funds_counts.get("PASS", 0) else "UNKNOWN_OR_PARTIAL_CONTEXT",
                 "sector_pass": sector_counts.get("PASS", 0),
                 "capital_pass": funds_counts.get("PASS", 0),
             })
             rows.extend(compact_item(row, str(session)) for row in result.get("items", []))
         except Exception as exc:
-            attempts.append({"observation_date": str(session), "status": "FAILED", "error_type": type(exc).__name__, "error": str(exc)})
+            attempts.append({
+                "observation_date": str(session),
+                "status": "FAILED",
+                "input_status": "FAILED",
+                "universe_status": "FAILED",
+                "price_trend_data_status": "FAILED",
+                "context_data_status": "FAILED",
+                "strategy_status": "FAILED",
+                "error_type": type(exc).__name__,
+                "error": str(exc),
+            })
     write_csv(output / "v2_historical_replay_items_compact.csv", rows)
     price_scope = [row for row in attempts if row.get("price_trend_replay_scope_status") == "EVALUATED"]
     full_context_scope = [row for row in attempts if row.get("full_context_replay_scope_status") == "EVALUATED"]
+    failed = [row for row in attempts if row.get("status") == "FAILED"]
+    source_constructed = [row for row in attempts if row.get("input_status") not in {"SOURCE_UNAVAILABLE", "FAILED"}]
+    evaluable = [row for row in attempts if row.get("strategy_status") == "EVALUATED" and row.get("eligible", 0) > 0]
+    unevaluable = [row for row in attempts if row not in evaluable and row not in failed]
+    dump_json(output / "v2_historical_replay_status_taxonomy.json", REPLAY_STATUS_TAXONOMY)
     return {
         "strategy_id": STAGE_AWARE_ID,
         "coverage_type": bundle.coverage_type,
@@ -356,7 +430,11 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
         "warmup_sessions_required_before_first_signal": warmup,
         "replay_sessions": [str(s) for s in sessions],
         "attempt_count": len(attempts),
-        "success_count": sum(row.get("status") != "FAILED" for row in attempts),
+        "source_constructed_count": len(source_constructed),
+        "evaluable_signal_day_count": len(evaluable),
+        "unevaluable_signal_day_count": len(unevaluable),
+        "failed_count": len(failed),
+        "success_count": len(evaluable),
         "focus_total": sum(row.get("focus", 0) for row in attempts),
         "watch_total": sum(row.get("watch", 0) for row in attempts),
         "rejected_total": sum(row.get("rejected", 0) for row in attempts),
@@ -365,15 +443,20 @@ def run_replay(bundle, cutoff, output, *, max_sessions):
         "scope_summary": {
             "PRICE_TREND_REPLAY_SCOPE": {
                 "success_count": len(price_scope),
+                "evaluable_signal_day_count": len(price_scope),
+                "unevaluable_signal_day_count": len([row for row in attempts if row.get("price_trend_replay_scope_status") != "EVALUATED" and row.get("status") != "FAILED"]),
                 "eligible_total": sum(row.get("eligible", 0) for row in price_scope),
                 "coverage_rule": "long daily price/comparable basis/dated qualification sufficient; Sector/Capital may remain UNKNOWN",
             },
             "FULL_CONTEXT_REPLAY_SCOPE": {
                 "success_count": len(full_context_scope),
+                "evaluable_signal_day_count": len(full_context_scope),
+                "unevaluable_signal_day_count": len([row for row in attempts if row.get("full_context_replay_scope_status") != "EVALUATED" and row.get("status") != "FAILED"]),
                 "eligible_total": sum(row.get("eligible", 0) for row in full_context_scope),
                 "coverage_rule": "requires visible PIT theme/sector and classified capital context, not imputed from current membership",
             },
         },
+        "status_taxonomy": REPLAY_STATUS_TAXONOMY,
         "attempts": attempts,
         "compact_items_csv": str((output / "v2_historical_replay_items_compact.csv").resolve()),
         "market_edge": CONFIG["market_edge"],
@@ -517,11 +600,15 @@ Unresolved data gaps are documented in `V2_DATA_READINESS.md` and `V2_PROSPECTIV
 - replay_input_observation_date: `{replay.get('replay_input_observation_date')}`
 - replay_range: `{replay['replay_sessions'][0] if replay['replay_sessions'] else None}` to `{replay['replay_sessions'][-1] if replay['replay_sessions'] else None}`
 - attempt_count: `{replay['attempt_count']}`
-- success_count: `{replay['success_count']}`
+- source_constructed_count: `{replay.get('source_constructed_count')}`
+- evaluable_signal_day_count: `{replay.get('evaluable_signal_day_count')}`
+- unevaluable_signal_day_count: `{replay.get('unevaluable_signal_day_count')}`
+- failed_count: `{replay.get('failed_count')}`
+- legacy_success_count_alias: `{replay['success_count']}`
 - Focus/Watch/Rejected/Unknown: `{replay['focus_total']}` / `{replay['watch_total']}` / `{replay['rejected_total']}` / `{replay['unknown_total']}`
 - eligible_total: `{replay['eligible_total']}`
-- PRICE_TREND_REPLAY_SCOPE successful days: `{(replay.get('scope_summary') or {}).get('PRICE_TREND_REPLAY_SCOPE', {}).get('success_count')}`
-- FULL_CONTEXT_REPLAY_SCOPE successful days: `{(replay.get('scope_summary') or {}).get('FULL_CONTEXT_REPLAY_SCOPE', {}).get('success_count')}`
+- PRICE_TREND_REPLAY_SCOPE evaluable days: `{(replay.get('scope_summary') or {}).get('PRICE_TREND_REPLAY_SCOPE', {}).get('evaluable_signal_day_count')}`
+- FULL_CONTEXT_REPLAY_SCOPE evaluable days: `{(replay.get('scope_summary') or {}).get('FULL_CONTEXT_REPLAY_SCOPE', {}).get('evaluable_signal_day_count')}`
 - compact_items_csv: `{replay_compact_csv}`
 - MARKET_EDGE: `{replay['market_edge']}`
 - blocker: `{replay_blocker}`
@@ -545,6 +632,8 @@ Rules: append-only outcomes, no historical-to-prospective backfill, UNKNOWN rema
 
 - status: `{prospective['status']}`
 - source: `{prospective['scheduler_state_source']}`
+- scheduler_thread_alive: `{prospective.get('scheduler_thread_alive')}`
+- readiness_blockers: `{prospective.get('readiness_blockers')}`
 - next_real_primary_capture: `{prospective.get('next_real_primary_capture')}`
 - next_target_session: `{prospective['next_target_session']}`
 - signal_input_observation_date: `{prospective['signal_input_observation_date']}`
@@ -649,23 +738,33 @@ def main():
     start_session = epoch.get("start_session")
     proto = protocol(start_session, cutoff)
     official_primary_signal_count = 1 if epoch.get("first_primary_run_id") else 0
+    scheduler_status = scheduler_state.get("status", "UNKNOWN")
+    readiness_blockers = list(scheduler_state.get("readiness_blockers") or [])
+    blocker_statuses = {
+        "NOT_CHECKED_ACTUAL_STATE_REQUIRED",
+        "SCHEDULER_NOT_ATTACHED_TO_SERVICE",
+        "PLANNED_BUT_NO_LIVE_SCHEDULER",
+    }
+    blocker = ";".join(readiness_blockers) if readiness_blockers else (scheduler_status if scheduler_status in blocker_statuses else None)
     prospective = {
         "status": scheduler_state.get("status", "UNKNOWN"),
         "scheduler_state_source": scheduler_state.get("source"),
+        "scheduler_thread_alive": scheduler_state.get("scheduler_thread_alive"),
+        "readiness_blockers": readiness_blockers,
         "next_real_primary_capture": scheduler_state.get("next_real_primary_capture"),
         "next_target_session": scheduler_state.get("expected_target_session") or str(target_session),
         "signal_input_observation_date": signal_date,
         "signal_validation_role": "PROSPECTIVE_PRELIMINARY" if bundle.coverage_type == "PROSPECTIVE_CAPTURED" else "NOT_PROSPECTIVE_SIGNAL_INPUT",
         "official_primary_signal_count": official_primary_signal_count,
         "first_official_validation_signal_date": epoch.get("first_signal_observation_date"),
-        "scheduler_status": scheduler_state.get("status", "UNKNOWN"),
+        "scheduler_status": scheduler_status,
         "scheduler_job_id": scheduler_state.get("scheduler_job_id"),
         "scheduler_job_state": scheduler_state.get("scheduler_job_state"),
         "scheduler_event_state": scheduler_state.get("scheduler_event_state"),
         "service_identity": scheduler_state.get("service_identity"),
         "validation_epoch": epoch or None,
-        "blocker": None if scheduler_state.get("status") not in {"NOT_CHECKED_ACTUAL_STATE_REQUIRED", "SCHEDULER_NOT_ATTACHED_TO_SERVICE"} else scheduler_state.get("status"),
-        "minimal_manual_action": None if scheduler_state.get("status") not in {"NOT_CHECKED_ACTUAL_STATE_REQUIRED", "SCHEDULER_NOT_ATTACHED_TO_SERVICE"} else "Start the StockFish local service with CandidateScheduler attached before the next scheduled capture.",
+        "blocker": blocker,
+        "minimal_manual_action": None if blocker is None else "Start or reuse the StockFish local service with CandidateScheduler attached and running before the next scheduled capture.",
         "market_edge": CONFIG["market_edge"],
     }
     research = research_list(result, signal_date, target_session, args.output)

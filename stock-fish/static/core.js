@@ -28,6 +28,7 @@
   let currentConfig = null;
   let latestCoverage = null;
   let latestExperiment = null;
+  let latestScore = null;
   let experimentPage = 1;
   let experimentHistoryOffset = 0;
   let experimentRuns = [];
@@ -40,6 +41,7 @@
   };
   const display = value => value === null || value === undefined ? '不可用' :
     typeof value === 'number' ? value.toFixed(2) : String(value);
+  const displayPct = value => value === null || value === undefined ? '不可用' : (Number(value) * 100).toFixed(2) + '%';
 
   function message(text, error = false) {
     $('message').textContent = text;
@@ -66,6 +68,110 @@
     const el = textNode('details');
     el.append(textNode('summary', title), textNode('pre', JSON.stringify(value, null, 2)));
     return el;
+  }
+
+  function scoreBand(record) {
+    if (!record || record.score === null || record.score === undefined) {
+      if (record?.score_status === 'N_A_NO_SELECTION') return 'N/A · NO FOCUS SIGNAL';
+      if (record?.score_status === 'NOT_MATURED') return 'Pending';
+      if (record?.score_status?.includes('COVERAGE')) return 'Partial / Insufficient Coverage';
+      return 'Not available yet';
+    }
+    if (record.score >= 80) return 'Top 20% random-basket percentile';
+    if (record.score >= 60) return 'Above median random basket';
+    if (record.score >= 40) return 'Near random median';
+    if (record.score >= 20) return 'Below median';
+    return 'Bottom 20%';
+  }
+
+  function latestDaily(history) {
+    const rows = history?.daily || [];
+    return rows.length ? rows[rows.length - 1] : null;
+  }
+
+  function scoreRecord(doc, tier, horizon) {
+    return (doc?.records || []).find(row => row.selection_tier === tier && row.horizon === horizon);
+  }
+
+  function drawScoreSection(data) {
+    latestScore = data;
+    $('scoreJson').textContent = JSON.stringify(data, null, 2);
+    const root = $('scoreCards');
+    root.replaceChildren();
+    const official = latestDaily(data.official_prospective_score);
+    const latestDoc = data.latest;
+    const headline = latestDoc?.headline;
+    const officialBadgeRecord = official ? {score: official.focus_score, score_status: official.focus_status} : null;
+
+    const badge = textNode('article', undefined, 'scorecard-main');
+    const score = officialBadgeRecord?.score ?? null;
+    const label = score === null || score === undefined ? 'N/A' : Math.round(score);
+    const ring = textNode('div', undefined, 'score-ring');
+    ring.style.setProperty('--score', (score === null || score === undefined ? 0 : Math.max(0, Math.min(100, score))) + '%');
+    ring.append(textNode('strong', label), textNode('span', score === null || score === undefined ? '' : '/100'));
+    const badgeText = textNode('div');
+    badgeText.append(textNode('span', 'Official prospective D+1', 'badge'), textNode('h3', scoreBand(officialBadgeRecord)));
+    badgeText.append(textNode('p', official ? `信号日 ${official.signal_observation_date} · FOCUS M ${official.focus_M} · benchmark coverage ${displayPct(official.benchmark_coverage)}` : 'Official prospective score: Not available yet'));
+    badge.append(ring, badgeText);
+    root.append(badge);
+
+    const metrics = textNode('article', undefined, 'scorecard-panel');
+    const focusD1 = scoreRecord(latestDoc, 'FOCUS_SCORE', 1);
+    metrics.append(textNode('span', 'Latest saved score revision'));
+    metrics.append(textNode('strong', latestDoc ? latestDoc.evidence_type : 'NO_SCORE_REVISION'));
+    metrics.append(textNode('p', latestDoc ? `${latestDoc.signal_observation_date} · ${latestDoc.headline_status} · ${latestDoc.score_spec_id}` : '暂无保存 score revision。'));
+    metrics.append(textNode('p', focusD1 ? `FOCUS M ${focusD1.M} · Selection ${displayPct(focusD1.equal_weight_return)} · Excess ${displayPct(focusD1.excess_return)} · Hit ${displayPct(focusD1.hit_rate)} · Outperform ${displayPct(focusD1.outperform_market_rate)}` : 'FOCUS D+1 尚无可显示记录。'));
+    root.append(metrics);
+
+    const trend = textNode('article', undefined, 'scorecard-panel wide');
+    trend.append(textNode('span', 'Daily / 20D / 60D trend'));
+    const officialHistory = data.official_prospective_score;
+    trend.append(textNode('strong', officialHistory?.official_signal_days ? `${officialHistory.official_signal_days} official signal days` : 'Official prospective score: Not available yet'));
+    const bars = textNode('div', undefined, 'score-bars');
+    for (const row of (officialHistory?.daily || []).slice(-30)) {
+      const bar = textNode('i');
+      bar.title = `${row.signal_observation_date} · ${row.focus_status} · ${display(row.focus_score)}`;
+      bar.style.height = row.focus_score == null ? '4px' : Math.max(4, Math.min(80, row.focus_score)) + 'px';
+      bar.dataset.empty = row.focus_score == null ? 'true' : 'false';
+      bars.append(bar);
+    }
+    if (!bars.children.length) bars.append(textNode('p', '首个 official primary 的 D+1 outcome 成熟后才绘制趋势；缺日不会补 0。', 'caption'));
+    trend.append(bars);
+    const r20 = officialHistory?.rolling?.['20D'];
+    const r60 = officialHistory?.rolling?.['60D'];
+    trend.append(textNode('p', `20D ${display(r20?.mean_score)} · 60D ${display(r60?.mean_score)} · reference line 50 percentile`));
+    root.append(trend);
+
+    const watch = textNode('article', undefined, 'scorecard-panel');
+    const watchD1 = scoreRecord(latestDoc, 'WATCH_RESEARCH_SCORE', 1);
+    watch.append(textNode('span', 'Focus vs Watch'));
+    watch.append(textNode('strong', focusD1 && watchD1 && focusD1.score != null && watchD1.score != null ? display(focusD1.score - watchD1.score) : 'Pending'));
+    watch.append(textNode('p', watchD1 ? `WATCH Research D+1 ${display(watchD1.score)} · ${watchD1.score_status} · 不作为正式推荐成绩` : 'WATCH research score 尚不可用。'));
+    root.append(watch);
+
+    const heatmap = textNode('article', undefined, 'scorecard-panel wide');
+    heatmap.append(textNode('span', 'Setup Score Heatmap'));
+    const table = textNode('table');
+    const header = textNode('tr');
+    ['Setup', 'D+1', 'D+3', 'D+5'].forEach(value => header.append(textNode('th', value)));
+    table.append(header);
+    for (const setup of ['START', 'ACCELERATION', 'HIGH_LEVEL_REPAIR', 'TREND_PULLBACK']) {
+      const row = textNode('tr');
+      row.append(textNode('td', setup));
+      for (const horizon of [1, 3, 5]) {
+        const record = scoreRecord(latestDoc, 'FOCUS:' + setup, horizon);
+        row.append(textNode('td', record?.score == null ? record?.score_status || 'Pending' : display(record.score)));
+      }
+      table.append(row);
+    }
+    heatmap.append(table);
+    root.append(heatmap);
+
+    const coverage = textNode('article', undefined, 'scorecard-panel');
+    coverage.append(textNode('span', 'Signal / data coverage'));
+    coverage.append(textNode('strong', officialHistory?.official_signal_days ? displayPct(officialHistory.focus_signal_coverage) : 'N/A'));
+    coverage.append(textNode('p', officialHistory?.official_signal_days ? `focus days ${officialHistory.focus_nonempty_days}/${officialHistory.official_signal_days} · mean M ${display(officialHistory.mean_M)} · median M ${display(officialHistory.median_M)}` : 'M=0 日期计入 coverage denominator，但不进入 rolling score mean。'));
+    root.append(coverage);
   }
 
   function tabCount(id) {
@@ -369,12 +475,14 @@
     try {
       await refreshPipeline();
       await refreshExperiments();
-      const [config, coverage, runs, schedule] = await Promise.all([
+      const [config, coverage, runs, schedule, score] = await Promise.all([
         api('/api/strategy-configs/current'),
         api('/api/universe/coverage'),
         api('/api/candidate-runs'),
         api('/api/candidate-schedule'),
+        api('/api/recommendation-scores/latest'),
       ]);
+      drawScoreSection(score);
       if (!currentConfig || currentConfig.config_hash !== config.config_hash) $('profile').value = config.config.funds_primary ? 'FUNDS_V1' : 'DAILY_V1';
       currentConfig = config;
       $('strategyVersion').textContent = config.config.strategy_id;

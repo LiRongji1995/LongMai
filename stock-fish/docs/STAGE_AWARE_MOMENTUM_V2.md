@@ -2,13 +2,13 @@
 
 核对日期：2026-09-08（Asia/Shanghai）。
 
-`STAGE_AWARE_MOMENTUM_V2` 是当前主动核心强势股策略。2026-09-08 本轮完成 `R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`，在 R09 语义修正基础上补齐真实 2026-09-07 数据、重建历史 replay 输入、并登记下一次 20:30 prospective primary 调度；不创建 V3、不新增长期并行策略臂。`STAGE_AWARE_MOMENTUM_V1` 保留为历史只读兼容和审计材料；旧 DAILY、PV、焦点、DNA、THEME 与 `THEME_CAPITAL_TREND_V1` 不改名、不重写历史。
+`STAGE_AWARE_MOMENTUM_V2` 是当前主动核心强势股策略。2026-09-08 本轮完成 `R11_VALIDATION_SCORING`：修正 liquidity 三态 AND 语义，完成 replay 成功口径拆分，接入 `DAILY_RECOMMENDATION_SCORE_V1` 只读评价消费者，并确认真实 20:30 prospective scheduler 正在运行；不创建 V3、不新增长期并行策略臂。`STAGE_AWARE_MOMENTUM_V1` 保留为历史只读兼容和审计材料；旧 DAILY、PV、焦点、DNA、THEME 与 `THEME_CAPITAL_TREND_V1` 不改名、不重写历史。
 
 ## 身份与边界
 
 - 策略 ID：`STAGE_AWARE_MOMENTUM_V2`。
-- 实现版本：`R10_STAGE_AWARE_MOMENTUM_V2_DATA_REPLAY_PROSPECTIVE_ACTIVATION`。
-- 规格修订：`R10_DATA_REPLAY_PROSPECTIVE_ACTIVATION`。
+- 实现版本：`R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING`。
+- 规格修订：`R11_VALIDATION_SCORING`。
 - 配置：[stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)。
 - 实现：[stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)。
 - Codex profile：`STAGE_AWARE_MOMENTUM_V2`。
@@ -48,7 +48,7 @@ V2 先保存事实和中间判定，再给最终标签：
 - 5 日高换手计数为最近五个会话含 T：`sessions[end_index-4:end_index+1]`；另存 prior5 excluding T 作为诊断，避免 6 日窗口错误。
 - 排名只在 decision tier 与 setup 内按透明特征排序；跨 setup 仅是显示顺序，`rank_semantics=SETUP_AND_DECISION_TIER_RESEARCH_ORDER_NOT_GLOBAL_SCORE`。PV 参考分只作诊断，不作 V2 全局排名。
 
-## R09/R10 完成点
+## R09/R10/R11 完成点
 
 - `Behavioral Confirmation = FAIL` 会阻止要求该行为的 setup 成为 FOCUS，但不把股票全局永久拒绝；UNKNOWN 仍可进入 WATCH/待确认。
 - `ACCELERATION` 使用共享的等长窗口强度动量：最近 3 个交易会话的收益与 RS，分别减去前一个 3 会话窗口的收益与 RS；边际增强为 `RISING`，稳定为 `STABLE`，减弱为 `FALLING`。强度 level 和动量 momentum 分开保存。
@@ -63,16 +63,22 @@ V2 先保存事实和中间判定，再给最终标签：
 - R10 进一步要求市场 `EXPANSION` 不能遮蔽跌停/炸板分歧压力；市场 momentum 只在前后 coverage 可比时给出，coverage 不可比时保持 `UNKNOWN`。
 - Sector Level 明确拆成绝对 peer return 与相对全市场 RS；Sector Momentum 改为 matched peers 等长窗口差；Stock Role 输出 known/unknown feature coverage 和真实涨停/连板分位证据。
 - 历史回放器读取 durable request-queue `results` 与实际 `raw/**/raw` archive，交易日历来自已捕获 provider calendar；交易所日历网页只作为可选审计附件。
+- R11 修正 liquidity 三态 AND：任一已知硬失败必须产生 `FAIL`，只有没有硬失败但存在缺字段时才为 `UNKNOWN`，不能让 `TURNOVER_UNAVAILABLE` 覆盖 `AMOUNT_BELOW_MIN`。
+- R11 replay 口径拆成 `attempt_count`、`source_constructed_count`、`evaluable_signal_day_count`、`unevaluable_signal_day_count` 和 `failed_count`；旧 `success_count` 只作为 `evaluable_signal_day_count` 的兼容别名。
+- R11 新增 replay day data status taxonomy：`INPUT_STATUS`、`UNIVERSE_STATUS`、`PRICE_TREND_DATA_STATUS`、`CONTEXT_DATA_STATUS`、`STRATEGY_STATUS`，空结果只允许在已评估 source/universe 后出现。
+- R11 新增 `DAILY_RECOMMENDATION_SCORE_V1`：读取保存的 V2 信号和追加 outcome，按同日冻结 eligible universe 的 same-M random basket percentile 出成绩，不参与策略筛选、调参或自动交易。
 
-## 2026-09-07 实测状态
+## 2026-09-08 R11 实测状态
 
-本轮实际补取了 2026-09-07 BaoStock 日线并生成 `PROSPECTIVE_CAPTURED` 输入，派生目录为 `reports/codex/v2_semantic_completion_20260907_20260907T190336/`。输入 hash 为 `ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd`，9.7 主板 bar 覆盖 4600 条，eligible 3041。V2 结果：FOCUS 0，WATCH 40，REJECTED 2887，UNKNOWN 114；下一目标交易会话为 2026-09-08。
+R11 bounded capture 在当前库上实际推进 request queue，但第二轮在生成最新 `PROSPECTIVE_CAPTURED` 输入后因 `MemoryError` 终止；该输入观察日为 2026-09-08，hash 为 `b7bfe39df96b574b357348f3a506ea1e4edfa519a7053103976c132be6ff12c1`。派生目录为 `reports/codex/r11_validation_scoring_20260908_20260908_122302/`，V2 结果为 eligible 0、FOCUS 0、WATCH 0、REJECTED 0、UNKNOWN 0；下一目标交易会话为 2026-09-09。
 
-当前 WATCH 清单不是正式推荐，更不是交易指令。它表示有形态或研究价值，但缺长窗趋势、PIT 题材、资金、市场兼容或行为确认等证据；完整清单见 `reports/codex/v2_semantic_completion_20260907_20260907T190336/V2_NEXT_SESSION_RESEARCH_LIST.md`。
+R10 的 2026-09-07 `PROSPECTIVE_CAPTURED` 输入仍可作为历史研究队列参考：当时 eligible 3041，FOCUS 0，WATCH 40，REJECTED 2887，UNKNOWN 114；但它不是 R11 official primary，也不能倒填 2026-09-08 prospective validation。
 
-长历史 readiness 以 V2 配置反推：MA250、斜率 warmup 和 60 个 replay signal sessions 需要 315 个交易会话。当前 9.7 prospective 输入中 MA5/10、RET1/3/5/10、RS1/3/5/10 已完整；MA20/60/120/250、长均线斜率、PIT 题材、资金、竞价与日内时间戳仍不足。R10 已用 BaoStock 官方文档、深交所主板代码区间公告和真实 cache receipt 组装 `RECONSTRUCTED_HISTORICAL` 输入，2026-09-07 单日 replay `success_count=1`，`PRICE_TREND_REPLAY_SCOPE` 成功 1 天，`FULL_CONTEXT_REPLAY_SCOPE` 因题材/资金缺失仍为 0。
+长历史 readiness 以 V2 配置反推：MA250、斜率 warmup 和 60 个 replay signal sessions 需要 315 个交易会话。当前 9.8 输入没有 current tradable eligible universe，MA5/10/20/60/120/250 与长均线斜率的 observed/expected 都为 0/0 `UNKNOWN`；PIT 题材、资金、竞价与日内时间戳仍不可用。
 
-Prospective validation 不从 9.7 手工补采倒填正式样本。当前真实 scheduler state 为 `ACTUAL_CANDIDATE_SCHEDULER_STATE_R10`，已登记 `schedule_2026-09-08_EVENING`，等待 2026-09-08 20:30 形成首个可计数 official primary；对应目标交易会话为 2026-09-09。
+历史 replay 本轮没有真正可评估天数：20 个 attempts 中 `source_constructed_count=0`、`evaluable_signal_day_count=0`、`unevaluable_signal_day_count=20`、`failed_count=0`，因为当前 workspace 缺少可核验 `RECONSTRUCTED_HISTORICAL` MarketInput 或带 `stock_basic_all` 的 replay supply。Prospective validation 不从 9.8 手工补采倒填正式样本。当前真实 scheduler state 为 `ACTUAL_CANDIDATE_SCHEDULER_STATE_R11`，状态 `READY_AND_RUNNING_WAITING_FOR_CUTOFF`，等待 2026-09-08 20:30 形成首个可计数 official primary；对应目标交易会话为 2026-09-09。
+
+`DAILY_RECOMMENDATION_SCORE_V1` 目前没有已保存 score revision，官方 prospective score days 为 0，scorecard 显示 `NO_SCORE_REVISION/N/A`。完整说明见 [DAILY_RECOMMENDATION_SCORE_V1.md](DAILY_RECOMMENDATION_SCORE_V1.md)。
 
 ## Astra 评审对应修正
 
