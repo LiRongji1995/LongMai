@@ -419,8 +419,9 @@ def research_list(result, signal_date, target_session, output):
         "selection_basis": "FOCUS_FIRST_ELSE_WATCH_RESEARCH_QUEUE",
         "focus_count": len(focus),
         "watch_count": len(watch),
+        "selection_candidate_count": len(selected),
         "listed_count": len(rows),
-        "items": rows[:30],
+        "items": rows,
         "csv": str((output / "v2_next_session_research_list.csv").resolve()),
         "market_edge": CONFIG["market_edge"],
     }
