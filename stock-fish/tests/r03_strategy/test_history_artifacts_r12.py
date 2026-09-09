@@ -231,3 +231,39 @@ def test_cross_instrument_windows_reuse_bounded_validated_blocks(tmp_path,monkey
     assert len(context.bars_by_session.cache)<=8
     assert context.bars_by_session.compressed_bytes<=8*1024*1024
     assert len(context.scalar_cache)==31
+
+
+def test_streaming_input_hash_preserves_identity_without_full_model_dump(tmp_path, monkeypatch):
+    from stockfish_core.yaogu.contracts import UniverseSnapshot
+    from stockfish_core.yaogu.history_artifacts import digest_market_input
+    original, _ = trend_bundle()
+    compact = compact_input(original, SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3'))
+    expected = [digest(original), digest(compact)]
+    input_dump, universe_dump = MarketInput.model_dump, UniverseSnapshot.model_dump
+
+    def bounded_input(self, *args, **kwargs):
+        assert {'bars', 'universe'} <= set(kwargs.get('exclude', ()))
+        return input_dump(self, *args, **kwargs)
+
+    def bounded_universe(self, *args, **kwargs):
+        assert 'securities' in kwargs.get('exclude', ())
+        return universe_dump(self, *args, **kwargs)
+
+    monkeypatch.setattr(MarketInput, 'model_dump', bounded_input)
+    monkeypatch.setattr(UniverseSnapshot, 'model_dump', bounded_universe)
+    assert [digest_market_input(original), digest_market_input(compact)] == expected
+
+
+def test_streamed_effective_dependency_hash_preserves_complete_evidence(tmp_path):
+    from stockfish_core.yaogu.history_artifacts import digest_json_stream
+    bundle, cutoff = trend_bundle()
+    compact = compact_input(bundle, SQLiteStore(tmp_path/'TEST_FIXTURE.sqlite3'))
+    context = _prepare_context(compact, cutoff)
+    for iid in context.eligible_ids:
+        _bar(context, context.observation_date, iid)
+    dependencies = context.resolver.effective_dependencies()
+    assert digest_json_stream(dependencies) == digest(dependencies)
+    assert digest_json_stream({'unicode': '\u4e2d\u6587', 'values': [None, False, -0.0, 1e-100, {'b': 2, 'a': 1}]}) == digest(
+        {'unicode': '\u4e2d\u6587', 'values': [None, False, -0.0, 1e-100, {'b': 2, 'a': 1}]})
+    changed = {**dependencies, 'immutable_history': {**dependencies['immutable_history'], 'selected_records_hash': '0'*64}}
+    assert digest_json_stream(changed) != digest_json_stream(dependencies)

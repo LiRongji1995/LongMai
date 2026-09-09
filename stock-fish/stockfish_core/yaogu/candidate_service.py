@@ -610,7 +610,8 @@ class CandidateService:
             'scheduler_job_id': scheduler_job_id,
         })
         result['signal_data_quality'] = signal_data_quality(result)
-        result['content_hash']=digest({k:v for k,v in result.items() if k!='content_hash'})
+        from .history_artifacts import digest_json_stream
+        result['content_hash']=digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
     def _write_strategy_result(self, connection, result, *, created_at):
@@ -625,7 +626,8 @@ class CandidateService:
         prospective['official_validation_signal_countable'] = official_signal_countable(result)
         prospective['official_primary_signal_countable'] = prospective['official_validation_signal_countable']
         result['signal_data_quality'] = signal_data_quality(result)
-        result['content_hash'] = digest({k:v for k,v in result.items() if k != 'content_hash'})
+        from .history_artifacts import digest_json_stream
+        result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k != 'content_hash'})
         # These flags are visible only if this transaction and job success commit.
         self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
         self._write_strategy_projection(connection, result)

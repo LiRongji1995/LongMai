@@ -28,6 +28,66 @@ def _json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(',', ':'), default=str, allow_nan=False)
 
 
+def digest_json_stream(value):
+    """The existing canonical digest without constructing the whole JSON text.
+
+    Dependency records are already ordinary JSON mappings. Their universe
+    envelope can contain every recent security row, so a second complete JSON
+    string and UTF-8 copy needlessly overlap the live strategy result.
+    """
+    hasher = hashlib.sha256()
+    encoder = json.JSONEncoder(sort_keys=True, ensure_ascii=False, separators=(',', ':'), default=str, allow_nan=False)
+    for chunk in encoder.iterencode(value):
+        hasher.update(chunk.encode())
+    return hasher.hexdigest()
+
+
+def digest_market_input(bundle):
+    """Preserve MarketInput's canonical identity using at most one row dump.
+
+    The daily artifact remains compact relative to history, but a full-market
+    six-session input still contains tens of thousands of rows. Do not expand
+    all Pydantic rows and serialize a second full copy just to calculate its ID.
+    """
+    hasher = hashlib.sha256()
+
+    def write(value):
+        hasher.update(value.encode())
+
+    def rows(values):
+        write('[')
+        for index, value in enumerate(values):
+            if index:
+                write(',')
+            write(_json(value))
+        write(']')
+
+    envelope = bundle.model_dump(mode='json', exclude={'bars', 'universe'})
+    universe = bundle.universe.model_dump(mode='json', exclude={'securities'})
+    write('{')
+    for index, key in enumerate(sorted((*envelope, 'bars', 'universe'))):
+        if index:
+            write(',')
+        write(_json(key) + ':')
+        if key == 'bars':
+            rows(bundle.bars)
+        elif key == 'universe':
+            write('{')
+            for position, field in enumerate(sorted((*universe, 'securities'))):
+                if position:
+                    write(',')
+                write(_json(field) + ':')
+                if field == 'securities':
+                    rows(bundle.universe.securities)
+                else:
+                    write(_json(universe[field]))
+            write('}')
+        else:
+            write(_json(envelope[key]))
+    write('}')
+    return hasher.hexdigest()
+
+
 class HistoryArtifactStore:
     def __init__(self, store):
         self.store = store

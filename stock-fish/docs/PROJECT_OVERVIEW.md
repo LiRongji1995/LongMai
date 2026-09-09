@@ -20,6 +20,12 @@
 
 历史架构在同一权威 SQLiteStore 保存不可变内容寻址行与会话 manifest；日 MarketInput 保存近期证据与历史 ref/hash，按证券读取长期窗口。512×315 合成基准峰值 RSS 从约 2.59 GB 降至约 160 MB。真实 321,622,653-byte 旧输入已流式迁移，迁移峰值约 131 MB；此测量与合成旧路径基准分开报告。每日增量复用旧行，不重复持久化整个315日历史。
 
+**2026-09-09 内存回归补充：** 四项补采取得9/8、9/4的目录和日线，08:58冻结输入42,538,681 bytes、95个历史分区，无9/9行情。09:00作业发生 `MemoryError` 后，仅修复市场聚合复用和哈希展开，未改阈值；重跑耗时1,414.672秒，在09:42:54 cutoff下于10:05:09生成、10:06:28.578864成功持久化，官方分页摘要及V2/PV CSV的hash/order/count核验通过。
+
+V2全部3,041只中FOCUS0、WATCH0、REJECTED2851、UNKNOWN190，仍为 `SIGNAL_DATA_UNAVAILABLE`；PV只有284/3041（约9.339%）可评估，保留50条原序结果及1条肯特催化PV预览，不能冒充V2焦点。独立只读MA20/60/120/250覆盖均为0，MA20全市场缺8/12、8/24、8/27、8/28。
+
+真实RSS峰值从失败时2,424,721,408升至完成时2,646,999,040 bytes，private峰值仍约3.427GB；单次哈希临时分配下降不代表端到端峰值下降，存储仍有大峰值，完整JSON deepcopy导出未验。最终核心984 passed、1 skipped（227.21秒）。新epoch正式尝试/可评价日数均0，旧9/8 primary质量不改写；10:07核验8001/PID40944及scheduler健康、今晚20:30计划存在。详情见 [R12 内存回归补充](R12_MEMORY_FOLLOWUP_20260909.md)。
+
 本轮最近20日真实重建尝试已有1日构造，但当前仍无可评价的 price/trend 日。缺失日期化 master、当日 RAW 和连续核心历史窗口仍是实际证据阻塞；theme/capital 不完整不会阻塞 price/trend scope，历史数据不进入正式前瞻计数。队列逻辑请求按 provider/endpoint/规范参数/session 去重并优先当前身份、价格与长期核心历史，保留已有尝试与原预算。
 
 持久服务使用单进程 Waitress、登记端口 `127.0.0.1:8001`、既有 DB/state 与唯一 scheduler。20:30 是触发时点，协议 SCHEDULED_2030_ACTUAL_COMPLETION 使用实际采集完成 cutoff，当前运行/epoch/计数以 [R12_PROSPECTIVE_INTEGRITY_REPORT](R12_PROSPECTIVE_INTEGRITY_REPORT.md) 的带时间核验为准。不可提前声明首个可计数正式信号；运行状态 API 与截止后只读检查入口均保留。

@@ -567,12 +567,12 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     theme_capital=run_theme_capital_trend(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     simple_trend=run_simple_trend_template(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     stage_aware=run_stage_aware_momentum(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
-    from .history_artifacts import history_identity
-    identity=source_identity();input_hash=digest(bundle);deps=ctx.resolver.effective_dependencies()
+    from .history_artifacts import history_identity, digest_market_input, digest_json_stream
+    identity=source_identity();input_hash=digest_market_input(bundle);deps=ctx.resolver.effective_dependencies()
     payload={'strategy_family':'R05','input_id':'market_input_'+input_hash[:16],'input_hash':input_hash,'observation_date':ctx.observation_date,
         'implementation_version':IMPLEMENTATION_VERSION,'parameter_status':PARAMETER_STATUS,'decision_cutoff':ctx.cutoff.isoformat(),'coverage_type':bundle.coverage_type,
         'audit_mode':'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type=='PROSPECTIVE_CAPTURED' else bundle.coverage_type,
-        'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),'effective_input_hash':digest(deps),
+        'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),'effective_input_hash':digest_json_stream(deps),
         'source_refs':sorted(ctx.resolver.used),'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
         **history_identity(bundle),
         'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme,

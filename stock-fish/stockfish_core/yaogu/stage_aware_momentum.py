@@ -237,12 +237,32 @@ def _return_map(ctx, iid, end_index, windows=PRICE_WINDOWS):
     return {str(window): _price_return(ctx, iid, end_index, window) for window in windows}
 
 
+def _market_return_population(ctx, end_index, lookback):
+    # The context owns the exact input/cutoff. Include every eligible identity
+    # so changing the effective pool cannot reuse a different population.
+    cache = getattr(ctx, "scalar_cache", None)
+    key = ("SAM_MARKET_RETURN_POPULATION", tuple(ctx.eligible_ids), end_index, lookback)
+    if cache is not None and key in cache:
+        return cache[key]
+    values = _market_return_population_uncached(ctx, end_index, lookback)
+    if cache is not None:
+        cache[key] = values
+    return values
+
+
+def _market_return_population_uncached(ctx, end_index, lookback):
+    return tuple(
+        value for iid in ctx.eligible_ids
+        if (value := _price_return(ctx, iid, end_index, lookback)) is not None
+    )
+
+
 def _market_benchmarks(ctx, end_index):
     primary = CONFIG["research_seed_parameters"]["relative_strength"]["primary_market_benchmark"]
     coverage_min = Fraction(str(CONFIG["research_seed_parameters"]["market_context"]["min_benchmark_coverage_fraction_inclusive"]))
     values = {}
     for window in set(PRICE_WINDOWS) | set(RS_WINDOWS):
-        returns = [value for iid in ctx.eligible_ids if (value := _price_return(ctx, iid, end_index, window)) is not None]
+        returns = _market_return_population(ctx, end_index, window)
         coverage = Fraction(len(returns), len(ctx.eligible_ids)) if ctx.eligible_ids else Fraction(0)
         status = "COMPLETE" if returns and coverage >= coverage_min else "INSUFFICIENT_COVERAGE" if returns else "UNKNOWN"
         values[str(window)] = {
@@ -490,6 +510,21 @@ def _state_from_delta(value, band, *, rising="RISING", stable="STABLE", falling=
 
 
 def _market_return_at(ctx, end_index, lookback):
+    cache = getattr(ctx, "scalar_cache", None)
+    coverage_min = Fraction(str(CONFIG["research_seed_parameters"]["market_context"]["min_benchmark_coverage_fraction_inclusive"]))
+    key = ("SAM_MARKET_RETURN_AT", tuple(ctx.eligible_ids), end_index, lookback, coverage_min)
+    if cache is not None and key in cache:
+        value, coverage = cache[key]
+    else:
+        value, coverage = _market_return_at_uncached(ctx, end_index, lookback)
+        if cache is not None:
+            cache[key] = (value, coverage)
+    # Callers receive their own metadata, including UNKNOWN reasons. The
+    # cached exact Fraction/None and population remain private to this context.
+    return value, {**coverage, "reason_codes": list(coverage["reason_codes"])}
+
+
+def _market_return_at_uncached(ctx, end_index, lookback):
     if end_index is None:
         return None, {
             "status": "UNKNOWN",
@@ -499,7 +534,7 @@ def _market_return_at(ctx, end_index, lookback):
             "coverage": Fraction(0),
         }
     coverage_min = Fraction(str(CONFIG["research_seed_parameters"]["market_context"]["min_benchmark_coverage_fraction_inclusive"]))
-    returns = [value for candidate in ctx.eligible_ids if (value := _price_return(ctx, candidate, end_index, lookback)) is not None]
+    returns = _market_return_population(ctx, end_index, lookback)
     coverage = Fraction(len(returns), len(ctx.eligible_ids)) if ctx.eligible_ids else Fraction(0)
     if returns and coverage >= coverage_min:
         status, reasons = "COMPLETE", []
@@ -988,7 +1023,7 @@ def _market_position_context(ctx, end_index):
     return {
         "instrument_limits": current_summary["instrument_limits"],
         "return_populations": {
-            str(window): [ret for candidate in ctx.eligible_ids if (ret := _price_return(ctx, candidate, end_index, window)) is not None]
+            str(window): list(_market_return_population(ctx, end_index, window))
             for window in (10, 20)
         },
         "market_width": {
@@ -1837,10 +1872,7 @@ def _stage_high_level_repair(ctx, iid, end_index, return_values, daily_path, mar
         return _condition("FAIL", ["SAM_HLR_CLOSE_LIMIT_DOWN_VERIFIED"], details={"setup_id": "HIGH_LEVEL_REPAIR", "setup_state": "LATE_CYCLE_WARNING"})
     ret5 = _prior_window_return(ctx, iid, end_index, 5)
     ret10 = _prior_window_return(ctx, iid, end_index, 10)
-    population10 = [
-        value for candidate in ctx.eligible_ids
-        if (value := _price_return(ctx, candidate, end_index - 1, 10)) is not None
-    ] if end_index is not None and end_index > 0 else []
+    population10 = _market_return_population(ctx, end_index - 1, 10) if end_index is not None and end_index > 0 else []
     percentile10 = percentile_rank_midpoint(ret10, population10) if ret10 is not None and population10 else None
     prior_event = None
     if end_index is not None and end_index > 0:
