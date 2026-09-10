@@ -171,7 +171,10 @@ def _prepare_context(bundle,cutoff=None):
         row=_select_revision(rows)
         if row is not None:bars.setdefault(session,{})[iid]=row.model_dump()
         else:rejected.append({'kind':'BAR','instrument_id':iid,'session':session,'reason_codes':['CONFLICTING_PRICE_REVISION']})
-    if bundle.history_artifact_ref:bars=InstrumentBars(bundle,resolver,rejected)
+    if bundle.history_artifact_ref:
+        from .data_pipeline import stage_aware_history_sessions_required
+        history_start=sessions[-min(len(sessions),stage_aware_history_sessions_required())]
+        bars=InstrumentBars(bundle,resolver,rejected,start=history_start)
     tg=defaultdict(list)
     for t in bundle.themes:
         proof=resolver.resolve(t,session=day,require_complete=True)
@@ -187,8 +190,41 @@ def _prepare_context(bundle,cutoff=None):
     return _ExperimentContext(bundle,str(day),list(map(str,sessions)),eligible,bars,universe_complete,resolver,states,partition,rejected,cutoff,themes)
 
 def _bar(ctx,session,iid):
+    cache=getattr(ctx,'scalar_cache',None)
+    key=('BAR',str(session),iid)
+    if cache is not None and key in cache:return cache[key]
     if hasattr(ctx.bars_by_session,'bar'):return ctx.bars_by_session.bar(session,iid)
     return ctx.bars_by_session.get(str(session),{}).get(iid)
+
+def _preload_bars(ctx,sessions,eligible_ids=None):
+    cache=getattr(ctx,'scalar_cache',None)
+    if cache is None or not sessions:return None
+    sessions=tuple(str(session)[:10] for session in sessions)
+    eligible=tuple(eligible_ids or ctx.eligible_ids)
+    marker=('BAR_PRELOAD',sessions,eligible)
+    if marker in cache:return None
+    if hasattr(ctx.bars_by_session,'bundle'):
+        from .coverage_diagnostics import _selected_bar_map
+        from .history_artifacts import daily_bar_payload
+        selected=_selected_bar_map(ctx,sessions,eligible)
+        for session in sessions:
+            for iid in eligible:
+                row=selected.get((session,iid))
+                if row is not None:
+                    row=daily_bar_payload(row)
+                    proof=ctx.resolver.resolve(row,instrument_id=iid,session=session,require_session=True)
+                    if not proof.allowed:
+                        ctx.rejected_evidence.append({'kind':'BAR','instrument_id':iid,'session':session,'reason_codes':list(proof.reason_codes)})
+                        row=None
+                cache[('BAR',session,iid)]=row
+    else:
+        for session in sessions:
+            rows=ctx.bars_by_session.get(session,{})
+            for iid in eligible:
+                cache[('BAR',session,iid)]=rows.get(iid)
+    cache[marker]=True
+    return None
+
 def _prior_sessions(ctx,count):return ctx.sessions[-count:] if len(ctx.sessions)>=count else []
 
 def _valid_ohlc(current):
@@ -256,6 +292,7 @@ def _rank_pv(rows):
 
 def run_pv_observation(bundle,*,top_n=100,cutoff=None,_context=None):
     ctx=_context or _prepare_context(bundle,cutoff);window=_prior_sessions(ctx,PV_SPEC['lookback_sessions'])
+    _preload_bars(ctx,window,ctx.eligible_ids)
     complete=[];missing=[];rejected=[];rows=[]
     for iid in ctx.eligible_ids:
         row,reason=_complete_pv_row(ctx,iid,window)
@@ -510,10 +547,12 @@ def run_theme_limitup(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=Non
 def strategy_comparison(daily_summary,pv,dna,theme,focus=None,extra_strategies=None):
     candidate_sets={k:set(v.get('top_ids',[])) for k,v in [('PV',pv),('DNA',dna),('THEME',theme)]}
     rows=[{'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
+        'data_scope_status':x.get('data_scope_status'),'coverage_scope':x.get('coverage_scope'),
         'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
         'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[]))} for x in (pv,dna,theme)]
     for x in extra_strategies or ():
         rows.append({'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
+            'data_scope_status':x.get('data_scope_status'),'coverage_scope':x.get('coverage_scope'),
             'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
             'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[])),
             'formal_list_policy':x.get('formal_list_policy'),'parameter_status_label_zh':x.get('parameter_status_label_zh')})
@@ -545,6 +584,7 @@ def source_identity():
         ROOT/'stockfish_core/yaogu/events.py',
         ROOT/'stockfish_core/yaogu/theme_capital_trend.py',
         ROOT/'stockfish_core/yaogu/stage_aware_momentum.py',
+        ROOT/'stockfish_core/yaogu/coverage_diagnostics.py',
         ROOT/'config/theme_capital_trend_v1.yaml',
         ROOT/'config/stage_aware_momentum_v2.yaml',
         SOURCE_LOCK_PATH,
@@ -567,12 +607,27 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     theme_capital=run_theme_capital_trend(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     simple_trend=run_simple_trend_template(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     stage_aware=run_stage_aware_momentum(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
+    from .coverage_diagnostics import build_coverage_diagnostics, json_safe
+    data_coverage=json_safe(build_coverage_diagnostics(ctx,pv_result=pv,stage_aware_result=stage_aware))
+    pv_scope=data_coverage['coverage_scope']['PV_READINESS']
+    trend_scope=data_coverage['coverage_scope']['TREND_READINESS']
+    context_scope=data_coverage['coverage_scope']['CONTEXT_READINESS']
+    pv.update(data_scope_status=pv_scope['status'],coverage_scope=pv_scope,
+        full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
+    for result in (dna,theme):
+        result.update(data_scope_status=pv_scope['status'],coverage_scope=pv_scope,
+            full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
+    for result in (theme_capital_technical,theme_capital,simple_trend,stage_aware):
+        result.update(data_scope_status=trend_scope['status'],coverage_scope=trend_scope,
+            context_scope_status=context_scope['status'],context_coverage_scope=context_scope,
+            full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
     from .history_artifacts import history_identity, digest_market_input, digest_json_stream
     identity=source_identity();input_hash=digest_market_input(bundle);deps=ctx.resolver.effective_dependencies()
     payload={'strategy_family':'R05','input_id':'market_input_'+input_hash[:16],'input_hash':input_hash,'observation_date':ctx.observation_date,
         'implementation_version':IMPLEMENTATION_VERSION,'parameter_status':PARAMETER_STATUS,'decision_cutoff':ctx.cutoff.isoformat(),'coverage_type':bundle.coverage_type,
         'audit_mode':'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type=='PROSPECTIVE_CAPTURED' else bundle.coverage_type,
         'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),'effective_input_hash':digest_json_stream(deps),
+        'data_coverage_diagnostics':data_coverage,'data_readiness':data_coverage['coverage_scope'],
         'source_refs':sorted(ctx.resolver.used),'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
         **history_identity(bundle),
         'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme,

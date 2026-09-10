@@ -61,7 +61,7 @@ def main(argv=None):
         bundle.writestr('source-manifest.json', json.dumps(manifest, ensure_ascii=False, indent=2))
         if args.evidence_dir:
             for path in sorted(args.evidence_dir.rglob('*')):
-                if (path.is_file() and path.suffix.lower() in {'.json','.md','.xml','.svg','.png','.txt'}
+                if (path.is_file() and path.suffix.lower() in {'.json','.md','.xml','.svg','.png','.txt','.csv'}
                         and path.name not in {'market-input.json','signal-run.json'} and path.stat().st_size < 5_000_000):
                     relative = path.relative_to(args.evidence_dir).as_posix()
                     content = path.read_bytes()

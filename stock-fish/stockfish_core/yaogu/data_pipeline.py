@@ -15,7 +15,7 @@ from .contracts import MarketInput, digest
 from .request_queue import RequestQueue, RequestBudget, capture_priority
 from .provider_requests import execute_request, FIELD_VERSION
 
-PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R12_STABLE_SESSION_PRIORITY_V1'
+PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R12_FULL_MARKET_COMPARABLE_PRIORITY_V1'
 SH = ZoneInfo('Asia/Shanghai')
 
 
@@ -199,8 +199,8 @@ class MainboardPipeline:
             def add(endpoint, parameters, stage, *, current=False):
                 priority = capture_priority(endpoint)
                 if endpoint == 'market_daily' and parameters.get('date') == str(day): priority = 0
-                if endpoint == 'master_all' and parameters.get('date') != str(day): priority = 1
-                if endpoint == 'stock_basic_all': priority = 1
+                if endpoint == 'master_all' and parameters.get('date') != str(day): priority = 2
+                if endpoint == 'stock_basic_all': priority = 2
                 return queue.enqueue(endpoint, parameters, stage=stage, definition_version=FIELD_VERSION,
                                      cache_epoch=epoch if current else None, priority=priority)
 
@@ -345,8 +345,9 @@ class MainboardPipeline:
             outcome_ids=sorted({item['instrument_id'] for item in demand})
             outcome_requests += [add('stock_basic', {'codes':outcome_ids[i:i+100]}, 'PublishedCandidateOutcomeCapture', current=True)
                                  for i in range(0,len(outcome_ids),100)]
-            # All P0 current inputs precede P1 full-market history; comparison
-            # bases are P2. Optional context cannot spend this core budget.
+            # All P0 current inputs precede P1 comparison bases, then P2
+            # full-market long-window history. Optional context cannot spend
+            # this core budget.
             drain('StructureHistoryCapture', structures)
             # Mature results remain explicit demand even for former losers.
             drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))

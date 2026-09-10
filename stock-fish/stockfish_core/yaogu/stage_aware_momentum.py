@@ -85,6 +85,10 @@ def _select_revision(rows):
     return _se()._select_revision(rows)
 
 
+def _preload_bars(ctx, sessions, eligible_ids=None):
+    return _se()._preload_bars(ctx, sessions, eligible_ids)
+
+
 def percentile_rank_midpoint(value, values):
     return _se().percentile_rank_midpoint(value, values)
 
@@ -2382,6 +2386,23 @@ def _rank_rows(rows):
 def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
     ctx = _context or _prepare_context(bundle, cutoff)
     end_index = _session_index(ctx)
+    benchmark_sessions = set()
+    benchmark_windows = set(PRICE_WINDOWS) | set(RS_WINDOWS) | {10, 20}
+    for anchor in {end_index, end_index - 1 if end_index is not None and end_index > 0 else None}:
+        if anchor is None or anchor < 0:
+            continue
+        benchmark_sessions.add(ctx.sessions[anchor])
+        benchmark_sessions.update(ctx.sessions[max(0, anchor - 19) : anchor + 1])
+        for window in benchmark_windows:
+            if anchor - window >= 0:
+                benchmark_sessions.add(ctx.sessions[anchor - window])
+    if end_index is not None:
+        trend_seed = CONFIG["research_seed_parameters"]["trend_state"]
+        slope_lookback = int(trend_seed["slope_lookback_sessions"])
+        longest_ma = max(MA_WINDOWS) if MA_WINDOWS else 0
+        first = max(0, end_index - slope_lookback - longest_ma + 1)
+        benchmark_sessions.update(ctx.sessions[first : end_index + 1])
+    _preload_bars(ctx, sorted(benchmark_sessions), ctx.eligible_ids)
     market = _market_benchmarks(ctx, end_index)
     market_position = _market_position_context(ctx, end_index)
     visible_themes, rejected_themes = _visible_stage_themes(ctx)

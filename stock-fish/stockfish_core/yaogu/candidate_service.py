@@ -738,6 +738,10 @@ class CandidateService:
         self.store._put_document(connection, 'strategy_implementation_assessments', run['run_id'], assessment)
         focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
         focus_ids = set(focus.get('selected_ids') or [])
+        diagnostics = run.get('data_coverage_diagnostics') or {}
+        diagnostics_summary = {k:v for k,v in diagnostics.items() if k != 'missing_reason_ledger'}
+        if diagnostics:
+            diagnostics_summary['missing_reason_ledger_count'] = len(diagnostics.get('missing_reason_ledger') or [])
         scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
                          'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
                           'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
@@ -755,10 +759,12 @@ class CandidateService:
         header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance',
             'validation_epoch_id','signal_implementation_version','signal_spec_revision','signal_config_hash','signal_source_hash','primary_cutoff_policy_id','prospective_validation','signal_data_quality')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
+                      data_readiness=run.get('data_readiness'), data_coverage_diagnostics=diagnostics_summary,
                       focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})
         for sid, rows in authoritative_strategy_items(run):
             result = ({**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}).get(sid) or {}
-            header['results'][sid] = {k: result.get(k) for k in ('strategy_id','status','counts','scope_label','reason_codes','spec_hash','top_ids')}
+            header['results'][sid] = {k: result.get(k) for k in ('strategy_id','status','counts','scope_label','data_scope_status','coverage_scope',
+                'context_scope_status','context_coverage_scope','full_market_gate_policy','reason_codes','spec_hash','top_ids')}
             header['results'][sid]['item_count'] = len(rows)
             header['selections'][sid] = {}
             for selection in ('all', 'focus', 'unselected'):
@@ -811,6 +817,55 @@ class CandidateService:
             raise KeyError(run_id)
         return value
 
+    def data_coverage_diagnostics(self, *, run_id=None, input_id=None, observation_date=None, include_ledger=False):
+        if run_id:
+            run = self.strategy_experiment(run_id)
+            diagnostics = run.get('data_coverage_diagnostics')
+            if diagnostics is None:
+                raise UnavailableError('DATA_COVERAGE_DIAGNOSTICS_NOT_SAVED_FOR_RUN', 'candidate')
+            source = {'source': 'SAVED_STRATEGY_EXPERIMENT_RUN', 'run_id': run_id,
+                      'input_id': run.get('input_id'), 'observation_date': run.get('observation_date')}
+        elif input_id is None and observation_date is None:
+            latest = self.store.list_document_metadata('strategy_experiment_runs', limit=1, descending=True)
+            if latest:
+                run = self.strategy_experiment(latest[0]['document_id'])
+                diagnostics = run.get('data_coverage_diagnostics')
+                if diagnostics is not None:
+                    source = {'source': 'LATEST_SAVED_STRATEGY_EXPERIMENT_RUN', 'run_id': run['run_id'],
+                              'input_id': run.get('input_id'), 'observation_date': run.get('observation_date')}
+                else:
+                    diagnostics = None
+            else:
+                diagnostics = None
+            if diagnostics is None:
+                resolved, bundle = self.strategy_input(input_id, observation_date)
+                diagnostics = self._compute_data_coverage_diagnostics(bundle)
+                source = {'source': 'RECOMPUTED_FROM_LATEST_MARKET_INPUT', 'input_id': resolved,
+                          'observation_date': str(bundle.observation_date)}
+        else:
+            resolved, bundle = self.strategy_input(input_id, observation_date)
+            diagnostics = self._compute_data_coverage_diagnostics(bundle)
+            source = {'source': 'RECOMPUTED_FROM_MARKET_INPUT', 'input_id': resolved,
+                      'observation_date': str(bundle.observation_date)}
+        output = dict(source, data_coverage_diagnostics=diagnostics)
+        if not include_ledger:
+            diag = {k:v for k,v in diagnostics.items() if k != 'missing_reason_ledger'}
+            diag['missing_reason_ledger_count'] = len(diagnostics.get('missing_reason_ledger') or [])
+            output['data_coverage_diagnostics'] = diag
+        output['market_edge'] = 'NOT_ESTABLISHED'
+        return output
+
+    @staticmethod
+    def _compute_data_coverage_diagnostics(bundle):
+        from .strategy_experiments import _prepare_context, run_pv_observation
+        from .stage_aware_momentum import run_stage_aware_momentum
+        from .coverage_diagnostics import build_coverage_diagnostics, json_safe
+        cutoff = utc_now()
+        ctx = _prepare_context(bundle, cutoff)
+        pv = run_pv_observation(bundle, cutoff=cutoff, _context=ctx)
+        stage_aware = run_stage_aware_momentum(bundle, cutoff=cutoff, _context=ctx)
+        return json_safe(build_coverage_diagnostics(ctx, pv_result=pv, stage_aware_result=stage_aware))
+
     def _strategy_result_summaries(self, run):
         return {sid: {k:v for k,v in result.items() if k not in {'items','incomplete','missing'}}
                 for sid,result in (run.get('results') or {}).items()}
@@ -836,8 +891,13 @@ class CandidateService:
                 if data is None or data['source_run_hash'] != projection['source_run_hash']:
                     raise UnavailableError('STRATEGY_SUMMARY_PROJECTION_MISMATCH', 'candidate')
                 items.extend(data['items'][max(0,start-chunk*50):min(50,stop-chunk*50)])
+        selected_result = projection['results'][strategy_id]
         return {**projection, 'strategy_id': strategy_id, 'selection': selection,
-                'status': projection['results'][strategy_id].get('status'), 'counts': projection['results'][strategy_id].get('counts'),
+                'status': selected_result.get('status'), 'counts': selected_result.get('counts'),
+                'data_scope_status': selected_result.get('data_scope_status'),
+                'coverage_scope': selected_result.get('coverage_scope'),
+                'context_scope_status': selected_result.get('context_scope_status'),
+                'context_coverage_scope': selected_result.get('context_coverage_scope'),
                 'filtered_total': total, 'page': page, 'page_size': page_size, 'has_next': stop < total, 'items': items}
 
     def strategy_experiment_item_detail(self, run_id, instrument_id):

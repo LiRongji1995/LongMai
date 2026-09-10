@@ -8,7 +8,8 @@ from __future__ import annotations
 
 from collections import OrderedDict, defaultdict
 from collections.abc import Mapping
-from datetime import date, timedelta
+from datetime import date, datetime, timedelta
+from decimal import Decimal
 import codecs
 import hashlib
 import json
@@ -88,6 +89,32 @@ def digest_market_input(bundle):
     return hasher.hexdigest()
 
 
+DAILY_BAR_DECIMAL_FIELDS = (
+    'open', 'high', 'low', 'close', 'reference_prev_close', 'volume_shares',
+    'amount_cny', 'limit_up', 'limit_down', 'tick_size', 'comparable_open',
+    'comparable_high', 'comparable_low', 'comparable_close', 'float_shares',
+)
+DAILY_BAR_DATETIME_FIELDS = ('event_time', 'source_published_at', 'first_seen_at', 'ingested_at', 'float_shares_as_of')
+
+
+def daily_bar_payload(value):
+    """Return the dict shape used by strategy code without full model parsing."""
+    if not isinstance(value, dict):
+        value = value.model_dump()
+    result = dict(value)
+    if result.get('session') is not None and not isinstance(result['session'], date):
+        result['session'] = date.fromisoformat(str(result['session'])[:10])
+    for field in DAILY_BAR_DATETIME_FIELDS:
+        if result.get(field) is not None and not isinstance(result[field], datetime):
+            result[field] = datetime.fromisoformat(str(result[field]).replace('Z', '+00:00'))
+    for field in DAILY_BAR_DECIMAL_FIELDS:
+        if result.get(field) is not None and not isinstance(result[field], Decimal):
+            result[field] = Decimal(str(result[field]))
+    if result.get('source_refs') is not None:
+        result['source_refs'] = tuple(result['source_refs'])
+    return result
+
+
 class HistoryArtifactStore:
     def __init__(self, store):
         self.store = store
@@ -96,6 +123,7 @@ class HistoryArtifactStore:
             con.execute('CREATE TABLE IF NOT EXISTS history_evidence_rows (row_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, instrument_id TEXT NOT NULL, session TEXT NOT NULL, payload TEXT NOT NULL)')
             con.execute('CREATE TABLE IF NOT EXISTS history_partition_members (partition_hash TEXT NOT NULL, row_hash TEXT NOT NULL, kind TEXT NOT NULL, instrument_id TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY(partition_hash,row_hash))')
             con.execute('CREATE INDEX IF NOT EXISTS history_instrument_window ON history_partition_members(partition_hash,kind,instrument_id,session)')
+            con.execute('CREATE INDEX IF NOT EXISTS history_kind_instrument_session ON history_partition_members(kind,instrument_id,session,partition_hash,row_hash)')
             for table in ('history_evidence_rows', 'history_partition_members'):
                 for action in ('UPDATE', 'DELETE'):
                     con.execute(f"CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT, 'immutable history artifact'); END")
@@ -130,12 +158,19 @@ class HistoryArtifactStore:
         for offset in range(0, len(parts), 400):
             batch = parts[offset:offset + 400]
             args = [*batch, kind]
-            extra = ''
+            filters = []
+            if kind == 'bar':
+                filters.append('m.session>=? AND m.session<=?')
+                args.extend((start, end))
+            else:
+                filters.append('m.session<=?')
+                args.append(end)
             if instrument_id is not None:
-                extra = ' AND m.instrument_id=?'
+                filters.append('m.instrument_id=?')
                 args.append(instrument_id)
             with self.store.transaction(write=False) as con:
                 placeholders = ','.join('?' for _ in batch)
+                extra = ''.join(' AND ' + item for item in filters)
                 cursor = con.execute('SELECT r.*,m.kind AS member_kind,m.instrument_id AS member_iid,m.session AS member_session FROM history_partition_members m LEFT JOIN history_evidence_rows r ON r.row_hash=m.row_hash WHERE m.partition_hash IN (' + placeholders + ') AND m.kind=?' + extra + ' ORDER BY m.instrument_id,m.session,r.row_hash', args)
                 for row in cursor:
                     if row['row_hash'] is None or row['payload'] is None:
@@ -310,15 +345,17 @@ def history_resolver(bundle, *, cutoff, allow_future_sessions=False):
     from .visibility import EvidenceResolver
     class BoundedResolver(EvidenceResolver):
         def __init__(self,*args,**kwargs):
+            kwargs.setdefault('record_rows', False)
             super().__init__(*args,**kwargs)
             self.history_record_hashes=defaultdict(set)
 
         def resolve(self, obj, **kwargs):
+            record_hash = kwargs.pop('record_hash', None)
             result = super().resolve(obj, **kwargs)
             if bundle.history_artifact_ref and result.allowed:
                 row = obj.model_dump(mode='json') if hasattr(obj, 'model_dump') else dict(obj)
                 if 'comparable_basis' in row or 'listed_on' in row:
-                    row_hash=digest(row)
+                    row_hash=record_hash or digest(row)
                     self.rows.pop(row_hash, None)
                     self.history_record_hashes[row['instrument_id']].add(bytes.fromhex(row_hash))
             return result
@@ -335,8 +372,9 @@ def history_resolver(bundle, *, cutoff, allow_future_sessions=False):
 
 
 class InstrumentBars:
-    def __init__(self, bundle, resolver, rejected, *, cache_size=8, compressed_cache_bytes=8*1024*1024):
+    def __init__(self, bundle, resolver, rejected, *, start=None, cache_size=8, compressed_cache_bytes=0):
         self.bundle, self.resolver, self.rejected = bundle, resolver, rejected
+        self.start = start
         self.cache_size, self.cache = cache_size, OrderedDict()
         # Peer/sector loops repeatedly need T across the universe. Retain only
         # that one resolved PIT row per instrument outside the historical LRU.
@@ -353,30 +391,71 @@ class InstrumentBars:
             self.compressed.move_to_end(iid)
             if len(self.cache)>self.cache_size:self.cache.popitem(last=False)
         if iid not in self.cache:
-            from .strategy_experiments import _select_revision
             groups = defaultdict(list)
-            for b in iter_bars(self.bundle, instrument_id=iid, end=self.bundle.observation_date):
-                if b.quality == 'INVALID':
+            owner = _owner(self.bundle)
+            manifest = owner.manifest(self.bundle.history_artifact_ref, self.bundle.history_artifact_hash)
+            start = str(self.start or '0001-01-01')
+            parts = [p['partition_hash'] for p in manifest['partitions'] if start <= p['session'] <= str(self.bundle.observation_date)]
+            with owner.store.transaction(write=False) as con:
+                for offset in range(0, len(parts), 400):
+                    batch = parts[offset:offset + 400]
+                    if not batch:
+                        continue
+                    placeholders = ','.join('?' for _ in batch)
+                    sql = (
+                        'SELECT m.row_hash,m.instrument_id,m.session,r.payload '
+                        'FROM history_partition_members m '
+                        'JOIN history_evidence_rows r ON r.row_hash=m.row_hash '
+                        f"WHERE m.partition_hash IN ({placeholders}) AND m.kind='bar' "
+                        'AND m.instrument_id=? AND m.session>=? AND m.session<=? '
+                        'ORDER BY m.session,m.row_hash'
+                    )
+                    for row in con.execute(sql, [*batch, iid, start, str(self.bundle.observation_date)]):
+                        payload = row['payload']
+                        if hashlib.sha256(payload.encode()).hexdigest() != row['row_hash']:
+                            raise IntegrityError('CORRUPT_HISTORY_ROW')
+                        value = daily_bar_payload(json.loads(payload))
+                        session = value.get('session')
+                        if value.get('instrument_id') != row['instrument_id'] or str(session) != row['session']:
+                            raise IntegrityError('CORRUPT_HISTORY_PARTITION_INDEX')
+                        if value.get('quality') == 'INVALID':
+                            self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(session), 'reason_codes': ['INVALID_PRICE_QUALITY']}); continue
+                        proof = self.resolver.resolve(value, instrument_id=iid, session=session, require_session=True, record_hash=row['row_hash'])
+                        if proof.allowed:
+                            groups[str(session)].append(value)
+                        else:
+                            self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(session), 'reason_codes': list(proof.reason_codes)})
+            for b in self.bundle.bars:
+                if b.instrument_id != iid or b.session > self.bundle.observation_date or (self.start is not None and b.session < self.start):
+                    continue
+                value = daily_bar_payload(b.model_dump())
+                if value.get('quality') == 'INVALID':
                     self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(b.session), 'reason_codes': ['INVALID_PRICE_QUALITY']}); continue
-                proof = self.resolver.resolve(b, instrument_id=iid, session=b.session, require_session=True)
+                proof = self.resolver.resolve(value, instrument_id=iid, session=b.session, require_session=True)
                 if proof.allowed:
-                    groups[str(b.session)].append(b)
+                    groups[str(b.session)].append(value)
                 else:
                     self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(b.session), 'reason_codes': list(proof.reason_codes)})
             selected = {}
+
+            def revision_key(row):
+                return tuple(datetime.fromisoformat(str(row[field]).replace('Z', '+00:00')) for field in ('source_published_at', 'ingested_at', 'first_seen_at'))
+
             for day, rows in groups.items():
-                value = _select_revision(rows)
-                if value is not None:
-                    selected[day] = value.model_dump()
+                latest = max(revision_key(row) for row in rows)
+                choices = [row for row in rows if revision_key(row) == latest]
+                if len({digest(row) for row in choices}) == 1:
+                    selected[day] = choices[0]
                 else:
                     self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': day, 'reason_codes': ['CONFLICTING_PRICE_REVISION']})
             self.cache[iid] = selected
             self.current_rows[iid]=selected.get(str(self.bundle.observation_date))
-            encoded=zlib.compress(pickle.dumps(selected,protocol=5),level=1)
-            if len(encoded)<=self.compressed_budget:
-                self.compressed[iid]=encoded;self.compressed_bytes+=len(encoded)
-                while self.compressed_bytes>self.compressed_budget:
-                    _,evicted=self.compressed.popitem(last=False);self.compressed_bytes-=len(evicted)
+            if self.compressed_budget > 0:
+                encoded=zlib.compress(pickle.dumps(selected,protocol=5),level=1)
+                if len(encoded)<=self.compressed_budget:
+                    self.compressed[iid]=encoded;self.compressed_bytes+=len(encoded)
+                    while self.compressed_bytes>self.compressed_budget:
+                        _,evicted=self.compressed.popitem(last=False);self.compressed_bytes-=len(evicted)
             if len(self.cache) > self.cache_size:
                 self.cache.popitem(last=False)
         self.cache.move_to_end(iid)

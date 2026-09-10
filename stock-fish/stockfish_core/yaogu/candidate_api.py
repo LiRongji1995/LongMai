@@ -37,6 +37,13 @@ def register_candidate_routes(app, service):
     def strategy_experiment_runs():
         return jsonify(service.list_strategy_experiments(int(request.args.get('limit', 20)), int(request.args.get('offset', 0))))
 
+    @app.get('/api/universe/data-coverage-diagnostics')
+    def data_coverage_diagnostics():
+        parsed_date = datetime.fromisoformat(request.args['observation_date']).date() if request.args.get('observation_date') else None
+        return jsonify(service.data_coverage_diagnostics(run_id=request.args.get('run_id') or None,
+            input_id=request.args.get('input_id') or None, observation_date=parsed_date,
+            include_ledger=request.args.get('include_ledger') in {'1', 'true'}))
+
     @app.post('/api/strategy-experiments/run')
     def start_strategy_experiment_run():
         value = body()

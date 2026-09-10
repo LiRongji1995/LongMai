@@ -54,15 +54,17 @@ class Resolution:
 
 
 class EvidenceResolver:
-    def __init__(self, receipts, *, cutoff, coverage_type, sessions=(), observation_date=None):
+    def __init__(self, receipts, *, cutoff, coverage_type, sessions=(), observation_date=None, record_rows=True):
         self.cutoff = stamp(cutoff)
         self.coverage_type = coverage_type
         self.sessions = tuple(day(x) for x in sessions)
         self.observation_date = day(observation_date) if observation_date is not None else None
+        self.record_rows = record_rows
         self.receipts = {}
         self.conflicts = set()
         self.used = {}
         self.rows = {}
+        self._receipt_resolution_cache = {}
         for value in (receipts.values() if isinstance(receipts, dict) else receipts or ()):
             parsed = value if isinstance(value, SourceReceipt) else SourceReceipt.model_validate(value)
             if parsed.receipt_id in self.receipts and self.receipts[parsed.receipt_id] != parsed:
@@ -89,6 +91,10 @@ class EvidenceResolver:
         r = receipt if isinstance(receipt, SourceReceipt) else self.receipts.get(receipt)
         if r is None:
             return Resolution(False, ('SOURCE_REFERENCE_UNRESOLVED',))
+        cache_key = (r.receipt_id, require_complete, str(business_day) if business_day is not None else None)
+        cached = self._receipt_resolution_cache.get(cache_key)
+        if cached is not None:
+            return cached
         if r.receipt_id in self.conflicts:
             return Resolution(False, ('SOURCE_REFERENCE_CONFLICT',))
         if r.status not in ('COMPLETE', 'PARTIAL'):
@@ -96,11 +102,13 @@ class EvidenceResolver:
         if require_complete and (r.status != 'COMPLETE' or not r.pagination_complete):
             return Resolution(False, ('SOURCE_NOT_COMPLETE',))
         reason, late = self._clock(r, (r.historical_time_proof,), business_day)
-        return Resolution(not reason, (reason,) if reason else (), (r.receipt_id,),
-                          (r.model_dump(mode='json'),) if not reason else (), reconstruction_used=late)
+        result = Resolution(not reason, (reason,) if reason else (), (r.receipt_id,),
+                            (r.model_dump(mode='json'),) if not reason else (), reconstruction_used=late)
+        self._receipt_resolution_cache[cache_key] = result
+        return result
 
     def resolve(self, obj, *, instrument_id=None, session=None, source_types=None, definition_version=None,
-                require_complete=False, require_session=False, source_refs=None):
+                require_complete=False, require_session=False, source_refs=None, record_hash=None):
         def reject(code):
             return Resolution(False, (code,))
         try:
@@ -158,10 +166,16 @@ class EvidenceResolver:
                                           prior_source_captured=not late_parents)
             if reason:
                 return reject(reason)
-            used = tuple(r.model_dump(mode='json') for r in parents)
-            for source in used:
-                self.used[source['receipt_id']] = source
-            self.rows[digest(row)] = row
+            used = []
+            for parent in parents:
+                source = self.used.get(parent.receipt_id)
+                if source is None:
+                    source = parent.model_dump(mode='json')
+                    self.used[source['receipt_id']] = source
+                used.append(source)
+            used = tuple(used)
+            if self.record_rows:
+                self.rows[digest(row)] = row
             return Resolution(True, (), tuple(sorted(set(refs))), used, reconstruction_used=late or row_late)
         except (TypeError, ValueError, KeyError):
             return reject('INVALID_EVIDENCE_ENVELOPE')

@@ -643,6 +643,16 @@
     return new URLSearchParams({strategy_id: $('experimentStrategy').value, selection: $('experimentSelection').value});
   }
 
+  function scopeLine(scope) {
+    const coverage = scope?.coverage;
+    const all = coverage?.ALL;
+    if (!all) return '覆盖分母尚未写入摘要';
+    const pct = all.coverage_pct == null ? 'n/a' : all.coverage_pct.toFixed(2) + '%';
+    const sse = coverage.SSE ? `沪 ${coverage.SSE.numerator}/${coverage.SSE.denominator}` : '沪 n/a';
+    const szse = coverage.SZSE ? `深 ${coverage.SZSE.numerator}/${coverage.SZSE.denominator}` : '深 n/a';
+    return `ALL ${all.numerator}/${all.denominator} (${pct}) · ${sse} · ${szse}`;
+  }
+
   async function loadExperimentView() {
     if (!latestExperiment) return;
     const query = experimentViewQuery();
@@ -656,11 +666,16 @@
     $('experimentPrev').disabled = experimentPage <= 1;
     $('experimentNext').disabled = !summary.has_next;
     $('experimentPageInfo').textContent = `第 ${summary.page} 页 · 共 ${summary.filtered_total} 只 · 每页 ${summary.page_size}`;
-    $('experimentStatus').textContent = `${summary.observation_date} · ${summary.strategy_id} · ${summary.status} · 本范围 ${summary.filtered_total} · 全部焦点 ${summary.focus_ids?.length ?? 0}`;
-    $('experimentIdentity').textContent = `保存运行 ${summary.run_id} · 生成 ${summary.generated_at || '未记录'} · 数据截止 ${summary.decision_cutoff || summary.cutoff || '见详情'} · ${summary.coverage_type || '见详情'} · ${summary.implementation_version || ''}`;
+    const dataScope = summary.data_scope_status || summary.results?.[summary.strategy_id]?.data_scope_status || 'UNAVAILABLE';
+    const scopeLabel = dataScope === 'FULL_MARKET' ? '全市场可比较' : dataScope === 'LIMITED_SCOPE' ? '有限样本可比较' : '不可比较';
+    $('experimentStatus').textContent = `${summary.observation_date} · ${summary.strategy_id} · ${summary.status} · ${scopeLabel} · 本范围 ${summary.filtered_total} · 全部焦点 ${summary.focus_ids?.length ?? 0}`;
+    $('experimentIdentity').textContent = `保存运行 ${summary.run_id} · 生成 ${summary.generated_at || '未记录'} · 数据截止 ${summary.decision_cutoff || summary.cutoff || '见详情'} · ${summary.coverage_type || '见详情'} · DATA_SCOPE ${dataScope} · ${summary.implementation_version || ''}`;
     $('experimentJson').textContent = JSON.stringify({summary, review}, null, 2);
     const cards = $('experimentReviewSummary');
     cards.replaceChildren();
+    const scopeCard = textNode('article');
+    scopeCard.append(textNode('span', '数据范围'), textNode('strong', dataScope), textNode('p', scopeLine(summary.coverage_scope)));
+    cards.append(scopeCard);
     const window = review.rolling_windows?.['5'];
     const selection = $('experimentSelection').value;
     const metricStrategy = selection === 'focus' && summary.strategy_id === 'PV_OBSERVATION_V1' ? 'PV_FOCUS_PREVIEW_V0.1' : summary.strategy_id;

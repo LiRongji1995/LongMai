@@ -19,7 +19,7 @@ from ..jobs import _ServiceLock
 from .contracts import digest
 
 
-QUEUE_VERSION = 'MAINBOARD_REQUEST_QUEUE_R12_V2'
+QUEUE_VERSION = 'MAINBOARD_REQUEST_QUEUE_R12_V3_FULL_MARKET_COMPARABLE_PRIORITY'
 LOGICAL_REQUEST_VERSION = 'PROVIDER_ENDPOINT_PARAMETERS_SESSION_V1'
 NONEMPTY_CORE_ENDPOINTS = {'mainboard_sse','master_szse','master_all','market_daily','calendar'}
 FINAL_SESSION_RELEASE_CLOCKS = {'market_daily':(17,30),'master_all':(17,30),
@@ -66,8 +66,8 @@ def logical_identity(endpoint, parameters, definition_version, *, cache_epoch=No
 def capture_priority(endpoint):
     if endpoint in {'calendar','mainboard_sse','master_szse','stock_basic','stock_basic_all','master_all',
                     'spot_all','spot_sina','delisting_sse'}: return 0
-    if endpoint in {'market_daily','history'}: return 1
-    if endpoint in {'adjustment_factors','history_adjusted'}: return 2
+    if endpoint in {'adjustment_factors','history_adjusted'}: return 1
+    if endpoint in {'market_daily','history'}: return 2
     if endpoint in {'daily_limits_eastmoney','limit_up_pool'}: return 3
     if endpoint.startswith(('concept_','industry_')): return 4
     return 5
@@ -255,6 +255,22 @@ class RequestQueue:
         return sorted((dict(r) for r in self.connection.execute('SELECT * FROM requests')
                        if r['request_id'] in selected), key=order)
 
+    def retry_blocked(self, ids, *, reason='EXPLICIT_OPERATOR_RETRY'):
+        """Permit one explicit maintenance retry without deleting audit history."""
+        selected = set(ids)
+        if not selected:
+            return 0
+        changed = 0
+        with self.connection:
+            for row in self.connection.execute('SELECT request_id,state FROM requests'):
+                if row['request_id'] in selected and row['state'] == 'BLOCKED':
+                    self.connection.execute(
+                        "UPDATE requests SET state='PENDING',failure_category=?,updated_at=? WHERE request_id=?",
+                        (reason, self.timestamp(), row['request_id']),
+                    )
+                    changed += 1
+        return changed
+
     def results(self, ids=None):
         values=[]
         for row in self.rows(ids):
@@ -360,7 +376,8 @@ class RequestQueue:
                 continue
             if row['failure_category'] in ('SOURCE_SCOPE_EMPTY','PRE_FINAL_CAPTURE') and row['request_id'] in self.attempted_ids:
                 continue
-            if row['attempts'] >= self.budget.max_attempts and row['failure_category'] not in ('BUDGET','INTERRUPTED','AUTH_RECOVERED','SOURCE_SCOPE_EMPTY','PRE_FINAL_CAPTURE'):
+            retry_reason = str(row['failure_category'] or '')
+            if row['attempts'] >= self.budget.max_attempts and row['failure_category'] not in ('BUDGET','INTERRUPTED','AUTH_RECOVERED','SOURCE_SCOPE_EMPTY','PRE_FINAL_CAPTURE','EXPLICIT_OPERATOR_RETRY') and not retry_reason.endswith('_EXPLICIT_RETRY'):
                 self.connection.execute("UPDATE requests SET state='BLOCKED' WHERE request_id=?", (row['request_id'],))
                 self.connection.commit()
                 continue
@@ -451,7 +468,7 @@ class RequestQueue:
                 'stored_request_rows':len(stored), 'active_logical_requests':len(logical),
                 'legacy_duplicate_rows_preserved':len(stored)-len(logical),
                 'active_logical_states':{s:sum(r['state']==s for r in logical) for s in counts},
-                'priority_policy':'P0_CURRENT_IDENTITY_PRICE_P1_HISTORY_P2_COMPARABILITY_P3_LIMITS_P4_THEME_P5_ENRICHMENT',
+                'priority_policy':'P0_CURRENT_IDENTITY_PRICE_P1_COMPARABILITY_P2_LONG_HISTORY_P3_LIMITS_P4_THEME_P5_ENRICHMENT',
                 'task_attempts_this_run': self.calls,
                 'http_attempts_this_run': self.transport_counts().get('HTTP',0),
                 'network_requests_this_run': self.transport_counts().get('HTTP',0),
