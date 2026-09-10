@@ -93,6 +93,14 @@ def percentile_rank_midpoint(value, values):
     return _se().percentile_rank_midpoint(value, values)
 
 
+def percentile_rank_midpoint_map(values):
+    return _se().percentile_rank_midpoint_map(values)
+
+
+def percentile_rank_midpoint_lookup(value, percentile_map):
+    return _se().percentile_rank_midpoint_lookup(value, percentile_map)
+
+
 def _amount_change(ctx, iid, end_index, lookback):
     return _tct()._amount_change(ctx, iid, end_index, lookback)
 
@@ -259,6 +267,24 @@ def _market_return_population_uncached(ctx, end_index, lookback):
         value for iid in ctx.eligible_ids
         if (value := _price_return(ctx, iid, end_index, lookback)) is not None
     )
+
+
+def _market_return_percentile_map(ctx, end_index, lookback):
+    cache = getattr(ctx, "scalar_cache", None)
+    key = ("SAM_MARKET_RETURN_PERCENTILE_MAP", tuple(ctx.eligible_ids), end_index, lookback)
+    if cache is not None and key in cache:
+        return cache[key]
+    values = _market_return_population(ctx, end_index, lookback)
+    result = percentile_rank_midpoint_map(values)
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _market_return_percentile(ctx, end_index, lookback, value):
+    if value is None:
+        return None
+    return percentile_rank_midpoint_lookup(value, _market_return_percentile_map(ctx, end_index, lookback))
 
 
 def _market_benchmarks(ctx, end_index):
@@ -1030,6 +1056,10 @@ def _market_position_context(ctx, end_index):
             str(window): list(_market_return_population(ctx, end_index, window))
             for window in (10, 20)
         },
+        "_return_percentile_maps": {
+            str(window): _market_return_percentile_map(ctx, end_index, window)
+            for window in (10, 20)
+        },
         "market_width": {
             "close_limit_count": current_summary["close_limit_count"],
             "touched_not_closed_count": current_summary["touched_not_closed_count"],
@@ -1070,7 +1100,12 @@ def _limit_market_status(ctx, iid, end_index, return_values, market_position):
     for window in (10, 20):
         value = return_values.get(str(window))
         population = market_position["return_populations"].get(str(window), [])
-        percentiles[str(window)] = percentile_rank_midpoint(value, population) if value is not None and population else None
+        percentile_map = market_position.get("_return_percentile_maps", {}).get(str(window))
+        percentiles[str(window)] = (
+            percentile_rank_midpoint_lookup(value, percentile_map)
+            if value is not None and percentile_map
+            else percentile_rank_midpoint(value, population) if value is not None and population else None
+        )
     return {
         "instrument_limit": {
             "close_limit_up": current.get("close_limit_up") if current else UNKNOWN,
@@ -1876,8 +1911,7 @@ def _stage_high_level_repair(ctx, iid, end_index, return_values, daily_path, mar
         return _condition("FAIL", ["SAM_HLR_CLOSE_LIMIT_DOWN_VERIFIED"], details={"setup_id": "HIGH_LEVEL_REPAIR", "setup_state": "LATE_CYCLE_WARNING"})
     ret5 = _prior_window_return(ctx, iid, end_index, 5)
     ret10 = _prior_window_return(ctx, iid, end_index, 10)
-    population10 = _market_return_population(ctx, end_index - 1, 10) if end_index is not None and end_index > 0 else []
-    percentile10 = percentile_rank_midpoint(ret10, population10) if ret10 is not None and population10 else None
+    percentile10 = _market_return_percentile(ctx, end_index - 1, 10, ret10) if end_index is not None and end_index > 0 else None
     prior_event = None
     if end_index is not None and end_index > 0:
         cevents = [

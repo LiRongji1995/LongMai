@@ -14,7 +14,7 @@ from stockfish_core.yaogu.candidate_service import CandidateRequest
 from stockfish_core.yaogu.contracts import digest
 from stockfish_core.yaogu.derived_feature_store import (
     DerivedFeatureStore,
-    cache_identity_with_overrides,
+    dependency_plan_for_context,
 )
 from stockfish_core.yaogu.request_queue import RequestQueue
 from stockfish_core.yaogu.strategy_experiments import (
@@ -114,21 +114,19 @@ def test_derived_feature_cache_hits_and_invalidation_identity(tmp_path):
     ctx = _prepare_context(bundle, cutoff)
     identity = first["derived_feature_store"]["identity"]
     sessions = first["derived_feature_store"]["target_sessions"]
-    cached = store.get_many(identity, list(ctx.eligible_ids), sessions)
-    invalid = store.get_many(
-        cache_identity_with_overrides(identity, feature_spec_hash="TEST_OTHER_FEATURE_SPEC"),
-        list(ctx.eligible_ids),
-        sessions,
-    )
-    invalid_history = store.get_many(
-        cache_identity_with_overrides(identity, history_artifact_hash="TEST_OTHER_HISTORY"),
-        list(ctx.eligible_ids),
-        sessions,
-    )
+    plan = dependency_plan_for_context(ctx, sessions, list(ctx.eligible_ids))
+    cached = store.get_many(identity, list(ctx.eligible_ids), sessions, dependency_plan=plan)
+    invalid_plan = {
+        key: {
+            family: {**dep, "dependency_fingerprint": "TEST_OTHER_SOURCE_DEPENDENCY"}
+            for family, dep in value.items()
+        }
+        for key, value in plan.items()
+    }
+    invalid = store.get_many(identity, list(ctx.eligible_ids), sessions, dependency_plan=invalid_plan)
 
     assert len(cached) == first["derived_feature_store"]["requested_feature_rows"]
     assert invalid == {}
-    assert invalid_history == {}
 
 
 def test_cold_recompute_after_cache_clear_is_business_equivalent(tmp_path):

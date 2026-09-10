@@ -1,16 +1,18 @@
-# R14 Daily Fast Path 与性能架构整改（2026-09-10）
+# R14/R15 Daily Fast Path 与性能架构整改（2026-09-10）
 
-本节优先于下方历史记录。R14 在同一业务目录中分离日常 primary 与研究 full suite：日常正式荐股只运行 active `STAGE_AWARE_MOMENTUM_V2`，完整 PV/DNA/THEME/THEME_CAPITAL/Simple Trend/V1-V2 comparison 仍保留给明确研究比较。`STAGE_AWARE_MOMENTUM_V2` 交易语义、Focus gate、排名、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。
+本节优先于下方历史记录。R14 在同一业务目录中分离日常 primary 与研究 full suite；R15 将日常派生缓存升级为按 feature dependency fingerprint 绑定的 `DERIVED_FEATURE_STORE_V2`，并消除 R14 cProfile 中 percentile O(N²) 热点。日常正式荐股只运行 active `STAGE_AWARE_MOMENTUM_V2`，完整 PV/DNA/THEME/THEME_CAPITAL/Simple Trend/V1-V2 comparison 仍保留给明确研究比较。`STAGE_AWARE_MOMENTUM_V2` 交易语义、Focus gate、排名、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。
 
 主要工程变更：
 
-- 新增 `DERIVED_FEATURE_STORE_V1`，按 input/history/spec/as-of/comparable identity 缓存 deterministic derived facts，缓存可删除重建，不是第二行情权威库；
+- R14 新增 `DERIVED_FEATURE_STORE_V1`；R15 新增独立 `DERIVED_FEATURE_STORE_V2`，按 feature family、instrument、feature session、required source range 与 source dependency fingerprint 缓存 deterministic derived facts，V1 作为 legacy ignored/read-only 保留，缓存可删除重建，不是第二行情权威库；
 - 新增 `run_active_daily_strategy(...)` 与 `/api/daily-primary/run`，CandidateService 和 scheduler 的 20:30 official primary 改走 `DAILY_PRIMARY_FAST`；
 - 日常 primary 保存 compact canonical run、分页 summary projection 和压缩 per-instrument detail，列表读取不反序列化巨大 run；
 - `RESEARCH_FULL` 端点仍保留完整多臂实验，score/outcome 后置追加，不阻塞 primary；
 - request queue retry 新增 `request_retries` 审计表，保留 `original_failure_category`、`retry_reason`、`retry_requested_at`、`retry_actor`。
 
 冻结输入 benchmark：eligible 3041、factor ALL/SSE/SZSE 3041/3041、1627/1627、1414/1414，PV computable 3040/3041，Research Full V2 business hash 与 fast cold/warm 完全一致。STOP baseline 为 V2 约646.8秒、full suite 约1213.8秒、RSS 约5.2GB、单 run 约220MB；R14 warm daily fast path 为59.760秒、peak RSS 992,960,512 bytes，包含隔离 compact persistence/projection 6.139秒。报告见仓库根目录 `R14_PERFORMANCE_*`、`BEFORE_AFTER_RESULT_EQUIVALENCE.*`、`DATA_READINESS.*`、`SQLITE_SIZE_AUDIT.*` 和 `R14_CPROFILE_SUMMARY.*`。
+
+R14 warm 是 same-input rerun，不是 true daily incremental。R15 实测四类报告已生成：R15 cold 433.499秒、same-snapshot warm 182.878秒、真实 2026-09-08 -> 2026-09-09 T+1 263.098秒，T+1 `reuse_ratio=0.0`、peak RSS 1,736,269,824 bytes，最终分类 `NOT_MEETING_R15_SLA`。原因是真实 T+1 输入的历史 consumed source dependencies 大面积变化，安全缓存必须失效；fixture regression 仍证明 append-only T+1 可跨 session reuse。报告见仓库根目录 `R15_CACHE_IDENTITY_AUDIT.*`、`R15_PERCENTILE_COMPLEXITY_AUDIT.md`、`R15_TRUE_INCREMENTAL_ARCHITECTURE.md`、`R15_PERFORMANCE_RESULT.*` 和 `R15_DERIVED_STORE_GROWTH_AUDIT.md`。
 
 ---
 

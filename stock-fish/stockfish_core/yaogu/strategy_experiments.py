@@ -79,6 +79,16 @@ def _percentile_map(values):
         result[value]=Fraction(100*(2*left+count),2*len(ordered));left+=count
     return result
 
+def percentile_rank_midpoint_map(values):
+    population=[value for value in map(_fraction,values) if value is not None]
+    return _percentile_map(population) if population else {}
+
+def percentile_rank_midpoint_lookup(value,percentile_map):
+    value=_fraction(value)
+    if value is None or not percentile_map:return None
+    result=percentile_map.get(value)
+    return float(_as_decimal(result)) if result is not None else None
+
 def _percentile_rank_decimal(value,values):
     value=_fraction(value);population=[v for v in map(_fraction,values) if v is not None]
     if value is None or not population:return None
@@ -717,8 +727,8 @@ def run_active_daily_strategy(bundle,daily_summary=None,*,top_n=100,cutoff=None,
             'rank_semantics':'INSTRUMENT_ID_ORDER_NOT_SELECTION_RANK','items':baseline_items,
             'cohort_rule':'FROZEN_DATED_ELIGIBLE_UNIVERSE_WITH_SIGNAL_COMPARABLE_CLOSE',
             'input_id':input_id or 'market_input_'+input_hash[:16],'decision_cutoff':ctx.cutoff.isoformat()}},
-        'derived_feature_store':ctx.scalar_cache.get('R14_DERIVED_FEATURE_STATS') or {
-            'store_version':'DERIVED_FEATURE_STORE_V1','status':'NOT_USED'},
+        'derived_feature_store':ctx.scalar_cache.get('R15_DERIVED_FEATURE_STATS') or ctx.scalar_cache.get('R14_DERIVED_FEATURE_STATS') or {
+            'store_version':'DERIVED_FEATURE_STORE_V2','status':'NOT_USED'},
         'daily_fast_path':{'path_version':'DAILY_RUNTIME_BUDGET_V1','active_strategy_id':'STAGE_AWARE_MOMENTUM_V2',
             'research_arms_executed':[],'research_arms_not_executed':['PV_OBSERVATION_V1','DNA_RERANK_V1',
                 'THEME_CONTEXT_V1','THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1',

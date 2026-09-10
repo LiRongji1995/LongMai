@@ -1,8 +1,8 @@
 # Codex 日常研究操作协议
 
-核对日期：2026-09-10（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，R14 日常快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)。
+核对日期：2026-09-10（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，R14/R15 日常快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)。
 
-**R14 当前默认：** 普通“下一交易日荐股”“今天 V2 名单”“盘后正式名单”和 20:30 official primary 必须走 `DAILY_PRIMARY_FAST`，即只运行 active `STAGE_AWARE_MOMENTUM_V2`、更新/读取 `DERIVED_FEATURE_STORE_V1`、保存 compact canonical run。只有用户明确要求多策略比较、historical replay、DNA/THEME/PV/V2 comparison 或深度研究时，才走 `RESEARCH_FULL`。
+**R15 当前默认：** 普通“下一交易日荐股”“今天 V2 名单”“盘后正式名单”和 20:30 official primary 必须走 `DAILY_PRIMARY_FAST`，即只运行 active `STAGE_AWARE_MOMENTUM_V2`、更新/读取 `DERIVED_FEATURE_STORE_V2`、保存 compact canonical run。`DERIVED_FEATURE_STORE_V1` 作为 legacy ignored/read-only 保留；R14 的 same-input warm 不是 true daily incremental 证据。只有用户明确要求多策略比较、historical replay、DNA/THEME/PV/V2 comparison 或深度研究时，才走 `RESEARCH_FULL`。
 
 ## 1. 请求与权限
 
@@ -48,7 +48,7 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
-新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；R14 没有创建 V3，也没有修改交易语义，只把日常 primary 与 research comparison 分离。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
+新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；R14 没有创建 V3，也没有修改交易语义，只把日常 primary 与 research comparison 分离。R15 同样不是 V3：它只将派生缓存升级为按 feature dependency fingerprint 绑定的 V2，并消除 percentile O(N²) 热点；真实 2026-09-08 -> 2026-09-09 benchmark 标记 `NOT_MEETING_R15_SLA`，后续不能把 R14 same-input warm 59.760 秒称为 daily incremental runtime。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
 
 - “把下一个交易日的荐股清单给我。”
 - “给我一份当前短线强势股和市场状态报告。”
@@ -61,7 +61,7 @@
 - “给我最近一次 DAILY_RECOMMENDATION_SCORE_V1 成绩卡。”
 - “给我策略调整建议，但不要修改正式策略。”
 
-执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，R14 快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
+执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision；派生特征缓存另按 `DERIVED_FEATURE_STORE_V2` 的 feature family/source dependency identity 判断能否复用。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，R14/R15 快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
 2026-09-08 R11 交付后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。R10 的 2026-09-07 V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。R11 的 2026-09-08 bounded capture input hash 为 `b7bfe39df96b574b357348f3a506ea1e4edfa519a7053103976c132be6ff12c1`，但当前 eligible/FOCUS/WATCH 均为 0，等待 20:30 official primary。
 
@@ -96,7 +96,7 @@
 
 本机 SQLite 为 `data/stockfish.sqlite3`，证据与状态为 `data/core/`，报告为 `reports/codex/`；这些数据不随源码推送。关闭浏览器不会停止服务或删除名单。停止服务期间没有采集；重开 Codex/浏览器后读取保存 run。备份同时包含库和状态证据，使用 README 中的现有备份工具，不能复制正在写入的裸 SQLite 文件代替一致性备份。
 
-在线调度按现有交易日历在 16:10、20:30 进行盘后采集与 primary 流程，09:26 竞价复核依赖有效快照；不是开机启动项，也不补造错过的数据。R14 后 20:30 official primary 只运行 Daily Primary Fast Path，不默认运行 full research suite；已有 PV 或 research run 可更新后验、跟踪与反馈，但不再作为普通日常荐股的默认计算路径。
+在线调度按现有交易日历在 16:10、20:30 进行盘后采集与 primary 流程，09:26 竞价复核依赖有效快照；不是开机启动项，也不补造错过的数据。R14/R15 后 20:30 official primary 只运行 Daily Primary Fast Path，不默认运行 full research suite；已有 PV 或 research run 可更新后验、跟踪与反馈，但不再作为普通日常荐股的默认计算路径。
 
 网页是可选入口：点击“采集 / 续采全主板数据”，就绪后点 R05 运行；历史选择器读取前一天结果，个股详情和持续跟踪入口查看原记录。不能以页面里显示的旧日期直接冒充今天的新计算。
 

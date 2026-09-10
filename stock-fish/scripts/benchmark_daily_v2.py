@@ -362,12 +362,161 @@ def sqlite_size_audit(db_path):
     return audit
 
 
+def _sqlite_file_bytes(path):
+    path = Path(path)
+    total = path.stat().st_size if path.exists() else 0
+    for suffix in ("-wal", "-shm"):
+        sidecar = Path(str(path) + suffix)
+        total += sidecar.stat().st_size if sidecar.exists() else 0
+    return total
+
+
+def _derived_cache_audit(db_path):
+    con = sqlite3.connect(db_path)
+    con.row_factory = sqlite3.Row
+    result = {
+        "db_path": str(db_path),
+        "file_bytes_including_wal_shm": _sqlite_file_bytes(db_path),
+        "v1_legacy": None,
+        "v2": None,
+    }
+    try:
+        if con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='yaogu_derived_features_v1'").fetchone():
+            result["v1_legacy"] = dict(con.execute(
+                "SELECT count(*) AS rows,sum(length(CAST(payload AS BLOB))) AS payload_bytes "
+                "FROM yaogu_derived_features_v1"
+            ).fetchone())
+        if con.execute("SELECT name FROM sqlite_master WHERE type='table' AND name='yaogu_derived_features_v2'").fetchone():
+            result["v2"] = dict(con.execute(
+                "SELECT count(*) AS rows,sum(length(CAST(payload AS BLOB))) AS payload_bytes,"
+                "count(DISTINCT instrument_id || ':' || feature_session) AS instrument_session_rows "
+                "FROM yaogu_derived_features_v2"
+            ).fetchone())
+    finally:
+        con.close()
+    return result
+
+
+def _clean_cache_db(path, source_db):
+    path = Path(path).resolve()
+    source_db = Path(source_db).resolve()
+    if path == source_db:
+        raise ValueError("R15 benchmark derived cache must be isolated from the production source DB")
+    path.parent.mkdir(parents=True, exist_ok=True)
+    for candidate in (path, Path(str(path) + "-wal"), Path(str(path) + "-shm")):
+        if candidate.exists():
+            candidate.unlink()
+    return path
+
+
+def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso, next_cutoff_iso,
+                                   timeout_seconds, derived_cache_db_path=None):
+    cache_db = Path(derived_cache_db_path).resolve() if derived_cache_db_path else Path(
+        tempfile.mkdtemp(prefix="r15_true_incremental_cache_")
+    ) / "derived-cache.sqlite3"
+    cache_db = _clean_cache_db(cache_db, db_path)
+    before = _derived_cache_audit(cache_db) if cache_db.exists() else {
+        "db_path": str(cache_db),
+        "file_bytes_including_wal_shm": 0,
+        "v1_legacy": None,
+        "v2": None,
+    }
+    cold_t = run_with_timeout("fast", db_path, input_id, cutoff_iso, timeout_seconds, cache_db)
+    after_t = _derived_cache_audit(cache_db)
+    same_snapshot_warm = run_with_timeout("fast", db_path, input_id, cutoff_iso, timeout_seconds, cache_db)
+    after_same = _derived_cache_audit(cache_db)
+    true_next = run_with_timeout("fast", db_path, next_input_id, next_cutoff_iso, timeout_seconds, cache_db)
+    after_next = _derived_cache_audit(cache_db)
+    day_t_bytes = after_t["file_bytes_including_wal_shm"]
+    day_tp1_bytes = after_next["file_bytes_including_wal_shm"]
+    return {
+        "benchmark_version": "R15_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1",
+        "generated_at": datetime.now().astimezone().isoformat(),
+        "db_path": str(db_path),
+        "input_id_t": input_id,
+        "input_id_t_plus_1": next_input_id,
+        "cutoff_t": cutoff_iso,
+        "cutoff_t_plus_1": next_cutoff_iso,
+        "derived_cache_db_path": str(cache_db),
+        "runs": {
+            "R15_COLD_T": cold_t,
+            "R15_SAME_SNAPSHOT_WARM_T": same_snapshot_warm,
+            "R15_TRUE_NEXT_SESSION_INCREMENTAL": true_next,
+        },
+        "storage": {
+            "before": before,
+            "after_day_t": after_t,
+            "after_same_snapshot": after_same,
+            "after_day_t_plus_1": after_next,
+            "day_t_store_size_bytes": day_t_bytes,
+            "day_t_plus_1_store_size_bytes": day_tp1_bytes,
+            "incremental_db_growth_bytes": day_tp1_bytes - day_t_bytes,
+        },
+        "classification_note": "same-snapshot warm is reported separately and is not daily incremental evidence",
+        "sql_metrics": {
+            "query_count": None,
+            "rows_read": None,
+            "rows_written": (true_next.get("derived_feature_store") or {}).get("family_cache", {}).get("inserted"),
+            "measurement_status": "sqlite_trace_not_enabled",
+        },
+        "market_edge": "NOT_ESTABLISHED",
+    }
+
+
 def write_json(path, value):
     path.parent.mkdir(parents=True, exist_ok=True)
     path.write_text(json.dumps(value, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
 
 
 def write_markdown(path, result):
+    if result.get("benchmark_version") == "R15_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1":
+        lines = [
+            "# R15 True Cross-Session Incremental Performance Result",
+            "",
+            f"- generated_at: {result['generated_at']}",
+            f"- db_path: `{result['db_path']}`",
+            f"- input_id_t: `{result['input_id_t']}`",
+            f"- input_id_t_plus_1: `{result['input_id_t_plus_1']}`",
+            f"- derived_cache_db_path: `{result['derived_cache_db_path']}`",
+            f"- market_edge: `{result['market_edge']}`",
+            "",
+            "## Runs",
+            "",
+        ]
+        for name, run in result["runs"].items():
+            stats = run.get("derived_feature_store") or {}
+            timings = run.get("phase_timings") or {}
+            lines.extend([
+                f"### {name}",
+                "",
+                f"- status: {run.get('status')}",
+                f"- observation_date: {run.get('observation_date')}",
+                f"- elapsed_seconds: {run.get('elapsed_seconds')}",
+                f"- rss_peak_bytes: {run.get('rss_peak_bytes')}",
+                f"- stage_aware_business_hash: `{run.get('stage_aware_business_hash')}`",
+                f"- bind_seconds: {timings.get('market_input_load_and_bind')}",
+                f"- strategy_compute_seconds: {timings.get('strategy_compute')}",
+                f"- persist_projection_seconds: {timings.get('persist_projection')}",
+                f"- requested_feature_rows: {stats.get('requested_feature_rows')}",
+                f"- cache_reused_rows: {stats.get('reused', stats.get('cache_hits'))}",
+                f"- newly_computed_rows: {stats.get('newly_computed', stats.get('built_rows'))}",
+                f"- invalidated_rows: {stats.get('invalidated')}",
+                f"- integrity_conflicts: {stats.get('integrity_conflicts')}",
+                f"- reuse_ratio: {stats.get('reuse_ratio', stats.get('cache_hit_rate'))}",
+                "",
+            ])
+        storage = result["storage"]
+        lines.extend([
+            "## Storage",
+            "",
+            f"- day_t_store_size_bytes: {storage.get('day_t_store_size_bytes')}",
+            f"- day_t_plus_1_store_size_bytes: {storage.get('day_t_plus_1_store_size_bytes')}",
+            f"- incremental_db_growth_bytes: {storage.get('incremental_db_growth_bytes')}",
+            "",
+            "Same-snapshot warm is reported separately and is not daily incremental evidence.",
+        ])
+        path.write_text("\n".join(lines), encoding="utf-8")
+        return
     lines = [
         "# R14 Daily Fast Path Performance Result",
         "",
@@ -430,6 +579,10 @@ def main(argv=None):
     parser.add_argument("--timeout-seconds", type=int, default=600)
     parser.add_argument("--derived-cache-db", default=None)
     parser.add_argument("--cprofile-output", default=None)
+    parser.add_argument("--r15-true-incremental", action="store_true")
+    parser.add_argument("--next-input-id", default=None)
+    parser.add_argument("--next-observation-date", default=None)
+    parser.add_argument("--next-cutoff", default=None)
     parser.add_argument("--output-json", default=None)
     parser.add_argument("--output-md", default=None)
     parser.add_argument("--include-sqlite-audit", action="store_true")
@@ -444,6 +597,29 @@ def main(argv=None):
         datetime.min.time().replace(hour=20, minute=30),
         ZoneInfo("Asia/Shanghai"),
     ).isoformat()
+    if args.r15_true_incremental:
+        next_input_id = args.next_input_id or _latest_input_id(store, args.next_observation_date)
+        next_bundle = _load_bundle(store, next_input_id)
+        next_cutoff = args.next_cutoff or datetime.combine(
+            next_bundle.observation_date,
+            datetime.min.time().replace(hour=20, minute=30),
+            ZoneInfo("Asia/Shanghai"),
+        ).isoformat()
+        result = run_r15_true_incremental_suite(
+            db_path,
+            input_id,
+            next_input_id,
+            cutoff,
+            next_cutoff,
+            args.timeout_seconds,
+            Path(args.derived_cache_db).resolve() if args.derived_cache_db else None,
+        )
+        if args.output_json:
+            write_json(Path(args.output_json), result)
+        if args.output_md:
+            write_markdown(Path(args.output_md), result)
+        print(json.dumps(result, ensure_ascii=False, indent=2, default=str))
+        return
     profiles = ("fast", "full") if args.profile == "both" else (args.profile,)
     derived_cache_db = Path(args.derived_cache_db).resolve() if args.derived_cache_db else None
     runs = []
@@ -455,7 +631,7 @@ def main(argv=None):
         runs.append(run_with_timeout(profile, db_path, input_id, cutoff, args.timeout_seconds,
                                      derived_cache_db, cprofile_output))
     result = {
-        "benchmark_version": "R14_DAILY_FAST_PATH_BENCHMARK_V1",
+        "benchmark_version": "R15_DAILY_FAST_PATH_SEGMENT_BENCHMARK_V1",
         "generated_at": datetime.now().astimezone().isoformat(),
         "db_path": str(db_path),
         "input_id": input_id,

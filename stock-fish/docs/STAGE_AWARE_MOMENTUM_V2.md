@@ -2,7 +2,7 @@
 
 核对日期：2026-09-10（Asia/Shanghai）。
 
-`STAGE_AWARE_MOMENTUM_V2` 是当前主动核心强势股策略。R14 只调整 daily/research 执行路径、派生特征缓存和持久化形态：日常 primary 使用 `DAILY_PRIMARY_FAST` 只跑 active V2，完整多策略比较仍走 `RESEARCH_FULL`。本轮不创建 V3、不调参数、不修改 Focus/Watch/Rejected/Unknown、Setup、排名、阈值或 `DAILY_RECOMMENDATION_SCORE_V1`。`STAGE_AWARE_MOMENTUM_V1` 保留为历史只读兼容和审计材料；旧 DAILY、PV、焦点、DNA、THEME 与 `THEME_CAPITAL_TREND_V1` 不改名、不重写历史。
+`STAGE_AWARE_MOMENTUM_V2` 是当前主动核心强势股策略。R14/R15 只调整 daily/research 执行路径、派生特征缓存身份、percentile 局部复杂度和持久化形态：日常 primary 使用 `DAILY_PRIMARY_FAST` 只跑 active V2，完整多策略比较仍走 `RESEARCH_FULL`。本轮不创建 V3、不调参数、不修改 Focus/Watch/Rejected/Unknown、Setup、排名、阈值或 `DAILY_RECOMMENDATION_SCORE_V1`。`STAGE_AWARE_MOMENTUM_V1` 保留为历史只读兼容和审计材料；旧 DAILY、PV、焦点、DNA、THEME 与 `THEME_CAPITAL_TREND_V1` 不改名、不重写历史。
 
 ## 身份与边界
 
@@ -12,8 +12,8 @@
 - 配置：[stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)。
 - 实现：[stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)。
 - Codex profile：`STAGE_AWARE_MOMENTUM_V2`。
-- R14 execution profile：`DAILY_PRIMARY_FAST` 用于日常 primary；`RESEARCH_FULL` 用于明确的多策略研究比较。
-- 派生缓存：`DERIVED_FEATURE_STORE_V1` 只保存 deterministic derived facts，绑定 input/history/spec/as-of/comparable identity，不保存最终策略判定。
+- R14/R15 execution profile：`DAILY_PRIMARY_FAST` 用于日常 primary；`RESEARCH_FULL` 用于明确的多策略研究比较。
+- 派生缓存：R15 新写入 `DERIVED_FEATURE_STORE_V2`，只保存 deterministic derived facts，按 feature family、instrument、feature session、required source range 与 source dependency fingerprint 绑定，不保存最终策略判定；V1 作为 legacy ignored/read-only 保留。
 - 实施与 replay 报告：[STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md](STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md)。
 - 历史 alias：`STAGE_AWARE_MOMENTUM_V1` 只读保留。
 - 参数状态：`INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED` / **尚未验证**。
