@@ -131,9 +131,13 @@ def main():
         },
         {
             "rank": 5,
-            "component": "Output serialization and compact estimate",
+            "component": "Output serialization, compact estimate, and persistence projection",
             "status": "MEASURED",
-            "evidence": f"output_size_stream={warm_run['phase_timings']['output_size_stream']:.3f}s; compact_size_estimate={warm_run['phase_timings']['compact_size_estimate']:.3f}s",
+            "evidence": (
+                f"output_size_stream={warm_run['phase_timings']['output_size_stream']:.3f}s; "
+                f"compact_size_estimate={warm_run['phase_timings']['compact_size_estimate']:.3f}s; "
+                f"persist_projection={warm_run['phase_timings'].get('persist_projection', 0):.3f}s"
+            ),
         },
     ]
 
@@ -296,11 +300,12 @@ def main():
         f"- compact run header+summary estimate: {warm_run['daily_primary_compact_estimate']['run_header_and_summary_bytes_estimate']} bytes\n"
         f"- detail compressed estimate: {warm_run['daily_primary_compact_estimate']['detail_compressed_bytes']} bytes\n"
         f"- combined run header+all detail estimate: {warm_run['daily_primary_compact_estimate']['run_header_and_summary_bytes_estimate'] + warm_run['daily_primary_compact_estimate']['detail_compressed_bytes']} bytes; details are stored separately and loaded on demand\n"
+        f"- measured temp persistence: {warm_run['phase_timings'].get('persist_projection')}s; run document bytes {warm_run.get('daily_primary_persist_result', {}).get('run_document_bytes')}\n"
         f"- V2 business hash identical to saved research full: {result['equivalence']['warm_matches_saved']}\n"
         "- market_edge: `NOT_ESTABLISHED`\n\n"
         "## Warm Phase Timings\n\n"
         + md_table([{key: round(value, 6) for key, value in warm_run["phase_timings"].items()}],
-                   ["sqlite_store_init", "market_input_load_and_bind", "config_load", "derived_cache_store_init", "strategy_compute", "output_size_stream", "compact_size_estimate", "total"])
+                   ["sqlite_store_init", "market_input_load_and_bind", "config_load", "derived_cache_store_init", "strategy_compute", "output_size_stream", "compact_size_estimate", "persist_projection", "total"])
         + "\n",
         encoding="utf-8",
     )

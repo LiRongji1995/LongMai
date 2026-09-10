@@ -72,4 +72,4 @@ R14 是性能架构整改，不是策略开发。`STAGE_AWARE_MOMENTUM_V2` 的�
 - [SQLITE_SIZE_AUDIT.md](../../SQLITE_SIZE_AUDIT.md)
 - [R14_CPROFILE_SUMMARY.md](../../R14_CPROFILE_SUMMARY.md)
 
-当前结果：冷 fast path 174.295 秒、热 cache daily fast path 53.109 秒，热路径 peak RSS 995,033,088 bytes；V2 business hash 与 saved research full 完全一致。冷启动和 provider/backfill 不计入 daily SLA，网络等待单独看作 external wait。
+当前结果：冷 fast path 179.799 秒、热 cache daily fast path 59.760 秒（含隔离 compact persistence/projection 6.139 秒），热路径 peak RSS 992,960,512 bytes；V2 business hash 与 saved research full 完全一致。冷启动和 provider/backfill 不计入 daily SLA，网络等待单独看作 external wait。

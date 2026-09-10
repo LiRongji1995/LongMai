@@ -17,6 +17,7 @@ from pathlib import Path
 import pstats
 import sqlite3
 import sys
+import tempfile
 import threading
 import time
 import traceback
@@ -127,6 +128,41 @@ def _compact_daily_primary_size(run):
     }
 
 
+def _persist_daily_primary_result(run, created_at_iso):
+    from stockfish_core.service import ApplicationService
+
+    with tempfile.TemporaryDirectory(prefix="r14_daily_persist_") as tmp:
+        root = Path(tmp)
+        db_path = root / "daily-primary-persist.sqlite3"
+        core = ApplicationService(
+            root=root / "state",
+            store=SQLiteStore(db_path),
+            allow_test_fixture=True,
+            data_dir=root / "no_model",
+        )
+        try:
+            with core.store.transaction() as connection:
+                core.candidates._write_strategy_result(connection, run, created_at=created_at_iso)
+            run_bytes = core.store.get_document_bytes("strategy_experiment_runs", run["run_id"])
+            con = sqlite3.connect(db_path)
+            con.row_factory = sqlite3.Row
+            try:
+                namespaces = [dict(row) for row in con.execute(
+                    "SELECT namespace,count(*) AS rows,sum(length(CAST(payload AS BLOB))) AS payload_bytes "
+                    "FROM documents GROUP BY namespace ORDER BY payload_bytes DESC"
+                )]
+            finally:
+                con.close()
+            return {
+                "temp_db_file_bytes": db_path.stat().st_size if db_path.exists() else None,
+                "run_document_bytes": len(run_bytes or b""),
+                "namespace_counts": namespaces,
+                "market_edge": "NOT_ESTABLISHED",
+            }
+        finally:
+            core.close()
+
+
 def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None):
     import psutil
 
@@ -175,7 +211,10 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
     after_payload_size = time.perf_counter()
     compact_size = _compact_daily_primary_size(result) if profile == "fast" else None
     after_compact_size = time.perf_counter()
-    elapsed = after_compact_size - started
+    stage_business_hash = digest_json_stream(_stage_slice(result))
+    persist_result = _persist_daily_primary_result(result, cutoff_iso) if profile == "fast" else None
+    after_persist = time.perf_counter()
+    elapsed = after_persist - started
     stop.set()
     sampler.join(timeout=1)
     stage = (result.get("results") or {}).get("STAGE_AWARE_MOMENTUM_V2") or {}
@@ -195,7 +234,8 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
             "strategy_compute": after_strategy - after_cache_store,
             "output_size_stream": after_payload_size - after_strategy,
             "compact_size_estimate": after_compact_size - after_payload_size,
-            "total": after_compact_size - started,
+            "persist_projection": after_persist - after_compact_size,
+            "total": after_persist - started,
         },
         "input_id": input_id,
         "observation_date": str(bundle.observation_date),
@@ -205,9 +245,10 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
         "coverage_type": bundle.coverage_type,
         "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
         "stage_aware_counts": stage.get("counts"),
-        "stage_aware_business_hash": digest_json_stream(_stage_slice(result)),
+        "stage_aware_business_hash": stage_business_hash,
         "derived_feature_store": result.get("derived_feature_store"),
         "daily_primary_compact_estimate": compact_size,
+        "daily_primary_persist_result": persist_result,
         "market_edge": "NOT_ESTABLISHED",
     }
 
@@ -350,6 +391,14 @@ def write_markdown(path, result):
             f"- stage_aware_business_hash: `{run.get('stage_aware_business_hash')}`",
             "",
         ])
+        if run.get("daily_primary_persist_result"):
+            persisted = run["daily_primary_persist_result"]
+            lines.extend([
+                f"- persist_projection_seconds: {run.get('phase_timings', {}).get('persist_projection')}",
+                f"- persisted_run_document_bytes: {persisted.get('run_document_bytes')}",
+                f"- temp_persist_db_file_bytes: {persisted.get('temp_db_file_bytes')}",
+                "",
+            ])
         if run.get("derived_feature_store"):
             stats = run["derived_feature_store"]
             lines.extend([

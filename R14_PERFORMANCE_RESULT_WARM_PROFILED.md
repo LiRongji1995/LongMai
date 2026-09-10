@@ -1,6 +1,6 @@
 # R14 Daily Fast Path Performance Result
 
-- generated_at: 2026-09-10T10:13:48.656416+08:00
+- generated_at: 2026-09-10T10:39:30.869386+08:00
 - db_path: `D:\stockfish-qlib-quant-system\stock-fish\data\stockfish.sqlite3`
 - input_id: `market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23`
 - cutoff: `2026-09-09T08:56:58.518020+00:00`
@@ -11,10 +11,14 @@
 ### fast
 
 - status: SUCCEEDED
-- elapsed_seconds: 147.3084746999666
-- rss_peak_bytes: 994480128
-- payload_bytes: 90264997
+- elapsed_seconds: 169.55372960004024
+- rss_peak_bytes: 993210368
+- payload_bytes: 90264998
 - stage_aware_business_hash: `38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef`
+
+- persist_projection_seconds: 26.48693670006469
+- persisted_run_document_bytes: 12037566
+- temp_persist_db_file_bytes: 56336384
 
 - derived_cache_hits: 79066
 - derived_cache_misses: 0

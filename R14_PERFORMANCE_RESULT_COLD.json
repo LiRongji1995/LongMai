@@ -1,6 +1,6 @@
 {
   "benchmark_version": "R14_DAILY_FAST_PATH_BENCHMARK_V1",
-  "generated_at": "2026-09-10T10:10:28.484967+08:00",
+  "generated_at": "2026-09-10T10:36:11.318375+08:00",
   "db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\stockfish.sqlite3",
   "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
   "observation_date": "2026-09-08",
@@ -9,26 +9,27 @@
     {
       "profile": "fast",
       "status": "SUCCEEDED",
-      "elapsed_seconds": 174.29496989992913,
-      "rss_start_bytes": 39301120,
-      "rss_peak_bytes": 2864689152,
-      "rss_delta_peak_bytes": 2825388032,
-      "payload_bytes": 90279739,
+      "elapsed_seconds": 179.799428600003,
+      "rss_start_bytes": 39522304,
+      "rss_peak_bytes": 2865180672,
+      "rss_delta_peak_bytes": 2825658368,
+      "payload_bytes": 90279740,
       "phase_timings": {
-        "sqlite_store_init": 0.0016746999463066459,
-        "market_input_load_and_bind": 16.523042100016028,
-        "config_load": 0.0032420000061392784,
-        "derived_cache_store_init": 0.007125500007532537,
-        "strategy_compute": 152.77738330001011,
-        "output_size_stream": 2.837859299965203,
-        "compact_size_estimate": 2.1446429999778047,
-        "total": 174.29496989992913
+        "sqlite_store_init": 0.0017035999335348606,
+        "market_input_load_and_bind": 16.324411000008695,
+        "config_load": 0.003269699984230101,
+        "derived_cache_store_init": 0.007363100070506334,
+        "strategy_compute": 152.84074109990615,
+        "output_size_stream": 2.7197657000506297,
+        "compact_size_estimate": 2.0118151999777183,
+        "persist_projection": 5.8903592000715435,
+        "total": 179.799428600003
       },
       "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
       "observation_date": "2026-09-08",
       "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
       "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
-      "derived_cache_db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\tmp_r14_cold_cache_20260910_rerun.sqlite3",
+      "derived_cache_db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\tmp_r14_cold_cache_20260910_persist.sqlite3",
       "coverage_type": "PROSPECTIVE_CAPTURED",
       "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
       "stage_aware_counts": {
@@ -198,20 +199,72 @@
         "built_rows": 79066,
         "cache_hit_rate": 0.0,
         "timing_seconds": {
-          "lookup": 0.05018020002171397,
-          "build_missing": 115.26249590003863,
-          "write_missing": 6.690294699976221,
-          "total": 122.00297080003656
+          "lookup": 0.057319399900734425,
+          "build_missing": 116.24550650001038,
+          "write_missing": 6.701394900097512,
+          "total": 123.00422080000862
         },
         "incremental_semantics": "BUILD_ONLY_MISSING_INSTRUMENT_SESSION_ROWS_FOR_THIS_AS_OF_AND_FEATURE_SPEC",
         "authority": "CACHE_MISS_REBUILDS_FROM_MARKET_INPUT_HISTORY_ARTIFACT_AND_SOURCE_EVIDENCE"
       },
       "daily_primary_compact_estimate": {
-        "run_header_and_summary_bytes_estimate": 11355061,
+        "run_header_and_summary_bytes_estimate": 11355062,
         "instrument_summary_items_bytes": 7644280,
         "detail_raw_bytes": 86565916,
         "detail_compressed_bytes": 13402726,
         "detail_document_count": 3041
+      },
+      "daily_primary_persist_result": {
+        "temp_db_file_bytes": 56348672,
+        "run_document_bytes": 12052308,
+        "namespace_counts": [
+          {
+            "namespace": "strategy_experiment_item_details",
+            "rows": 3041,
+            "payload_bytes": 19081601
+          },
+          {
+            "namespace": "strategy_experiment_summary_pages",
+            "rows": 244,
+            "payload_bytes": 17732578
+          },
+          {
+            "namespace": "strategy_experiment_runs",
+            "rows": 1,
+            "payload_bytes": 12052308
+          },
+          {
+            "namespace": "strategy_experiment_summaries",
+            "rows": 1,
+            "payload_bytes": 21577
+          },
+          {
+            "namespace": "strategy_configs",
+            "rows": 1,
+            "payload_bytes": 2084
+          },
+          {
+            "namespace": "strategy_research_pending",
+            "rows": 1,
+            "payload_bytes": 293
+          },
+          {
+            "namespace": "strategy_implementation_assessments",
+            "rows": 1,
+            "payload_bytes": 287
+          },
+          {
+            "namespace": "strategy_config_activations",
+            "rows": 1,
+            "payload_bytes": 132
+          },
+          {
+            "namespace": "strategy_name_bindings",
+            "rows": 1,
+            "payload_bytes": 82
+          }
+        ],
+        "market_edge": "NOT_ESTABLISHED"
       },
       "market_edge": "NOT_ESTABLISHED"
     }
