@@ -1,3 +1,19 @@
+# R16 Go 迁移 Phase 0 契约与可观测边界（2026-09-10）
+
+本节优先于下方历史记录。R16 建立 Go 迁移前的 Python 权威契约、正确性不变量、E2E trace 和 shadow equivalence 基础；生产计算仍由 Python `STAGE_AWARE_MOMENTUM_V2` 执行，Go core 仅为 Phase 0 影子事实切片与契约校验骨架，未接入正式荐股路径。策略语义、Focus gate、排序、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。
+
+主要工程变更：
+
+- 新增 `FEATURE_EVIDENCE_CONTRACT_V1`、JSON schema、Python baseline exporter、snapshot compare、schema validator 和 Go shadow fixture，要求未知/缺失显式为 `UNKNOWN`，不得默认为 0 或 FALSE；
+- 新增 `CANONICAL_RESOLVED_SOURCE_VIEW_V1`，由 dependency fingerprint 和 feature materialization 共用同一 canonical source token，防止“计划看见一套来源、计算读取另一套来源”；
+- `DERIVED_FEATURE_STORE_V2` 身份升级为 R16 canonical source 依赖，cache lifecycle 区分 `NEW`、`MISSING_CACHE_ROW`、`INVALIDATED_SOURCE_REVISION`、`INVALIDATED_DEPENDENCY/SPEC/POLICY` 与 `CORRUPT_OR_CONFLICT`；
+- Daily Primary benchmark 与 CandidateService 实际构建路径记录 E2E stage trace，覆盖请求开始、交易日/数据新鲜度、provider/history、MarketInput、来源解析、依赖规划、缓存、特征、策略、持久化、导出、响应和结果就绪；
+- 真实历史稳定性审计定位到既有 2026-09-09 T+1 immutable history artifact 丢失早前 comparable factor composite rows；R16 修复后续 normalization 构建时传入 prior `history_base_ref`，但不静默重写既有生产 DB/artifact。
+
+R16 不是性能达标声明，也不是 Go 替换完成声明。提交后证据以 `StockRecommendation_R16_GoMigrationPhase0_ReviewBundle_*` 为准，页面侧独立审阅后才能判定验收；普通研究请求仍不因此获得自动改代码或提交推送授权。
+
+---
+
 # R14/R15 Daily Fast Path 与性能架构整改（2026-09-10）
 
 本节优先于下方历史记录。R14 在同一业务目录中分离日常 primary 与研究 full suite；R15 将日常派生缓存升级为按 feature dependency fingerprint 绑定的 `DERIVED_FEATURE_STORE_V2`，并消除 R14 cProfile 中 percentile O(N²) 热点。日常正式荐股只运行 active `STAGE_AWARE_MOMENTUM_V2`，完整 PV/DNA/THEME/THEME_CAPITAL/Simple Trend/V1-V2 comparison 仍保留给明确研究比较。`STAGE_AWARE_MOMENTUM_V2` 交易语义、Focus gate、排名、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。

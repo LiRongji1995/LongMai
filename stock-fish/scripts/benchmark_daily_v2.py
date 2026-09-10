@@ -32,6 +32,7 @@ from stockfish_core.storage import SQLiteStore, checked_payload  # noqa: E402
 from stockfish_core.yaogu.config import StrategyConfig  # noqa: E402
 from stockfish_core.yaogu.contracts import MarketInput  # noqa: E402
 from stockfish_core.yaogu.derived_feature_store import DerivedFeatureStore  # noqa: E402
+from stockfish_core.yaogu.e2e_tracing import DailyPrimaryTrace  # noqa: E402
 from stockfish_core.yaogu.history_artifacts import bind_history, digest_json_stream, digest_market_input  # noqa: E402
 from stockfish_core.yaogu.strategy_experiments import (  # noqa: E402
     run_active_daily_strategy,
@@ -94,6 +95,17 @@ def _load_bundle(store, input_id):
     if raw is None:
         raise RuntimeError("candidate input missing or corrupt")
     return bind_history(MarketInput.model_validate_json(raw), store)
+
+
+def _default_cutoff(bundle):
+    receipt_times = [receipt.ingested_at for receipt in bundle.receipts if receipt.ingested_at is not None]
+    if receipt_times:
+        return max(receipt_times).isoformat()
+    return datetime.combine(
+        bundle.observation_date,
+        datetime.min.time().replace(hour=20, minute=30),
+        ZoneInfo("Asia/Shanghai"),
+    ).isoformat()
 
 
 def _stage_slice(run):
@@ -182,13 +194,45 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
     sampler = threading.Thread(target=sample, daemon=True)
     sampler.start()
     started = time.perf_counter()
+    tracer = DailyPrimaryTrace(
+        input_id=input_id,
+        command=f"benchmark_daily_v2 --profile {profile}",
+        benchmark_version="R16_DAILY_PRIMARY_E2E_TRACE_BENCHMARK_V1",
+    )
+    tracer.record_stage("USER_REQUEST_COMMAND_START", metadata={"profile": profile})
     store = SQLiteStore(db_path)
     after_store = time.perf_counter()
     bundle = _load_bundle(store, input_id)
     after_bundle = time.perf_counter()
+    tracer.trace["snapshot_id"] = getattr(bundle.universe, "snapshot_id", None)
+    tracer.trace["as_of_session"] = str(bundle.observation_date)
     config = _current_config(store)
     after_config = time.perf_counter()
     cutoff = datetime.fromisoformat(cutoff_iso)
+    tracer.record_stage(
+        "CALENDAR_TRADING_SESSION_RESOLUTION",
+        elapsed_ms=0,
+        item_count=len(bundle.sessions),
+        metadata={"observation_date": str(bundle.observation_date), "cutoff": cutoff_iso},
+    )
+    tracer.record_stage(
+        "DATA_FRESHNESS_STATUS_CHECK",
+        elapsed_ms=0,
+        item_count=len(bundle.receipts),
+        metadata={"coverage_type": bundle.coverage_type, "data_watermark": max((r.ingested_at.isoformat() for r in bundle.receipts), default=None)},
+    )
+    tracer.record_stage("PROVIDER_REFRESH_INCREMENTAL_INGESTION", metadata={"status": "NOT_RUN_EXISTING_INPUT_BENCHMARK"})
+    tracer.record_stage(
+        "HISTORY_ARTIFACT_UPDATE",
+        metadata={"status": "NOT_RUN_EXISTING_INPUT_BENCHMARK", "history_artifact_hash": bundle.history_artifact_hash},
+    )
+    tracer.record_stage(
+        "MARKET_INPUT_CREATION_OR_LOAD",
+        elapsed_ms=(after_bundle - after_store) * 1000,
+        item_count=len(bundle.bars),
+        snapshot_id=getattr(bundle.universe, "snapshot_id", None),
+        bytes_read=len(store.get_document_bytes("candidate_inputs", input_id, expected_hash=input_id[7:]) or b""),
+    )
     if profile == "fast":
         cache_store = SQLiteStore(derived_cache_db_path or db_path)
         after_cache_store = time.perf_counter()
@@ -207,6 +251,22 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
     else:
         raise ValueError(profile)
     after_strategy = time.perf_counter()
+    derived_stats = result.get("derived_feature_store") or {}
+    derived_timings = derived_stats.get("timing_seconds") or {}
+    tracer.record_stage("SOURCE_RESOLUTION", elapsed_ms=1000 * (derived_timings.get("source_resolution") or 0),
+                        item_count=(derived_stats.get("eligible_count") or 0) * len(derived_stats.get("target_sessions") or []),
+                        cache_stats={"source_view": "CANONICAL_RESOLVED_PRICE_SOURCE_VIEW"} if profile == "fast" else None)
+    tracer.record_stage("DEPENDENCY_PLANNING", elapsed_ms=1000 * (derived_timings.get("dependency_plan") or 0),
+                        item_count=derived_stats.get("requested_feature_rows"), cache_stats=derived_stats.get("family_cache") if profile == "fast" else None)
+    tracer.record_stage("CACHE_LOOKUP", elapsed_ms=1000 * (derived_timings.get("lookup") or 0),
+                        item_count=derived_stats.get("requested_feature_rows"), cache_stats=derived_stats if profile == "fast" else None)
+    tracer.record_stage("FEATURE_COMPUTATION", elapsed_ms=1000 * (derived_timings.get("build_missing") or 0),
+                        item_count=derived_stats.get("built_rows"), cache_stats=derived_stats.get("row_lifecycle") if profile == "fast" else None)
+    tracer.record_stage(
+        "STRATEGY_COMPUTE",
+        elapsed_ms=(after_strategy - after_cache_store) * 1000,
+        item_count=((result.get("results") or {}).get("STAGE_AWARE_MOMENTUM_V2") or {}).get("counts", {}).get("eligible"),
+    )
     payload_bytes = _json_size_bytes(result)
     after_payload_size = time.perf_counter()
     compact_size = _compact_daily_primary_size(result) if profile == "fast" else None
@@ -214,6 +274,16 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
     stage_business_hash = digest_json_stream(_stage_slice(result))
     persist_result = _persist_daily_primary_result(result, cutoff_iso) if profile == "fast" else None
     after_persist = time.perf_counter()
+    tracer.record_stage("PERSISTENCE", elapsed_ms=(after_persist - after_compact_size) * 1000,
+                        bytes_written=(persist_result or {}).get("run_document_bytes") if persist_result else None,
+                        metadata={"persisted": bool(persist_result)})
+    tracer.record_stage("CANDIDATE_EXPORT", elapsed_ms=(after_compact_size - after_payload_size) * 1000,
+                        item_count=compact_size.get("detail_document_count") if compact_size else None,
+                        bytes_written=compact_size.get("detail_compressed_bytes") if compact_size else None)
+    tracer.record_stage("REPORT_RENDER_API_RESPONSE", elapsed_ms=(after_payload_size - after_strategy) * 1000,
+                        bytes_written=payload_bytes)
+    tracer.record_stage("RESULT_READY", metadata={"status": "SUCCEEDED"})
+    e2e_trace = tracer.finish(status="SUCCEEDED", run_id=result.get("run_id"), result_hash=stage_business_hash)
     elapsed = after_persist - started
     stop.set()
     sampler.join(timeout=1)
@@ -247,6 +317,9 @@ def _measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path=None)
         "stage_aware_counts": stage.get("counts"),
         "stage_aware_business_hash": stage_business_hash,
         "derived_feature_store": result.get("derived_feature_store"),
+        "data_readiness": result.get("data_readiness"),
+        "data_coverage_diagnostics": result.get("data_coverage_diagnostics"),
+        "e2e_trace": e2e_trace,
         "daily_primary_compact_estimate": compact_size,
         "daily_primary_persist_result": persist_result,
         "market_edge": "NOT_ESTABLISHED",
@@ -430,7 +503,7 @@ def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso,
     day_t_bytes = after_t["file_bytes_including_wal_shm"]
     day_tp1_bytes = after_next["file_bytes_including_wal_shm"]
     return {
-        "benchmark_version": "R15_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1",
+        "benchmark_version": "R16_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1",
         "generated_at": datetime.now().astimezone().isoformat(),
         "db_path": str(db_path),
         "input_id_t": input_id,
@@ -439,9 +512,9 @@ def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso,
         "cutoff_t_plus_1": next_cutoff_iso,
         "derived_cache_db_path": str(cache_db),
         "runs": {
-            "R15_COLD_T": cold_t,
-            "R15_SAME_SNAPSHOT_WARM_T": same_snapshot_warm,
-            "R15_TRUE_NEXT_SESSION_INCREMENTAL": true_next,
+            "R16_COLD_T": cold_t,
+            "R16_SAME_SNAPSHOT_WARM_T": same_snapshot_warm,
+            "R16_TRUE_NEXT_SESSION_INCREMENTAL": true_next,
         },
         "storage": {
             "before": before,
@@ -469,9 +542,9 @@ def write_json(path, value):
 
 
 def write_markdown(path, result):
-    if result.get("benchmark_version") == "R15_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1":
+    if result.get("benchmark_version") in {"R15_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1", "R16_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1"}:
         lines = [
-            "# R15 True Cross-Session Incremental Performance Result",
+            "# R16 True Cross-Session Incremental Performance Result",
             "",
             f"- generated_at: {result['generated_at']}",
             f"- db_path: `{result['db_path']}`",
@@ -487,7 +560,7 @@ def write_markdown(path, result):
             stats = run.get("derived_feature_store") or {}
             timings = run.get("phase_timings") or {}
             lines.extend([
-                f"### {name}",
+                f"### {name.replace('R15_', 'R16_')}",
                 "",
                 f"- status: {run.get('status')}",
                 f"- observation_date: {run.get('observation_date')}",
@@ -592,19 +665,11 @@ def main(argv=None):
     store = SQLiteStore(db_path)
     input_id = args.input_id or _latest_input_id(store, args.observation_date)
     bundle = _load_bundle(store, input_id)
-    cutoff = args.cutoff or datetime.combine(
-        bundle.observation_date,
-        datetime.min.time().replace(hour=20, minute=30),
-        ZoneInfo("Asia/Shanghai"),
-    ).isoformat()
+    cutoff = args.cutoff or _default_cutoff(bundle)
     if args.r15_true_incremental:
         next_input_id = args.next_input_id or _latest_input_id(store, args.next_observation_date)
         next_bundle = _load_bundle(store, next_input_id)
-        next_cutoff = args.next_cutoff or datetime.combine(
-            next_bundle.observation_date,
-            datetime.min.time().replace(hour=20, minute=30),
-            ZoneInfo("Asia/Shanghai"),
-        ).isoformat()
+        next_cutoff = args.next_cutoff or _default_cutoff(next_bundle)
         result = run_r15_true_incremental_suite(
             db_path,
             input_id,
@@ -631,7 +696,7 @@ def main(argv=None):
         runs.append(run_with_timeout(profile, db_path, input_id, cutoff, args.timeout_seconds,
                                      derived_cache_db, cprofile_output))
     result = {
-        "benchmark_version": "R15_DAILY_FAST_PATH_SEGMENT_BENCHMARK_V1",
+        "benchmark_version": "R16_DAILY_PRIMARY_SEGMENT_BENCHMARK_V1",
         "generated_at": datetime.now().astimezone().isoformat(),
         "db_path": str(db_path),
         "input_id": input_id,

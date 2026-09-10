@@ -155,6 +155,7 @@ def _window_return(ctx, iid, end_index, lookback):
 
 def stage_aware_source_identity():
     paths = [Path(__file__), CONFIG_PATH, Path(__file__).with_name('history_artifacts.py'),
+             Path(__file__).with_name('source_resolution.py'),
              Path(__file__).with_name('strategy_experiments.py'), Path(__file__).with_name('visibility.py'),
              Path(__file__).with_name('theme_capital_trend.py'),
              Path(__file__).with_name('contracts.py')]

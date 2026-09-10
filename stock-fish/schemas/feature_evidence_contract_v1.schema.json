@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://github.com/LiRongji1995/stockfish-qlib-quant-system/schemas/feature_evidence_contract_v1.schema.json",
+  "title": "FEATURE_EVIDENCE_CONTRACT_V1",
+  "type": "object",
+  "required": ["manifest", "facts"],
+  "properties": {
+    "manifest": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "snapshot_id",
+        "as_of_session",
+        "decision_cutoff",
+        "created_at",
+        "universe_hash",
+        "calendar_revision",
+        "source_policy_revision",
+        "feature_spec_revision",
+        "source_manifest_hash",
+        "provenance_root_hash",
+        "builder_version",
+        "coverage_summary"
+      ],
+      "properties": {
+        "contract_version": { "const": "FEATURE_EVIDENCE_CONTRACT_V1" },
+        "snapshot_id": { "type": "string", "minLength": 1 },
+        "as_of_session": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "decision_cutoff": { "type": "string", "minLength": 1 },
+        "created_at": { "type": "string", "minLength": 1 },
+        "universe_version": { "type": ["string", "null"] },
+        "universe_hash": { "type": ["string", "null"] },
+        "calendar_revision": { "type": "string", "minLength": 1 },
+        "source_policy_revision": { "type": ["string", "null"] },
+        "feature_spec_revision": { "type": "string", "minLength": 1 },
+        "source_manifest_hash": { "type": "string", "minLength": 1 },
+        "provenance_root_hash": { "type": "string", "minLength": 1 },
+        "builder_version": { "type": "string", "minLength": 1 },
+        "coverage_summary": { "type": "object" }
+      },
+      "additionalProperties": true
+    },
+    "facts": {
+      "type": "array",
+      "items": { "$ref": "#/$defs/fact" }
+    }
+  },
+  "$defs": {
+    "fact": {
+      "type": "object",
+      "required": [
+        "contract_version",
+        "instrument",
+        "exchange",
+        "session",
+        "eligibility",
+        "field_group",
+        "field",
+        "value_json",
+        "status",
+        "provenance"
+      ],
+      "properties": {
+        "contract_version": { "const": "FEATURE_EVIDENCE_CONTRACT_V1" },
+        "instrument": { "type": "string", "minLength": 1 },
+        "exchange": { "enum": ["SSE", "SZSE", "BSE", "UNKNOWN"] },
+        "session": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
+        "eligibility": { "type": "string", "minLength": 1 },
+        "eligibility_reason": { "type": ["string", "null"] },
+        "field_group": {
+          "enum": ["PRICE", "RETURN", "ROLLING", "ACTIVITY", "MARKET", "SECTOR", "CAPITAL", "EVENT"]
+        },
+        "field": { "type": "string", "minLength": 1 },
+        "value": {},
+        "value_json": { "type": "string" },
+        "status": { "enum": ["KNOWN", "UNKNOWN", "NOT_APPLICABLE", "UNVERIFIED"] },
+        "unit": { "type": ["string", "null"] },
+        "provenance": { "type": "object" },
+        "source_label": { "type": "string" }
+      },
+      "additionalProperties": true
+    }
+  }
+}

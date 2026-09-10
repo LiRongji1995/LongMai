@@ -61,7 +61,7 @@ def _theme_type(name,endpoint):
     if re.search(r'融资融券|沪股通|深股通|沪深股通|昨日|涨停|连板|次新|新股|ST板|风险警示|MSCI|富时|标准普尔|沪深300|上证50|中证\d+|机构重仓|社保重仓|基金重仓|证金持股|专精特新',name,re.I):return 'QUALIFICATION'
     return 'EVENT'
 
-def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None):
+def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None):
     day=_date(observation_date)
     if day is None or now.tzinfo is None:raise ValueError('OBSERVATION_DATE_AND_AWARE_CLOCK_REQUIRED')
     sessions=tuple(sorted({_date(s) for s in sessions if _date(s) is not None and _date(s)<=day}))
@@ -227,7 +227,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
         observations[iid]=dict(instrument_id=iid,exchange={'SH':'SSE','SZ':'SZSE','BJ':'BSE'}.get(iid[-2:],'UNKNOWN'),board='UNKNOWN',
             security_type='UNKNOWN',listed_on=_date(row['ipoDate']),name=str(row.get('code_name') or ''),source=rid)
         outcome_only.append(iid)
-    history_writer=history_store.writer(tuple(receipts.values())) if history_store is not None else None
+    history_writer=history_store.writer(tuple(receipts.values()), base_ref=history_base_ref) if history_store is not None else None
     recent_start=[s for s in sessions if s<=day][-min(6,len([s for s in sessions if s<=day]))]
     class RecentRows(list):
         def __init__(self):super().__init__();self.total=0;self.instrument_ids=set()
@@ -478,8 +478,8 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
             'rows':len(r.get('rows',[])),'request_receipt_id':r.get('request_receipt_id'),'http_attempts':r.get('coverage',{}).get('http_attempts'),
             'parameters':r.get('parameters')} for r in results if r['endpoint']==ep],
         'status_if_no_attempt':'NOT_ATTEMPTED'} for ep,definition in TUSHARE_ENDPOINTS.items()]
-    if history_writer is not None:report['history_artifact']={**history_identity,'artifact_version':'CONTENT_ADDRESSED_HISTORY_ARTIFACT_V1','total_bar_rows':bars.total,'daily_recent_bar_rows':len(bars),'new_row_bytes':history_writer.added_bytes,'new_rows':history_writer.added_rows}
+    if history_writer is not None:report['history_artifact']={**history_identity,'artifact_version':'CONTENT_ADDRESSED_HISTORY_ARTIFACT_V1','base_history_artifact_ref':history_base_ref,'total_bar_rows':bars.total,'daily_recent_bar_rows':len(bars),'new_row_bytes':history_writer.added_bytes,'new_rows':history_writer.added_rows}
     return bundle,report
 
-def normalize_capture(results,observation_date,now,sessions,*,history_store=None):
-    return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store)[0]
+def normalize_capture(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None):
+    return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store,history_base_ref=history_base_ref)[0]

@@ -1,3 +1,19 @@
+# R16 Go 迁移 Phase 0 部署补充（2026-09-10）
+
+本节优先于下方历史部署记录。R16 不切换运行服务、不更换权威数据库、不启用 Go 生产计算。当前实际仓库仍为 `D:/stockfish-qlib-quant-system`，业务目录 `stock-fish`，权威数据库仍是 `stock-fish/data/stockfish.sqlite3`，state root 仍是 `stock-fish/data/core`；不提交真实 DB、state、cache、日志、模型或 review bundle。
+
+Daily Primary 仍走 Python `/api/daily-primary/run` / `CandidateService.submit_daily_primary_strategy()` 与 active `STAGE_AWARE_MOMENTUM_V2`。R16 在该路径上增加 E2E trace，并将派生缓存身份升级为 `DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_CANONICAL_SOURCE`：dependency planning 与 feature build 共用 `CANONICAL_RESOLVED_SOURCE_VIEW_V1`，cache miss/invalidated/new 等生命周期分类进入运行结果。Go 目录 `go-core/` 仅用于 Contract V1 影子事实切片和 Python-vs-Go equivalence fixture；没有服务入口指向 Go。
+
+后续采集 normalization 支持用最近已登记历史 artifact 作为 `history_base_ref` 继续 append，避免新 artifact 因当日 capture 缺少 factor evidence 而丢失既有 comparable rows。既有 2026-09-09 T+1 artifact 如已包含该问题，R16 不自动改写生产历史；真实数据 readiness 与 cache reuse 必须以提交后审计报告为准。
+
+```powershell
+pwsh -NoProfile -File ./Start-StockFish.ps1 -Port 8001 -DatabasePath ./stock-fish/data/stockfish.sqlite3 -StateRoot ./stock-fish/data/core
+Invoke-RestMethod http://127.0.0.1:8001/api/health
+Invoke-RestMethod http://127.0.0.1:8001/api/candidate-schedule
+```
+
+---
+
 # R14/R15 日常快路径部署补充（2026-09-10）
 
 本节优先于下方历史部署记录。当前实际仓库仍为 `D:/stockfish-qlib-quant-system`，业务目录 `stock-fish`，权威数据库仍是 `stock-fish/data/stockfish.sqlite3`，state root 仍是 `stock-fish/data/core`；不新建第二套业务库，也不提交真实 DB/state/cache。

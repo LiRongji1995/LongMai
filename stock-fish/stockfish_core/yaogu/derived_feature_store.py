@@ -21,7 +21,7 @@ from .contracts import digest
 
 LEGACY_STORE_VERSION = "DERIVED_FEATURE_STORE_V1"
 STORE_VERSION = "DERIVED_FEATURE_STORE_V2"
-FEATURE_SPEC_VERSION = "DERIVED_FEATURE_STORE_V2_FAMILY_SPECS"
+FEATURE_SPEC_VERSION = "DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_CANONICAL_SOURCE"
 PRICE_BASE_FEATURE_SPEC_ID = "DERIVED_PRICE_FEATURE_SPEC_V1"
 ROLLING_PRICE_FEATURE_SPEC_ID = "ROLLING_PRICE_FEATURE_SPEC_V1"
 ACTIVITY_FEATURE_SPEC_ID = "ACTIVITY_FEATURE_SPEC_V1"
@@ -39,6 +39,17 @@ CONTEXT_KEY = "R14_DERIVED_FEATURES"
 CONTEXT_STATS_KEY = "R15_DERIVED_FEATURE_STATS"
 LEGACY_CONTEXT_STATS_KEY = "R14_DERIVED_FEATURE_STATS"
 MISSING = object()
+CACHE_LIFECYCLE_CATEGORIES = (
+    "CACHE_HIT",
+    "NEW",
+    "INVALIDATED_SOURCE_REVISION",
+    "INVALIDATED_DEPENDENCY",
+    "INVALIDATED_SPEC",
+    "INVALIDATED_POLICY",
+    "MISSING_CACHE_ROW",
+    "CORRUPT_OR_CONFLICT",
+    "UNKNOWN",
+)
 
 FEATURE_FAMILY_SPECS = {
     "PRICE_BASE": {
@@ -145,9 +156,12 @@ def feature_family_spec_hash(family):
 
 
 def feature_spec_hash():
+    from .source_resolution import CANONICAL_SOURCE_RESOLVER_VERSION
+
     return digest({
         "store_version": STORE_VERSION,
         "feature_spec_version": FEATURE_SPEC_VERSION,
+        "source_resolver_version": CANONICAL_SOURCE_RESOLVER_VERSION,
         "family_spec_hashes": {
             family: feature_family_spec_hash(family)
             for family in sorted(FEATURE_FAMILY_SPECS)
@@ -159,9 +173,12 @@ def feature_spec_hash():
 
 
 def strategy_dependency_version():
+    from .source_resolution import CANONICAL_SOURCE_RESOLVER_VERSION
+
     return (
         f"{STORE_VERSION}:"
         + ":".join(FEATURE_FAMILY_SPECS[family]["feature_spec_id"] for family in MATERIALIZED_FAMILIES)
+        + f":{CANONICAL_SOURCE_RESOLVER_VERSION}"
     )
 
 
@@ -171,10 +188,13 @@ def family_cross_as_of_safe(family):
 
 
 def identity_for_context(ctx, input_hash):
+    from .source_resolution import CANONICAL_SOURCE_RESOLVER_VERSION
+
     history_hash = ctx.bundle.history_artifact_hash or input_hash
     return {
         "store_version": STORE_VERSION,
         "feature_spec_version": FEATURE_SPEC_VERSION,
+        "source_resolver_version": CANONICAL_SOURCE_RESOLVER_VERSION,
         "legacy_store_version": LEGACY_STORE_VERSION,
         "input_hash_observed": input_hash,
         "input_hash_in_cache_key": False,
@@ -196,6 +216,7 @@ def identity_for_context(ctx, input_hash):
         "comparable_basis_policy": "BOUND_BY_SOURCE_DEPENDENCY_FINGERPRINT_AND_PAYLOAD_BASIS",
         "pit_policy": "SOURCE_VISIBILITY_RESOLVED_BEFORE_FEATURE_MATERIALIZATION",
         "cache_key_policy": "FEATURE_SPEC_INSTRUMENT_FEATURE_SESSION_REQUIRED_SOURCE_RANGE_DEPENDENCY_FINGERPRINT",
+        "dependency_completeness_invariant": "CACHE_FINGERPRINT_AND_FEATURE_PAYLOAD_SHARE_CANONICAL_RESOLVED_SOURCE_VIEW",
     }
 
 
@@ -315,52 +336,62 @@ def _inline_dependency_index(ctx, source_sessions, instrument_ids):
     return result
 
 
-def _source_token_for_index(source_index, iid, source_session):
-    row = source_index.get((iid, source_session), {})
-    if "row_hashes" in row:
-        return {
-            "session": source_session,
-            "row_hashes": row.get("row_hashes") or ["MISSING_VISIBLE_BAR"],
-        }
+def _source_token_for_view(source_view, iid, source_session):
+    from .source_resolution import source_token
+
+    token = source_token(source_view, iid, source_session)
     return {
-        "session": source_session,
-        "row_hash": row.get("row_hash", "MISSING_VISIBLE_BAR"),
-        "source_refs": row.get("source_refs", []),
+        "resolver_version": token.get("resolver_version"),
+        "requirement": token.get("requirement"),
+        "session": token.get("session"),
+        "status": token.get("status"),
+        "source_kind": token.get("source_kind"),
+        "row_hash": token.get("row_hash"),
+        "revision_key": token.get("revision_key"),
+        "source_revision": token.get("source_revision"),
+        "provenance": token.get("provenance"),
+        "values": token.get("values"),
+        "value_hash": token.get("value_hash"),
+        "dependency_material_hash": token.get("dependency_material_hash"),
     }
 
 
-def _source_summary_for_range(source_index, source_mode, iid, source_sessions):
+def _source_summary_for_range(source_view, source_mode, iid, source_sessions):
     hasher = hashlib.sha256()
     hasher.update(_json({"source_mode": source_mode, "instrument_id": iid}).encode("utf-8") + b"\n")
     first_token = None
     last_token = None
     missing_count = 0
-    multi_revision_count = 0
+    conflict_count = 0
     for source_session in source_sessions:
-        token = _source_token_for_index(source_index, iid, source_session)
+        token = _source_token_for_view(source_view, iid, source_session)
         if first_token is None:
             first_token = token
         last_token = token
-        if token.get("row_hash") == "MISSING_VISIBLE_BAR" or token.get("row_hashes") == ["MISSING_VISIBLE_BAR"]:
+        if token.get("status") == "MISSING" or token.get("row_hash") == "MISSING_VISIBLE_BAR":
             missing_count += 1
-        if len(token.get("row_hashes") or []) > 1:
-            multi_revision_count += 1
+        if token.get("status") == "CONFLICT":
+            conflict_count += 1
         hasher.update(_json(token).encode("utf-8") + b"\n")
     return {
         "source_mode": source_mode,
+        "resolver_version": source_view.get("resolver_version"),
+        "requirement": source_view.get("requirement"),
         "source_token_count": len(source_sessions),
         "source_token_digest": hasher.hexdigest(),
         "missing_source_token_count": missing_count,
-        "multi_revision_source_token_count": multi_revision_count,
+        "conflicting_source_token_count": conflict_count,
         "first_source_token": first_token,
         "last_source_token": last_token,
     }
 
 
-def _dependency_identity(ctx, family, iid, session, source_sessions, source_index, source_mode):
-    source_summary = _source_summary_for_range(source_index, source_mode, iid, source_sessions)
+def _dependency_identity(ctx, family, iid, session, source_sessions, source_view, source_mode):
+    source_summary = _source_summary_for_range(source_view, source_mode, iid, source_sessions)
     spec = FEATURE_FAMILY_SPECS[family]
     source_fingerprint = digest({
+        "resolver_version": source_view.get("resolver_version"),
+        "requirement": source_view.get("requirement"),
         "source_mode": source_mode,
         "instrument_id": iid,
         "source_token_digest": source_summary["source_token_digest"],
@@ -406,7 +437,7 @@ def _dependency_identity(ctx, family, iid, session, source_sessions, source_inde
     return value
 
 
-def dependency_plan_for_context(ctx, sessions, instrument_ids):
+def dependency_plan_for_context(ctx, sessions, instrument_ids, *, source_view=None):
     sessions = tuple(_date_text(session) for session in sessions)
     instrument_ids = tuple(instrument_ids)
     session_positions = {_date_text(value): index for index, value in enumerate(ctx.sessions)}
@@ -416,13 +447,11 @@ def dependency_plan_for_context(ctx, sessions, instrument_ids):
         for family in MATERIALIZED_FAMILIES
         for source_session in _source_session_range(ctx, session, family)
     }, key=session_positions.__getitem__)
-    history_index = _history_dependency_index(ctx, source_sessions, instrument_ids)
-    if history_index is not None:
-        source_index = history_index
-        source_mode = "HISTORY_VISIBLE_ROW_HASHES"
-    else:
-        source_index = _inline_dependency_index(ctx, source_sessions, instrument_ids)
-        source_mode = "VISIBLE_INLINE_ROW_HASHES"
+    if source_view is None:
+        from .source_resolution import canonical_price_source_view
+
+        source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
+    source_mode = source_view.get("source_mode", "CANONICAL_RESOLVED_PRICE_SOURCE_VIEW")
     plan = {}
     for iid in instrument_ids:
         for session in sessions:
@@ -433,7 +462,7 @@ def dependency_plan_for_context(ctx, sessions, instrument_ids):
                     iid,
                     session,
                     _source_session_range(ctx, session, family),
-                    source_index,
+                    source_view,
                     source_mode,
                 )
                 for family in MATERIALIZED_FAMILIES
@@ -571,8 +600,24 @@ class DerivedFeatureStore:
                 "family_requested": 0,
                 "family_hits": 0,
                 "family_misses": 0,
+                "family_lifecycle": {category: 0 for category in CACHE_LIFECYCLE_CATEGORIES},
+                "family_by_family": {
+                    family: {"requested": 0, "hits": 0, "misses": 0, "lifecycle": {category: 0 for category in CACHE_LIFECYCLE_CATEGORIES}}
+                    for family in MATERIALIZED_FAMILIES
+                },
+                "row_lifecycle": {
+                    "requested_rows": 0,
+                    "full_row_reused": 0,
+                    "partial_family_reused": 0,
+                    "new_rows": 0,
+                    "invalidated_rows": 0,
+                    "missing_cache_rows": 0,
+                    "corrupt_or_conflict_rows": 0,
+                    "unknown_rows": 0,
+                },
                 "invalidated_rows": 0,
                 "invalidated_family_rows": 0,
+                "missing_cache_rows": 0,
             }
             return {}
         if dependency_plan is None:
@@ -587,6 +632,18 @@ class DerivedFeatureStore:
         result = {}
         by_row = defaultdict(dict)
         found_keys = set()
+        family_statuses_by_row = defaultdict(dict)
+        family_lifecycle = {category: 0 for category in CACHE_LIFECYCLE_CATEGORIES}
+        family_by_family = {
+            family: {
+                "requested": 0,
+                "hits": 0,
+                "misses": 0,
+                "lifecycle": {category: 0 for category in CACHE_LIFECYCLE_CATEGORIES},
+            }
+            for family in MATERIALIZED_FAMILIES
+        }
+        lifecycle_samples = []
         with self.store.transaction(write=False) as con:
             keys = list(expected)
             for left in range(0, len(keys), 500):
@@ -602,17 +659,51 @@ class DerivedFeatureStore:
                     if _payload_hash(value) != row["payload_hash"]:
                         raise IntegrityError("DERIVED_FEATURE_CACHE_HASH_MISMATCH")
                     found_keys.add(row["cache_key"])
+                    iid, session, family, _dep = expected[row["cache_key"]]
+                    family_statuses_by_row[(iid, session)][family] = "CACHE_HIT"
                     key = (row["instrument_id"], row["feature_session"])
                     by_row[key][row["feature_family"]] = value
             missing_expected = {
                 key: expected[key]
                 for key in sorted(set(expected) - found_keys)
             }
-            invalidated_family_rows = self._count_invalidated(con, missing_expected)
+            existing_by_family_row = self._existing_rows_for_missing(con, missing_expected)
+            for cache_key, (iid, session, family, dep) in missing_expected.items():
+                status = self._classify_family_miss(
+                    dep,
+                    existing_by_family_row.get((family, iid, session), ()),
+                    family,
+                )
+                family_statuses_by_row[(iid, session)][family] = status
+                if len(lifecycle_samples) < 50:
+                    lifecycle_samples.append({
+                        "cache_key": cache_key,
+                        "instrument_id": iid,
+                        "session": session,
+                        "feature_family": family,
+                        "lifecycle": status,
+                        "dependency_fingerprint": dep.get("dependency_fingerprint"),
+                        "provider_revision_identity": dep.get("provider_revision_identity"),
+                    })
+            for cache_key, (iid, session, family, _dep) in expected.items():
+                status = family_statuses_by_row[(iid, session)].get(family, "UNKNOWN")
+                family_lifecycle[status] = family_lifecycle.get(status, 0) + 1
+                family_stats = family_by_family[family]
+                family_stats["requested"] += 1
+                family_stats["lifecycle"][status] = family_stats["lifecycle"].get(status, 0) + 1
+                if status == "CACHE_HIT":
+                    family_stats["hits"] += 1
+                else:
+                    family_stats["misses"] += 1
+            invalidated_family_rows = sum(
+                count for category, count in family_lifecycle.items()
+                if category.startswith("INVALIDATED_")
+            )
         for key, payloads in by_row.items():
             if all(family in payloads for family in MATERIALIZED_FAMILIES):
                 result[key] = _runtime_row(_combined_payload(payloads))
         row_misses = wanted - set(result)
+        row_lifecycle = self._row_lifecycle(wanted, family_statuses_by_row)
         self.last_get_many_stats = {
             "requested_rows": len(wanted),
             "row_hits": len(result),
@@ -620,12 +711,107 @@ class DerivedFeatureStore:
             "family_requested": len(expected),
             "family_hits": len(found_keys),
             "family_misses": len(expected) - len(found_keys),
-            "invalidated_rows": len({
-                (iid, session)
-                for _cache_key, (iid, session, _family, _dep) in missing_expected.items()
-            }) if invalidated_family_rows else 0,
+            "family_lifecycle": family_lifecycle,
+            "family_by_family": family_by_family,
+            "row_lifecycle": row_lifecycle,
+            "invalidated_rows": row_lifecycle["invalidated_rows"],
             "invalidated_family_rows": invalidated_family_rows,
+            "missing_cache_rows": row_lifecycle["missing_cache_rows"],
+            "lifecycle_samples": lifecycle_samples,
         }
+        return result
+
+    def _existing_rows_for_missing(self, con, missing_expected):
+        if not missing_expected:
+            return {}
+        grouped = defaultdict(lambda: {"sessions": set(), "instruments": set()})
+        for _cache_key, (iid, session, family, _dep) in missing_expected.items():
+            grouped[family]["sessions"].add(session)
+            grouped[family]["instruments"].add(iid)
+        result = defaultdict(list)
+        for family, values in grouped.items():
+            sessions = sorted(values["sessions"])
+            instruments = sorted(values["instruments"])
+            for session_left in range(0, len(sessions), 200):
+                session_chunk = sessions[session_left:session_left + 200]
+                session_placeholders = ",".join("?" for _ in session_chunk)
+                for instrument_left in range(0, len(instruments), 500):
+                    instrument_chunk = instruments[instrument_left:instrument_left + 500]
+                    instrument_placeholders = ",".join("?" for _ in instrument_chunk)
+                    rows = con.execute(
+                        "SELECT feature_family,family_spec_id,family_spec_hash,instrument_id,feature_session,"
+                        "dependency_fingerprint,comparable_basis_identity,pit_policy_identity,"
+                        "provider_revision_identity,payload_hash "
+                        "FROM yaogu_derived_features_v2 "
+                        "WHERE feature_family=? "
+                        f"AND feature_session IN ({session_placeholders}) "
+                        f"AND instrument_id IN ({instrument_placeholders})",
+                        [family, *session_chunk, *instrument_chunk],
+                    ).fetchall()
+                    for row in rows:
+                        result[(row["feature_family"], row["instrument_id"], row["feature_session"])].append(dict(row))
+        return result
+
+    @staticmethod
+    def _classify_family_miss(dep, existing_rows, family):
+        if not existing_rows:
+            return "NEW"
+        same_spec = [
+            row for row in existing_rows
+            if row.get("family_spec_id") == FEATURE_FAMILY_SPECS[family]["feature_spec_id"]
+            and row.get("family_spec_hash") == feature_family_spec_hash(family)
+        ]
+        if not same_spec:
+            return "INVALIDATED_SPEC"
+        same_policy = [
+            row for row in same_spec
+            if row.get("pit_policy_identity") == dep.get("pit_policy_identity")
+            and row.get("comparable_basis_identity") == dep.get("comparable_basis_identity")
+        ]
+        if not same_policy:
+            return "INVALIDATED_POLICY"
+        same_provider = [
+            row for row in same_policy
+            if row.get("provider_revision_identity") == dep.get("provider_revision_identity")
+        ]
+        if not same_provider:
+            return "INVALIDATED_SOURCE_REVISION"
+        same_dependency = [
+            row for row in same_provider
+            if row.get("dependency_fingerprint") == dep.get("dependency_fingerprint")
+        ]
+        if not same_dependency:
+            return "INVALIDATED_DEPENDENCY"
+        return "MISSING_CACHE_ROW"
+
+    @staticmethod
+    def _row_lifecycle(wanted, family_statuses_by_row):
+        result = {
+            "requested_rows": len(wanted),
+            "full_row_reused": 0,
+            "partial_family_reused": 0,
+            "new_rows": 0,
+            "invalidated_rows": 0,
+            "missing_cache_rows": 0,
+            "corrupt_or_conflict_rows": 0,
+            "unknown_rows": 0,
+        }
+        for key in wanted:
+            statuses = [family_statuses_by_row[key].get(family, "UNKNOWN") for family in MATERIALIZED_FAMILIES]
+            if all(status == "CACHE_HIT" for status in statuses):
+                result["full_row_reused"] += 1
+            elif any(status == "CACHE_HIT" for status in statuses):
+                result["partial_family_reused"] += 1
+            if all(status == "NEW" for status in statuses):
+                result["new_rows"] += 1
+            if any(status.startswith("INVALIDATED_") for status in statuses):
+                result["invalidated_rows"] += 1
+            if any(status == "MISSING_CACHE_ROW" for status in statuses):
+                result["missing_cache_rows"] += 1
+            if any(status == "CORRUPT_OR_CONFLICT" for status in statuses):
+                result["corrupt_or_conflict_rows"] += 1
+            if any(status == "UNKNOWN" for status in statuses):
+                result["unknown_rows"] += 1
         return result
 
     def _count_invalidated(self, con, missing_expected):
@@ -789,80 +975,14 @@ def _revision_key(row):
     return (str(row.get("source_published_at")), str(row.get("ingested_at")), str(row.get("first_seen_at")))
 
 
-def _selected_compact_bars(ctx, source_sessions, instrument_ids):
-    from .history_artifacts import daily_bar_payload
+def _selected_compact_bars(ctx, source_sessions, instrument_ids, *, source_view=None):
+    if source_view is None:
+        from .source_resolution import canonical_price_source_view
 
-    wanted_sessions = set(_date_text(session) for session in source_sessions)
-    wanted_ids = set(instrument_ids)
-    grouped = defaultdict(list)
+        source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
+    from .source_resolution import selected_rows
 
-    def consider(value, row_hash=None):
-        row = daily_bar_payload(value)
-        session = _date_text(row.get("session"))
-        iid = row.get("instrument_id")
-        if session not in wanted_sessions or iid not in wanted_ids:
-            return
-        if row.get("quality") == "INVALID":
-            return
-        proof = ctx.resolver.resolve(row, instrument_id=iid, session=session, require_session=True, record_hash=row_hash)
-        if not proof.allowed:
-            ctx.rejected_evidence.append({"kind": "BAR", "instrument_id": iid, "session": session, "reason_codes": list(proof.reason_codes)})
-            return
-        grouped[(iid, session)].append((_revision_key(row), digest(row), {
-            "instrument_id": iid,
-            "session": session,
-            "open": row.get("open"),
-            "high": row.get("high"),
-            "low": row.get("low"),
-            "close": row.get("close"),
-            "reference_prev_close": row.get("reference_prev_close"),
-            "comparable_close": row.get("comparable_close"),
-            "comparable_basis": row.get("comparable_basis"),
-            "amount_cny": row.get("amount_cny"),
-            "turnover_fraction": row.get("turnover_fraction"),
-        }))
-
-    if ctx.bundle.history_artifact_ref:
-        owner = ctx.bundle._history_store
-        manifest = owner.manifest(ctx.bundle.history_artifact_ref, ctx.bundle.history_artifact_hash)
-        partitions = [part["partition_hash"] for part in manifest["partitions"] if part["session"] in wanted_sessions]
-        wanted_id_list = sorted(wanted_ids)
-        with owner.store.transaction(write=False) as con:
-            for left in range(0, len(partitions), 250):
-                batch = partitions[left:left + 250]
-                if not batch:
-                    continue
-                placeholders_p = ",".join("?" for _ in batch)
-                for id_left in range(0, len(wanted_id_list), 500):
-                    id_batch = wanted_id_list[id_left:id_left + 500]
-                    placeholders_i = ",".join("?" for _ in id_batch)
-                    cursor = con.execute(
-                        "SELECT m.row_hash,m.instrument_id,m.session,r.payload "
-                        "FROM history_partition_members m "
-                        "JOIN history_evidence_rows r ON r.row_hash=m.row_hash "
-                        f"WHERE m.partition_hash IN ({placeholders_p}) AND m.kind='bar' "
-                        f"AND m.instrument_id IN ({placeholders_i}) "
-                        "ORDER BY m.instrument_id,m.session,m.row_hash",
-                        [*batch, *id_batch],
-                    )
-                    for row in cursor:
-                        payload = row["payload"]
-                        if hashlib.sha256(payload.encode("utf-8")).hexdigest() != row["row_hash"]:
-                            raise IntegrityError("CORRUPT_HISTORY_ROW")
-                        consider(json.loads(payload), row_hash=row["row_hash"])
-    for bar in ctx.bundle.bars:
-        consider(bar)
-
-    selected = {}
-    for key, rows in grouped.items():
-        latest = max(row[0] for row in rows)
-        choices = [row for row in rows if row[0] == latest]
-        if len({row[1] for row in choices}) == 1:
-            selected[key] = choices[0][2]
-        else:
-            iid, session = key
-            ctx.rejected_evidence.append({"kind": "BAR", "instrument_id": iid, "session": session, "reason_codes": ["CONFLICTING_PRICE_REVISION"]})
-    return selected
+    return selected_rows(source_view)
 
 
 def _same_basis(rows):
@@ -970,7 +1090,7 @@ def _target_indices(ctx):
     return sorted(indices)
 
 
-def build_missing_features(ctx, identity, missing_keys, *, dependency_plan=None):
+def build_missing_features(ctx, identity, missing_keys, *, dependency_plan=None, source_view=None):
     if not missing_keys:
         return []
     target_sessions = sorted({session for _, session in missing_keys}, key=ctx.sessions.index)
@@ -981,7 +1101,7 @@ def build_missing_features(ctx, identity, missing_keys, *, dependency_plan=None)
     right = max(target_indices)
     source_sessions = ctx.sessions[left:right + 1]
     instrument_ids = sorted({iid for iid, _ in missing_keys})
-    selected = _selected_compact_bars(ctx, source_sessions, instrument_ids)
+    selected = _selected_compact_bars(ctx, source_sessions, instrument_ids, source_view=source_view)
     bars_by_iid = defaultdict(dict)
     for (iid, session), row in selected.items():
         bars_by_iid[iid][session] = row
@@ -1000,8 +1120,20 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
     sessions = [ctx.sessions[index] for index in _target_indices(ctx)]
     session_by_text = {_date_text(session): session for session in sessions}
     instrument_ids = list(ctx.eligible_ids)
+    session_positions = {_date_text(value): index for index, value in enumerate(ctx.sessions)}
+    source_sessions = sorted({
+        source_session
+        for session in sessions
+        for family in MATERIALIZED_FAMILIES
+        for source_session in _source_session_range(ctx, session, family)
+    }, key=session_positions.__getitem__)
+    source_view_started = time.perf_counter()
+    from .source_resolution import canonical_price_source_view
+
+    source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
+    after_source_view = time.perf_counter()
     dependency_plan_started = time.perf_counter()
-    dependency_plan = dependency_plan_for_context(ctx, sessions, instrument_ids)
+    dependency_plan = dependency_plan_for_context(ctx, sessions, instrument_ids, source_view=source_view)
     after_dependency_plan = time.perf_counter()
     cached = store.get_many(identity, instrument_ids, sessions, dependency_plan=dependency_plan)
     after_lookup = time.perf_counter()
@@ -1028,7 +1160,7 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
                 for iid in chunk_iids
                 for pair in missing_by_instrument[iid]
             ]
-            built = build_missing_features(ctx, identity, chunk_missing, dependency_plan=dependency_plan)
+            built = build_missing_features(ctx, identity, chunk_missing, dependency_plan=dependency_plan, source_view=source_view)
             built_count += len(built)
             if built:
                 chunk_put_stats = store.put_many(identity, built)
@@ -1050,13 +1182,18 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
         "target_sessions": [_date_text(session) for session in sessions],
         "eligible_count": len(instrument_ids),
         "requested_feature_rows": len(wanted),
-        "cache_hits": len(wanted) - len(missing),
+        "cache_hits": lookup_stats.get("row_lifecycle", {}).get("full_row_reused", len(wanted) - len(missing)),
         "cache_misses": len(missing),
         "built_rows": built_count,
-        "reused": len(wanted) - len(missing),
+        "reused": lookup_stats.get("row_lifecycle", {}).get("full_row_reused", len(wanted) - len(missing)),
+        "full_row_reused": lookup_stats.get("row_lifecycle", {}).get("full_row_reused", len(wanted) - len(missing)),
+        "partial_family_reused_rows": lookup_stats.get("row_lifecycle", {}).get("partial_family_reused", 0),
+        "new_rows": lookup_stats.get("row_lifecycle", {}).get("new_rows", 0),
         "newly_computed": built_count,
         "newly_built": built_count,
         "invalidated": lookup_stats.get("invalidated_rows", 0),
+        "invalidated_rows": lookup_stats.get("invalidated_rows", 0),
+        "missing_cache_rows": lookup_stats.get("missing_cache_rows", 0),
         "integrity_conflicts": put_stats.get("integrity_conflicts", 0),
         "family_cache": {
             "requested": lookup_stats.get("family_requested", len(wanted) * len(MATERIALIZED_FAMILIES)),
@@ -1065,12 +1202,17 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
             "inserted": put_stats.get("inserted_family_rows", 0),
             "reused_existing_on_put": put_stats.get("reused_existing_family_rows", 0),
             "invalidated": lookup_stats.get("invalidated_family_rows", 0),
+            "by_family": lookup_stats.get("family_by_family", {}),
+            "lifecycle": lookup_stats.get("family_lifecycle", {}),
         },
+        "row_lifecycle": lookup_stats.get("row_lifecycle", {}),
+        "cache_lifecycle_policy": "R16_CACHE_ROW_FAMILY_LIFECYCLE_V1",
         "cache_hit_rate": (len(wanted) - len(missing)) / len(wanted) if wanted else None,
-        "reuse_ratio": (len(wanted) - len(missing)) / len(wanted) if wanted else None,
+        "reuse_ratio": lookup_stats.get("row_lifecycle", {}).get("full_row_reused", len(wanted) - len(missing)) / len(wanted) if wanted else None,
         "bytes_read": None,
         "bytes_written": None,
         "timing_seconds": {
+            "source_resolution": after_source_view - source_view_started,
             "dependency_plan": after_dependency_plan - dependency_plan_started,
             "lookup": after_lookup - after_dependency_plan,
             "build_missing_setup": after_build - after_lookup,

@@ -194,7 +194,8 @@ def _prepare_context(bundle,cutoff=None):
     partition={'partition_version':'R05_UNIQUE_DATED_QUALIFICATION_V1','master_expected':expected,'identity_observed':len(groups),'identity_absent':absent,
         'eligible':len(eligible),'eligible_ids':eligible,'known_excluded':len(excluded),'known_excluded_records':excluded,
         'eligibility_unknown':len(unknown)+absent,'eligibility_unknown_records':unknown,'selected_security_hash':digest({i:s.model_dump(mode='json') for i,s in states.items() if s is not None}),
-        'selected_records':[{'instrument_id':i,'name':s.name,'effective_from':str(s.effective_from),'effective_to':str(s.effective_to) if s.effective_to else None,
+        'selected_records':[{'instrument_id':i,'name':s.name,'exchange':s.exchange,'board':s.board,'security_type':s.security_type,
+            'effective_from':str(s.effective_from),'effective_to':str(s.effective_to) if s.effective_to else None,
             'listing_exchange_sessions':sum(s.listed_on<=d<=day for d in sessions),'source_refs':list(s.source_refs),'record_hash':digest(s)} for i,s in sorted(states.items()) if s is not None],
         'universe_evidence_reason_codes':list(universe_proof.reason_codes)}
     return _ExperimentContext(bundle,str(day),list(map(str,sessions)),eligible,bars,universe_complete,resolver,states,partition,rejected,cutoff,themes)
@@ -591,6 +592,7 @@ def source_identity():
         ROOT/'stockfish_core/yaogu/visibility.py',
         ROOT/'stockfish_core/yaogu/contracts.py',
         ROOT/'stockfish_core/yaogu/history_artifacts.py',
+        ROOT/'stockfish_core/yaogu/source_resolution.py',
         ROOT/'stockfish_core/yaogu/derived_feature_store.py',
         ROOT/'stockfish_core/yaogu/events.py',
         ROOT/'stockfish_core/yaogu/theme_capital_trend.py',

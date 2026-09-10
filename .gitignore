@@ -43,6 +43,7 @@ dist/
 *.bak
 *.tar.gz
 *.bundle
+*.zip
 
 # Local editor / OS files
 .idea/

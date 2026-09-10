@@ -180,6 +180,35 @@ class MainboardPipeline:
             from .history_artifacts import HistoryArtifactStore
             self.history_store = HistoryArtifactStore(service.store)
 
+    def _latest_prior_history_artifact(self, day):
+        if self.service is None or not hasattr(self.service, 'store'):
+            return None
+        candidates = []
+        offset = 0
+        store = self.service.store
+        while True:
+            rows = store.list_documents('candidate_input_indexes', limit=1000, offset=offset)
+            for row in rows:
+                payload = row['payload']
+                observed = _date(payload.get('observation_date'))
+                input_id = payload.get('input_id') or row['document_id']
+                if observed is None or observed >= day or not input_id:
+                    continue
+                document = store.get_document('candidate_inputs', input_id)
+                if document and document.get('history_artifact_ref') and document.get('history_artifact_hash'):
+                    candidates.append({
+                        'input_id': input_id,
+                        'observation_date': str(observed),
+                        'history_artifact_ref': document['history_artifact_ref'],
+                        'history_artifact_hash': document['history_artifact_hash'],
+                    })
+            if len(rows) < 1000:
+                break
+            offset += len(rows)
+        if not candidates:
+            return None
+        return max(candidates, key=lambda item: (item['observation_date'], item['input_id']))
+
     def capture(self, output_dir, now, *, observation_date=None, checkpoint=lambda: None, progress=lambda _: None):
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('REAL_AWARE_CAPTURE_CLOCK_REQUIRED')
@@ -233,6 +262,7 @@ class MainboardPipeline:
             structure_start = sessions[max(0, len(sessions)-22)]
             v2_long_history_start = history_start
             demand = published_outcome_demand(self.service, day, sessions)
+            history_base = self._latest_prior_history_artifact(day) if self.history_store is not None else None
             missing_listing=[]
             for r in initial:
                 if r.get('endpoint') not in ('mainboard_sse','master_szse'):
@@ -253,6 +283,7 @@ class MainboardPipeline:
                     'v2_long_history_universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
                     'v2_long_history_data_policy': 'ALL_MARKET_DAILY_BY_EXCHANGE_SESSION_PLUS_ALL_DIRECTORY_ADJUSTMENT_FACTORS',
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
+                    'history_append_base': history_base,
                     'initial_estimate': {'full_pool_structure_members': len(ids),
                         'full_pool_raw_daily_requests': sum(v2_long_history_start <= s <= day for s in sessions),
                         'historical_security_master_requests': sum(v2_long_history_start <= s <= day for s in sessions),
@@ -380,7 +411,12 @@ class MainboardPipeline:
                 from .provider_normalization import normalize_capture_with_report
                 normalize = normalize_capture_with_report
             import inspect
-            normalization_options = {'history_store': self.history_store} if self.history_store is not None and 'history_store' in inspect.signature(normalize).parameters else {}
+            signature = inspect.signature(normalize).parameters
+            normalization_options = {}
+            if self.history_store is not None and 'history_store' in signature:
+                normalization_options['history_store'] = self.history_store
+            if history_base is not None and 'history_base_ref' in signature:
+                normalization_options['history_base_ref'] = history_base['history_artifact_ref']
             bundle = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions, **normalization_options)
             if isinstance(bundle, tuple):
                 bundle, gaps = bundle
@@ -434,6 +470,7 @@ class MainboardPipeline:
                     'adjustment_factor_policy': 'ALL_DIRECTORY_IDS_BATCHED_INDEPENDENTLY_OF_DAILY_CANDIDATE_IDS',
                     'historical_security_policy': 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE',
                 },
+                'history_append_base': history_base,
                 'published_outcome_demand': demand, 'stages': stages, 'queue': queue_summary,
                 'consumer_status': check.status, 'consumer_coverage': check.coverage,
                 'consumer_emotion': check.emotion.model_dump(mode='json'),
