@@ -125,6 +125,11 @@ def _turnover_fraction(bar):
 
 
 def _ma_value(ctx, iid, end_index, window):
+    from .derived_feature_store import MISSING, ma_value_from_context
+
+    derived = ma_value_from_context(ctx, iid, end_index, window)
+    if derived is not MISSING:
+        return derived
     cache=getattr(ctx,'scalar_cache',None)
     key=('MA_VALUE',iid,end_index,window)
     if cache is not None and key in cache:return cache[key]
@@ -287,6 +292,11 @@ def _shape_condition(ctx, iid, end_index):
 
 
 def _window_return(ctx, iid, end_index, lookback):
+    from .derived_feature_store import MISSING, window_return_from_context
+
+    derived = window_return_from_context(ctx, iid, end_index, lookback)
+    if derived is not MISSING:
+        return derived
     cache=getattr(ctx,'scalar_cache',None)
     key=('WINDOW_RETURN',iid,end_index,lookback)
     if cache is not None and key in cache:return cache[key]
@@ -307,6 +317,11 @@ def _window_return_uncached(ctx, iid, end_index, lookback):
 
 
 def _amount_change(ctx, iid, end_index, lookback):
+    from .derived_feature_store import MISSING, amount_change_from_context
+
+    derived = amount_change_from_context(ctx, iid, end_index, lookback)
+    if derived is not MISSING:
+        return derived
     cache=getattr(ctx,'scalar_cache',None)
     key=('AMOUNT_CHANGE',iid,end_index,lookback)
     if cache is not None and key in cache:return cache[key]

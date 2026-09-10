@@ -52,6 +52,14 @@ def register_candidate_routes(app, service):
         parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
         return accepted(service.submit_strategy_experiments(input_id=value.get('input_id'), observation_date=parsed_date))
 
+    @app.post('/api/daily-primary/run')
+    def start_daily_primary_run():
+        value = body()
+        if set(value) - {'input_id', 'observation_date'}:
+            raise ValueError('select an existing market input only')
+        parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
+        return accepted(service.submit_daily_primary_strategy(input_id=value.get('input_id'), observation_date=parsed_date))
+
     @app.get('/api/strategy-experiments/<run_id>/summary')
     def strategy_experiment_summary(run_id):
         return jsonify(service.strategy_experiment_summary(run_id, page=int(request.args.get('page', 1)),

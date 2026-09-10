@@ -1,3 +1,19 @@
+# R14 Daily Fast Path 与性能架构整改（2026-09-10）
+
+本节优先于下方历史记录。R14 在同一业务目录中分离日常 primary 与研究 full suite：日常正式荐股只运行 active `STAGE_AWARE_MOMENTUM_V2`，完整 PV/DNA/THEME/THEME_CAPITAL/Simple Trend/V1-V2 comparison 仍保留给明确研究比较。`STAGE_AWARE_MOMENTUM_V2` 交易语义、Focus gate、排名、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。
+
+主要工程变更：
+
+- 新增 `DERIVED_FEATURE_STORE_V1`，按 input/history/spec/as-of/comparable identity 缓存 deterministic derived facts，缓存可删除重建，不是第二行情权威库；
+- 新增 `run_active_daily_strategy(...)` 与 `/api/daily-primary/run`，CandidateService 和 scheduler 的 20:30 official primary 改走 `DAILY_PRIMARY_FAST`；
+- 日常 primary 保存 compact canonical run、分页 summary projection 和压缩 per-instrument detail，列表读取不反序列化巨大 run；
+- `RESEARCH_FULL` 端点仍保留完整多臂实验，score/outcome 后置追加，不阻塞 primary；
+- request queue retry 新增 `request_retries` 审计表，保留 `original_failure_category`、`retry_reason`、`retry_requested_at`、`retry_actor`。
+
+冻结输入 benchmark：eligible 3041、factor ALL/SSE/SZSE 3041/3041、1627/1627、1414/1414，PV computable 3040/3041，Research Full V2 business hash 与 fast cold/warm 完全一致。STOP baseline 为 V2 约646.8秒、full suite 约1213.8秒、RSS 约5.2GB、单 run 约220MB；R14 warm daily fast path 为53.109秒、peak RSS 995,033,088 bytes。报告见仓库根目录 `R14_PERFORMANCE_*`、`BEFORE_AFTER_RESULT_EQUIVALENCE.*`、`DATA_READINESS.*`、`SQLITE_SIZE_AUDIT.*` 和 `R14_CPROFILE_SUMMARY.*`。
+
+---
+
 # R05 本次统一整改与历史回放（2026-09-06）
 
 本节优先于下方历史记录。本次在同一业务目录完成 F01—F13 规格整改，保持 R05。当前入口见 [R05 说明](stock-fish/docs/R05_RECTIFICATION_AND_REPLAY.md)、[业务基线](stock-fish/ENGINEERING_BASELINE.md)、[数据及 Docker 核验](stock-fish/docs/R05_DATA_AND_DOCKER_RECTIFICATION.md)。旧报告的统计数、公式和 daemon 状态只反映旧运行。

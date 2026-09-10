@@ -1,3 +1,19 @@
+# R14 日常快路径部署补充（2026-09-10）
+
+本节优先于下方历史部署记录。当前实际仓库仍为 `D:/stockfish-qlib-quant-system`，业务目录 `stock-fish`，权威数据库仍是 `stock-fish/data/stockfish.sqlite3`，state root 仍是 `stock-fish/data/core`；不新建第二套业务库，也不提交真实 DB/state/cache。
+
+R14 后，20:30 official primary 和普通“下一交易日荐股”入口走 Daily Primary Fast Path：`/api/daily-primary/run` / `CandidateService.submit_daily_primary_strategy()`，只运行 active `STAGE_AWARE_MOMENTUM_V2`，使用 `DERIVED_FEATURE_STORE_V1` 派生缓存并保存 compact run、summary projection 和按需 detail。完整 `/api/strategy-experiments/run` 继续保留为 `RESEARCH_FULL`，仅用于明确的多策略比较、historical replay 或深度研究。
+
+```powershell
+pwsh -NoProfile -File ./Start-StockFish.ps1 -Port 8001 -DatabasePath ./stock-fish/data/stockfish.sqlite3 -StateRoot ./stock-fish/data/core
+Invoke-RestMethod http://127.0.0.1:8001/api/health
+Invoke-RestMethod http://127.0.0.1:8001/api/candidate-schedule
+```
+
+R14 不修改 `STAGE_AWARE_MOMENTUM_V2` 交易语义，不修改 `DAILY_RECOMMENDATION_SCORE_V1` 公式。score/outcome 是后置追加消费者，不进入 primary critical path。性能、SQLite 与数据 readiness 证据见 `R14_PERFORMANCE_RESULT.*`、`R14_PERFORMANCE_BASELINE.*`、`BEFORE_AFTER_RESULT_EQUIVALENCE.*`、`DATA_READINESS.*`、`SQLITE_SIZE_AUDIT.*` 和 `R14_CPROFILE_SUMMARY.*`。
+
+---
+
 # R12 持久本机服务（2026-09-08）
 
 本节优先于下方历史部署记录。当前实际仓库 D:/stockfish-qlib-quant-system，业务目录 stock-fish。同一既有权威数据库 stock-fish/data/stockfish.sqlite3，state root stock-fish/data/core；不新建第二套业务库。R12 长历史 artifact 也在此 SQLiteStore。升级前用 SQLite 在线备份或停服一致性备份保存既有库。

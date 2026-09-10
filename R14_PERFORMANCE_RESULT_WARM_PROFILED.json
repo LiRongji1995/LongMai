@@ -1,0 +1,223 @@
+{
+  "benchmark_version": "R14_DAILY_FAST_PATH_BENCHMARK_V1",
+  "generated_at": "2026-09-10T10:13:48.655122+08:00",
+  "db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\stockfish.sqlite3",
+  "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+  "observation_date": "2026-09-08",
+  "cutoff": "2026-09-09T08:56:58.518020+00:00",
+  "runs": [
+    {
+      "profile": "fast",
+      "status": "SUCCEEDED",
+      "elapsed_seconds": 147.3084746999666,
+      "rss_start_bytes": 39612416,
+      "rss_peak_bytes": 994480128,
+      "rss_delta_peak_bytes": 954867712,
+      "payload_bytes": 90264997,
+      "phase_timings": {
+        "sqlite_store_init": 0.0018366000149399042,
+        "market_input_load_and_bind": 20.92111090000253,
+        "config_load": 0.003916400019079447,
+        "derived_cache_store_init": 0.0013794999103993177,
+        "strategy_compute": 98.92895470000803,
+        "output_size_stream": 22.65510750003159,
+        "compact_size_estimate": 4.796169099980034,
+        "total": 147.3084746999666
+      },
+      "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+      "observation_date": "2026-09-08",
+      "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+      "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+      "derived_cache_db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\stockfish.sqlite3",
+      "coverage_type": "PROSPECTIVE_CAPTURED",
+      "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
+      "stage_aware_counts": {
+        "eligible": 3041,
+        "evaluated": 3041,
+        "focus": 0,
+        "watch": 42,
+        "rejected": 2851,
+        "passed": 0,
+        "failed": 2851,
+        "unknown": 148,
+        "decision_counts": {
+          "FOCUS": 0,
+          "WATCH": 42,
+          "REJECTED": 2851,
+          "UNKNOWN": 148
+        },
+        "condition_counts": {
+          "liquidity_bottom": {
+            "PASS": 190,
+            "FAIL": 2851,
+            "UNKNOWN": 0
+          },
+          "trend_state": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          },
+          "setup_identification": {
+            "PASS": 441,
+            "FAIL": 0,
+            "UNKNOWN": 2600
+          },
+          "behavioral_confirmation": {
+            "PASS": 437,
+            "FAIL": 4,
+            "UNKNOWN": 2600
+          },
+          "market_compatibility": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          },
+          "sector_context": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          },
+          "capital_linkage": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          },
+          "same_theme_context": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          },
+          "critical_counterevidence": {
+            "PASS": 3027,
+            "FAIL": 0,
+            "UNKNOWN": 14
+          }
+        },
+        "stage_counts": {
+          "START": {
+            "PASS": 367,
+            "FAIL": 2674,
+            "UNKNOWN": 0
+          },
+          "ACCELERATION": {
+            "PASS": 63,
+            "FAIL": 2978,
+            "UNKNOWN": 0
+          },
+          "HIGH_LEVEL_REPAIR": {
+            "PASS": 20,
+            "FAIL": 3021,
+            "UNKNOWN": 0
+          },
+          "TREND_PULLBACK": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          }
+        },
+        "setup_counts": {
+          "START": {
+            "PASS": 367,
+            "FAIL": 2674,
+            "UNKNOWN": 0
+          },
+          "ACCELERATION": {
+            "PASS": 63,
+            "FAIL": 2978,
+            "UNKNOWN": 0
+          },
+          "HIGH_LEVEL_REPAIR": {
+            "PASS": 20,
+            "FAIL": 3021,
+            "UNKNOWN": 0
+          },
+          "TREND_PULLBACK": {
+            "PASS": 0,
+            "FAIL": 0,
+            "UNKNOWN": 3041
+          }
+        },
+        "visible_theme_count": 0,
+        "rejected_theme_evidence_count": 0,
+        "reference_score_available": 3040,
+        "reference_score": {
+          "status": "COMPLETE",
+          "evaluated": 3040,
+          "missing": 1,
+          "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+        }
+      },
+      "stage_aware_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+      "derived_feature_store": {
+        "store_version": "DERIVED_FEATURE_STORE_V1",
+        "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+        "mode": "DAILY_INCREMENTAL",
+        "identity": {
+          "store_version": "DERIVED_FEATURE_STORE_V1",
+          "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+          "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+          "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+          "feature_spec_hash": "60820a031a15da56191bad652ed4e03032b1a13fb864f20d659445df98aad2a7",
+          "strategy_dependency_version": "R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY:R12_INTEGRITY_HISTORY:STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+          "as_of_session": "2026-09-08",
+          "comparable_basis_policy": "PER_ROW_BASIS_IN_CACHE_KEY_AND_WINDOW_BASIS_MATCH_REQUIRED",
+          "pit_policy": "SOURCE_VISIBILITY_RESOLVED_BEFORE_FEATURE_MATERIALIZATION"
+        },
+        "target_sessions": [
+          "2026-08-04",
+          "2026-08-05",
+          "2026-08-06",
+          "2026-08-07",
+          "2026-08-10",
+          "2026-08-11",
+          "2026-08-12",
+          "2026-08-13",
+          "2026-08-14",
+          "2026-08-17",
+          "2026-08-18",
+          "2026-08-19",
+          "2026-08-20",
+          "2026-08-21",
+          "2026-08-24",
+          "2026-08-25",
+          "2026-08-26",
+          "2026-08-27",
+          "2026-08-28",
+          "2026-08-31",
+          "2026-09-01",
+          "2026-09-02",
+          "2026-09-03",
+          "2026-09-04",
+          "2026-09-07",
+          "2026-09-08"
+        ],
+        "eligible_count": 3041,
+        "requested_feature_rows": 79066,
+        "cache_hits": 79066,
+        "cache_misses": 0,
+        "built_rows": 0,
+        "cache_hit_rate": 1.0,
+        "timing_seconds": {
+          "lookup": 5.361023399978876,
+          "build_missing": 0.05471729999408126,
+          "write_missing": 7.00005330145359e-07,
+          "total": 5.4157413999782875
+        },
+        "incremental_semantics": "BUILD_ONLY_MISSING_INSTRUMENT_SESSION_ROWS_FOR_THIS_AS_OF_AND_FEATURE_SPEC",
+        "authority": "CACHE_MISS_REBUILDS_FROM_MARKET_INPUT_HISTORY_ARTIFACT_AND_SOURCE_EVIDENCE"
+      },
+      "daily_primary_compact_estimate": {
+        "run_header_and_summary_bytes_estimate": 11340319,
+        "instrument_summary_items_bytes": 7644280,
+        "detail_raw_bytes": 86565916,
+        "detail_compressed_bytes": 13402726,
+        "detail_document_count": 3041
+      },
+      "market_edge": "NOT_ESTABLISHED",
+      "cprofile_output": "R14_FAST_WARM.cprofile",
+      "cprofile_top_cumulative": "         673783047 function calls (565144330 primitive calls) in 164.268 seconds\n\n   Ordered by: cumulative time\n   List reduced from 1332 to 40 due to restriction <40>\n\n   ncalls  tottime  percall  cumtime  percall filename:lineno(function)\n     2433   22.711    0.009  248.318    0.102 {built-in method time.sleep}\n        1    0.000    0.000  168.051  168.051 benchmark_daily_v2.py:130(_measure)\n        1    0.000    0.000  147.346  147.346 threading.py:1117(join)\n        1    0.000    0.000  147.346  147.346 threading.py:1155(_wait_for_tstate_lock)\n      8/6    0.000    0.000  147.346   24.558 {method 'acquire' of '_thread.lock' objects}\n        1    0.000    0.000  147.346  147.346 threading.py:1018(_bootstrap)\n        1    0.027    0.027   98.812   98.812 strategy_experiments.py:672(run_active_daily_strategy)\n        1    0.010    0.010   92.408   92.408 stage_aware_momentum.py:2645(run_stage_aware_momentum)\n     3041    0.037    0.000   55.178    0.018 stage_aware_momentum.py:1067(_limit_market_status)\n     6082    0.008    0.000   55.127    0.009 stage_aware_momentum.py:92(percentile_rank_midpoint)\n     6082    0.106    0.000   55.069    0.009 strategy_experiments.py:87(percentile_rank_midpoint)\n     6082    1.750    0.000   54.969    0.009 strategy_experiments.py:82(_percentile_rank_decimal)\n    65643    4.243    0.000   51.701    0.001 {built-in method builtins.sum}\n 25023960    3.432    0.000   32.622    0.000 encoder.py:414(_iterencode)\n130044852/25023958   20.449    0.000   29.057    0.000 encoder.py:334(_iterencode_dict)\n        1    0.003    0.003   27.488   27.488 threading.py:1058(_bootstrap_inner)\n 18707937    3.133    0.000   25.295    0.000 fractions.py:955(__lt__)\n28587990/25011852    3.951    0.000   22.601    0.000 encoder.py:278(_iterencode_list)\n 18995268   10.050    0.000   22.598    0.000 fractions.py:933(_richcmp)\n 93667899   12.055    0.000   21.494    0.000 {built-in method builtins.isinstance}\n        1    0.000    0.000   20.920   20.920 benchmark_daily_v2.py:91(_load_bundle)\n        1    0.070    0.070   20.883   20.883 stage_aware_momentum.py:2386(_evaluate_rows)\n        2    3.791    1.896   19.983    9.992 history_artifacts.py:32(digest_json_stream)\n        1    0.003    0.003   19.907   19.907 history_artifacts.py:262(bind_history)\n 18501444    3.313    0.000   17.852    0.000 strategy_experiments.py:85(<genexpr>)\n 18548801    5.675    0.000   14.586    0.000 fractions.py:912(__eq__)\n        1    0.027    0.027   12.284   12.284 stage_aware_momentum.py:88(_preload_bars)\n  1948596    1.654    0.000   10.299    0.000 __init__.py:183(dumps)\n 38941778    5.155    0.000    9.419    0.000 <frozen abc>:117(__instancecheck__)\n  1948596    1.352    0.000    8.283    0.000 encoder.py:183(encode)\n        1    0.096    0.096    7.916    7.916 strategy_experiments.py:199(_preload_bars)\n    59339    0.220    0.000    7.411    0.000 history_artifacts.py:352(resolve)\n  1677790    0.734    0.000    6.952    0.000 history_artifacts.py:26(_json)\n     3041    0.048    0.000    6.900    0.002 stage_aware_momentum.py:2054(_stages)\n  1948543    6.335    0.000    6.335    0.000 encoder.py:205(iterencode)\n    59339    0.980    0.000    5.693    0.000 visibility.py:110(resolve)\n        1    0.038    0.038    5.416    5.416 derived_feature_store.py:483(ensure_stage_aware_derived_features)\n        1    0.223    0.223    5.358    5.358 derived_feature_store.py:177(get_many)\n        1    0.031    0.031    4.794    4.794 benchmark_daily_v2.py:103(_compact_daily_primary_size)\n 38941778    4.265    0.000    4.265    0.000 {built-in method _abc._abc_instancecheck}\n\n\n"
+    }
+  ],
+  "sqlite_size_audit": null,
+  "market_edge": "NOT_ESTABLISHED"
+}

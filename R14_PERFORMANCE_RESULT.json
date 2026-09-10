@@ -1,0 +1,502 @@
+{
+  "report_version": "R14_PERFORMANCE_RESULT_V1",
+  "generated_at": "2026-09-10T10:24:07.914397+08:00",
+  "frozen_input": {
+    "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "observation_date": "2026-09-08",
+    "decision_cutoff": "2026-09-09T08:56:58.518020+00:00",
+    "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+    "coverage_type": "PROSPECTIVE_CAPTURED",
+    "eligible": 3041,
+    "research_full_run_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+    "research_full_v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef"
+  },
+  "after_cold": {
+    "profile": "fast",
+    "status": "SUCCEEDED",
+    "elapsed_seconds": 174.29496989992913,
+    "rss_start_bytes": 39301120,
+    "rss_peak_bytes": 2864689152,
+    "rss_delta_peak_bytes": 2825388032,
+    "payload_bytes": 90279739,
+    "phase_timings": {
+      "sqlite_store_init": 0.0016746999463066459,
+      "market_input_load_and_bind": 16.523042100016028,
+      "config_load": 0.0032420000061392784,
+      "derived_cache_store_init": 0.007125500007532537,
+      "strategy_compute": 152.77738330001011,
+      "output_size_stream": 2.837859299965203,
+      "compact_size_estimate": 2.1446429999778047,
+      "total": 174.29496989992913
+    },
+    "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "observation_date": "2026-09-08",
+    "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+    "derived_cache_db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\tmp_r14_cold_cache_20260910_rerun.sqlite3",
+    "coverage_type": "PROSPECTIVE_CAPTURED",
+    "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
+    "stage_aware_counts": {
+      "eligible": 3041,
+      "evaluated": 3041,
+      "focus": 0,
+      "watch": 42,
+      "rejected": 2851,
+      "passed": 0,
+      "failed": 2851,
+      "unknown": 148,
+      "decision_counts": {
+        "FOCUS": 0,
+        "WATCH": 42,
+        "REJECTED": 2851,
+        "UNKNOWN": 148
+      },
+      "condition_counts": {
+        "liquidity_bottom": {
+          "PASS": 190,
+          "FAIL": 2851,
+          "UNKNOWN": 0
+        },
+        "trend_state": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "setup_identification": {
+          "PASS": 441,
+          "FAIL": 0,
+          "UNKNOWN": 2600
+        },
+        "behavioral_confirmation": {
+          "PASS": 437,
+          "FAIL": 4,
+          "UNKNOWN": 2600
+        },
+        "market_compatibility": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "sector_context": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "capital_linkage": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "same_theme_context": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "critical_counterevidence": {
+          "PASS": 3027,
+          "FAIL": 0,
+          "UNKNOWN": 14
+        }
+      },
+      "stage_counts": {
+        "START": {
+          "PASS": 367,
+          "FAIL": 2674,
+          "UNKNOWN": 0
+        },
+        "ACCELERATION": {
+          "PASS": 63,
+          "FAIL": 2978,
+          "UNKNOWN": 0
+        },
+        "HIGH_LEVEL_REPAIR": {
+          "PASS": 20,
+          "FAIL": 3021,
+          "UNKNOWN": 0
+        },
+        "TREND_PULLBACK": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        }
+      },
+      "setup_counts": {
+        "START": {
+          "PASS": 367,
+          "FAIL": 2674,
+          "UNKNOWN": 0
+        },
+        "ACCELERATION": {
+          "PASS": 63,
+          "FAIL": 2978,
+          "UNKNOWN": 0
+        },
+        "HIGH_LEVEL_REPAIR": {
+          "PASS": 20,
+          "FAIL": 3021,
+          "UNKNOWN": 0
+        },
+        "TREND_PULLBACK": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        }
+      },
+      "visible_theme_count": 0,
+      "rejected_theme_evidence_count": 0,
+      "reference_score_available": 3040,
+      "reference_score": {
+        "status": "COMPLETE",
+        "evaluated": 3040,
+        "missing": 1,
+        "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+      }
+    },
+    "stage_aware_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "derived_feature_store": {
+      "store_version": "DERIVED_FEATURE_STORE_V1",
+      "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+      "mode": "DAILY_INCREMENTAL",
+      "identity": {
+        "store_version": "DERIVED_FEATURE_STORE_V1",
+        "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+        "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+        "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+        "feature_spec_hash": "60820a031a15da56191bad652ed4e03032b1a13fb864f20d659445df98aad2a7",
+        "strategy_dependency_version": "R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY:R12_INTEGRITY_HISTORY:STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+        "as_of_session": "2026-09-08",
+        "comparable_basis_policy": "PER_ROW_BASIS_IN_CACHE_KEY_AND_WINDOW_BASIS_MATCH_REQUIRED",
+        "pit_policy": "SOURCE_VISIBILITY_RESOLVED_BEFORE_FEATURE_MATERIALIZATION"
+      },
+      "target_sessions": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14",
+        "2026-08-17",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+        "2026-09-01",
+        "2026-09-02",
+        "2026-09-03",
+        "2026-09-04",
+        "2026-09-07",
+        "2026-09-08"
+      ],
+      "eligible_count": 3041,
+      "requested_feature_rows": 79066,
+      "cache_hits": 0,
+      "cache_misses": 79066,
+      "built_rows": 79066,
+      "cache_hit_rate": 0.0,
+      "timing_seconds": {
+        "lookup": 0.05018020002171397,
+        "build_missing": 115.26249590003863,
+        "write_missing": 6.690294699976221,
+        "total": 122.00297080003656
+      },
+      "incremental_semantics": "BUILD_ONLY_MISSING_INSTRUMENT_SESSION_ROWS_FOR_THIS_AS_OF_AND_FEATURE_SPEC",
+      "authority": "CACHE_MISS_REBUILDS_FROM_MARKET_INPUT_HISTORY_ARTIFACT_AND_SOURCE_EVIDENCE"
+    },
+    "daily_primary_compact_estimate": {
+      "run_header_and_summary_bytes_estimate": 11355061,
+      "instrument_summary_items_bytes": 7644280,
+      "detail_raw_bytes": 86565916,
+      "detail_compressed_bytes": 13402726,
+      "detail_document_count": 3041
+    },
+    "market_edge": "NOT_ESTABLISHED"
+  },
+  "after_warm": {
+    "profile": "fast",
+    "status": "SUCCEEDED",
+    "elapsed_seconds": 53.10854079993442,
+    "rss_start_bytes": 39714816,
+    "rss_peak_bytes": 995033088,
+    "rss_delta_peak_bytes": 955318272,
+    "payload_bytes": 90264998,
+    "phase_timings": {
+      "sqlite_store_init": 0.002021599910221994,
+      "market_input_load_and_bind": 16.03524770005606,
+      "config_load": 0.003414000035263598,
+      "derived_cache_store_init": 0.0014001999516040087,
+      "strategy_compute": 32.17816550005227,
+      "output_size_stream": 2.7943010999588296,
+      "compact_size_estimate": 2.0939906999701634,
+      "total": 53.10854079993442
+    },
+    "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "observation_date": "2026-09-08",
+    "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+    "derived_cache_db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\stockfish.sqlite3",
+    "coverage_type": "PROSPECTIVE_CAPTURED",
+    "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
+    "stage_aware_counts": {
+      "eligible": 3041,
+      "evaluated": 3041,
+      "focus": 0,
+      "watch": 42,
+      "rejected": 2851,
+      "passed": 0,
+      "failed": 2851,
+      "unknown": 148,
+      "decision_counts": {
+        "FOCUS": 0,
+        "WATCH": 42,
+        "REJECTED": 2851,
+        "UNKNOWN": 148
+      },
+      "condition_counts": {
+        "liquidity_bottom": {
+          "PASS": 190,
+          "FAIL": 2851,
+          "UNKNOWN": 0
+        },
+        "trend_state": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "setup_identification": {
+          "PASS": 441,
+          "FAIL": 0,
+          "UNKNOWN": 2600
+        },
+        "behavioral_confirmation": {
+          "PASS": 437,
+          "FAIL": 4,
+          "UNKNOWN": 2600
+        },
+        "market_compatibility": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "sector_context": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "capital_linkage": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "same_theme_context": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        },
+        "critical_counterevidence": {
+          "PASS": 3027,
+          "FAIL": 0,
+          "UNKNOWN": 14
+        }
+      },
+      "stage_counts": {
+        "START": {
+          "PASS": 367,
+          "FAIL": 2674,
+          "UNKNOWN": 0
+        },
+        "ACCELERATION": {
+          "PASS": 63,
+          "FAIL": 2978,
+          "UNKNOWN": 0
+        },
+        "HIGH_LEVEL_REPAIR": {
+          "PASS": 20,
+          "FAIL": 3021,
+          "UNKNOWN": 0
+        },
+        "TREND_PULLBACK": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        }
+      },
+      "setup_counts": {
+        "START": {
+          "PASS": 367,
+          "FAIL": 2674,
+          "UNKNOWN": 0
+        },
+        "ACCELERATION": {
+          "PASS": 63,
+          "FAIL": 2978,
+          "UNKNOWN": 0
+        },
+        "HIGH_LEVEL_REPAIR": {
+          "PASS": 20,
+          "FAIL": 3021,
+          "UNKNOWN": 0
+        },
+        "TREND_PULLBACK": {
+          "PASS": 0,
+          "FAIL": 0,
+          "UNKNOWN": 3041
+        }
+      },
+      "visible_theme_count": 0,
+      "rejected_theme_evidence_count": 0,
+      "reference_score_available": 3040,
+      "reference_score": {
+        "status": "COMPLETE",
+        "evaluated": 3040,
+        "missing": 1,
+        "ranked_by": "PV_CONTINUOUS_SCORE_NO_PV_AR_OR_FOCUS_PREFILTER"
+      }
+    },
+    "stage_aware_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "derived_feature_store": {
+      "store_version": "DERIVED_FEATURE_STORE_V1",
+      "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+      "mode": "DAILY_INCREMENTAL",
+      "identity": {
+        "store_version": "DERIVED_FEATURE_STORE_V1",
+        "feature_spec_version": "STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+        "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+        "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+        "feature_spec_hash": "60820a031a15da56191bad652ed4e03032b1a13fb864f20d659445df98aad2a7",
+        "strategy_dependency_version": "R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY:R12_INTEGRITY_HISTORY:STAGE_AWARE_DERIVED_FEATURE_SPEC_V1",
+        "as_of_session": "2026-09-08",
+        "comparable_basis_policy": "PER_ROW_BASIS_IN_CACHE_KEY_AND_WINDOW_BASIS_MATCH_REQUIRED",
+        "pit_policy": "SOURCE_VISIBILITY_RESOLVED_BEFORE_FEATURE_MATERIALIZATION"
+      },
+      "target_sessions": [
+        "2026-08-04",
+        "2026-08-05",
+        "2026-08-06",
+        "2026-08-07",
+        "2026-08-10",
+        "2026-08-11",
+        "2026-08-12",
+        "2026-08-13",
+        "2026-08-14",
+        "2026-08-17",
+        "2026-08-18",
+        "2026-08-19",
+        "2026-08-20",
+        "2026-08-21",
+        "2026-08-24",
+        "2026-08-25",
+        "2026-08-26",
+        "2026-08-27",
+        "2026-08-28",
+        "2026-08-31",
+        "2026-09-01",
+        "2026-09-02",
+        "2026-09-03",
+        "2026-09-04",
+        "2026-09-07",
+        "2026-09-08"
+      ],
+      "eligible_count": 3041,
+      "requested_feature_rows": 79066,
+      "cache_hits": 79066,
+      "cache_misses": 0,
+      "built_rows": 0,
+      "cache_hit_rate": 1.0,
+      "timing_seconds": {
+        "lookup": 3.0603848000755534,
+        "build_missing": 0.02882579993456602,
+        "write_missing": 7.00005330145359e-07,
+        "total": 3.0892113000154495
+      },
+      "incremental_semantics": "BUILD_ONLY_MISSING_INSTRUMENT_SESSION_ROWS_FOR_THIS_AS_OF_AND_FEATURE_SPEC",
+      "authority": "CACHE_MISS_REBUILDS_FROM_MARKET_INPUT_HISTORY_ARTIFACT_AND_SOURCE_EVIDENCE"
+    },
+    "daily_primary_compact_estimate": {
+      "run_header_and_summary_bytes_estimate": 11340320,
+      "instrument_summary_items_bytes": 7644280,
+      "detail_raw_bytes": 86565916,
+      "detail_compressed_bytes": 13402726,
+      "detail_document_count": 3041
+    },
+    "market_edge": "NOT_ESTABLISHED"
+  },
+  "saved_research_full": {
+    "run_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+    "persisted_run_bytes": 220912631,
+    "v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "execution_profile": "RESEARCH_FULL",
+    "rerun_status": "NOT_RERUN_TO_AVOID_10_MIN_PURE_COMPUTE_LIMIT_AND_20H_BACKFILL_FAILURE"
+  },
+  "equivalence": {
+    "saved_research_v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "fast_cold_v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "fast_warm_v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef",
+    "cold_matches_saved": true,
+    "warm_matches_saved": true,
+    "counts_identical": true
+  },
+  "runtime_sla": {
+    "warm_total_seconds": 53.10854079993442,
+    "warm_strategy_compute_seconds": 32.17816550005227,
+    "warm_peak_rss_bytes": 995033088,
+    "warm_peak_rss_under_1gb": true,
+    "daily_compute_local_budget_status": "PASS"
+  },
+  "top_hotspots_remaining": [
+    {
+      "rank": 1,
+      "component": "V2 market limit status percentile ranks",
+      "status": "MEASURED",
+      "evidence": "cProfile: _limit_market_status / percentile_rank_midpoint dominate profiled strategy compute after sampler overhead is ignored."
+    },
+    {
+      "rank": 2,
+      "component": "MarketInput load + history artifact bind",
+      "status": "MEASURED",
+      "evidence": "warm phase market_input_load_and_bind=16.035s"
+    },
+    {
+      "rank": 3,
+      "component": "Stage-Aware strategy compute",
+      "status": "MEASURED",
+      "evidence": "warm strategy_compute=32.178s"
+    },
+    {
+      "rank": 4,
+      "component": "Derived feature cache lookup/deserialization",
+      "status": "MEASURED",
+      "evidence": "lookup=3.060s; hit_rate=1.0"
+    },
+    {
+      "rank": 5,
+      "component": "Output serialization and compact estimate",
+      "status": "MEASURED",
+      "evidence": "output_size_stream=2.794s; compact_size_estimate=2.094s"
+    }
+  ],
+  "top_sql_query_patterns": [
+    {
+      "pattern": "history artifact bind/load",
+      "status": "MEASURED_AS_PHASE_NOT_SQL_TRACED"
+    },
+    {
+      "pattern": "derived feature cache lookup by identity/instrument/session",
+      "status": "MEASURED_AS_DERIVED_LOOKUP_TIME_NOT_QUERY_COUNTED"
+    },
+    {
+      "pattern": "dbstat unavailable in this SQLite build",
+      "status": "NOT_MEASURED"
+    }
+  ],
+  "market_edge": "NOT_ESTABLISHED"
+}

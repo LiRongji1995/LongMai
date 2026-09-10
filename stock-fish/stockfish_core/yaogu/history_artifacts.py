@@ -384,7 +384,8 @@ class InstrumentBars:
         self.compressed=OrderedDict();self.compressed_bytes=0;self.compressed_budget=compressed_cache_bytes
 
     def bar(self, session, iid):
-        if str(session)==str(self.bundle.observation_date) and iid in self.current_rows:
+        requested_session = str(session)[:10]
+        if requested_session==str(self.bundle.observation_date) and iid in self.current_rows:
             return self.current_rows[iid]
         if iid not in self.cache and iid in self.compressed:
             self.cache[iid]=pickle.loads(zlib.decompress(self.compressed[iid]))
@@ -393,38 +394,19 @@ class InstrumentBars:
         if iid not in self.cache:
             groups = defaultdict(list)
             owner = _owner(self.bundle)
-            manifest = owner.manifest(self.bundle.history_artifact_ref, self.bundle.history_artifact_hash)
             start = str(self.start or '0001-01-01')
-            parts = [p['partition_hash'] for p in manifest['partitions'] if start <= p['session'] <= str(self.bundle.observation_date)]
-            with owner.store.transaction(write=False) as con:
-                for offset in range(0, len(parts), 400):
-                    batch = parts[offset:offset + 400]
-                    if not batch:
-                        continue
-                    placeholders = ','.join('?' for _ in batch)
-                    sql = (
-                        'SELECT m.row_hash,m.instrument_id,m.session,r.payload '
-                        'FROM history_partition_members m '
-                        'JOIN history_evidence_rows r ON r.row_hash=m.row_hash '
-                        f"WHERE m.partition_hash IN ({placeholders}) AND m.kind='bar' "
-                        'AND m.instrument_id=? AND m.session>=? AND m.session<=? '
-                        'ORDER BY m.session,m.row_hash'
-                    )
-                    for row in con.execute(sql, [*batch, iid, start, str(self.bundle.observation_date)]):
-                        payload = row['payload']
-                        if hashlib.sha256(payload.encode()).hexdigest() != row['row_hash']:
-                            raise IntegrityError('CORRUPT_HISTORY_ROW')
-                        value = daily_bar_payload(json.loads(payload))
-                        session = value.get('session')
-                        if value.get('instrument_id') != row['instrument_id'] or str(session) != row['session']:
-                            raise IntegrityError('CORRUPT_HISTORY_PARTITION_INDEX')
-                        if value.get('quality') == 'INVALID':
-                            self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(session), 'reason_codes': ['INVALID_PRICE_QUALITY']}); continue
-                        proof = self.resolver.resolve(value, instrument_id=iid, session=session, require_session=True, record_hash=row['row_hash'])
-                        if proof.allowed:
-                            groups[str(session)].append(value)
-                        else:
-                            self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(session), 'reason_codes': list(proof.reason_codes)})
+            for row in owner.iter_rows(self.bundle.history_artifact_ref, 'bar', instrument_id=iid,
+                                       start=start, end=self.bundle.observation_date,
+                                       expected_hash=self.bundle.history_artifact_hash):
+                value = daily_bar_payload(row)
+                row_session = value.get('session')
+                if value.get('quality') == 'INVALID':
+                    self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(row_session), 'reason_codes': ['INVALID_PRICE_QUALITY']}); continue
+                proof = self.resolver.resolve(value, instrument_id=iid, session=row_session, require_session=True)
+                if proof.allowed:
+                    groups[str(row_session)].append(value)
+                else:
+                    self.rejected.append({'kind': 'BAR', 'instrument_id': iid, 'session': str(row_session), 'reason_codes': list(proof.reason_codes)})
             for b in self.bundle.bars:
                 if b.instrument_id != iid or b.session > self.bundle.observation_date or (self.start is not None and b.session < self.start):
                     continue
@@ -459,7 +441,7 @@ class InstrumentBars:
             if len(self.cache) > self.cache_size:
                 self.cache.popitem(last=False)
         self.cache.move_to_end(iid)
-        return self.cache[iid].get(str(session))
+        return self.cache[iid].get(requested_session)
 
 
 class OutcomeBarMapping(Mapping):

@@ -2386,6 +2386,17 @@ def _rank_rows(rows):
 def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
     ctx = _context or _prepare_context(bundle, cutoff)
     end_index = _session_index(ctx)
+    derived_store = ctx.scalar_cache.get("DERIVED_FEATURE_STORE")
+    if derived_store is not None:
+        from .derived_feature_store import ensure_stage_aware_derived_features
+        from .history_artifacts import digest_market_input
+
+        ensure_stage_aware_derived_features(
+            ctx,
+            derived_store,
+            input_hash=ctx.scalar_cache.get("DERIVED_INPUT_HASH") or digest_market_input(ctx.bundle),
+            mode=ctx.scalar_cache.get("DERIVED_FEATURE_MODE", "DAILY_INCREMENTAL"),
+        )
     benchmark_sessions = set()
     benchmark_windows = set(PRICE_WINDOWS) | set(RS_WINDOWS) | {10, 20}
     for anchor in {end_index, end_index - 1 if end_index is not None and end_index > 0 else None}:
@@ -2396,7 +2407,7 @@ def _evaluate_rows(bundle, *, top_n=100, cutoff=None, _context=None):
         for window in benchmark_windows:
             if anchor - window >= 0:
                 benchmark_sessions.add(ctx.sessions[anchor - window])
-    if end_index is not None:
+    if end_index is not None and derived_store is None:
         trend_seed = CONFIG["research_seed_parameters"]["trend_state"]
         slope_lookback = int(trend_seed["slope_lookback_sessions"])
         longest_ma = max(MA_WINDOWS) if MA_WINDOWS else 0

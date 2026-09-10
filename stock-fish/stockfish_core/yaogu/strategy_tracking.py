@@ -19,6 +19,7 @@ METRIC_POLICY_ID = 'R05_COMPARABLE_PRICE_AND_LIMIT_EVENT_LABEL_V1'
 TRACKING_VERSION = 'R05_RESEARCH_EPISODE_TRACKING_V2'
 REVIEW_VERSION = 'R05_RESEARCH_FEEDBACK_V2'
 FOCUS = 'PV_FOCUS_PREVIEW_V0.1'
+STAGE_AWARE_FOCUS = 'STAGE_AWARE_MOMENTUM_V2_FOCUS'
 STAGE_AWARE = 'STAGE_AWARE_MOMENTUM_V2'
 V2_OUTCOME_POLICY_ID = 'STAGE_AWARE_MOMENTUM_V2_SETUP_SPECIFIC_OUTCOMES_V2'
 
@@ -135,7 +136,34 @@ def _strategy_items(run, strategy_id='PV_OBSERVATION_V1'):
 
 
 def _focus_ids(run):
-    return set(((run.get('selection_results') or {}).get(FOCUS) or {}).get('selected_ids') or [])
+    policy, _, selected = _primary_focus_selection(run)
+    return selected
+
+
+def _primary_focus_selection(run):
+    selections = run.get('selection_results') or {}
+    for policy_id in (STAGE_AWARE_FOCUS, FOCUS):
+        value = selections.get(policy_id)
+        if value is not None:
+            return policy_id, value, set(value.get('selected_ids') or [])
+    return None, {}, set()
+
+
+def _strategy_focus(run, strategy_id, items):
+    if strategy_id == STAGE_AWARE:
+        selected = {row['instrument_id'] for row in items
+                    if row.get('instrument_id') and row.get('decision_status') == 'FOCUS'}
+        if selected:
+            return STAGE_AWARE_FOCUS, selected
+        saved_focus = (run.get('selection_results') or {}).get(STAGE_AWARE_FOCUS)
+        if saved_focus is not None:
+            return STAGE_AWARE_FOCUS, set(saved_focus.get('selected_ids') or [])
+    policy_id, _, selected = _primary_focus_selection(run)
+    return policy_id or FOCUS, selected
+
+
+def _tracking_strategy_id(run):
+    return STAGE_AWARE if (run.get('selection_results') or {}).get(STAGE_AWARE_FOCUS) is not None else 'PV_OBSERVATION_V1'
 
 
 def _reference_close(item):
@@ -386,10 +414,10 @@ def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons
         raise ValueError('experiment observation date missing from outcome calendar')
     future = calendar[calendar.index(observation_date) + 1:]
     bars = context.bars
-    focus_ids = _focus_ids(run)
     input_hash = context.input_hash
     values = []
     for sid, items in authoritative_strategy_items(run):
+        focus_policy_id, focus_ids = _strategy_focus(run, sid, items)
         for item in items:
             iid = item['instrument_id']
             signal_bar = bars.get((iid, observation_date))
@@ -455,7 +483,7 @@ def evaluate_strategy_experiment_outcomes(run, bundle, evaluated_at, *, horizons
                            'metric_policy_id': METRIC_POLICY_ID, 'label_kind': run.get('label_kind', 'SIGNAL')}
                 value = {'schema_version': OUTCOME_VERSION, **logical, 'run_id': run['run_id'],
                          'signal_input_id': run.get('input_id'), 'input_id': 'market_' + input_hash, 'input_hash': input_hash,
-                         'selection_policy_id': FOCUS if iid in focus_ids else None, 'selected_focus': iid in focus_ids,
+                         'selection_policy_id': focus_policy_id if iid in focus_ids else None, 'selected_focus': iid in focus_ids,
                          'parent_rank': item.get('rank'), 'parent_score': item.get('S_PV'), 'horizon_unit': 'exchange_trading_sessions',
                          'label_end': str(end) if end else None, 'evaluated_at': evaluated_at.isoformat(),
                          'coverage_type': bundle.coverage_type, 'status': status, 'metrics': metrics, 'metric_states': metric_states,
@@ -502,11 +530,13 @@ def build_strategy_tracking(run, bundle, evaluated_at, *, horizons=DEFAULT_RESEA
         if datetime.combine(archive_day, time(15), SH) <= evaluated_at.astimezone(SH):
             archive_records.append(record)
     episodes, observations, signals, shadows = [], [], [], []
-    for item in _strategy_items(run):
+    primary_strategy_id = _tracking_strategy_id(run)
+    focus_policy_id, focus_ids = _strategy_focus(run, primary_strategy_id, _strategy_items(run, primary_strategy_id))
+    for item in _strategy_items(run, primary_strategy_id):
         iid = item['instrument_id']
-        if iid not in _focus_ids(run):
+        if iid not in focus_ids:
             continue
-        choices = [e for e in existing_episodes if e['instrument_id'] == iid and e.get('selection_policy_id') == FOCUS and e.get('tracking_policy_id') == 'TRACKING_POLICY_PILOT_V0.1' and _day(e['observation_date']) <= signal_day]
+        choices = [e for e in existing_episodes if e['instrument_id'] == iid and e.get('selection_policy_id') == focus_policy_id and e.get('tracking_policy_id') == 'TRACKING_POLICY_PILOT_V0.1' and _day(e['observation_date']) <= signal_day]
         choices.sort(key=lambda e: (e['observation_date'], e['episode_id']))
         previous = choices[-1] if choices else None
         exit_day = None
@@ -518,17 +548,17 @@ def build_strategy_tracking(run, bundle, evaluated_at, *, horizons=DEFAULT_RESEA
         if previous and (exit_day is None or signal_day <= exit_day):
             episode = previous
         else:
-            key = {'instrument_id': iid, 'selection_policy_id': FOCUS, 'observation_date': str(signal_day),
+            key = {'instrument_id': iid, 'selection_policy_id': focus_policy_id, 'observation_date': str(signal_day),
                    'tracking_policy_id': 'TRACKING_POLICY_PILOT_V0.1', 'previous_episode_id': previous['episode_id'] if previous else None}
             episode = {'schema_version': TRACKING_VERSION, **key, 'episode_id': 'research_episode_' + digest(key),
-                       'run_id': run['run_id'], 'strategy_id': 'PV_OBSERVATION_V1', 'pending_horizons': list(horizons),
+                       'run_id': run['run_id'], 'strategy_id': primary_strategy_id, 'pending_horizons': list(horizons),
                        'post_exit_horizons': list(POST_EXIT_HORIZONS), 'started_at': datetime.combine(signal_day, time(15), SH).isoformat(),
                        'market_edge': 'NOT_ESTABLISHED'}
         episodes.append(episode)
         eid = episode['episode_id']
         start = _day(episode['observation_date'])
-        signal = {'run_id': run['run_id'], 'instrument_id': iid, 'strategy_id': 'PV_OBSERVATION_V1', 'episode_id': eid,
-                  'observation_date': str(signal_day), 'selection_policy_id': FOCUS}
+        signal = {'run_id': run['run_id'], 'instrument_id': iid, 'strategy_id': primary_strategy_id, 'episode_id': eid,
+                  'observation_date': str(signal_day), 'selection_policy_id': focus_policy_id}
         signals.append({**signal, 'signal_record_id': 'episode_signal_' + digest(signal)})
         volume_peak, below_streak, cooling_streak, state, actual_exit = None, 0, 0, 'ACTIVE', None
         episode_volume_basis = None

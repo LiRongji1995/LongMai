@@ -1,0 +1,428 @@
+{
+  "report_version": "R14_SQLITE_SIZE_AUDIT_V1",
+  "generated_at": "2026-09-10T10:24:07.914397+08:00",
+  "db_path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\stockfish.sqlite3",
+  "db_file_bytes": 5129125888,
+  "namespace_counts": [
+    {
+      "namespace": "strategy_experiment_runs",
+      "rows": 4,
+      "payload_bytes": 448165833
+    },
+    {
+      "namespace": "strategy_trading_session_observations",
+      "rows": 23625,
+      "payload_bytes": 251815951
+    },
+    {
+      "namespace": "candidate_inputs",
+      "rows": 10,
+      "payload_bytes": 199147472
+    },
+    {
+      "namespace": "strategy_experiment_summary_pages",
+      "rows": 411,
+      "payload_bytes": 33661600
+    },
+    {
+      "namespace": "strategy_research_reviews",
+      "rows": 7,
+      "payload_bytes": 10796688
+    },
+    {
+      "namespace": "candidate_pipeline_attempts",
+      "rows": 4,
+      "payload_bytes": 10138287
+    },
+    {
+      "namespace": "candidate_runs",
+      "rows": 3,
+      "payload_bytes": 2895871
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "rows": 12,
+      "payload_bytes": 2095115
+    },
+    {
+      "namespace": "recommendation_score_revisions",
+      "rows": 3,
+      "payload_bytes": 1351725
+    },
+    {
+      "namespace": "market_emotions",
+      "rows": 3,
+      "payload_bytes": 723453
+    },
+    {
+      "namespace": "strategy_research_review_summaries",
+      "rows": 7,
+      "payload_bytes": 332428
+    },
+    {
+      "namespace": "candidate_run_summaries",
+      "rows": 3,
+      "payload_bytes": 200488
+    },
+    {
+      "namespace": "strategy_experiment_summaries",
+      "rows": 4,
+      "payload_bytes": 88085
+    },
+    {
+      "namespace": "stage_aware_prospective_validation_schedules",
+      "rows": 24,
+      "payload_bytes": 51098
+    },
+    {
+      "namespace": "historical_replay_runs",
+      "rows": 3,
+      "payload_bytes": 46456
+    },
+    {
+      "namespace": "stage_aware_prospective_validation_epochs",
+      "rows": 22,
+      "payload_bytes": 28622
+    },
+    {
+      "namespace": "candidate_schedule_events",
+      "rows": 19,
+      "payload_bytes": 8327
+    },
+    {
+      "namespace": "strategy_tracking_runs",
+      "rows": 6,
+      "payload_bytes": 6061
+    },
+    {
+      "namespace": "stage_aware_prospective_primary_runs",
+      "rows": 1,
+      "payload_bytes": 2660
+    },
+    {
+      "namespace": "candidate_input_indexes",
+      "rows": 10,
+      "payload_bytes": 2406
+    },
+    {
+      "namespace": "candidate_observation_plans",
+      "rows": 1,
+      "payload_bytes": 2325
+    },
+    {
+      "namespace": "strategy_configs",
+      "rows": 1,
+      "payload_bytes": 2084
+    },
+    {
+      "namespace": "candidate_capture_results",
+      "rows": 3,
+      "payload_bytes": 1937
+    },
+    {
+      "namespace": "strategy_research_review_indexes",
+      "rows": 7,
+      "payload_bytes": 1694
+    },
+    {
+      "namespace": "strategy_implementation_assessments",
+      "rows": 4,
+      "payload_bytes": 1308
+    },
+    {
+      "namespace": "strategy_research_pending",
+      "rows": 4,
+      "payload_bytes": 1195
+    },
+    {
+      "namespace": "candidate_publications",
+      "rows": 3,
+      "payload_bytes": 951
+    },
+    {
+      "namespace": "research_episode_observations",
+      "rows": 1,
+      "payload_bytes": 783
+    },
+    {
+      "namespace": "research_episodes",
+      "rows": 1,
+      "payload_bytes": 601
+    },
+    {
+      "namespace": "strategy_research_horizon_requests",
+      "rows": 4,
+      "payload_bytes": 494
+    },
+    {
+      "namespace": "research_episode_signals",
+      "rows": 1,
+      "payload_bytes": 435
+    },
+    {
+      "namespace": "strategy_config_activations",
+      "rows": 1,
+      "payload_bytes": 132
+    },
+    {
+      "namespace": "strategy_name_bindings",
+      "rows": 1,
+      "payload_bytes": 82
+    }
+  ],
+  "largest_documents": [
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+      "payload_bytes": 220912631,
+      "created_at": "2026-09-09T09:26:51.031676+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_a4b33e34aebf0c167e5fc12332c5e2108efc582006a793f2da10753895770bf8",
+      "payload_bytes": 219437457,
+      "created_at": "2026-09-09T02:06:27.300888+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_37236efb54f9c6760aea0ade645875485044011ffbe324c9daf1ad7eedfb3d01",
+      "payload_bytes": 42538681,
+      "created_at": "2026-09-09T00:59:23.816801+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_75e94aeb8cc78e159319cf4697fe54394060c293cd21e17e734ed9c751aa24af",
+      "payload_bytes": 37734803,
+      "created_at": "2026-09-09T10:17:53.446807+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+      "payload_bytes": 37733295,
+      "created_at": "2026-09-09T05:27:00.558401+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_073997415e2e7d0626e6ffa70212e0ed3073ffa589d46232addbc1275e6107b8",
+      "payload_bytes": 35470947,
+      "created_at": "2026-09-09T00:53:34.313965+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_fa149affa82a83ac6a30f40962ca957a30cbb8101fcf042a15a131533e47f10d",
+      "payload_bytes": 31363704,
+      "created_at": "2026-09-08T12:43:16.758824+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_e642f51a9803358574ffde5f809b0b09e93f08e4c5e7500ef4dbae8174225b5c",
+      "payload_bytes": 10163247,
+      "created_at": "2026-09-08T09:13:45.301752+00:00"
+    },
+    {
+      "namespace": "strategy_research_reviews",
+      "document_id": "strategy_review_48e53ac3d028d16df3e7a69eb48b7cf7a093fc2f8b84db49dd953672c3b410df",
+      "payload_bytes": 5230534,
+      "created_at": "2026-09-09T07:06:51.710331+00:00"
+    },
+    {
+      "namespace": "strategy_research_reviews",
+      "document_id": "strategy_review_b4a2f085bd804325105d57941058a6ddae44a1f6a5bb28355179ce716a3b0c95",
+      "payload_bytes": 5230534,
+      "created_at": "2026-09-09T07:08:24.701152+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_f9ee0408e365542054c79f32345e26ee4aa2de75096004da4ab1eb8cf51e96d5",
+      "payload_bytes": 4083675,
+      "created_at": "2026-09-08T09:16:04.751667+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_a301a6f4e1385936f665cc5036cbadaba1546da0fc97a0dd5a60476cb9ad0387",
+      "payload_bytes": 3732070,
+      "created_at": "2026-09-08T12:43:33.160921+00:00"
+    },
+    {
+      "namespace": "candidate_pipeline_attempts",
+      "document_id": "pipeline_13c9335582bfd5a43468bed6b7a54f4fcae94832a7697919abb426fb2fdfda7f",
+      "payload_bytes": 3300707,
+      "created_at": "2026-09-08T12:42:58.517822+00:00"
+    },
+    {
+      "namespace": "candidate_pipeline_attempts",
+      "document_id": "pipeline_7325581f4f7bef661a88b25d2df1369d6592531cdac30b9a5e730e5959716bed",
+      "payload_bytes": 3278459,
+      "created_at": "2026-09-08T09:13:31.195376+00:00"
+    },
+    {
+      "namespace": "candidate_pipeline_attempts",
+      "document_id": "pipeline_ae4ac0df7bf255d56a5fbe285f4d5ab373c42244a52ddf1a280a1b5ebb79e63e",
+      "payload_bytes": 3191983,
+      "created_at": "2026-09-08T04:13:23.158573+00:00"
+    },
+    {
+      "namespace": "candidate_runs",
+      "document_id": "candidate_schedule_2026-09-08_EVENING_validation_epoch_dc93276142daab1c1345ef13f0e21e986e8da91988aceec1562878a27b1dc1cf",
+      "payload_bytes": 1466248,
+      "created_at": "2026-09-08T12:43:33.077643+00:00"
+    },
+    {
+      "namespace": "candidate_runs",
+      "document_id": "candidate_capture_4c6199ac6b464389bc1fd5ddd17f2ed5",
+      "payload_bytes": 1414494,
+      "created_at": "2026-09-08T09:13:53.268685+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_270929a86ab141c5c7a166aa04f8a5a7190cf3b3d664fed9709f61c76e01b19b",
+      "payload_bytes": 1393910,
+      "created_at": "2026-09-08T09:15:48.615820+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_6cf320ad97cf5986f63cd0dc3e64e23c50c512edaabb0cb0bd8a657eb5dea117",
+      "payload_bytes": 1305022,
+      "created_at": "2026-09-08T08:31:06.610283+00:00"
+    },
+    {
+      "namespace": "candidate_inputs",
+      "document_id": "market_30431924ae54ba2dd91937eb978f4ad2a79c4cecfe867cd4b8743c981171b499",
+      "payload_bytes": 1305022,
+      "created_at": "2026-09-08T08:36:17.859772+00:00"
+    },
+    {
+      "namespace": "recommendation_score_revisions",
+      "document_id": "recommendation_score_c9e6f35e3f2a576847d77ef63e8c0c7bded9557a18a3d4d87c4ce9204536090d",
+      "payload_bytes": 961338,
+      "created_at": "2026-09-09T07:06:51.738635+00:00"
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "document_id": "history_0396a1f32528beff5858ce1466988cd755611a205602d4b08869ac86557a973c",
+      "payload_bytes": 416349,
+      "created_at": "2026-09-09T10:17:00.412358+00:00"
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "document_id": "history_b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+      "payload_bytes": 414507,
+      "created_at": "2026-09-09T05:26:03.190158+00:00"
+    },
+    {
+      "namespace": "market_emotions",
+      "document_id": "candidate_schedule_2026-09-08_EVENING_validation_epoch_dc93276142daab1c1345ef13f0e21e986e8da91988aceec1562878a27b1dc1cf",
+      "payload_bytes": 368932,
+      "created_at": "2026-09-08T12:43:33.104933+00:00"
+    },
+    {
+      "namespace": "candidate_pipeline_attempts",
+      "document_id": "pipeline_e57567735073444674a872ec2f385720a9052a93ec4ecea919a1db4ba94400dd",
+      "payload_bytes": 367138,
+      "created_at": "2026-09-08T08:12:28.783998+00:00"
+    },
+    {
+      "namespace": "market_emotions",
+      "document_id": "candidate_capture_4c6199ac6b464389bc1fd5ddd17f2ed5",
+      "payload_bytes": 351931,
+      "created_at": "2026-09-08T09:13:53.297574+00:00"
+    },
+    {
+      "namespace": "strategy_research_reviews",
+      "document_id": "strategy_review_a6b992c0226f562ac6a0fe53369d36d021a290313d5f761c423b4534bba1b563",
+      "payload_bytes": 257708,
+      "created_at": "2026-09-09T07:01:23.113220+00:00"
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "document_id": "history_7bd46c02d29800fb00843120cb9c84bda62395038e831445bde52a6d03bd1f14",
+      "payload_bytes": 216990,
+      "created_at": "2026-09-09T00:57:59.720584+00:00"
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "document_id": "history_dfcacab2a58e672e48db1f3a6f6806bd7c91667c51a11423f09b3114fe12fdd6",
+      "payload_bytes": 215317,
+      "created_at": "2026-09-09T00:51:52.605062+00:00"
+    },
+    {
+      "namespace": "history_artifact_manifests",
+      "document_id": "history_89c9f9d3f290c2dba3c749dba738f3c4fb108149df961b4608080e52927b3597",
+      "payload_bytes": 213807,
+      "created_at": "2026-09-08T12:41:35.418507+00:00"
+    }
+  ],
+  "strategy_experiment_run_sizes": [
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+      "payload_bytes": 220912631,
+      "created_at": "2026-09-09T09:26:51.031676+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_a4b33e34aebf0c167e5fc12332c5e2108efc582006a793f2da10753895770bf8",
+      "payload_bytes": 219437457,
+      "created_at": "2026-09-09T02:06:27.300888+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_f9ee0408e365542054c79f32345e26ee4aa2de75096004da4ab1eb8cf51e96d5",
+      "payload_bytes": 4083675,
+      "created_at": "2026-09-08T09:16:04.751667+00:00"
+    },
+    {
+      "namespace": "strategy_experiment_runs",
+      "document_id": "strategy_experiment_a301a6f4e1385936f665cc5036cbadaba1546da0fc97a0dd5a60476cb9ad0387",
+      "payload_bytes": 3732070,
+      "created_at": "2026-09-08T12:43:33.160921+00:00"
+    }
+  ],
+  "derived_feature_store": {
+    "rows": 79066,
+    "payload_bytes": 144886863,
+    "largest_payload_bytes": 2213
+  },
+  "dbstat": "UNAVAILABLE_NO_SUCH_TABLE_IN_THIS_SQLITE_BUILD",
+  "queue_state": {
+    "path": "D:\\stockfish-qlib-quant-system\\stock-fish\\data\\core\\yaogu\\provider_cache\\request-queue.sqlite3",
+    "exists": true,
+    "states": [
+      {
+        "state": "BLOCKED",
+        "rows": 16
+      },
+      {
+        "state": "COMPLETE",
+        "rows": 302
+      },
+      {
+        "state": "PARTIAL",
+        "rows": 2
+      },
+      {
+        "state": "PENDING",
+        "rows": 888
+      }
+    ],
+    "failure_categories": [
+      {
+        "failure_category": "PROVIDER",
+        "rows": 92
+      },
+      {
+        "failure_category": "NETWORK",
+        "rows": 12
+      },
+      {
+        "failure_category": "UPSTREAM_SCHEMA",
+        "rows": 1
+      }
+    ],
+    "row_count": 1208,
+    "logical_count": 1025,
+    "retry_audit_table_present": false,
+    "retry_audit_rows": null
+  },
+  "market_edge": "NOT_ESTABLISHED"
+}

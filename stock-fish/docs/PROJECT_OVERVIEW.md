@@ -4,19 +4,19 @@
 
 ## 1. 文档身份、核验基础与版本
 
-**最后核对：2026-09-08，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成，将阶段感知主动核心 `STAGE_AWARE_MOMENTUM_V2` 提升到 `R12_INTEGRITY_HISTORY`，并新增只读评价消费者 `DAILY_RECOMMENDATION_SCORE_V1`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
+**最后核对：2026-09-10，Asia/Shanghai。** 当前交付在 `D:/stockfish-qlib-quant-system` 克隆中完成 R14 Daily Fast Path 与性能架构整改：阶段感知主动核心仍是 `STAGE_AWARE_MOMENTUM_V2`，但日常 primary 与完整 research comparison 已分离，`DAILY_RECOMMENDATION_SCORE_V1` 继续作为只读后验消费者。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容，上一版 `THEME_CAPITAL_TREND_V1` 保留为对照。动态数据、任务、进程和模型状态会在此时间以后改变，使用前应重新读取小型状态摘要。
 
 | 对象 | 核对基础及含义 |
 |---|---|
-| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；本轮在 `main` 上完成，推送并核对远端后从最终 commit 字节生成 R12 review bundle |
-| 本轮核心版本 | `STAGE_AWARE_MOMENTUM_V2`；配置 [stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，说明 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)；V1 只读历史说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
+| 当前交付仓库 | `D:/stockfish-qlib-quant-system`；远端 `git@github.com:LiRongji1995/stockfish-qlib-quant-system.git`；R14 在 `main` 上完成后推送并从最终 commit 字节生成 review bundle |
+| 本轮核心版本 | `STAGE_AWARE_MOMENTUM_V2`；R14 仅调整执行路径和派生缓存，不改策略语义；配置 [stage_aware_momentum_v2.yaml](../config/stage_aware_momentum_v2.yaml)，实现 [stage_aware_momentum.py](../stockfish_core/yaogu/stage_aware_momentum.py)，快路径说明 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)，策略说明 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)；V1 只读历史说明见 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md) |
 | 每日成绩版本 | `DAILY_RECOMMENDATION_SCORE_V1`；实现 [recommendation_scoring.py](../stockfish_core/yaogu/recommendation_scoring.py)，说明 [DAILY_RECOMMENDATION_SCORE_V1.md](DAILY_RECOMMENDATION_SCORE_V1.md)；仅读保存的信号和追加 outcome，不参与策略计算 |
 | 历史运行证据 | 旧 `D:/StockRecommendation` 服务与发布检出证据保留为历史核对材料；其 PID、端口和镜像身份是当时事实，使用前必须重新核对 |
-| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；当前核心实现 `R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY`，spec `R12_INTEGRITY_HISTORY`；初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
+| 本文规则身份 | `YAOGU_V1.1.0` / `YAOGU_FEATURES_V1_R03`；旧实验实现 `R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY`；上一版新增实现 `R06_THEME_CAPITAL_TREND_V1`；当前核心策略保持 `STAGE_AWARE_MOMENTUM_V2`，R14 execution profile 为 `DAILY_PRIMARY_FAST` / `RESEARCH_FULL`；初始参数状态 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED` |
 
 开发工作区、发布检出与运行进程分别核验。本次任务只提交当前授权文件，不覆盖私人数据库、缓存、报告或旧运行目录。正式 DAILY、旧 PV、旧焦点、DNA、THEME 的规则与历史结果保留；新增策略不以国芳集团或金健米业是否入选作为验收标准。
 
-本轮 R12 修复跨 signal run outcome 污染，epoch 绑定完整 signal/protocol/score 身份，并区分不可评价日期与合法无推荐。交易参数、Setup、优先级、Focus gate 均保持 V2。交付说明见 [R12_SCORE_INTEGRITY_REPORT](R12_SCORE_INTEGRITY_REPORT.md)、[R12_HISTORY_ARTIFACT_REPORT](R12_HISTORY_ARTIFACT_REPORT.md)、[R12_PROSPECTIVE_INTEGRITY_REPORT](R12_PROSPECTIVE_INTEGRITY_REPORT.md)、[MEMORY_PROFILE](MEMORY_PROFILE.md)、[V2_DATA_READINESS](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT](V2_HISTORICAL_REPLAY_REPORT.md) 与 [V2_PROSPECTIVE_VALIDATION_PROTOCOL](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)。
+本轮 R14 修复日常 primary 仍被完整多臂实验拖慢的问题，新增 `run_active_daily_strategy(...)`、`DERIVED_FEATURE_STORE_V1`、compact daily persistence、`/api/daily-primary/run` 和 scheduler 快路径。冻结 benchmark input 上，saved research full 的 V2 business hash 与 cold/warm daily fast path 完全一致；热路径 53.109 秒、peak RSS 995,033,088 bytes。交易参数、Setup、优先级、Focus gate 和 score 公式均保持 V2。R12 的 score/history/prospective 修复仍见 [R12_SCORE_INTEGRITY_REPORT](R12_SCORE_INTEGRITY_REPORT.md)、[R12_HISTORY_ARTIFACT_REPORT](R12_HISTORY_ARTIFACT_REPORT.md)、[R12_PROSPECTIVE_INTEGRITY_REPORT](R12_PROSPECTIVE_INTEGRITY_REPORT.md)、[MEMORY_PROFILE](MEMORY_PROFILE.md)、[V2_DATA_READINESS](V2_DATA_READINESS.md)、[V2_HISTORICAL_REPLAY_REPORT](V2_HISTORICAL_REPLAY_REPORT.md) 与 [V2_PROSPECTIVE_VALIDATION_PROTOCOL](V2_PROSPECTIVE_VALIDATION_PROTOCOL.md)。
 
 历史架构在同一权威 SQLiteStore 保存不可变内容寻址行与会话 manifest；日 MarketInput 保存近期证据与历史 ref/hash，按证券读取长期窗口。512×315 合成基准峰值 RSS 从约 2.59 GB 降至约 160 MB。真实 321,622,653-byte 旧输入已流式迁移，迁移峰值约 131 MB；此测量与合成旧路径基准分开报告。每日增量复用旧行，不重复持久化整个315日历史。
 
@@ -54,7 +54,8 @@ V2全部3,041只中FOCUS0、WATCH0、REJECTED2851、UNKNOWN190，仍为 `SIGNAL_
   → 不可变 MarketInput / 来源与资格分区
   → CandidateService
       ├─ DAILY / FUNDS / PRICE_ONLY：engine.py + features/events/themes/emotion
-      └─ R05：strategy_experiments.py → 完整 PV → 焦点 / DNA / THEME
+      ├─ Daily Primary Fast Path：active STAGE_AWARE_MOMENTUM_V2 + DERIVED_FEATURE_STORE_V1
+      └─ Research Full：PV / DNA / THEME / THEME_CAPITAL / V1/V2 comparison
   → SQLite 保存唯一运行、摘要投影、单股证据、任务状态
   → 后验、episode、复盘另行追加
   → Codex 通过现有 API 与轻量封装读取或触发；网页是可选视图
@@ -63,10 +64,10 @@ V2全部3,041只中FOCUS0、WATCH0、REJECTED2851、UNKNOWN190，仍为 `SIGNAL_
 | 模块 | 实际职责与边界 |
 |---|---|
 | [app.py](../app.py)、[api.py](../stockfish_core/api.py) | 本地 Web/API 外壳；请求只能选择已登记输入 ID，不能通过 HTTP 声明任意文件可信或上传假收益 |
-| [service.py](../stockfish_core/service.py)、[candidate_service.py](../stockfish_core/yaogu/candidate_service.py) | 组装服务、调用正式计算、原子发布与持久结果；摘要投影有来源哈希，详情与导出派生于保存排名 |
+| [service.py](../stockfish_core/service.py)、[candidate_service.py](../stockfish_core/yaogu/candidate_service.py) | 组装服务、调用正式计算、原子发布与持久结果；R14 日常 primary 调用 active V2 快路径并保存 compact summary/detail，research endpoint 仍保留完整多臂实验 |
 | [data_pipeline.py](../stockfish_core/yaogu/data_pipeline.py)、[request_queue.py](../stockfish_core/yaogu/request_queue.py) | 全主板分层请求、缓存复用、续采、失败分类和预算；不是无限重试或每天全量重下 |
 | [contracts.py](../stockfish_core/yaogu/contracts.py)、[visibility.py](../stockfish_core/yaogu/visibility.py) | 类型、单位、来源四时钟、父回执及逐行可见性；拒绝未来或无法核验的证据 |
-| [jobs.py](../stockfish_core/jobs.py)、[scheduler.py](../stockfish_core/yaogu/scheduler.py) | SQLite 持久任务；核心单执行 worker、最多 20 个待执行任务；应用进程内唯一调度器 |
+| [jobs.py](../stockfish_core/jobs.py)、[scheduler.py](../stockfish_core/yaogu/scheduler.py) | SQLite 持久任务；核心单执行 worker、最多 20 个待执行任务；应用进程内唯一调度器；20:30 official primary 走 Daily Primary Fast Path |
 | [static/core.js](../static/core.js) | 读取保存摘要、历史选择、详情、导出、触发计算/后验/跟踪；页面不是第二套计算权威 |
 | [scripts/codex_research.py](../scripts/codex_research.py) | 本任务的薄调用封装，复用服务接口；不复制策略或标签算法，不另建数据库或常驻服务 |
 | Docker / WSGI | Compose 是可选后台部署；[wsgi.py](../wsgi.py) 配合单进程 gunicorn 保证单调度器，持久卷保存状态；当前本机实际使用本地 Python |
@@ -127,7 +128,7 @@ RAW 价格用于当日 OHLC、限价/封板、参考前收和开盘执行研究�
 | `DNA_RERANK_V1` | 已实现的股性增强实验，在合格子群重算 PV 后混合 G | 连续 252 会话、可核验板事件、成熟样本与可靠性门槛；最新实际输入不足 |
 | `THEME_CONTEXT_V1` | 已实现的事件题材增强实验，在合格子群重算 PV 后混合 T | 截止前可见完整 EVENT 主题、至少5成员、同伴价格/板事件覆盖≥95%；最新实际输入不足 |
 | `THEME_CAPITAL_TREND_V1` | 上一版板块、资金、多头趋势独立研究臂，保留为对照 | 成交额、换手、长窗均线、题材联动、同题材活跃资金均需 `PASS` |
-| `STAGE_AWARE_MOMENTUM_V2` | 当前主动核心阶段感知强势股策略；V1 冻结为历史只读兼容 | 主板资格、成交额/换手底线、慢趋势状态、setup 识别、行为确认、市场兼容、同题材板块/资金和关键反证；最终输出 `FOCUS/WATCH/REJECTED/UNKNOWN` |
+| `STAGE_AWARE_MOMENTUM_V2` | 当前主动核心阶段感知强势股策略；R14 起为 daily primary 默认 active strategy；V1 冻结为历史只读兼容 | 主板资格、成交额/换手底线、慢趋势状态、setup 识别、行为确认、市场兼容、同题材板块/资金和关键反证；最终输出 `FOCUS/WATCH/REJECTED/UNKNOWN` |
 
 `DNA_REVERSAL_V1` 与 `THEME_LIMITUP_V1` 是旧客户端兼容别名；实际 canonical ID 分别为 DNA_RERANK/THEME_CONTEXT，不是两个新增策略，也不重复统计。配置 `execution_enabled: false` 指不启用交易执行，不代表禁止运行研究实验。日常以已确认 PV 路径处理量价请求，仍明确 DAILY 是冻结原基线，不拿 PV 结果冒充 DAILY 已齐备。
 

@@ -116,6 +116,11 @@ class RequestQueue:
                 request_id TEXT NOT NULL, attempt INTEGER NOT NULL, state TEXT NOT NULL,
                 result_path TEXT, result_hash TEXT, recorded_at TEXT NOT NULL,
                 PRIMARY KEY(request_id,attempt));
+            CREATE TABLE IF NOT EXISTS request_retries (
+                request_id TEXT NOT NULL, retry_requested_at TEXT NOT NULL,
+                retry_actor TEXT NOT NULL, retry_reason TEXT NOT NULL,
+                original_failure_category TEXT, original_state TEXT NOT NULL,
+                PRIMARY KEY(request_id,retry_requested_at));
             CREATE TABLE IF NOT EXISTS logical_requests (
                 logical_id TEXT PRIMARY KEY, request_id TEXT NOT NULL UNIQUE);''')
         self._register_legacy_identities()
@@ -255,18 +260,24 @@ class RequestQueue:
         return sorted((dict(r) for r in self.connection.execute('SELECT * FROM requests')
                        if r['request_id'] in selected), key=order)
 
-    def retry_blocked(self, ids, *, reason='EXPLICIT_OPERATOR_RETRY'):
+    def retry_blocked(self, ids, *, reason='EXPLICIT_OPERATOR_RETRY', actor='LOCAL_OPERATOR'):
         """Permit one explicit maintenance retry without deleting audit history."""
         selected = set(ids)
         if not selected:
             return 0
         changed = 0
         with self.connection:
-            for row in self.connection.execute('SELECT request_id,state FROM requests'):
+            for row in self.connection.execute('SELECT request_id,state,failure_category FROM requests'):
                 if row['request_id'] in selected and row['state'] == 'BLOCKED':
+                    retry_requested_at = self.timestamp()
+                    self.connection.execute(
+                        'INSERT INTO request_retries VALUES(?,?,?,?,?,?)',
+                        (row['request_id'], retry_requested_at, actor, reason,
+                         row['failure_category'], row['state']),
+                    )
                     self.connection.execute(
                         "UPDATE requests SET state='PENDING',failure_category=?,updated_at=? WHERE request_id=?",
-                        (reason, self.timestamp(), row['request_id']),
+                        (reason, retry_requested_at, row['request_id']),
                     )
                     changed += 1
         return changed

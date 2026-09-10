@@ -12,6 +12,9 @@ from .visibility import EvidenceResolver
 POLICY_ID='NEXT_OPEN_HOLD_H_PAPER_V1'
 SH=ZoneInfo('Asia/Shanghai')
 COSTS=(0,30,60)
+PV_FOCUS='PV_FOCUS_PREVIEW_V0.1'
+STAGE_AWARE='STAGE_AWARE_MOMENTUM_V2'
+STAGE_AWARE_FOCUS='STAGE_AWARE_MOMENTUM_V2_FOCUS'
 
 
 def assumptions():
@@ -53,8 +56,14 @@ def evaluate_paper_execution(run,bundle,cutoff,*,horizons=(1,2,3,4,5,10,20),prep
     bars,securities=prepared if prepared is not None else (_visible_bars(bundle,cutoff),_securities(bundle,cutoff))
     strategies=list(authoritative_strategy_items(run))
     pv=dict((x['instrument_id'],x) for sid,items in strategies if sid=='PV_OBSERVATION_V1' for x in items)
-    focus=(run.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1') or {}).get('selected_ids',[])
-    strategies.append(('PV_FOCUS_PREVIEW_V0.1',[pv[iid] for iid in focus if iid in pv]))
+    selections=run.get('selection_results',{})
+    if selections.get(STAGE_AWARE_FOCUS) is not None:
+        stage=dict((x['instrument_id'],x) for sid,items in strategies if sid==STAGE_AWARE for x in items)
+        focus=(selections.get(STAGE_AWARE_FOCUS) or {}).get('selected_ids',[])
+        strategies.append((STAGE_AWARE_FOCUS,[stage[iid] for iid in focus if iid in stage]))
+    else:
+        focus=(selections.get(PV_FOCUS) or {}).get('selected_ids',[])
+        strategies.append((PV_FOCUS,[pv[iid] for iid in focus if iid in pv]))
     output=[]
     for sid,items in strategies:
         for item in items:

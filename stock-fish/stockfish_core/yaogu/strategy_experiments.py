@@ -174,7 +174,7 @@ def _prepare_context(bundle,cutoff=None):
     if bundle.history_artifact_ref:
         from .data_pipeline import stage_aware_history_sessions_required
         history_start=sessions[-min(len(sessions),stage_aware_history_sessions_required())]
-        bars=InstrumentBars(bundle,resolver,rejected,start=history_start)
+        bars=InstrumentBars(bundle,resolver,rejected,start=history_start,compressed_cache_bytes=8*1024*1024)
     tg=defaultdict(list)
     for t in bundle.themes:
         proof=resolver.resolve(t,session=day,require_complete=True)
@@ -581,6 +581,7 @@ def source_identity():
         ROOT/'stockfish_core/yaogu/visibility.py',
         ROOT/'stockfish_core/yaogu/contracts.py',
         ROOT/'stockfish_core/yaogu/history_artifacts.py',
+        ROOT/'stockfish_core/yaogu/derived_feature_store.py',
         ROOT/'stockfish_core/yaogu/events.py',
         ROOT/'stockfish_core/yaogu/theme_capital_trend.py',
         ROOT/'stockfish_core/yaogu/stage_aware_momentum.py',
@@ -643,6 +644,94 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     payload['results'][THEME_LIMITUP_ID]={**theme,'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
     payload['comparison']=strategy_comparison(daily_summary,pv,dna,theme,focus,(theme_capital_technical,theme_capital,simple_trend,stage_aware))
     payload['run_id']=_stable_id('strategy_experiment',{k:payload[k] for k in ('input_hash','observation_date','decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash')})
+    return payload
+
+def _stage_aware_focus_selection(stage_aware):
+    focus = [row for row in stage_aware.get('items', ()) if row.get('decision_status') == 'FOCUS']
+    return {'selection_policy_id':'STAGE_AWARE_MOMENTUM_V2_FOCUS','strategy_id':'STAGE_AWARE_MOMENTUM_V2',
+        'selected_ids':[row['instrument_id'] for row in focus],
+        'count':len(focus),'selection_basis':'DECISION_STATUS_EQUALS_FOCUS',
+        'selection_role':'DAILY_PRIMARY_ACTIVE_STRATEGY_FOCUS_ONLY',
+        'items':[{'instrument_id':row['instrument_id'],'rank':row.get('rank'),'reason_codes':row.get('reason_codes',()),
+            'primary_stage':row.get('primary_stage'),'decision_status':row.get('decision_status')} for row in focus]}
+
+def _active_daily_comparison(stage_aware):
+    return {'comparison_version':'R14_DAILY_PRIMARY_FAST_PATH_V1',
+        'parameter_status':PARAMETER_STATUS,
+        'strategies':[{'strategy_id':stage_aware.get('strategy_id'),'status':stage_aware.get('status'),
+            'scope_label':stage_aware.get('scope_label'),'data_scope_status':stage_aware.get('data_scope_status'),
+            'coverage_scope':stage_aware.get('coverage_scope'),'context_scope_status':stage_aware.get('context_scope_status'),
+            'context_coverage_scope':stage_aware.get('context_coverage_scope'),'top_ids':stage_aware.get('top_ids',()),
+            'actual_top_ids':stage_aware.get('top_ids',()),'top_ids_source':'ACTIVE_DAILY_STRATEGY',
+            'count':len(stage_aware.get('top_ids',())),'full_rank_count':sum(r.get('rank') is not None for r in stage_aware.get('items',()))}],
+        'research_full_suite_executed':False,
+        'research_full_suite_endpoint':'/api/strategy-experiments/run',
+        'daily_primary_endpoint':'/api/daily-primary/run',
+        'market_edge':'NOT_ESTABLISHED'}
+
+def run_active_daily_strategy(bundle,daily_summary=None,*,top_n=100,cutoff=None,config=None,
+                              derived_store=None,input_id=None,execution_profile='DAILY_PRIMARY_FAST'):
+    from .coverage_diagnostics import build_coverage_diagnostics, json_safe
+    from .history_artifacts import history_identity, digest_market_input, digest_json_stream
+    from .stage_aware_momentum import run_stage_aware_momentum
+
+    ctx=_prepare_context(bundle,cutoff)
+    input_hash=digest_market_input(bundle)
+    if derived_store is not None:
+        ctx.scalar_cache['DERIVED_FEATURE_STORE']=derived_store
+        ctx.scalar_cache['DERIVED_INPUT_HASH']=input_hash
+        ctx.scalar_cache['DERIVED_FEATURE_MODE']='DAILY_INCREMENTAL'
+    stage_aware=run_stage_aware_momentum(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
+    data_coverage=json_safe(build_coverage_diagnostics(ctx,pv_result=None,stage_aware_result=stage_aware))
+    trend_scope=data_coverage['coverage_scope']['TREND_READINESS']
+    context_scope=data_coverage['coverage_scope']['CONTEXT_READINESS']
+    stage_aware.update(data_scope_status=trend_scope['status'],coverage_scope=trend_scope,
+        context_scope_status=context_scope['status'],context_coverage_scope=context_scope,
+        full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
+    stage_aware['diagnostics'] = []
+    stage_aware['diagnostics_storage_policy'] = 'DAILY_PRIMARY_ITEMS_RETAIN_FULL_ELIGIBLE_POOL_DIAGNOSTICS_NOT_DUPLICATED'
+    identity=source_identity();deps=ctx.resolver.effective_dependencies()
+    focus=_stage_aware_focus_selection(stage_aware)
+    baseline_items=[]
+    for iid in ctx.eligible_ids:
+        bar=_bar(ctx,ctx.observation_date,iid)
+        if bar and bar.get('comparable_close') is not None and bar.get('comparable_basis'):
+            baseline_items.append({'instrument_id':iid,'rank':len(baseline_items)+1,
+                'comparable_close':str(bar.get('comparable_close')),'comparable_basis':bar.get('comparable_basis'),
+                'source_refs':list(bar.get('source_refs',()))})
+    payload={'strategy_family':'R14_DAILY_PRIMARY','execution_profile':execution_profile,
+        'input_id':input_id or 'market_input_'+input_hash[:16],'input_hash':input_hash,'observation_date':ctx.observation_date,
+        'implementation_version':IMPLEMENTATION_VERSION,'parameter_status':PARAMETER_STATUS,'decision_cutoff':ctx.cutoff.isoformat(),
+        'coverage_type':bundle.coverage_type,
+        'audit_mode':'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type=='RECONSTRUCTED_HISTORICAL' else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type=='PROSPECTIVE_CAPTURED' else bundle.coverage_type,
+        'spec_conformance':'SPEC_CONFORMANT','qualification':ctx.qualification,'universe_hash':digest(ctx.qualification),
+        'effective_input_hash':digest_json_stream(deps),'data_coverage_diagnostics':data_coverage,
+        'data_readiness':data_coverage['coverage_scope'],'source_refs':sorted(ctx.resolver.used),
+        'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
+        **history_identity(bundle),
+        'results':{'STAGE_AWARE_MOMENTUM_V2':stage_aware},
+        'selection_results':{'STAGE_AWARE_MOMENTUM_V2_FOCUS':focus},
+        'evaluation_baselines':{'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC':{
+            'strategy_id':'ELIGIBLE_UNIVERSE_EQUAL_WEIGHT_PRICE_DIAGNOSTIC',
+            'status':'COMPLETE' if baseline_items else 'UNAVAILABLE',
+            'rank_semantics':'INSTRUMENT_ID_ORDER_NOT_SELECTION_RANK','items':baseline_items,
+            'cohort_rule':'FROZEN_DATED_ELIGIBLE_UNIVERSE_WITH_SIGNAL_COMPARABLE_CLOSE',
+            'input_id':input_id or 'market_input_'+input_hash[:16],'decision_cutoff':ctx.cutoff.isoformat()}},
+        'derived_feature_store':ctx.scalar_cache.get('R14_DERIVED_FEATURE_STATS') or {
+            'store_version':'DERIVED_FEATURE_STORE_V1','status':'NOT_USED'},
+        'daily_fast_path':{'path_version':'DAILY_RUNTIME_BUDGET_V1','active_strategy_id':'STAGE_AWARE_MOMENTUM_V2',
+            'research_arms_executed':[],'research_arms_not_executed':['PV_OBSERVATION_V1','DNA_RERANK_V1',
+                'THEME_CONTEXT_V1','THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1',
+                'SIMPLE_TREND_TEMPLATE_REFERENCE_V1','STAGE_AWARE_MOMENTUM_V1'],
+            'score_in_critical_path':False,'tracking_registration_required':True,
+            'market_edge':'NOT_ESTABLISHED'}}
+    for result in payload['results'].values():
+        for key,value in identity.items():result.setdefault(key,value)
+        result.update(input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type,
+            execution_profile=execution_profile,**history_identity(bundle))
+    payload['comparison']=_active_daily_comparison(stage_aware)
+    payload['run_id']=_stable_id('strategy_experiment',{k:payload[k] for k in ('input_hash','observation_date',
+        'decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash','execution_profile')})
     return payload
 
 def strategy_specs():

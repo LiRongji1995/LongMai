@@ -1,0 +1,692 @@
+{
+  "report_version": "R14_DATA_READINESS_V1",
+  "generated_at": "2026-09-10T10:24:07.914397+08:00",
+  "source_run_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+  "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+  "coverage_funnel": {
+    "capital_available": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "eligible": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_6_session_comparable_close": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_6_session_raw": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_adjustment_factor": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_current_raw_bar": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_long_ma_slope": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_ma10": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_ma120": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_ma20": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_ma250": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_ma5": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_ma60": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "has_required_amount_history": {
+      "ALL": {
+        "coverage": 0.9996711608023676,
+        "coverage_pct": 99.96711608023676,
+        "denominator": 3041,
+        "numerator": 3040
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 0.9992927864214993,
+        "coverage_pct": 99.92927864214992,
+        "denominator": 1414,
+        "numerator": 1413
+      }
+    },
+    "has_turnover": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "has_valid_comparable_basis": {
+      "ALL": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 3041,
+        "numerator": 3041
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1414,
+        "numerator": 1414
+      }
+    },
+    "pv_base_pass": {
+      "ALL": {
+        "coverage": 0.19763235777704702,
+        "coverage_pct": 19.763235777704704,
+        "denominator": 3041,
+        "numerator": 601
+      },
+      "SSE": {
+        "coverage": 0.189920098340504,
+        "coverage_pct": 18.9920098340504,
+        "denominator": 1627,
+        "numerator": 309
+      },
+      "SZSE": {
+        "coverage": 0.2065063649222065,
+        "coverage_pct": 20.650636492220652,
+        "denominator": 1414,
+        "numerator": 292
+      }
+    },
+    "pv_feature_computable": {
+      "ALL": {
+        "coverage": 0.9996711608023676,
+        "coverage_pct": 99.96711608023676,
+        "denominator": 3041,
+        "numerator": 3040
+      },
+      "SSE": {
+        "coverage": 1.0,
+        "coverage_pct": 100.0,
+        "denominator": 1627,
+        "numerator": 1627
+      },
+      "SZSE": {
+        "coverage": 0.9992927864214993,
+        "coverage_pct": 99.92927864214992,
+        "denominator": 1414,
+        "numerator": 1413
+      }
+    },
+    "pv_focus_pass": {
+      "ALL": {
+        "coverage": 0.006576783952647156,
+        "coverage_pct": 0.6576783952647156,
+        "denominator": 3041,
+        "numerator": 20
+      },
+      "SSE": {
+        "coverage": 0.005531653349723417,
+        "coverage_pct": 0.5531653349723418,
+        "denominator": 1627,
+        "numerator": 9
+      },
+      "SZSE": {
+        "coverage": 0.007779349363507779,
+        "coverage_pct": 0.7779349363507779,
+        "denominator": 1414,
+        "numerator": 11
+      }
+    },
+    "sector_available": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    },
+    "trend_computable": {
+      "ALL": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 3041,
+        "numerator": 0
+      },
+      "SSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1627,
+        "numerator": 0
+      },
+      "SZSE": {
+        "coverage": 0.0,
+        "coverage_pct": 0.0,
+        "denominator": 1414,
+        "numerator": 0
+      }
+    }
+  },
+  "data_readiness": {
+    "CONTEXT_READINESS": {
+      "capital": {
+        "ALL": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 3041,
+          "numerator": 0
+        },
+        "SSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1627,
+          "numerator": 0
+        },
+        "SZSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1414,
+          "numerator": 0
+        }
+      },
+      "sector": {
+        "ALL": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 3041,
+          "numerator": 0
+        },
+        "SSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1627,
+          "numerator": 0
+        },
+        "SZSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1414,
+          "numerator": 0
+        }
+      },
+      "status": "UNAVAILABLE"
+    },
+    "PV_READINESS": {
+      "coverage": {
+        "ALL": {
+          "coverage": 0.9996711608023676,
+          "coverage_pct": 99.96711608023676,
+          "denominator": 3041,
+          "numerator": 3040
+        },
+        "SSE": {
+          "coverage": 1.0,
+          "coverage_pct": 100.0,
+          "denominator": 1627,
+          "numerator": 1627
+        },
+        "SZSE": {
+          "coverage": 0.9992927864214993,
+          "coverage_pct": 99.92927864214992,
+          "denominator": 1414,
+          "numerator": 1413
+        }
+      },
+      "exchange_coverage_imbalance": false,
+      "status": "FULL_MARKET"
+    },
+    "TREND_READINESS": {
+      "coverage": {
+        "ALL": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 3041,
+          "numerator": 0
+        },
+        "SSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1627,
+          "numerator": 0
+        },
+        "SZSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1414,
+          "numerator": 0
+        }
+      },
+      "exchange_coverage_imbalance": false,
+      "long_slope": {
+        "ALL": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 3041,
+          "numerator": 0
+        },
+        "SSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1627,
+          "numerator": 0
+        },
+        "SZSE": {
+          "coverage": 0.0,
+          "coverage_pct": 0.0,
+          "denominator": 1414,
+          "numerator": 0
+        }
+      },
+      "ma_coverage": {
+        "MA10": {
+          "ALL": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 3041,
+            "numerator": 0
+          },
+          "SSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1627,
+            "numerator": 0
+          },
+          "SZSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1414,
+            "numerator": 0
+          }
+        },
+        "MA120": {
+          "ALL": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 3041,
+            "numerator": 0
+          },
+          "SSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1627,
+            "numerator": 0
+          },
+          "SZSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1414,
+            "numerator": 0
+          }
+        },
+        "MA20": {
+          "ALL": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 3041,
+            "numerator": 0
+          },
+          "SSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1627,
+            "numerator": 0
+          },
+          "SZSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1414,
+            "numerator": 0
+          }
+        },
+        "MA250": {
+          "ALL": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 3041,
+            "numerator": 0
+          },
+          "SSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1627,
+            "numerator": 0
+          },
+          "SZSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1414,
+            "numerator": 0
+          }
+        },
+        "MA5": {
+          "ALL": {
+            "coverage": 1.0,
+            "coverage_pct": 100.0,
+            "denominator": 3041,
+            "numerator": 3041
+          },
+          "SSE": {
+            "coverage": 1.0,
+            "coverage_pct": 100.0,
+            "denominator": 1627,
+            "numerator": 1627
+          },
+          "SZSE": {
+            "coverage": 1.0,
+            "coverage_pct": 100.0,
+            "denominator": 1414,
+            "numerator": 1414
+          }
+        },
+        "MA60": {
+          "ALL": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 3041,
+            "numerator": 0
+          },
+          "SSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1627,
+            "numerator": 0
+          },
+          "SZSE": {
+            "coverage": 0.0,
+            "coverage_pct": 0.0,
+            "denominator": 1414,
+            "numerator": 0
+          }
+        }
+      },
+      "status": "UNAVAILABLE"
+    },
+    "gate_fraction": 0.98,
+    "gate_policy": "FULL_MARKET_REQUIRES_ALL_AND_EACH_EXCHANGE_COVERAGE",
+    "scope_version": "FULL_MARKET_COVERAGE_SCOPE_V1"
+  },
+  "reason_aggregates": {
+    "INSUFFICIENT_MA_HISTORY": {
+      "ALL": 3041,
+      "SSE": 1627,
+      "SZSE": 1414
+    },
+    "MISSING_AMOUNT": {
+      "ALL": 1,
+      "SSE": 0,
+      "SZSE": 1
+    },
+    "PV_AMOUNT_MEAN5_UNAVAILABLE": {
+      "ALL": 1,
+      "SSE": 0,
+      "SZSE": 1
+    }
+  },
+  "stop_session_window_claims": {
+    "MA20_required_sessions_available": "18/20",
+    "MA60_required_sessions_available": "51/60",
+    "MA120_required_sessions_available": "111/120",
+    "MA250_required_sessions_available": "236/250",
+    "remaining_missing_sessions_claim": "14"
+  },
+  "interpretation": "PV/factor correctness is retained; long-MA strategy readiness remains UNAVAILABLE until required history windows are complete. Missing window-session counts are from STOP review and were not backfilled in R14.",
+  "market_edge": "NOT_ESTABLISHED"
+}

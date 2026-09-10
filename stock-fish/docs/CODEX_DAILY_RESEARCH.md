@@ -1,12 +1,14 @@
 # Codex 日常研究操作协议
 
-核对日期：2026-09-08（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，本次实测见 [首用验证](CODEX_FIRST_USE_VERIFICATION.md)。
+核对日期：2026-09-10（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，R14 日常快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)。
+
+**R14 当前默认：** 普通“下一交易日荐股”“今天 V2 名单”“盘后正式名单”和 20:30 official primary 必须走 `DAILY_PRIMARY_FAST`，即只运行 active `STAGE_AWARE_MOMENTUM_V2`、更新/读取 `DERIVED_FEATURE_STORE_V1`、保存 compact canonical run。只有用户明确要求多策略比较、historical replay、DNA/THEME/PV/V2 comparison 或深度研究时，才走 `RESEARCH_FULL`。
 
 ## 1. 请求与权限
 
 | 用户怎样说 | Codex 应怎样做 |
 |---|---|
-| 给我下一交易日的完整研究名单 | 核对本机服务、交易日历、最后结束日和保存运行；本项目已确认使用 PV 观察链路作为日常研究语境，明确其为 R05 实验，不修改正式 DAILY 默认配置；读同一 run 的全名单、焦点与跟踪 |
+| 给我下一交易日的完整研究名单 | 核对本机服务、交易日历、最后结束日和保存运行；默认使用 Daily Primary Fast Path 读取或触发 active `STAGE_AWARE_MOMENTUM_V2`，不顺带运行 PV/DNA/THEME 全研究套件；读同一 run 的全名单、Focus/Watch/Rejected/Unknown 与跟踪 |
 | 给我明天的名单 | 将“明天”先解释为上海日期的下一自然日，再按交易所日历定位该日或之后首个交易日；同时说明最近结束的观察日，不把未来目标日当成已有行情 |
 | 写一份短线市场和个股分析 | 先读保存名单与覆盖，生成私有报告；事实、程序计算、Codex 推断和未知分开。只有局部主板数据时，报告标题与结论注明范围，不能推断全市场、题材或资金共识 |
 | 昨天那些股票后来怎样，继续跟踪 | 找原信号日的原 run，不用今天规则重算；读后验、episode 和复盘。只有新合格输入时才更新原跟踪；未成熟保留空值 |
@@ -23,7 +25,7 @@
 2. 读取交易所日历和真实保存运行。分别列出请求目标交易日、最后可用观察日、生成时间、决策截止与输入水位。日历超出覆盖时停止推断，不按周一至周五猜节假日。
 3. 优先复用保存结果。核对 input_id/input_hash、策略/配置、实现一致性、截止和覆盖；旧输入已有不匹配结果时解释差异，不自行覆盖或悄悄再算。历史查询无需满足当前实现版本，仍必须保留原版本。
 4. 需要新资料才使用现有采集入口；检查是否有在途任务，单次有界执行并等待或返回 job_id。HTTP 202 只是已受理，SUCCEEDED 也不等于数据合格；必须另看质量、激活和覆盖。鉴权失败不循环重试。
-5. 新运行仅使用已登记、已核验的真实输入。现有服务没有原子幂等运行接口，CLI 的 `run` 只精确查找可复用运行；若返回 `INPUT_VERIFICATION_REQUIRED`，由 Codex 核对来源、日期、覆盖、现有任务与用户范围后，调用一次原有 POST `/api/strategy-experiments/run`。响应不明时先查任务/运行，不盲目重发。不要为增加重复样本改截止。
+5. 新的日常 primary 运行仅使用已登记、已核验的真实输入。先查是否已有同 input/hash/cutoff 的保存 run；确需触发时调用一次 POST `/api/daily-primary/run`。只有明确研究比较时才调用 POST `/api/strategy-experiments/run`。响应不明时先查任务/运行，不盲目重发。不要为增加重复样本改截止。
 6. 同一 run 读取全量、焦点、个股详情、官方 JSON/CSV 导出；检查证券顺序、数量和源内容哈希。聊天可摘录，保存的完整名单不可截断。数量来自正式条件，不凑 17、20 或 30 只。
 7. 按需读取跟踪、后验和复盘；有新数据且用户要求继续跟踪时使用现有更新入口。不把缺失/未成熟计作零或失败，不把多个标签周期数当独立股票样本数。
 8. 报告保存到被 Git 忽略的 `reports/codex/`；回应包含 run_id、路径、覆盖和阻塞。普通查询不创建空提交，不公开运行数据。
@@ -46,7 +48,7 @@
 ./.venv/Scripts/python.exe -X utf8 scripts/codex_research.py track RUN_ID
 ```
 
-新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；2026-09-08 已提升为 `R11_STAGE_AWARE_MOMENTUM_V2_VALIDATION_SCORING` / `R11_VALIDATION_SCORING`。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
+新版《StockRecommendation：阶段感知的强势股研究框架与落选反思》对应主动核心 `STAGE_AWARE_MOMENTUM_V2`；R14 没有创建 V3，也没有修改交易语义，只把日常 primary 与 research comparison 分离。`STAGE_AWARE_MOMENTUM_V1` 冻结为历史审计和只读兼容。它不重写旧 PV/焦点历史，也不删除上一版 `THEME_CAPITAL_TREND_V1` 对照；初始研究参数必须标明 **尚未验证**，`MARKET_EDGE=NOT_ESTABLISHED`，并与用户硬性条件分开说明。日常可直接说：
 
 - “把下一个交易日的荐股清单给我。”
 - “给我一份当前短线强势股和市场状态报告。”
@@ -59,7 +61,7 @@
 - “给我最近一次 DAILY_RECOMMENDATION_SCORE_V1 成绩卡。”
 - “给我策略调整建议，但不要修改正式策略。”
 
-执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
+执行时先查保存 run 或 `reports/codex/` 派生产物是否已经包含同一输入 hash、同一 `STAGE_AWARE_MOMENTUM_V2` implementation/spec revision。没有合格长窗价格、题材、资金、市场覆盖或行为确认时，输出 `WATCH/UNKNOWN/INSUFFICIENT_EVIDENCE` 和具体缺口，不用旧 PV 冒充阶段感知正式名单。完整规格见 [STAGE_AWARE_MOMENTUM_V2.md](STAGE_AWARE_MOMENTUM_V2.md)，R14 快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)，旧 V1 首轮审计保留在 [STAGE_AWARE_MOMENTUM_V1.md](STAGE_AWARE_MOMENTUM_V1.md)。上一版板块资金趋势对照仍见 [THEME_CAPITAL_TREND_V1.md](THEME_CAPITAL_TREND_V1.md)。
 
 2026-09-08 R11 交付后，旧 R05 V4 PV 保存运行可按已知源码哈希白名单只读复用；这只适用于 `PV_OBSERVATION_V1`，不能让旧 run 假装已经包含新版策略。R10 的 2026-09-07 V2 输入 `market_ac9666cc9d0ddc4f60a270828cadfc9aa37f940572148045f1b531b54c0ce0fd` 给出 FOCUS 0、WATCH 40、REJECTED 2887、UNKNOWN 114，若日常回复引用该清单，必须说明它是 WATCH 研究队列，不是正式 FOCUS 推荐。R11 的 2026-09-08 bounded capture input hash 为 `b7bfe39df96b574b357348f3a506ea1e4edfa519a7053103976c132be6ff12c1`，但当前 eligible/FOCUS/WATCH 均为 0，等待 20:30 official primary。
 
@@ -78,9 +80,9 @@
 | 指定 run 的摘要、详情、导出 | GET `/api/strategy-experiments/<run_id>/summary`、`/items/<instrument_id>`、`/export` |
 | 原运行跟踪与评价 | GET 同一 run 的 `/tracking`、`/outcomes`、`/review`；有新合格输入时 POST 现有更新入口 |
 | 每日推荐成绩 | GET `/api/recommendation-scores/latest`、`/api/recommendation-scores`、`/api/recommendation-scores/<run_id>`；只读保存的 score revision，不接受公式覆盖参数 |
-| 有界采集和运行 | POST `/api/candidate-data-pipeline/capture`、`/api/strategy-experiments/run`；GET `/api/jobs/<job_id>` 检查终态 |
+| 有界采集和运行 | 日常 primary 用 POST `/api/daily-primary/run`；研究比较用 POST `/api/strategy-experiments/run`；有界采集用 POST `/api/candidate-data-pipeline/capture`；GET `/api/jobs/<job_id>` 检查终态 |
 
-`DAILY_RECOMMENDATION_SCORE_V1` 是表现观察，不是策略输入。它只在 outcome 成熟且保存了 score revision 后显示分数；没有 FOCUS、未成熟、benchmark coverage 不足或没有 official primary 时，显示 `N/A/NOT_MATURED/INSUFFICIENT_BENCHMARK_COVERAGE/NO_SCORE_REVISION`，不得把缺失当 0，也不得用 score 自动调参。
+`DAILY_RECOMMENDATION_SCORE_V1` 是表现观察，不是策略输入，也不进入 20:30 primary critical path。它只在 outcome 成熟且保存了 score revision 后显示分数；没有 FOCUS、未成熟、benchmark coverage 不足或没有 official primary 时，显示 `N/A/NOT_MATURED/INSUFFICIENT_BENCHMARK_COVERAGE/NO_SCORE_REVISION`，不得把缺失当 0，也不得用 score 自动调参。
 
 `selection=all` 是全名单，`focus` 是额外门槛通过者，不是全名单前 N 名。正式导出 JSON 中实现 source_hash 与名单源内容哈希不同，按 `export_view.source_content_hash` 对照运行 source_run_hash，不能把不同用途的哈希判作失败。
 
@@ -94,7 +96,7 @@
 
 本机 SQLite 为 `data/stockfish.sqlite3`，证据与状态为 `data/core/`，报告为 `reports/codex/`；这些数据不随源码推送。关闭浏览器不会停止服务或删除名单。停止服务期间没有采集；重开 Codex/浏览器后读取保存 run。备份同时包含库和状态证据，使用 README 中的现有备份工具，不能复制正在写入的裸 SQLite 文件代替一致性备份。
 
-在线调度按现有交易日历在 16:10、20:30 进行盘后采集/DAILY 或 FUNDS 流程，09:26 竞价复核依赖有效快照；不是开机启动项，也不补造错过的数据。已有 PV 的盘后研究可更新后验、跟踪与反馈，**没有自动生成新 PV 名单的每日调度**。要更新 PV，可说“检查新数据，按既有规则更新下一交易日研究名单”；Codex 先复用，必要时采集、检查后再运行。
+在线调度按现有交易日历在 16:10、20:30 进行盘后采集与 primary 流程，09:26 竞价复核依赖有效快照；不是开机启动项，也不补造错过的数据。R14 后 20:30 official primary 只运行 Daily Primary Fast Path，不默认运行 full research suite；已有 PV 或 research run 可更新后验、跟踪与反馈，但不再作为普通日常荐股的默认计算路径。
 
 网页是可选入口：点击“采集 / 续采全主板数据”，就绪后点 R05 运行；历史选择器读取前一天结果，个股详情和持续跟踪入口查看原记录。不能以页面里显示的旧日期直接冒充今天的新计算。
 

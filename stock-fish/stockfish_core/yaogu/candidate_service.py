@@ -1,6 +1,7 @@
 """One immutable candidate publication for API, UI, exports, and observations."""
 from __future__ import annotations
 
+import base64
 from datetime import date, datetime, time
 import csv
 import io
@@ -8,6 +9,7 @@ import json
 from pathlib import Path
 from threading import RLock
 from typing import Literal
+import zlib
 from uuid import uuid4
 
 from pydantic import Field, field_validator
@@ -61,6 +63,7 @@ class CandidateService:
         self.jobs.register('auction_review', self._auction_job)
         self.jobs.register('candidate_outcomes', self._outcome_job)
         self.jobs.register('strategy_experiments', self._strategy_experiment_job)
+        self.jobs.register('daily_primary_strategy', self._daily_primary_strategy_job)
         self.jobs.register('strategy_outcomes', self._strategy_outcome_job)
         self.jobs.register('strategy_tracking', self._strategy_tracking_job)
         if not self._all('strategy_configs'):
@@ -333,8 +336,8 @@ class CandidateService:
             terminal['activated'] = activation_allowed
         strategy_primary_result = None
         if payload.get('market_session') == 'EVENING':
-            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 primary；保留实际资料截止')
-            strategy_primary_result = self._build_strategy_experiment_result(
+            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 daily fast primary；保留实际资料截止')
+            strategy_primary_result = self._build_daily_primary_strategy_result(
                 payload['input_id'], bundle, cutoff, config,
                 market_session='EVENING',
                 validation_role='PROSPECTIVE_PRIMARY',
@@ -506,6 +509,11 @@ class CandidateService:
         return self.jobs.submit('strategy_experiments', {'input_id': resolved,
             'cutoff': utc_now().isoformat()}, job_id=job_id)
 
+    def submit_daily_primary_strategy(self, *, input_id=None, observation_date=None, job_id=None):
+        resolved,_=self.strategy_input(input_id,observation_date)
+        return self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
+            'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST'}, job_id=job_id)
+
     def _stage_aware_target_session(self, bundle):
         sessions = sorted(date.fromisoformat(str(day)[:10]) for day in bundle.sessions)
         later = [day for day in sessions if day > bundle.observation_date]
@@ -523,6 +531,7 @@ class CandidateService:
                                           scheduler_job_id=None, capture_timing=None):
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
+        result['execution_profile']='RESEARCH_FULL'
         result['input_id']=input_id
         result['generated_at']=utc_now().isoformat()
         latest=self._latest_input_publication(input_id)
@@ -614,6 +623,193 @@ class CandidateService:
         result['content_hash']=digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
+    def _build_daily_primary_strategy_result(self, input_id, bundle, cutoff, config, *, market_session=None,
+                                             validation_role='MANUAL_OR_REPLAY', primary_signal_cutoff=None,
+                                             scheduler_job_id=None, capture_timing=None):
+        from .derived_feature_store import DerivedFeatureStore
+        from .strategy_experiments import run_active_daily_strategy
+        result = run_active_daily_strategy(
+            bundle,
+            cutoff=cutoff,
+            config=config,
+            input_id=input_id,
+            derived_store=DerivedFeatureStore(self.store),
+            execution_profile='DAILY_PRIMARY_FAST',
+        )
+        result['input_id'] = input_id
+        result['generated_at'] = utc_now().isoformat()
+        latest = self._latest_input_publication(input_id)
+        if latest is not None:
+            result['market_state'] = latest.emotion.model_dump(mode='json')
+        stage_aware = result.get('results', {}).get('STAGE_AWARE_MOMENTUM_V2') or {}
+        counts = stage_aware.get('counts') or {}
+        official_primary = (
+            validation_role == 'PROSPECTIVE_PRIMARY'
+            and market_session == 'EVENING'
+            and bundle.coverage_type == 'PROSPECTIVE_CAPTURED'
+        )
+        result['prospective_validation'] = {
+            'protocol_id': 'SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
+            'primary_cutoff_policy_id': 'SCHEDULED_2030_ACTUAL_COMPLETION',
+            'validation_role': validation_role,
+            'official_primary_capture': official_primary,
+            'official_primary_signal_countable': False,
+            'official_validation_signal_countable': False,
+            'input_integrity_valid': True,
+            'signal_run_persisted': False,
+            **(capture_timing or {}),
+            'actual_decision_cutoff': cutoff.isoformat(),
+            'preliminary_not_counted': validation_role == 'PROSPECTIVE_PRELIMINARY',
+            'market_session': market_session,
+            'primary_signal_cutoff': primary_signal_cutoff,
+            'scheduler_job_id': scheduler_job_id,
+            'signal_observation_date': str(bundle.observation_date),
+            'target_session': str(self._stage_aware_target_session(bundle)) if self._stage_aware_target_session(bundle) else None,
+            'coverage_type': bundle.coverage_type,
+            'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+            'stage_aware_counts': {
+                'focus': counts.get('focus', 0),
+                'watch': counts.get('watch', 0),
+                'rejected': counts.get('rejected', 0),
+                'unknown': counts.get('unknown', 0),
+                'eligible': counts.get('eligible', 0),
+            },
+            'historical_vs_prospective_separation': 'RECONSTRUCTED_HISTORICAL_NEVER_COUNTS_AS_PROSPECTIVE_PRIMARY',
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+        from .validation_identity import validation_identity_for_run, signal_data_quality
+        identity = validation_identity_for_run(result)
+        scheduled_epoch = (capture_timing or {}).get('scheduled_validation_epoch_id')
+        if scheduled_epoch and identity['validation_epoch_id'] != scheduled_epoch:
+            raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_SIGNAL_EVALUATION')
+        result.update(identity)
+        result['prospective_validation'].update(identity)
+        result['run_id'] = 'strategy_experiment_' + digest({
+            'signal_id': result['run_id'], 'validation_epoch_id': identity['validation_epoch_id'],
+            'validation_role': validation_role, 'market_session': market_session,
+            'scheduler_job_id': scheduler_job_id, 'execution_profile': result.get('execution_profile'),
+        })
+        result['signal_data_quality'] = signal_data_quality(result)
+        from .history_artifacts import digest_json_stream
+        result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
+        return result
+
+    @staticmethod
+    def _strategy_scalar_fields():
+        return {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
+            'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
+            'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
+            'decision_status','watch_reasons','observation_bucket','setup_rank','display_order','rank_semantics','setup_rank_features',
+            'trend_state','market_context_state','market_compatibility_status','same_theme_context_status',
+            'behavioral_confirmation_status','critical_counterevidence_status','capital_evidence_status',
+            'formal_status','relative_strength_status','ret1_pct','ret3_pct','ret5_pct','ret10_pct','ret20_pct','CLV',
+            'amplitude_pct','low_return_pct','high_return_pct','close_return_pct','recovery_points_pct',
+            'low_to_close_rebound_pct','RS_market_1d_pct','RS_sector_1d_pct',
+            'amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
+            'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh',
+            'primary_sector_absolute_level','primary_sector_relative_level','primary_sector_market_rs_pct',
+            'primary_sector_stock_role_known_feature_count','primary_sector_stock_role_unknown_feature_count',
+            'primary_sector_stock_role_evidence_coverage','detail_ref','detail_hash','detail_encoding'}
+
+    @staticmethod
+    def _primary_focus_selection(run):
+        selections = run.get('selection_results') or {}
+        for policy_id in ('STAGE_AWARE_MOMENTUM_V2_FOCUS', 'PV_FOCUS_PREVIEW_V0.1'):
+            value = selections.get(policy_id)
+            if value is not None:
+                focus = dict(value)
+                focus.setdefault('selection_policy_id', policy_id)
+                return policy_id, focus, set(focus.get('selected_ids') or [])
+        return None, {}, set()
+
+    @classmethod
+    def _focus_ids_for_strategy(cls, run, strategy_id, rows):
+        if strategy_id == 'STAGE_AWARE_MOMENTUM_V2':
+            ids = {row['instrument_id'] for row in rows
+                   if row.get('instrument_id') and row.get('decision_status') == 'FOCUS'}
+            if ids:
+                return ids
+            stage_focus = (run.get('selection_results') or {}).get('STAGE_AWARE_MOMENTUM_V2_FOCUS')
+            if stage_focus is not None:
+                return set(stage_focus.get('selected_ids') or [])
+        return cls._primary_focus_selection(run)[2]
+
+    @staticmethod
+    def _strategy_item_detail_id(run_id, strategy_id, instrument_id):
+        return 'strategy_item_detail_' + digest({'run_id':run_id,'strategy_id':strategy_id,'instrument_id':instrument_id})
+
+    def _encode_strategy_item_detail(self, run_id, strategy_id, row):
+        raw = json.dumps(row, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str, allow_nan=False).encode('utf-8')
+        compressed = zlib.compress(raw, level=6)
+        raw_hash = digest({'sha256': __import__('hashlib').sha256(raw).hexdigest(), 'bytes': len(raw)})
+        document_id = self._strategy_item_detail_id(run_id, strategy_id, row['instrument_id'])
+        return document_id, {
+            'detail_document_version':'R14_STRATEGY_ITEM_DETAIL_ZLIB_V1',
+            'run_id':run_id,
+            'strategy_id':strategy_id,
+            'instrument_id':row['instrument_id'],
+            'encoding':'zlib+base64+canonical-json',
+            'raw_sha256':__import__('hashlib').sha256(raw).hexdigest(),
+            'raw_bytes':len(raw),
+            'compressed_bytes':len(compressed),
+            'payload_b64':base64.b64encode(compressed).decode('ascii'),
+            'market_edge':'NOT_ESTABLISHED',
+        }, raw_hash
+
+    @staticmethod
+    def _decode_strategy_item_detail(document):
+        raw = zlib.decompress(base64.b64decode(document['payload_b64'].encode('ascii')))
+        if __import__('hashlib').sha256(raw).hexdigest() != document['raw_sha256']:
+            raise UnavailableError('STRATEGY_ITEM_DETAIL_HASH_MISMATCH', 'candidate')
+        return json.loads(raw.decode('utf-8'))
+
+    def _expand_strategy_row_detail(self, row):
+        ref = row.get('detail_ref')
+        if not ref:
+            return row
+        document = self.store.get_document('strategy_experiment_item_details', ref)
+        if document is None:
+            raise UnavailableError('STRATEGY_ITEM_DETAIL_MISSING', 'candidate')
+        detail = self._decode_strategy_item_detail(document)
+        if row.get('detail_hash') and digest({'sha256': document['raw_sha256'], 'bytes': document['raw_bytes']}) != row['detail_hash']:
+            raise UnavailableError('STRATEGY_ITEM_DETAIL_REF_MISMATCH', 'candidate')
+        return detail
+
+    def _compact_daily_primary_result(self, result):
+        stage = (result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2')
+        if result.get('execution_profile') != 'DAILY_PRIMARY_FAST' or not stage:
+            return result, []
+        scalar_fields = self._strategy_scalar_fields()
+        details = []
+        summary_rows = []
+        detail_payload_bytes = 0
+        detail_compressed_bytes = 0
+        for row in stage.get('items') or ():
+            document_id, document, raw_hash = self._encode_strategy_item_detail(result['run_id'], 'STAGE_AWARE_MOMENTUM_V2', row)
+            details.append((document_id, document))
+            detail_payload_bytes += document['raw_bytes']
+            detail_compressed_bytes += document['compressed_bytes']
+            summary = {k:v for k,v in row.items() if k in scalar_fields}
+            summary.update(detail_ref=document_id, detail_hash=raw_hash, detail_encoding=document['encoding'])
+            summary_rows.append(summary)
+        stage['items'] = summary_rows
+        stage['diagnostics'] = []
+        stage['diagnostics_storage_policy'] = 'PER_INSTRUMENT_DETAIL_DOCUMENTS_COMPRESSED_AND_LOADED_ON_DEMAND'
+        items_bytes = len(json.dumps(summary_rows, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8'))
+        result['daily_primary_persistence'] = {
+            'persistence_version':'R14_COMPACT_DAILY_PRIMARY_RUN_V1',
+            'run_header_and_summary_bytes':None,
+            'instrument_summary_items_bytes':items_bytes,
+            'detail_raw_bytes':detail_payload_bytes,
+            'detail_compressed_bytes':detail_compressed_bytes,
+            'detail_document_count':len(details),
+            'heavy_diagnostics_embedded_in_run':False,
+            'summary_api_loads_detail_documents':False,
+            'detail_api_loads_detail_documents':True,
+            'target_run_document_bytes_lt_20mb':True,
+        }
+        return result, details
+
     def _write_strategy_result(self, connection, result, *, created_at):
         from .validation_identity import (validation_identity_for_run, signal_data_quality,
             official_primary_capture_for_run, official_signal_countable)
@@ -626,14 +822,25 @@ class CandidateService:
         prospective['official_validation_signal_countable'] = official_signal_countable(result)
         prospective['official_primary_signal_countable'] = prospective['official_validation_signal_countable']
         result['signal_data_quality'] = signal_data_quality(result)
+        detail_documents = []
+        if result.get('execution_profile') == 'DAILY_PRIMARY_FAST':
+            result, detail_documents = self._compact_daily_primary_result(result)
         from .history_artifacts import digest_json_stream
         result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k != 'content_hash'})
+        if result.get('daily_primary_persistence'):
+            result['daily_primary_persistence']['run_header_and_summary_bytes'] = len(
+                json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(',', ':'), default=str).encode('utf-8'))
+            result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k != 'content_hash'})
         # These flags are visible only if this transaction and job success commit.
+        for document_id, document in detail_documents:
+            self.store._put_document(connection, 'strategy_experiment_item_details', document_id, document)
         self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
         self._write_strategy_projection(connection, result)
+        selection_policy_id = self._primary_focus_selection(result)[0] or 'PV_FOCUS_PREVIEW_V0.1'
         self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
             {'run_id': result['run_id'], 'observation_date': result['observation_date'], 'horizons': [1,2,3,4,5,10,20],
-             'created_at': created_at, 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1',
+             'created_at': created_at, 'selection_policy_id': selection_policy_id,
+             'execution_profile': result.get('execution_profile'),
              'stage_aware_primary_role': (result.get('prospective_validation') or {}).get('validation_role')})
         prospective = result.get('prospective_validation') or {}
         if prospective.get('official_primary_capture'):
@@ -731,44 +938,53 @@ class CandidateService:
             self._write_strategy_result(connection, result, created_at=payload['cutoff'])
         return ctx.complete(terminal, write)
 
+    def _daily_primary_strategy_job(self, ctx):
+        payload=ctx.payload
+        _,bundle=self.input(payload['input_id'])
+        config=self.current_config()
+        cutoff=datetime.fromisoformat(payload['cutoff'])
+        ctx.update(.2,'运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
+        result = self._build_daily_primary_strategy_result(
+            payload['input_id'], bundle, cutoff, config,
+            market_session=payload.get('market_session', 'ON_DEMAND_DAILY_PRIMARY'),
+            validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
+            primary_signal_cutoff=payload.get('primary_signal_cutoff'),
+            scheduler_job_id=payload.get('scheduler_job_id'),
+        )
+        stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
+        counts = stage.get('counts') or {}
+        terminal={'strategy_experiment_run_id':result['run_id'],'run_id':result['run_id'],
+            'status':'complete','quality':stage.get('status'),'execution_profile':'DAILY_PRIMARY_FAST',
+            'stage_aware_counts':{key:counts.get(key,0) for key in ('eligible','focus','watch','rejected','unknown')}}
+        def write(connection):
+            self._write_strategy_result(connection, result, created_at=payload['cutoff'])
+        return ctx.complete(terminal, write)
+
     def _write_strategy_projection(self, connection, run):
         from .strategy_tracking import authoritative_strategy_items
         from .strategy_experiments import implementation_conformance
         assessment = implementation_conformance(run)
         self.store._put_document(connection, 'strategy_implementation_assessments', run['run_id'], assessment)
-        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
-        focus_ids = set(focus.get('selected_ids') or [])
+        focus_policy_id, focus, focus_ids = self._primary_focus_selection(run)
         diagnostics = run.get('data_coverage_diagnostics') or {}
         diagnostics_summary = {k:v for k,v in diagnostics.items() if k != 'missing_reason_ledger'}
         if diagnostics:
             diagnostics_summary['missing_reason_ledger_count'] = len(diagnostics.get('missing_reason_ledger') or [])
-        scalar_fields = {'instrument_id','name','rank','rank_percentiles','S_PV','S_DNA','S_THEME','S_PV_REFERENCE','reference_score','reference_rank',
-                         'A','R','H','status','technical_status','theme_status','capital_status','hard_requirements_status','condition_statuses',
-                          'shape_type','primary_stage','alternate_stages','liquidity_status','sector_status','funds_status','funds_grade',
-                          'decision_status','watch_reasons','observation_bucket','setup_rank','display_order','rank_semantics','setup_rank_features',
-                          'trend_state','market_context_state','market_compatibility_status','same_theme_context_status',
-                         'behavioral_confirmation_status','critical_counterevidence_status','capital_evidence_status',
-                         'formal_status','relative_strength_status','ret1_pct','ret3_pct','ret5_pct','ret10_pct','ret20_pct','CLV',
-                         'amplitude_pct','low_return_pct','high_return_pct','close_return_pct','recovery_points_pct',
-                         'low_to_close_rebound_pct','RS_market_1d_pct','RS_sector_1d_pct',
-                         'amount_cny','turnover_fraction','close','open','high','low','comparable_close','comparable_basis',
-                          'risk_flags','risk_review_status','board_state','limit_event_status','reason_codes','parameter_status_label_zh',
-                          'primary_sector_absolute_level','primary_sector_relative_level','primary_sector_market_rs_pct',
-                          'primary_sector_stock_role_known_feature_count','primary_sector_stock_role_unknown_feature_count',
-                          'primary_sector_stock_role_evidence_coverage'}
+        scalar_fields = self._strategy_scalar_fields()
         header = {k: run.get(k) for k in ('run_id','input_id','observation_date','implementation_version','parameter_status','generated_at','decision_cutoff','cutoff','spec_hash','strategy_spec_hash','coverage_type','spec_conformance',
             'validation_epoch_id','signal_implementation_version','signal_spec_revision','signal_config_hash','signal_source_hash','primary_cutoff_policy_id','prospective_validation','signal_data_quality')}
         header.update(source_run_hash=run.get('content_hash') or digest(run), comparison=run.get('comparison'), implementation_assessment=assessment,
                       data_readiness=run.get('data_readiness'), data_coverage_diagnostics=diagnostics_summary,
-                      focus_ids=list(focus.get('selected_ids') or []), selection_policy=focus.get('selection_policy'), results={}, selections={})
+                      focus_ids=list(focus_ids), selection_policy=focus_policy_id or focus.get('selection_policy_id'), results={}, selections={})
         for sid, rows in authoritative_strategy_items(run):
+            strategy_focus_ids = self._focus_ids_for_strategy(run, sid, rows)
             result = ({**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}).get(sid) or {}
             header['results'][sid] = {k: result.get(k) for k in ('strategy_id','status','counts','scope_label','data_scope_status','coverage_scope',
                 'context_scope_status','context_coverage_scope','full_market_gate_policy','reason_codes','spec_hash','top_ids')}
             header['results'][sid]['item_count'] = len(rows)
             header['selections'][sid] = {}
             for selection in ('all', 'focus', 'unselected'):
-                selected = self._selected_strategy_rows(rows, focus_ids, selection)
+                selected = self._selected_strategy_rows(rows, strategy_focus_ids, selection)
                 header['selections'][sid][selection] = len(selected)
                 for start in range(0, len(selected), 50):
                     page_id = run['run_id'] + '_' + digest({'strategy_id': sid, 'selection': selection, 'chunk': start//50})
@@ -904,10 +1120,11 @@ class CandidateService:
         run = self.strategy_experiment(run_id)
         matches = {}
         for strategy_id, result in (run.get('results') or {}).items():
-            found = [row for row in result.get('items', []) if row.get('instrument_id') == instrument_id]
+            found = [self._expand_strategy_row_detail(row) for row in result.get('items', [])
+                     if row.get('instrument_id') == instrument_id]
             if found:
                 matches[strategy_id] = found
-        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
+        selection_policy_id, focus, _ = self._primary_focus_selection(run)
         focus_matches = [row for row in focus.get('items', []) if row.get('instrument_id') == instrument_id]
         if not matches and not focus_matches:
             raise KeyError(instrument_id)
@@ -917,7 +1134,7 @@ class CandidateService:
             'observation_date': run.get('observation_date'),
             'strategy_results': matches,
             'focus_selection': focus_matches[0] if focus_matches else None,
-            'selection_policy': focus.get('selection_policy'),
+            'selection_policy': selection_policy_id or focus.get('selection_policy_id') or focus.get('selection_policy'),
             'outcomes': self._strategy_item_observations('strategy_trading_session_observations', run_id, instrument_id),
             'tracking': self._strategy_item_observations('research_episode_observations', run_id, instrument_id, latest=100),
             'market_edge': 'NOT_ESTABLISHED',
@@ -947,8 +1164,7 @@ class CandidateService:
 
     def _strategy_export_rows(self, run, strategy_id, selection):
         from .strategy_tracking import authoritative_strategy_items
-        focus = (run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}
-        focus_ids = set(focus.get('selected_ids') or [])
+        _, focus, focus_ids = self._primary_focus_selection(run)
         results = {**(run.get('results') or {}), **(run.get('evaluation_baselines') or {})}
         result = results.get(strategy_id)
         if result is None:
@@ -957,13 +1173,13 @@ class CandidateService:
         if result is None:
             raise KeyError(strategy_id)
         if result.get('strategy_id') == 'STAGE_AWARE_MOMENTUM_V2' or result.get('full_eligible_pool_retained'):
-            all_rows = list(result.get('items') or [])
+            all_rows = [self._expand_strategy_row_detail(row) for row in result.get('items') or []]
             selection = selection or 'all'
             if selection not in {'all', 'focus', 'unselected'}:
                 raise ValueError('unknown strategy experiment selection')
             rows = [row for row in all_rows if selection == 'all' or (row.get('decision_status') == 'FOCUS') == (selection == 'focus')]
             ranked = [row for row in all_rows if row.get('decision_status') == 'FOCUS']
-            return result, rows, ranked, focus, focus_ids
+            return result, rows, ranked, focus, self._focus_ids_for_strategy(run, 'STAGE_AWARE_MOMENTUM_V2', all_rows)
         ranked = dict(authoritative_strategy_items(run))
         if strategy_id not in ranked:
             raise KeyError(strategy_id)
@@ -1308,7 +1524,9 @@ class CandidateService:
                 if pending is None:
                     run = self.strategy_experiment(item['document_id'])
                     pending = {'run_id': run['run_id'], 'observation_date': run['observation_date'],
-                               'horizons': [1,2,3,4,5,10,20], 'selection_policy_id': 'PV_FOCUS_PREVIEW_V0.1'}
+                               'horizons': [1,2,3,4,5,10,20],
+                               'selection_policy_id': self._primary_focus_selection(run)[0] or 'PV_FOCUS_PREVIEW_V0.1',
+                               'execution_profile': run.get('execution_profile')}
                     self.store.put_document('strategy_research_pending', run['run_id'], pending)
                 custom = {h for r in requests if r['run_id'] == pending['run_id'] for h in r['horizons']}
                 rows.append({**pending, 'horizons': sorted(set(pending['horizons']) | custom)})
@@ -1340,7 +1558,9 @@ class CandidateService:
                             missing.append('metrics.' + field)
                     if missing:
                         fields[str(horizon)] = missing
-                focus = iid in set(((run.get('selection_results') or {}).get('PV_FOCUS_PREVIEW_V0.1') or {}).get('selected_ids') or [])
+                focus = iid in self._focus_ids_for_strategy(run, 'STAGE_AWARE_MOMENTUM_V2'
+                    if (run.get('selection_results') or {}).get('STAGE_AWARE_MOMENTUM_V2_FOCUS') is not None
+                    else 'PV_OBSERVATION_V1', [{'instrument_id': iid}])
                 if fields or focus:
                     start = date.fromisoformat(run['observation_date'])
                     prior = [d for d in days if d <= start]

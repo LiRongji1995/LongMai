@@ -1,0 +1,52 @@
+{
+  "report_version": "R14_PERFORMANCE_BASELINE_V1",
+  "generated_at": "2026-09-10T10:24:07.914397+08:00",
+  "baseline_source": [
+    "USER_STOP_REVIEW_MEASUREMENTS",
+    "SAVED_RESEARCH_FULL_RUN_METADATA"
+  ],
+  "git_head_claimed_in_stop": "4f72524b7cc26d197d8c3db17d86a4aa98ecb655",
+  "actual_start_head_recorded_in_PRE_R14_WORKTREE_STATE": "6f7d04b19050fd0b105b5e631389149582fe83da",
+  "frozen_input": {
+    "input_id": "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "observation_date": "2026-09-08",
+    "decision_cutoff": "2026-09-09T08:56:58.518020+00:00",
+    "input_hash": "63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23",
+    "history_artifact_hash": "b217908207aea1cd2531e49ba81b09d3a152b641d3517b897d61419129d42372",
+    "coverage_type": "PROSPECTIVE_CAPTURED",
+    "eligible": 3041,
+    "research_full_run_id": "strategy_experiment_314b72ca9c6e714267d968c50e6db392ab6b39917a8f5ae029816c5a1fcca78e",
+    "research_full_v2_business_hash": "38fcca80d6b03d860ac32031a3e1d66cf74151e3f5a8441cd337a803bcf859ef"
+  },
+  "before_measurements": {
+    "pv_only_seconds": 14.9,
+    "stage_aware_v2_seconds": 646.8,
+    "strategy_experiment_full_seconds": 1213.8,
+    "python_working_set_bytes_approx": 5583457484,
+    "single_full_strategy_experiment_run_bytes": 220912631,
+    "main_sqlite_bytes_approx_before_r14": 4776415232
+  },
+  "top_hotspots_before": [
+    {
+      "component": "Stage-Aware repeated historical/PIT bar lookup and long-window MA primitives",
+      "status": "INFERRED_FROM_STOP_AND_CODE_REVIEW"
+    },
+    {
+      "component": "Full research path executing PV/DNA/THEME/TCT/SimpleTrend/V2 for daily primary",
+      "status": "MEASURED_BY_STOP_RUNTIME"
+    },
+    {
+      "component": "Massive run JSON serialization/persistence",
+      "status": "MEASURED_FROM_SAVED_RUN_SIZE"
+    },
+    {
+      "component": "Full StrategyExperiment diagnostics duplicated in one immutable document",
+      "status": "MEASURED_FROM_SQLITE_SIZE_AUDIT"
+    },
+    {
+      "component": "MarketInput/history artifact bind and JSON/Pydantic construction",
+      "status": "MEASURED_POST_R14_AS_REMAINING_LOAD_COST"
+    }
+  ],
+  "market_edge": "NOT_ESTABLISHED"
+}

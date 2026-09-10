@@ -141,7 +141,7 @@ class CandidateScheduler:
         if existing is None:
             value = {
                 'schedule_id': doc_id,
-                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R12',
+                'schedule_version': 'STAGE_AWARE_MOMENTUM_V2_PRIMARY_SCHEDULE_R14_DAILY_FAST_PATH',
                 'registered_at': now.isoformat(),
                 'config_hash': config.config_hash,
                 'calendar_hash': self.calendar_hash,
@@ -150,9 +150,9 @@ class CandidateScheduler:
                 'capture_flow': [
                     'capture/update current MarketInput',
                     'validate cutoff',
-                    'run active STAGE_AWARE_MOMENTUM_V2',
+                    'run Daily Primary Fast Path active STAGE_AWARE_MOMENTUM_V2',
                     'persist immutable strategy_experiment_run',
-                    'persist full eligible rows and Focus/Watch/Rejected/Unknown counts',
+                    'persist compact eligible summaries, compressed detail documents, and Focus/Watch/Rejected/Unknown counts',
                     'register append-only tracking/outcome demand',
                 ],
                 **planned,
