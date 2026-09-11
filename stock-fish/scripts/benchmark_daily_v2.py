@@ -1,4 +1,4 @@
-"""Benchmark R14 daily primary fast path against the research comparison path.
+"""Benchmark R16 daily primary fast path against the research comparison path.
 
 This harness reads immutable MarketInput documents from the configured SQLite
 store. It never backfills provider data, never changes strategy semantics, and
@@ -42,6 +42,15 @@ from stockfish_core.yaogu.strategy_experiments import (  # noqa: E402
 
 def _canonical_bytes(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(",", ":"), default=str, allow_nan=False).encode("utf-8")
+
+
+def _progress(event, **metadata):
+    payload = {
+        "event": event,
+        "generated_at": datetime.now().astimezone().isoformat(),
+        **metadata,
+    }
+    print(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), flush=True)
 
 
 def _json_size_bytes(value):
@@ -339,10 +348,13 @@ def _profiled_measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_p
     return result
 
 
-def _worker(queue, profile, db_path, input_id, cutoff_iso, derived_cache_db_path, cprofile_output):
+def _worker(queue, profile, db_path, input_id, cutoff_iso, derived_cache_db_path, cprofile_output, result_json_path):
     try:
-        queue.put({"ok": True, "result": _profiled_measure(
-            profile, db_path, input_id, cutoff_iso, derived_cache_db_path, cprofile_output)})
+        result = _profiled_measure(profile, db_path, input_id, cutoff_iso, derived_cache_db_path, cprofile_output)
+        result_path = Path(result_json_path)
+        result_path.parent.mkdir(parents=True, exist_ok=True)
+        result_path.write_text(json.dumps(result, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
+        queue.put({"ok": True, "result_json_path": str(result_path)})
     except BaseException as exc:
         queue.put({
             "ok": False,
@@ -355,40 +367,50 @@ def _worker(queue, profile, db_path, input_id, cutoff_iso, derived_cache_db_path
 def run_with_timeout(profile, db_path, input_id, cutoff_iso, timeout_seconds, derived_cache_db_path=None,
                      cprofile_output=None):
     queue = mp.Queue()
-    process = mp.Process(target=_worker, args=(queue, profile, str(db_path), input_id, cutoff_iso,
-                                               str(derived_cache_db_path) if derived_cache_db_path else None,
-                                               str(cprofile_output) if cprofile_output else None), daemon=False)
-    process.start()
-    process.join(timeout_seconds)
-    if process.is_alive():
-        process.terminate()
-        process.join(10)
+    with tempfile.TemporaryDirectory(prefix="r16_benchmark_worker_") as tmp:
+        result_path = Path(tmp) / f"{profile}-result.json"
+        process = mp.Process(target=_worker, args=(queue, profile, str(db_path), input_id, cutoff_iso,
+                                                   str(derived_cache_db_path) if derived_cache_db_path else None,
+                                                   str(cprofile_output) if cprofile_output else None,
+                                                   str(result_path)), daemon=False)
+        process.start()
+        process.join(timeout_seconds)
+        if process.is_alive():
+            process.terminate()
+            process.join(10)
+            return {
+                "profile": profile,
+                "status": "TIMEOUT",
+                "timeout_seconds": timeout_seconds,
+                "input_id": input_id,
+                "result_transport": "worker_json_file",
+                "market_edge": "NOT_ESTABLISHED",
+            }
+        if queue.empty():
+            return {
+                "profile": profile,
+                "status": "FAILED_NO_RESULT",
+                "exitcode": process.exitcode,
+                "input_id": input_id,
+                "result_transport": "worker_json_file",
+                "result_json_exists": result_path.exists(),
+                "market_edge": "NOT_ESTABLISHED",
+            }
+        payload = queue.get()
+        if payload["ok"]:
+            with Path(payload["result_json_path"]).open("r", encoding="utf-8") as handle:
+                result = json.load(handle)
+            result["result_transport"] = "worker_json_file"
+            return result
         return {
             "profile": profile,
-            "status": "TIMEOUT",
-            "timeout_seconds": timeout_seconds,
-            "input_id": input_id,
-            "market_edge": "NOT_ESTABLISHED",
-        }
-    if queue.empty():
-        return {
-            "profile": profile,
-            "status": "FAILED_NO_RESULT",
+            "status": "FAILED",
             "exitcode": process.exitcode,
+            **{k: payload[k] for k in ("error_type", "error", "traceback")},
             "input_id": input_id,
+            "result_transport": "worker_json_file",
             "market_edge": "NOT_ESTABLISHED",
         }
-    payload = queue.get()
-    if payload["ok"]:
-        return payload["result"]
-    return {
-        "profile": profile,
-        "status": "FAILED",
-        "exitcode": process.exitcode,
-        **{k: payload[k] for k in ("error_type", "error", "traceback")},
-        "input_id": input_id,
-        "market_edge": "NOT_ESTABLISHED",
-    }
 
 
 def sqlite_size_audit(db_path):
@@ -494,12 +516,18 @@ def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso,
         "v1_legacy": None,
         "v2": None,
     }
+    _progress("R16_BENCHMARK_RUN_START", run="R16_COLD_T", input_id=input_id)
     cold_t = run_with_timeout("fast", db_path, input_id, cutoff_iso, timeout_seconds, cache_db)
     after_t = _derived_cache_audit(cache_db)
+    _progress("R16_BENCHMARK_RUN_DONE", run="R16_COLD_T", status=cold_t.get("status"), elapsed_seconds=cold_t.get("elapsed_seconds"))
+    _progress("R16_BENCHMARK_RUN_START", run="R16_SAME_SNAPSHOT_WARM_T", input_id=input_id)
     same_snapshot_warm = run_with_timeout("fast", db_path, input_id, cutoff_iso, timeout_seconds, cache_db)
     after_same = _derived_cache_audit(cache_db)
+    _progress("R16_BENCHMARK_RUN_DONE", run="R16_SAME_SNAPSHOT_WARM_T", status=same_snapshot_warm.get("status"), elapsed_seconds=same_snapshot_warm.get("elapsed_seconds"))
+    _progress("R16_BENCHMARK_RUN_START", run="R16_TRUE_NEXT_SESSION_INCREMENTAL", input_id=next_input_id)
     true_next = run_with_timeout("fast", db_path, next_input_id, next_cutoff_iso, timeout_seconds, cache_db)
     after_next = _derived_cache_audit(cache_db)
+    _progress("R16_BENCHMARK_RUN_DONE", run="R16_TRUE_NEXT_SESSION_INCREMENTAL", status=true_next.get("status"), elapsed_seconds=true_next.get("elapsed_seconds"))
     day_t_bytes = after_t["file_bytes_including_wal_shm"]
     day_tp1_bytes = after_next["file_bytes_including_wal_shm"]
     return {
