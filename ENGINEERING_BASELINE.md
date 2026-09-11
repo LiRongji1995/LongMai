@@ -8,7 +8,7 @@
 - 新增 `CANONICAL_RESOLVED_SOURCE_VIEW_V1`，由 dependency fingerprint 和 feature materialization 共用同一 canonical source token，防止“计划看见一套来源、计算读取另一套来源”；
 - `DERIVED_FEATURE_STORE_V2` 身份升级为 R16 canonical source 依赖，cache lifecycle 区分 `NEW`、`MISSING_CACHE_ROW`、`INVALIDATED_SOURCE_REVISION`、`INVALIDATED_DEPENDENCY/SPEC/POLICY` 与 `CORRUPT_OR_CONFLICT`；
 - Daily Primary benchmark 与 CandidateService 实际构建路径记录 E2E stage trace，覆盖请求开始、交易日/数据新鲜度、provider/history、MarketInput、来源解析、依赖规划、缓存、特征、策略、持久化、导出、响应和结果就绪；
-- 真实历史稳定性审计定位到既有 2026-09-09 T+1 immutable history artifact 丢失早前 comparable factor composite rows；R16 修复后续 normalization 构建时传入 prior `history_base_ref`，但不静默重写既有生产 DB/artifact。
+- 真实历史稳定性审计改为批量/set-based source record 对比，带进度日志、checkpoint、ETA 和 targeted canonical resolver 复核；审计定位到既有 2026-09-09 T+1 immutable history artifact 丢失早前 comparable factor composite rows，R16 修复后续 normalization 构建时传入 prior `history_base_ref`，但不静默重写既有生产 DB/artifact。
 
 R16 不是性能达标声明，也不是 Go 替换完成声明。提交后证据以 `StockRecommendation_R16_GoMigrationPhase0_ReviewBundle_*` 为准，页面侧独立审阅后才能判定验收；普通研究请求仍不因此获得自动改代码或提交推送授权。
 

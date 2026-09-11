@@ -3,10 +3,13 @@ from __future__ import annotations
 
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+import hashlib
+import importlib.util
 import json
 from pathlib import Path
 
 from tests.yaogu.fixtures import TZ, make_bundle
+from stockfish_core.common import canonical_json
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.contracts import DailyBar, digest
 from stockfish_core.yaogu.derived_feature_store import (
@@ -31,6 +34,7 @@ from stockfish_core.yaogu.strategy_experiments import _prepare_context, run_acti
 
 ROOT = Path(__file__).resolve().parents[2]
 GOLDEN_MANIFEST = ROOT / "tests" / "fixtures" / "r16_equivalence" / "golden_manifest.json"
+AUDIT_SCRIPT = ROOT / "scripts" / "r16_history_stability_audit.py"
 
 
 def _slice_bundle(bundle, index):
@@ -48,6 +52,23 @@ def _slice_bundle(bundle, index):
 def _compact(bundle, store):
     compact = compact_input(bundle, store, recent_sessions=6)
     return compact
+
+
+def _store_candidate_input(store, bundle):
+    payload = bundle.model_dump(mode="json")
+    content_hash = hashlib.sha256(canonical_json(payload).encode("utf-8")).hexdigest()
+    input_id = "market_" + content_hash
+    store.put_document("candidate_inputs", input_id, payload)
+    store.put_document("candidate_input_indexes", input_id, {"observation_date": str(bundle.observation_date)})
+    return input_id
+
+
+def _audit_module():
+    spec = importlib.util.spec_from_file_location("r16_history_stability_audit", AUDIT_SCRIPT)
+    module = importlib.util.module_from_spec(spec)
+    assert spec.loader is not None
+    spec.loader.exec_module(module)
+    return module
 
 
 def _bar_with_revision(bar, *, published_hour, close):
@@ -246,6 +267,40 @@ def test_r16_normalizer_append_base_preserves_comparable_rows(tmp_path):
     assert report["history_artifact"]["base_history_artifact_ref"] == base_bundle.history_artifact_ref
     assert token["values"]["comparable_close"] == "22"
     assert token["values"]["comparable_basis"].startswith("BAOSTOCK_HFQ_RAW_X_BACK_FACTOR_R03_V1")
+
+
+def test_r16_history_audit_set_based_progress_and_canonical_checks(tmp_path):
+    module = _audit_module()
+    bundle, _ = make_bundle(4)
+    day_t, cutoff_t = _slice_bundle(bundle, -2)
+    day_tp1, cutoff_tp1 = _slice_bundle(bundle, -1)
+    store = SQLiteStore(tmp_path / "audit.sqlite3")
+    compact_t = compact_input(day_t, store, recent_sessions=1)
+    compact_tp1 = compact_input(day_tp1, store, recent_sessions=1)
+    input_t = _store_candidate_input(store, compact_t)
+    input_tp1 = _store_candidate_input(store, compact_tp1)
+    checkpoint = tmp_path / "audit.checkpoint.json"
+
+    result = module.audit(
+        str(store.path),
+        input_t,
+        input_tp1,
+        cutoff_t=cutoff_t.isoformat(),
+        cutoff_tp1=cutoff_tp1.isoformat(),
+        instrument_limit=2,
+        checkpoint_json=checkpoint,
+        progress_interval_seconds=0,
+        canonical_batch_size=1,
+    )
+
+    assert result["audit_version"] == "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V2"
+    assert result["comparison_scope"]["comparison_method"].startswith("SET_BASED_SELECTED_SOURCE_RECORDS")
+    assert result["comparison_scope"]["total_pairs"] > 0
+    assert result["append_only_invariant"]["status"] == "PASS"
+    assert result["targeted_canonical_resolver_checks"]["status"] == "PASS"
+    assert result["targeted_canonical_resolver_checks"]["all_discovered_discrepancies_checked"] is True
+    assert checkpoint.exists()
+    assert json.loads(checkpoint.read_text(encoding="utf-8"))["stage"] == "DONE"
 
 
 def test_r16_contract_export_validation_and_comparison(tmp_path):
