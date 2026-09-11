@@ -17,6 +17,7 @@ import json
 from pathlib import Path
 import sys
 import time as perf_time
+from typing import NamedTuple
 from zoneinfo import ZoneInfo
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -24,7 +25,7 @@ REPO_ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
 from stockfish_core.storage import SQLiteStore  # noqa: E402
-from stockfish_core.yaogu.contracts import DailyBar, MarketInput, digest  # noqa: E402
+from stockfish_core.yaogu.contracts import DailyBar, MarketInput  # noqa: E402
 from stockfish_core.yaogu.history_artifacts import (  # noqa: E402
     bind_history,
     daily_bar_payload,
@@ -39,7 +40,6 @@ from stockfish_core.yaogu.source_resolution import (  # noqa: E402
     _candidate,
     _receipt_index,
     _row_hash,
-    _selected_token,
     canonical_price_source_view,
     source_token,
 )
@@ -51,6 +51,7 @@ DEFAULT_T = "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f848
 DEFAULT_TP1 = "market_04d95df6f6f699c7f88353d181308159526865877a666a7c3efb84be01b9c08d"
 AUDIT_VERSION = "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V2"
 SOURCE_FAMILY = "PRICE_DAILY_BAR"
+REVISION_FIELDS = ("source_published_at", "ingested_at", "first_seen_at")
 
 COMPARE_VALUE_FIELDS = (
     "open",
@@ -64,6 +65,7 @@ COMPARE_VALUE_FIELDS = (
     "comparable_close",
     "comparable_basis",
 )
+VALUE_INDEX = {field: index for index, field in enumerate(COMPARE_VALUE_FIELDS)}
 VIOLATION_CATEGORIES = {
     "SOURCE_REPLACED",
     "SOURCE_DISAPPEARED",
@@ -72,6 +74,16 @@ VIOLATION_CATEGORIES = {
     "SOURCE_BECAME_UNAVAILABLE",
     "UNKNOWN",
 }
+
+
+class AuditToken(NamedTuple):
+    status: str
+    row_hash: str | None
+    source_kind: str | None
+    revision_key: tuple | None
+    source_revision: tuple | None
+    value_hash: str | None
+    values: tuple
 
 
 def _load_bundle(store, input_id):
@@ -173,17 +185,15 @@ def _after_cutoff(value, cutoff):
 
 
 def _has_newer_visible_revision(token, cutoff):
-    revision = token.get("source_revision") or {}
-    return any(_after_cutoff(revision.get(field), cutoff) for field in ("source_published_at", "ingested_at", "first_seen_at"))
+    revision = token.source_revision or ()
+    return any(_after_cutoff(value, cutoff) for value in revision)
 
 
 def _lost_comparable_payload(t_token, tp1_token):
-    left = t_token.get("values") or {}
-    right = tp1_token.get("values") or {}
-    comparable_was_known = left.get("comparable_close") is not None and left.get("comparable_basis") is not None
-    comparable_now_missing = right.get("comparable_close") is None or right.get("comparable_basis") is None
+    comparable_was_known = _value(t_token, "comparable_close") is not None and _value(t_token, "comparable_basis") is not None
+    comparable_now_missing = _value(tp1_token, "comparable_close") is None or _value(tp1_token, "comparable_basis") is None
     raw_fields = ("open", "high", "low", "close", "reference_prev_close", "volume_shares", "amount_cny", "turnover_fraction")
-    raw_same = all(left.get(field) == right.get(field) for field in raw_fields)
+    raw_same = all(_value(t_token, field) == _value(tp1_token, field) for field in raw_fields)
     return comparable_was_known and comparable_now_missing and raw_same
 
 
@@ -193,62 +203,50 @@ def _classify(t_token, tp1_token, session, day_t, day_tp1, cutoff_t):
     day_tp1 = _date_text(day_tp1)
     if session > day_t and session <= day_tp1:
         return "APPENDED_NEW_SESSION"
-    if t_token.get("status") == "MISSING" and tp1_token.get("status") == "MISSING":
+    if t_token.status == "MISSING" and tp1_token.status == "MISSING":
         return "UNCHANGED"
-    if t_token.get("status") == "SELECTED" and tp1_token.get("status") == "SELECTED":
-        if t_token.get("row_hash") == tp1_token.get("row_hash"):
+    if t_token.status == "SELECTED" and tp1_token.status == "SELECTED":
+        if t_token.row_hash == tp1_token.row_hash:
             return "UNCHANGED"
-        if t_token.get("value_hash") == tp1_token.get("value_hash"):
+        if t_token.value_hash == tp1_token.value_hash:
             return "LEGITIMATE_SOURCE_REVISION"
         if _lost_comparable_payload(t_token, tp1_token):
             return "BUG_IN_ARTIFACT_BUILD"
         if _has_newer_visible_revision(tp1_token, cutoff_t):
             return "LEGITIMATE_SOURCE_REVISION"
-        if t_token.get("source_kind") != tp1_token.get("source_kind"):
+        if t_token.source_kind != tp1_token.source_kind:
             return "SOURCE_REPLACED"
         return "SOURCE_REPLACED"
-    if t_token.get("status") == "SELECTED" and tp1_token.get("status") == "MISSING":
+    if t_token.status == "SELECTED" and tp1_token.status == "MISSING":
         return "SOURCE_DISAPPEARED"
-    if t_token.get("status") == "MISSING" and tp1_token.get("status") == "SELECTED":
+    if t_token.status == "MISSING" and tp1_token.status == "SELECTED":
         return "LEGITIMATE_SOURCE_REVISION" if _has_newer_visible_revision(tp1_token, cutoff_t) else "BUG_IN_ARTIFACT_BUILD"
-    if "CONFLICT" in {t_token.get("status"), tp1_token.get("status")}:
+    if "CONFLICT" in {t_token.status, tp1_token.status}:
         return "BUG_IN_MERGE/RESOLUTION"
     return "UNKNOWN"
 
 
 def _missing_token(iid, session):
-    return {
-        "resolver_version": CANONICAL_SOURCE_RESOLVER_VERSION,
-        "requirement": PRICE_SOURCE_REQUIREMENT,
-        "source_family": SOURCE_FAMILY,
-        "instrument_id": iid,
-        "session": _date_text(session),
-        "status": "MISSING",
-        "row_hash": MISSING_VISIBLE_BAR,
-        "source_kind": None,
-        "revision_key": None,
-        "source_revision": None,
-        "values": {},
-        "value_hash": MISSING_VISIBLE_BAR,
-    }
+    return AuditToken("MISSING", MISSING_VISIBLE_BAR, None, None, None, MISSING_VISIBLE_BAR, tuple(None for _ in COMPARE_VALUE_FIELDS))
 
 
 def _compact_token(token):
     values = token.get("values") or {}
-    return {
-        "resolver_version": token.get("resolver_version"),
-        "requirement": token.get("requirement"),
-        "source_family": SOURCE_FAMILY,
-        "instrument_id": token.get("instrument_id"),
-        "session": _date_text(token.get("session")),
-        "status": token.get("status"),
-        "row_hash": token.get("row_hash"),
-        "source_kind": token.get("source_kind"),
-        "revision_key": token.get("revision_key"),
-        "source_revision": token.get("source_revision"),
-        "value_hash": token.get("value_hash"),
-        "values": {field: values.get(field) for field in COMPARE_VALUE_FIELDS if field in values},
-    }
+    revision = token.get("source_revision") or {}
+    revision_tuple = tuple(revision.get(field) for field in REVISION_FIELDS) if isinstance(revision, dict) else tuple(revision or ())
+    return AuditToken(
+        token.get("status"),
+        token.get("row_hash"),
+        token.get("source_kind"),
+        tuple(token.get("revision_key") or ()) or None,
+        revision_tuple if any(value is not None for value in revision_tuple) else None,
+        token.get("value_hash"),
+        tuple(values.get(field) for field in COMPARE_VALUE_FIELDS),
+    )
+
+
+def _value(token, field):
+    return token.values[VALUE_INDEX[field]]
 
 
 def _token_for(selected, iid, session):
@@ -256,14 +254,31 @@ def _token_for(selected, iid, session):
 
 
 def _token_identity(token):
+    return token
+
+
+def _token_to_dict(token, iid=None, session=None):
+    source_revision = None
+    if token.source_revision is not None:
+        source_revision = {field: token.source_revision[index] for index, field in enumerate(REVISION_FIELDS)}
+    values = {
+        field: token.values[index]
+        for index, field in enumerate(COMPARE_VALUE_FIELDS)
+        if token.values[index] is not None
+    }
     return {
-        "status": token.get("status"),
-        "row_hash": token.get("row_hash"),
-        "source_kind": token.get("source_kind"),
-        "revision_key": token.get("revision_key"),
-        "source_revision": token.get("source_revision"),
-        "value_hash": token.get("value_hash"),
-        "values": token.get("values") or {},
+        "resolver_version": CANONICAL_SOURCE_RESOLVER_VERSION,
+        "requirement": PRICE_SOURCE_REQUIREMENT,
+        "source_family": SOURCE_FAMILY,
+        "instrument_id": iid,
+        "session": _date_text(session) if session is not None else None,
+        "status": token.status,
+        "row_hash": token.row_hash,
+        "source_kind": token.source_kind,
+        "revision_key": token.revision_key,
+        "source_revision": source_revision,
+        "value_hash": token.value_hash,
+        "values": values,
     }
 
 
@@ -293,7 +308,7 @@ class SelectedSourceAccumulator:
         if not proof.allowed:
             self._reject(iid, session, source_kind, row_hash, list(proof.reason_codes))
             return
-        candidate = _candidate(source_kind, row, row_hash, self.receipts)
+        candidate = self._compact_candidate(_candidate(source_kind, row, row_hash, self.receipts))
         key = (iid, session)
         current = self.latest.get(key)
         if current is None or candidate["revision_key"] > current["revision_key"]:
@@ -307,6 +322,19 @@ class SelectedSourceAccumulator:
             self.stats["lower_revision_rows_ignored"] += 1
         self.stats["candidate_rows_allowed"] += 1
         self.stats[f"source_kind_{source_kind}"] += 1
+
+    @staticmethod
+    def _compact_candidate(candidate):
+        values = candidate.get("values") or {}
+        revision = candidate.get("source_revision") or {}
+        return {
+            "source_kind": candidate.get("source_kind"),
+            "row_hash": candidate.get("row_hash"),
+            "revision_key": tuple(candidate.get("revision_key") or ()),
+            "source_revision": tuple(revision.get(field) for field in REVISION_FIELDS),
+            "value_hash": candidate.get("value_hash"),
+            "values": tuple(values.get(field) for field in COMPARE_VALUE_FIELDS),
+        }
 
     def _reject(self, iid, session, source_kind, row_hash, reason_codes):
         self.stats["candidate_rows_rejected"] += 1
@@ -323,10 +351,30 @@ class SelectedSourceAccumulator:
         selected = {}
         conflict_count = 0
         for (iid, session), state in self.latest.items():
-            token, _row = _selected_token(iid, session, state["candidates"])
-            if token.get("status") == "CONFLICT":
+            candidates = state["candidates"]
+            row_hashes = {candidate["row_hash"] for candidate in candidates}
+            if len(row_hashes) != 1:
                 conflict_count += 1
-            selected[(iid, session)] = _compact_token(token)
+                selected[(iid, session)] = AuditToken(
+                    "CONFLICT",
+                    CONFLICTING_PRICE_REVISION,
+                    "CONFLICT",
+                    tuple(state["revision_key"]),
+                    None,
+                    CONFLICTING_PRICE_REVISION,
+                    tuple(None for _ in COMPARE_VALUE_FIELDS),
+                )
+                continue
+            chosen = candidates[0]
+            selected[(iid, session)] = AuditToken(
+                "SELECTED",
+                chosen["row_hash"],
+                chosen["source_kind"],
+                tuple(chosen["revision_key"]),
+                tuple(chosen["source_revision"]),
+                chosen["value_hash"],
+                tuple(chosen["values"]),
+            )
         self.stats["selected_pairs"] = len(selected)
         self.stats["conflict_pairs"] = conflict_count
         return selected, dict(self.stats)
@@ -474,10 +522,10 @@ def _compare_selected(selected_t, selected_tp1, common_instruments, common_sessi
             counts[category] += 1
             if category == "UNCHANGED" and len(unchanged_pairs) < 100:
                 unchanged_pairs.append((iid, session))
-            if token_t.get("status") == "MISSING" or token_tp1.get("status") == "MISSING":
+            if token_t.status == "MISSING" or token_tp1.status == "MISSING":
                 if len(missing_pairs) < 100:
                     missing_pairs.append((iid, session))
-            if token_t.get("source_kind") == "INLINE_MARKET_INPUT" or token_tp1.get("source_kind") == "INLINE_MARKET_INPUT":
+            if token_t.source_kind == "INLINE_MARKET_INPUT" or token_tp1.source_kind == "INLINE_MARKET_INPUT":
                 if len(inline_pairs) < 100:
                     inline_pairs.append((iid, session))
             if category != "UNCHANGED":
@@ -489,8 +537,8 @@ def _compare_selected(selected_t, selected_tp1, common_instruments, common_sessi
                         "instrument": iid,
                         "session": session,
                         "category": category,
-                        "day_t": token_t,
-                        "day_t_plus_1": token_tp1,
+                        "day_t": _token_to_dict(token_t, iid, session),
+                        "day_t_plus_1": _token_to_dict(token_tp1, iid, session),
                     })
             processed += 1
             logger.event("PAIR_COMPARE_PROGRESS", processed=processed, total=total, counts=counts)
@@ -541,8 +589,8 @@ def _verify_pairs_with_canonical(ctx_t, ctx_tp1, pairs, selected_t, selected_tp1
                         "case_id": case_id,
                         "instrument": iid,
                         "session": session,
-                        "expected": expected_t,
-                        "actual": actual_t,
+                        "expected": _token_to_dict(expected_t, iid, session),
+                        "actual": _token_to_dict(actual_t, iid, session),
                     })
                 if _token_identity(expected_tp1) != _token_identity(actual_tp1) and len(mismatches) < 100:
                     mismatches.append({
@@ -550,8 +598,8 @@ def _verify_pairs_with_canonical(ctx_t, ctx_tp1, pairs, selected_t, selected_tp1
                         "case_id": case_id,
                         "instrument": iid,
                         "session": session,
-                        "expected": expected_tp1,
-                        "actual": actual_tp1,
+                        "expected": _token_to_dict(expected_tp1, iid, session),
+                        "actual": _token_to_dict(actual_tp1, iid, session),
                     })
             processed += len(batch)
             logger.event(
@@ -600,7 +648,7 @@ def _single_context_canonical_check(ctx, pairs, expected_status=None, logger=Non
                         "session": session,
                         "expected_status": expected_status,
                         "actual_status": token.get("status"),
-                        "token": _compact_token(token),
+                        "token": _token_to_dict(_compact_token(token), iid, session),
                     })
             checked += len(batch)
             if logger:
@@ -658,16 +706,18 @@ def _synthetic_inline_revision_checks(bundle, ctx, session, iid):
     future_view = canonical_price_source_view(future_ctx, [session], [iid])
     future_token = source_token(future_view, iid, session)
 
-    visible_ok = visible_token.get("source_kind") == "INLINE_MARKET_INPUT" and (visible_token.get("values") or {}).get("comparable_close") == "99.1234"
-    future_ok = (future_token.get("values") or {}).get("comparable_close") != "88.1234"
+    visible_compact = _compact_token(visible_token)
+    future_compact = _compact_token(future_token)
+    visible_ok = visible_compact.source_kind == "INLINE_MARKET_INPUT" and _value(visible_compact, "comparable_close") == "99.1234"
+    future_ok = _value(future_compact, "comparable_close") != "88.1234"
     return {
         "case_id": "INLINE_HIGHER_REVISION_AND_FUTURE_LEAK_SYNTHETIC_CASES",
         "instrument": iid,
         "session": _date_text(session),
         "visible_higher_revision_status": "PASS" if visible_ok else "FAIL",
         "future_revision_pit_status": "PASS" if future_ok else "FAIL",
-        "visible_token": _compact_token(visible_token),
-        "future_token": _compact_token(future_token),
+        "visible_token": _token_to_dict(visible_compact, iid, session),
+        "future_token": _token_to_dict(future_compact, iid, session),
         "status": "PASS" if visible_ok and future_ok else "FAIL",
     }
 
