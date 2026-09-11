@@ -291,10 +291,12 @@ def test_r16_history_audit_set_based_progress_and_canonical_checks(tmp_path):
         checkpoint_json=checkpoint,
         progress_interval_seconds=0,
         canonical_batch_size=1,
+        canonical_session_batch_size=1,
     )
 
-    assert result["audit_version"] == "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V2"
+    assert result["audit_version"] == "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V3"
     assert result["comparison_scope"]["comparison_method"].startswith("SET_BASED_SELECTED_SOURCE_RECORDS")
+    assert result["comparison_scope"]["canonical_verification_method"] == "SESSION_BATCHED_FULL_CANONICAL_SOURCE_VIEW"
     assert result["comparison_scope"]["total_pairs"] > 0
     assert result["append_only_invariant"]["status"] == "PASS"
     assert result["targeted_canonical_resolver_checks"]["status"] == "PASS"

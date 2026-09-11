@@ -3,8 +3,9 @@
 The full-universe audit is intentionally set-based: it streams normalized
 source rows from immutable history partitions, aggregates the selected revision
 per (instrument, session, price-source-family), and only then compares Day T
-against Day T+1.  The canonical resolver is still used for targeted correctness
-checks over every discovered discrepancy plus representative PIT cases.
+against Day T+1.  The canonical resolver verification is also batched by
+session/instrument chunks so every discovered discrepancy can be checked
+without repeatedly rescanning SQLite for one pair at a time.
 """
 from __future__ import annotations
 
@@ -12,6 +13,7 @@ import argparse
 from collections import Counter, defaultdict
 from datetime import datetime, time, timedelta
 from decimal import Decimal
+import gc
 import hashlib
 import json
 from pathlib import Path
@@ -49,7 +51,7 @@ from stockfish_core.yaogu.strategy_experiments import _prepare_context  # noqa: 
 SH = ZoneInfo("Asia/Shanghai")
 DEFAULT_T = "market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f8488a23"
 DEFAULT_TP1 = "market_04d95df6f6f699c7f88353d181308159526865877a666a7c3efb84be01b9c08d"
-AUDIT_VERSION = "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V2"
+AUDIT_VERSION = "R16_FAST_SET_BASED_HISTORY_STABILITY_AUDIT_V3"
 SOURCE_FAMILY = "PRICE_DAILY_BAR"
 REVISION_FIELDS = ("source_published_at", "ingested_at", "first_seen_at")
 
@@ -561,53 +563,89 @@ def _clear_context_cache(ctx):
         cache.clear()
 
 
-def _verify_pairs_with_canonical(ctx_t, ctx_tp1, pairs, selected_t, selected_tp1, logger, case_id, *, batch_size=300):
+def _chunks(values, size):
+    size = max(1, int(size))
+    for left in range(0, len(values), size):
+        yield values[left : left + size]
+
+
+def _verify_pairs_with_canonical(
+    ctx_t,
+    ctx_tp1,
+    pairs,
+    selected_t,
+    selected_tp1,
+    logger,
+    case_id,
+    *,
+    batch_size=300,
+    session_batch_size=32,
+):
     pairs = sorted(set((iid, _date_text(session)) for iid, session in pairs))
-    by_session = defaultdict(list)
+    by_session = defaultdict(set)
     for iid, session in pairs:
-        by_session[session].append(iid)
+        by_session[session].add(iid)
+    sessions = sorted(by_session)
     total = len(pairs)
     processed = 0
     mismatches = []
     logger.event(f"CANONICAL_VERIFY_{case_id}_START", processed=0, total=total, force=True)
-    for session in sorted(by_session):
-        ids = sorted(set(by_session[session]))
-        for left in range(0, len(ids), batch_size):
-            batch = ids[left : left + batch_size]
+    for session_batch in _chunks(sessions, session_batch_size):
+        ids_for_sessions = sorted({iid for session in session_batch for iid in by_session[session]})
+        for id_batch in _chunks(ids_for_sessions, batch_size):
+            id_set = set(id_batch)
             _clear_context_cache(ctx_t)
             _clear_context_cache(ctx_tp1)
-            view_t = canonical_price_source_view(ctx_t, [session], batch)
-            view_tp1 = canonical_price_source_view(ctx_tp1, [session], batch)
-            for iid in batch:
-                expected_t = _token_for(selected_t, iid, session)
-                expected_tp1 = _token_for(selected_tp1, iid, session)
-                actual_t = _compact_token(source_token(view_t, iid, session))
-                actual_tp1 = _compact_token(source_token(view_tp1, iid, session))
-                if _token_identity(expected_t) != _token_identity(actual_t) and len(mismatches) < 100:
-                    mismatches.append({
-                        "side": "T",
-                        "case_id": case_id,
-                        "instrument": iid,
-                        "session": session,
-                        "expected": _token_to_dict(expected_t, iid, session),
-                        "actual": _token_to_dict(actual_t, iid, session),
-                    })
-                if _token_identity(expected_tp1) != _token_identity(actual_tp1) and len(mismatches) < 100:
-                    mismatches.append({
-                        "side": "T_PLUS_1",
-                        "case_id": case_id,
-                        "instrument": iid,
-                        "session": session,
-                        "expected": _token_to_dict(expected_tp1, iid, session),
-                        "actual": _token_to_dict(actual_tp1, iid, session),
-                    })
-            processed += len(batch)
+            view_t = canonical_price_source_view(ctx_t, session_batch, id_batch)
+            view_tp1 = canonical_price_source_view(ctx_tp1, session_batch, id_batch)
+            batch_checked = 0
+            for session in session_batch:
+                for iid in sorted(by_session[session] & id_set):
+                    expected_t = _token_for(selected_t, iid, session)
+                    expected_tp1 = _token_for(selected_tp1, iid, session)
+                    actual_t = _compact_token(source_token(view_t, iid, session))
+                    actual_tp1 = _compact_token(source_token(view_tp1, iid, session))
+                    if _token_identity(expected_t) != _token_identity(actual_t) and len(mismatches) < 100:
+                        mismatches.append({
+                            "side": "T",
+                            "case_id": case_id,
+                            "instrument": iid,
+                            "session": session,
+                            "expected": _token_to_dict(expected_t, iid, session),
+                            "actual": _token_to_dict(actual_t, iid, session),
+                        })
+                    if _token_identity(expected_tp1) != _token_identity(actual_tp1) and len(mismatches) < 100:
+                        mismatches.append({
+                            "side": "T_PLUS_1",
+                            "case_id": case_id,
+                            "instrument": iid,
+                            "session": session,
+                            "expected": _token_to_dict(expected_tp1, iid, session),
+                            "actual": _token_to_dict(actual_tp1, iid, session),
+                        })
+                    batch_checked += 1
+            processed += batch_checked
             logger.event(
                 f"CANONICAL_VERIFY_{case_id}_PROGRESS",
                 processed=processed,
                 total=total,
                 mismatch_count=len(mismatches),
+                sessions_in_batch=len(session_batch),
+                instruments_in_batch=len(id_batch),
             )
+            del view_t, view_tp1
+            _clear_context_cache(ctx_t)
+            _clear_context_cache(ctx_tp1)
+            gc.collect()
+        logger.event(
+            f"CANONICAL_VERIFY_{case_id}_SESSION_BATCH_DONE",
+            processed=processed,
+            total=total,
+            mismatch_count=len(mismatches),
+            first_session=session_batch[0],
+            last_session=session_batch[-1],
+            force=True,
+        )
     logger.event(
         f"CANONICAL_VERIFY_{case_id}_DONE",
         processed=processed,
@@ -617,6 +655,7 @@ def _verify_pairs_with_canonical(ctx_t, ctx_tp1, pairs, selected_t, selected_tp1
     )
     return {
         "case_id": case_id,
+        "verification_method": "SESSION_BATCHED_FULL_CANONICAL_SOURCE_VIEW",
         "requested_pair_count": total,
         "checked_pair_count": processed,
         "mismatch_count": len(mismatches),
@@ -735,6 +774,7 @@ def _targeted_canonical_checks(
     logger,
     *,
     batch_size=300,
+    session_batch_size=32,
 ):
     category_pairs = compare_result["category_pairs"]
     discrepancy_pairs = []
@@ -751,6 +791,7 @@ def _targeted_canonical_checks(
         logger,
         "ALL_DISCOVERED_DISCREPANCIES",
         batch_size=batch_size,
+        session_batch_size=session_batch_size,
     ))
     checks.append(_verify_pairs_with_canonical(
         ctx_t,
@@ -761,6 +802,7 @@ def _targeted_canonical_checks(
         logger,
         "LEGITIMATE_REVISION_CASES",
         batch_size=batch_size,
+        session_batch_size=session_batch_size,
     ))
     checks.append(_verify_pairs_with_canonical(
         ctx_t,
@@ -771,6 +813,7 @@ def _targeted_canonical_checks(
         logger,
         "UNCHANGED_CASES",
         batch_size=batch_size,
+        session_batch_size=session_batch_size,
     ))
     checks.append(_verify_pairs_with_canonical(
         ctx_t,
@@ -781,6 +824,7 @@ def _targeted_canonical_checks(
         logger,
         "MISSING_DATA_CASES",
         batch_size=batch_size,
+        session_batch_size=session_batch_size,
     ))
     checks.append(_verify_pairs_with_canonical(
         ctx_t,
@@ -791,6 +835,7 @@ def _targeted_canonical_checks(
         logger,
         "REAL_INLINE_SELECTED_CASES",
         batch_size=batch_size,
+        session_batch_size=session_batch_size,
     ))
     fake_iid = "__R16_MISSING__.NA"
     checks.append(_single_context_canonical_check(
@@ -872,6 +917,7 @@ def audit(
     checkpoint_json=None,
     progress_interval_seconds=10.0,
     canonical_batch_size=300,
+    canonical_session_batch_size=32,
     run_canonical_checks=True,
 ):
     logger = ProgressLogger(checkpoint_json, interval_seconds=progress_interval_seconds)
@@ -923,6 +969,7 @@ def audit(
             common_sessions,
             logger,
             batch_size=canonical_batch_size,
+            session_batch_size=canonical_session_batch_size,
         )
         if run_canonical_checks
         else {"status": "SKIPPED", "reason": "explicit --skip-canonical-target-checks"}
@@ -951,6 +998,9 @@ def audit(
         },
         "comparison_scope": {
             "comparison_method": "SET_BASED_SELECTED_SOURCE_RECORDS_WITH_TARGETED_CANONICAL_RESOLVER_VERIFICATION",
+            "canonical_verification_method": "SESSION_BATCHED_FULL_CANONICAL_SOURCE_VIEW",
+            "canonical_batch_size": canonical_batch_size,
+            "canonical_session_batch_size": canonical_session_batch_size,
             "source_family": SOURCE_FAMILY,
             "sessions_compared": list(common_sessions),
             "instrument_count": len(common_instruments),
@@ -1059,6 +1109,7 @@ def main(argv=None):
     parser.add_argument("--cutoff-t-plus-1", default=None)
     parser.add_argument("--instrument-limit", type=int, default=None)
     parser.add_argument("--canonical-batch-size", type=int, default=300)
+    parser.add_argument("--canonical-session-batch-size", type=int, default=32)
     parser.add_argument("--progress-interval-seconds", type=float, default=10.0)
     parser.add_argument("--checkpoint-json", default=None)
     parser.add_argument("--skip-canonical-target-checks", action="store_true")
@@ -1078,6 +1129,7 @@ def main(argv=None):
         checkpoint_json=checkpoint_json,
         progress_interval_seconds=args.progress_interval_seconds,
         canonical_batch_size=args.canonical_batch_size,
+        canonical_session_batch_size=args.canonical_session_batch_size,
         run_canonical_checks=not args.skip_canonical_target_checks,
     )
     output_json = Path(args.output_json)
