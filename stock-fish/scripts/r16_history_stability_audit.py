@@ -17,6 +17,7 @@ import gc
 import hashlib
 import json
 from pathlib import Path
+import subprocess
 import sys
 import time as perf_time
 from typing import NamedTuple
@@ -110,6 +111,26 @@ def _date_text(value):
 
 def _json_line(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, default=str)
+
+
+def _git_provenance(command_argv):
+    def run(*args):
+        try:
+            return subprocess.check_output(["git", *args], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    status = run("status", "--short")
+    return {
+        "git_commit": run("rev-parse", "HEAD"),
+        "git_tree": run("rev-parse", "HEAD^{tree}"),
+        "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
+        "dirty": bool(status),
+        "dirty_status": status,
+        "command": " ".join(command_argv),
+        "benchmark_version": AUDIT_VERSION,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
 
 
 class ProgressLogger:
@@ -977,6 +998,7 @@ def audit(
     elapsed = perf_time.perf_counter() - logger.started
     result = {
         "audit_version": AUDIT_VERSION,
+        "provenance": _git_provenance(sys.argv),
         "generated_at": datetime.now().astimezone().isoformat(),
         "elapsed_seconds": elapsed,
         "db_path": str(Path(db_path).resolve()),

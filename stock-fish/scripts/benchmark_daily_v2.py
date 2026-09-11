@@ -16,6 +16,7 @@ import os
 from pathlib import Path
 import pstats
 import sqlite3
+import subprocess
 import sys
 import tempfile
 import threading
@@ -51,6 +52,26 @@ def _progress(event, **metadata):
         **metadata,
     }
     print(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str), flush=True)
+
+
+def _git_provenance(command_argv, benchmark_version):
+    def run(*args):
+        try:
+            return subprocess.check_output(["git", *args], cwd=REPO_ROOT, text=True, stderr=subprocess.DEVNULL).strip()
+        except (OSError, subprocess.CalledProcessError):
+            return None
+
+    status = run("status", "--short")
+    return {
+        "git_commit": run("rev-parse", "HEAD"),
+        "git_tree": run("rev-parse", "HEAD^{tree}"),
+        "branch": run("rev-parse", "--abbrev-ref", "HEAD"),
+        "dirty": bool(status),
+        "dirty_status": status,
+        "command": " ".join(command_argv),
+        "benchmark_version": benchmark_version,
+        "timestamp": datetime.now().astimezone().isoformat(),
+    }
 
 
 def _json_size_bytes(value):
@@ -505,7 +526,7 @@ def _clean_cache_db(path, source_db):
 
 
 def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso, next_cutoff_iso,
-                                   timeout_seconds, derived_cache_db_path=None):
+                                   timeout_seconds, derived_cache_db_path=None, command_argv=None):
     cache_db = Path(derived_cache_db_path).resolve() if derived_cache_db_path else Path(
         tempfile.mkdtemp(prefix="r15_true_incremental_cache_")
     ) / "derived-cache.sqlite3"
@@ -532,6 +553,7 @@ def run_r15_true_incremental_suite(db_path, input_id, next_input_id, cutoff_iso,
     day_tp1_bytes = after_next["file_bytes_including_wal_shm"]
     return {
         "benchmark_version": "R16_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1",
+        "provenance": _git_provenance(command_argv or sys.argv, "R16_TRUE_CROSS_SESSION_INCREMENTAL_BENCHMARK_V1"),
         "generated_at": datetime.now().astimezone().isoformat(),
         "db_path": str(db_path),
         "input_id_t": input_id,
@@ -706,6 +728,7 @@ def main(argv=None):
             next_cutoff,
             args.timeout_seconds,
             Path(args.derived_cache_db).resolve() if args.derived_cache_db else None,
+            sys.argv,
         )
         if args.output_json:
             write_json(Path(args.output_json), result)
@@ -725,6 +748,7 @@ def main(argv=None):
                                      derived_cache_db, cprofile_output))
     result = {
         "benchmark_version": "R16_DAILY_PRIMARY_SEGMENT_BENCHMARK_V1",
+        "provenance": _git_provenance(sys.argv, "R16_DAILY_PRIMARY_SEGMENT_BENCHMARK_V1"),
         "generated_at": datetime.now().astimezone().isoformat(),
         "db_path": str(db_path),
         "input_id": input_id,
