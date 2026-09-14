@@ -59,6 +59,8 @@ live-attempt 与 offline-replay 的原始命令见对应 run.json；offline 不�
 
 `r16_r1_profile_source_work.py --before-source-directory <包内preoptimization两源码目录> --output <新目录>` 重跑精确 token/selected/dependency 字节对照的小 profile。它与完整 baseline/final benchmark 是不同实验。
 
+`r16_r1_memory_batch_probe.py --source-root . --instruments 300 --output <新目录> --cprofile` 测量完整 feature ensure 分批内存控制。另一次独立进程加 `--implementation-file <包内pre-memory-fix-source/derived_feature_store.py>`，其余参数及共享源码不变；各自用 supervisor 记录 RSS。逐行缓存哈希排除 created_at，比较 runtime features、effective dependencies 和 PIT 拒绝记录；本实验是明确的 TEST_FIXTURE，不代替全市场 Strategy。baseline benchmark 如终止失败，保留原始失败与跳过的依赖样本，独立 final 测量继续；缺失的跨版本比率/等价保持 null/NOT_VERIFIED，整体不升级 PASS。
+
 最终完整工程验收命令包括 `git diff --check`、`python -m compileall -q stock-fish/stockfish_core stock-fish/scripts`、`python stock-fish/scripts/run_core_tests.py tests -q`、`go build/test/vet`、`node --check stock-fish/scripts/r16_r1_sqlite_pages.cjs` 和 `pip check`。测试日志记录实际通过/skip/未执行范围，不能沿用旧数字。source freeze 后任何执行相关源码变动都需要新 commit 与受影响复跑。
 
 最终 bundle 通过实际解压 checksum 与解压源码小型 contract/oracle/Go smoke 验证。打包脚本接受明确 inclusion spec，保留 JSONL、profile、失败日志；排除 DB/credentials/cache 并将必要大资产列为外部引用。最终 ZIP 的 SHA-256 位于外部侧车，避免自引用。

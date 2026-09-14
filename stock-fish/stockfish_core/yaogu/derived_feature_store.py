@@ -11,6 +11,7 @@ from decimal import Decimal, InvalidOperation
 from fractions import Fraction
 import hashlib
 import json
+import logging
 import sqlite3
 import time
 
@@ -39,6 +40,7 @@ CONTEXT_KEY = "R14_DERIVED_FEATURES"
 CONTEXT_STATS_KEY = "R15_DERIVED_FEATURE_STATS"
 LEGACY_CONTEXT_STATS_KEY = "R14_DERIVED_FEATURE_STATS"
 MISSING = object()
+SOURCE_BATCH_INSTRUMENTS = 250
 CACHE_LIFECYCLE_CATEGORIES = (
     "CACHE_HIT",
     "NEW",
@@ -1133,13 +1135,13 @@ def build_missing_features(ctx, identity, missing_keys, *, dependency_plan=None,
     return rows
 
 
-def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, input_hash, mode="DAILY_INCREMENTAL"):
+def _ensure_stage_aware_derived_features_batch(ctx, store: DerivedFeatureStore, *, input_hash, mode, instrument_ids):
     from .e2e_tracing import measured_stage
     started = time.perf_counter()
     identity = identity_for_context(ctx, input_hash)
     sessions = [ctx.sessions[index] for index in _target_indices(ctx)]
     session_by_text = {_date_text(session): session for session in sessions}
-    instrument_ids = list(ctx.eligible_ids)
+    instrument_ids = list(instrument_ids)
     session_positions = {_date_text(value): index for index, value in enumerate(ctx.sessions)}
     source_sessions = sorted({
         source_session
@@ -1152,7 +1154,9 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
 
     with measured_stage("SOURCE_RESOLUTION", item_count=len(source_sessions) * len(instrument_ids)) as span:
         source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
-        span["metadata"] = source_view.get("work_counters", {})
+        span["metadata"] = {**source_view.get("work_counters", {}), "instrument_count": len(instrument_ids),
+            "first_instrument": instrument_ids[0] if instrument_ids else None,
+            "last_instrument": instrument_ids[-1] if instrument_ids else None}
     after_source_view = time.perf_counter()
     dependency_plan_started = time.perf_counter()
     with measured_stage("DEPENDENCY_PLANNING", item_count=len(sessions) * len(instrument_ids)) as span:
@@ -1274,6 +1278,77 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
     ctx.scalar_cache[CONTEXT_STATS_KEY] = stats
     ctx.scalar_cache[LEGACY_CONTEXT_STATS_KEY] = stats
     return stats
+
+
+def _sum_counters(left, right):
+    """Merge disjoint instrument counts, retaining nested lifecycle categories."""
+    for key, value in right.items():
+        if isinstance(value, dict):
+            _sum_counters(left.setdefault(key, {}), value)
+        elif isinstance(value, (int, float)) and not isinstance(value, bool):
+            left[key] = left.get(key, 0) + value
+        else:
+            raise TypeError("NON_NUMERIC_BATCH_COUNTER: " + key)
+
+
+def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, input_hash, mode="DAILY_INCREMENTAL"):
+    """Bound source/dependency retention to disjoint instrument batches.
+
+    Each batch runs the same resolver, fingerprint, lookup and computation. No
+    source window is truncated. Only compact runtime feature rows survive a
+    batch; cache identities and payloads do not contain the batch boundary.
+    """
+    started = time.perf_counter()
+    ids = list(ctx.eligible_ids)
+    batches = [ids[left:left + SOURCE_BATCH_INSTRUMENTS]
+               for left in range(0, len(ids), SOURCE_BATCH_INSTRUMENTS)] or [[]]
+    cached, combined, lookups = {}, None, {}
+    timings = []
+    count_fields = (
+        "eligible_count", "requested_feature_rows", "cache_hits", "cache_misses", "built_rows",
+        "reused", "full_row_reused", "partial_family_reused_rows", "new_rows", "newly_computed",
+        "newly_built", "invalidated", "invalidated_rows", "missing_cache_rows", "integrity_conflicts",
+    )
+    nested_fields = ("family_cache", "row_lifecycle", "timing_seconds", "source_work_counters", "dependency_work_counters")
+    samples = []
+    for index, batch in enumerate(batches):
+        stats = _ensure_stage_aware_derived_features_batch(
+            ctx, store, input_hash=input_hash, mode=mode, instrument_ids=batch)
+        cached.update(ctx.scalar_cache.pop(CONTEXT_KEY))
+        lookup = dict(getattr(store, "last_get_many_stats", {}) or {})
+        samples.extend(lookup.pop("lifecycle_samples", []))
+        _sum_counters(lookups, lookup)
+        timings.append({"batch": index + 1, "instruments": len(batch),
+                        "first_instrument": batch[0] if batch else None,
+                        "last_instrument": batch[-1] if batch else None,
+                        "timing_seconds": dict(stats["timing_seconds"])})
+        if combined is None:
+            # Subsequent summation must not mutate an earlier span's metadata.
+            from copy import deepcopy
+            combined = deepcopy(stats)
+        else:
+            for key in count_fields:
+                combined[key] += stats[key]
+            for key in nested_fields:
+                _sum_counters(combined[key], stats[key])
+        logging.getLogger(__name__).info(
+            "R16_R1_FEATURE_BATCH processed=%s/%s batches=%s/%s elapsed_seconds=%.3f",
+            min((index + 1) * SOURCE_BATCH_INSTRUMENTS, len(ids)), len(ids), index + 1,
+            len(batches), time.perf_counter() - started)
+    lookups["lifecycle_samples"] = sorted(samples, key=lambda row: row["cache_key"])[:50]
+    store.last_get_many_stats = lookups
+    requested = combined["requested_feature_rows"]
+    combined["cache_hit_rate"] = (requested - combined["cache_misses"]) / requested if requested else None
+    combined["reuse_ratio"] = combined["full_row_reused"] / requested if requested else None
+    combined["bounded_source_batches"] = {"instrument_limit": SOURCE_BATCH_INSTRUMENTS,
+        "batch_count": len(batches), "timings": timings,
+        "policy": "DISJOINT_INSTRUMENTS_COMPLETE_SOURCE_WINDOWS_SAME_IDENTITIES",
+        "timing_policy": "PRE_CACHE_HIT_AND_PHASES_SUM_DISJOINT_BATCH_WORK; TOTAL_IS_OUTER_WALL_CLOCK"}
+    combined["timing_seconds"]["total"] = time.perf_counter() - started
+    ctx.scalar_cache[CONTEXT_KEY] = cached
+    ctx.scalar_cache[CONTEXT_STATS_KEY] = combined
+    ctx.scalar_cache[LEGACY_CONTEXT_STATS_KEY] = combined
+    return combined
 
 
 def _context_feature(ctx, iid, end_index):

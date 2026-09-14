@@ -54,7 +54,7 @@ def run(args):
         'pid': os.getpid(), 'process_create_time': psutil.Process().create_time(),
         'total_budget_seconds': args.total_budget, 'preparation_budget_seconds': args.preparation_budget,
         'corrected_build_path': str(Path(args.corrected_build).resolve()), 'corrected_build_sha256': sha256(args.corrected_build),
-        'rows': [], 'cache_backups': [], 'status': 'RUNNING',
+        'rows': [], 'failed_runs': [], 'skipped_runs': [], 'cache_backups': [], 'status': 'RUNNING',
         'profile_policy': 'ALL_ROWS_CPROFILE_SAME_WORKLOAD; API_E2E_SEPARATELY_UNPROFILED',
         'sample_policy': 'COLD_ONCE_WARM_THREE_PER_IMPLEMENTATION; MEDIAN_RANGE_ONLY_NO_P95',
         'cold_definition': 'NEW_PROCESS_AND_EMPTY_DERIVED_CACHE; OS_PAGE_CACHE_NOT_CLEARED; FIXED_BASELINE_THEN_FINAL_ORDER'}
@@ -68,7 +68,8 @@ def run(args):
                 suite['preparation_progress'] = value; save()
                 print(json.dumps(value), flush=True); last[0] = time.monotonic()
         return backup(source, target, deadline=deadline, progress=progress)
-    def one(label, input_id, cache_db, source_db=db, cutoff=common, implementation=ROOT, binding=None):
+    def one(label, input_id, cache_db, source_db=db, cutoff=common, implementation=ROOT, binding=None,
+            allow_terminal_failure=False):
         command = [sys.executable, '-X', 'utf8', str(ROOT/'stock-fish/scripts/r16_r1_benchmark_worker.py'),
             '--db', str(source_db), '--input-id', input_id, '--cutoff', cutoff,
             '--cache-db', str(cache_db), '--output', str(output/label), '--label', label,
@@ -79,6 +80,14 @@ def run(args):
         run = supervise(command, output/(label+'-process'), cwd=ROOT, source_root=ROOT,
             registry=args.registry, budget_seconds=min(args.per_run_budget, suite_deadline-time.monotonic()), input_manifest=args.corrected_build, label=label)
         if run['exit_code'] != 0:
+            suite['failed_runs'].append({'label': label, 'status': run['status'], 'exit_code': run['exit_code'],
+                'process_report': str(output/(label+'-process')/'run.json'),
+                'process_report_sha256': sha256(output/(label+'-process')/'run.json'),
+                'input_id': input_id, 'successful_workload_seconds': None,
+                'rss_family_sampled_peak_bytes': run['rss_family_sampled_peak_bytes']})
+            if allow_terminal_failure and run['status'] in {'FAILED', 'TIMEOUT'} and not run.get('live_descendants'):
+                save()
+                return False
             suite.update(status='FAILED', failed_label=label); save()
             raise RuntimeError('BENCHMARK_FAILED:'+label)
         report = json.loads((output/label/'benchmark.json').read_text(encoding='utf-8'))
@@ -100,15 +109,22 @@ def run(args):
             'invalidated_rows': report['derived_feature_store']['invalidated_rows'],
             'cache_footprint_after_checkpoint': report['checkpoints']['cache']['after']})
         save()
+        return True
     try:
         # The archived implementation may initialize its source schema. It gets
         # its own exact isolated input copy; it never opens production to write.
         baseline_db = output/'baseline-input.sqlite3'
         suite['source_backup'] = prepared_backup(db, baseline_db); save()
         baseline_cache = output/'baseline-cache.sqlite3'
-        for label in ['baseline-cold','baseline-warm-1','baseline-warm-2','baseline-warm-3']:
-            one(label, source['input_t_corrected'], baseline_cache, source_db=baseline_db,
-                implementation=Path(args.baseline_source_root).resolve(), binding=args.baseline_binding)
+        baseline_labels = ['baseline-cold','baseline-warm-1','baseline-warm-2','baseline-warm-3']
+        for index, label in enumerate(baseline_labels):
+            if not one(label, source['input_t_corrected'], baseline_cache, source_db=baseline_db,
+                    implementation=Path(args.baseline_source_root).resolve(), binding=args.baseline_binding,
+                    allow_terminal_failure=True):
+                suite['skipped_runs'].extend({'label': skipped, 'status': 'SKIPPED_DEPENDENCY_FAILED',
+                    'failed_dependency': label} for skipped in baseline_labels[index+1:])
+                save()
+                break
         cache = output/'final-cache.sqlite3'
         one('final-cold', source['input_t_corrected'], cache)
         day_t = output/'day-t-cache.sqlite3'
@@ -138,15 +154,20 @@ def run(args):
         summary = {}
         for implementation in ('baseline','final'):
             warm = [row['elapsed_seconds'] for row in suite['rows'] if row['label'].startswith(implementation+'-warm-')]
-            summary[implementation] = {'cold_seconds': next(row['elapsed_seconds'] for row in suite['rows'] if row['label'] == implementation+'-cold'),
-                'warm_samples': warm, 'warm_median_seconds': statistics.median(warm), 'warm_range_seconds': [min(warm),max(warm)]}
+            summary[implementation] = {'cold_seconds': next((row['elapsed_seconds'] for row in suite['rows'] if row['label'] == implementation+'-cold'), None),
+                'warm_samples': warm, 'warm_median_seconds': statistics.median(warm) if len(warm)==3 else None,
+                'warm_range_seconds': [min(warm),max(warm)] if len(warm)==3 else None,
+                'measurement_status': 'COMPLETE' if len(warm)==3 else 'NOT_VERIFIED_INCOMPLETE'}
         hashes = {row['business_result_hash'] for row in suite['rows'] if row['label'].startswith(('baseline-','final-'))}
-        summary['same_corrected_t_business_hashes_match'] = len(hashes) == 1
-        summary['warm_ratio_final_over_baseline'] = summary['final']['warm_median_seconds']/summary['baseline']['warm_median_seconds']
+        complete = all(summary[name]['measurement_status']=='COMPLETE' and summary[name]['cold_seconds'] is not None
+                       for name in ('baseline','final'))
+        summary['same_corrected_t_business_hashes_match'] = len(hashes) == 1 if complete else None
+        summary['cross_implementation_comparison'] = 'MEASURED' if complete else 'NOT_VERIFIED_BASELINE_INCOMPLETE'
+        summary['warm_ratio_final_over_baseline'] = (summary['final']['warm_median_seconds']/summary['baseline']['warm_median_seconds']) if complete else None
         incremental = next(row for row in suite['rows'] if row['label'] == 'corrected-t-to-t1')
         summary['corrected_increment_full_row_reuse_ratio'] = incremental['cache_hits']/(incremental['cache_hits']+incremental['cache_misses'])
         summary['corrected_increment_has_no_invalidated_rows'] = incremental['invalidated_rows'] == 0
-        suite.update(status='SUCCESS' if len(hashes)==1 and incremental['invalidated_rows']==0 else 'FAIL_REQUIRES_REVIEW',
+        suite.update(status='SUCCESS' if complete and not suite['failed_runs'] and len(hashes)==1 and incremental['invalidated_rows']==0 else 'FAIL_REQUIRES_REVIEW',
             end=now(), summary=summary, current=None)
         save(); write_json(output/'benchmark-summary.json', suite)
         print(json.dumps(suite['summary'], ensure_ascii=False, indent=2), flush=True)

@@ -72,3 +72,84 @@ def test_chunk_selection_only_copies_requested_scope():
     selected = dft._selected_compact_bars(ctx, [session], [iid], source_view=view)
     assert set(selected) == {(iid, str(session))}
     assert selected[(iid, str(session))] == view['selected'][(iid, str(session))]
+
+
+def test_batched_pipeline_keeps_exact_cache_rows_and_lifecycle_across_cold_warm_revision(tmp_path, monkeypatch):
+    """Compare the unbatched primitive and bounded pipeline, including real keys."""
+    bundle, cutoff = make_bundle(5)
+    ids = _prepare_context(bundle, cutoff).eligible_ids
+    stores = [dft.DerivedFeatureStore(SQLiteStore(tmp_path / (name + '.sqlite3')))
+              for name in ('TEST_FIXTURE_whole', 'TEST_FIXTURE_batched')]
+    monkeypatch.setattr(dft, 'SOURCE_BATCH_INSTRUMENTS', 2)
+    original = source.canonical_price_source_view
+    scopes = []
+    def record(ctx, sessions, instruments):
+        scopes.append(tuple(instruments))
+        return original(ctx, sessions, instruments)
+    monkeypatch.setattr(source, 'canonical_price_source_view', record)
+    changed_bars = list(bundle.bars)
+    changed_bars[-1] = changed_bars[-1].model_copy(update={'amount_cny': changed_bars[-1].amount_cny + 100})
+    revised = bundle.model_copy(update={'bars': tuple(changed_bars)})
+    for run, current in enumerate((bundle, bundle, revised)):
+        left, right = (_prepare_context(current, cutoff) for _ in range(2))
+        before = dft._ensure_stage_aware_derived_features_batch(
+            left, stores[0], input_hash='TEST_FIXTURE', mode='DAILY_INCREMENTAL', instrument_ids=ids)
+        scopes.clear()
+        after = dft.ensure_stage_aware_derived_features(right, stores[1], input_hash='TEST_FIXTURE')
+        assert list(map(len, scopes)) == [2, 2, 1]
+        assert left.scalar_cache[dft.CONTEXT_KEY] == right.scalar_cache[dft.CONTEXT_KEY]
+        assert left.resolver.effective_dependencies() == right.resolver.effective_dependencies()
+        assert left.rejected_evidence == right.rejected_evidence
+        for key in ('family_cache', 'row_lifecycle', 'requested_feature_rows', 'cache_hits',
+                    'cache_misses', 'built_rows', 'cache_hit_rate', 'reuse_ratio'):
+            assert before[key] == after[key]
+        assert not any(isinstance(key, tuple) and key[0] == 'R16_CANONICAL_PRICE_SOURCE_VIEW'
+                       for key in right.scalar_cache)
+        dumps = []
+        for store in stores:
+            with store.store.transaction(write=False) as con:
+                rows = [dict(row) for row in con.execute('SELECT * FROM yaogu_derived_features_v2 ORDER BY cache_key')]
+                for row in rows:
+                    row.pop('created_at')
+                dumps.append(rows)
+        assert dumps[0] == dumps[1]
+        if run == 0:
+            assert after['new_rows'] == after['requested_feature_rows'] > 0
+        elif run == 1:
+            assert after['cache_hits'] == after['requested_feature_rows'] and after['built_rows'] == 0
+        else:
+            assert after['invalidated_rows'] > 0 and after['full_row_reused'] > 0
+
+
+def test_same_strategy_consumes_identical_features_across_batch_boundaries(tmp_path, monkeypatch):
+    from stockfish_core.yaogu.strategy_experiments import run_active_daily_strategy
+    bundle, cutoff = make_bundle(5)
+    results = []
+    for size in (10, 2, 1):
+        monkeypatch.setattr(dft, 'SOURCE_BATCH_INSTRUMENTS', size)
+        store = dft.DerivedFeatureStore(SQLiteStore(tmp_path / f'TEST_FIXTURE_strategy_{size}.sqlite3'))
+        result = run_active_daily_strategy(bundle, cutoff=cutoff, derived_store=store,
+                                           execution_profile='DAILY_PRIMARY_FAST')
+        results.append({key: result[key] for key in ('effective_input_hash', 'results', 'qualification',
+                                                    'data_coverage_diagnostics')})
+    assert results[0] == results[1] == results[2]
+    assert results[0]['results']['STAGE_AWARE_MOMENTUM_V2']['items']
+
+
+def test_later_batch_failure_propagates_without_publishing_partial_context(tmp_path, monkeypatch):
+    import pytest
+    bundle, cutoff = make_bundle(5)
+    ctx = _prepare_context(bundle, cutoff)
+    monkeypatch.setattr(dft, 'SOURCE_BATCH_INSTRUMENTS', 2)
+    original = source.canonical_price_source_view
+    calls = []
+    def fail_later(*args, **kwargs):
+        calls.append(1)
+        if len(calls) == 2:
+            raise RuntimeError('TEST_FIXTURE_LATER_BATCH_FAILED')
+        return original(*args, **kwargs)
+    monkeypatch.setattr(source, 'canonical_price_source_view', fail_later)
+    store = dft.DerivedFeatureStore(SQLiteStore(tmp_path / 'TEST_FIXTURE_failure.sqlite3'))
+    with pytest.raises(RuntimeError, match='LATER_BATCH_FAILED'):
+        dft.ensure_stage_aware_derived_features(ctx, store, input_hash='TEST_FIXTURE')
+    assert dft.CONTEXT_KEY not in ctx.scalar_cache

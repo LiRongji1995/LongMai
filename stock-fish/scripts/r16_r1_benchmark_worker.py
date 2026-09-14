@@ -10,6 +10,7 @@ from datetime import datetime
 import hashlib
 import importlib.util
 import json
+import logging
 from pathlib import Path
 import pstats
 import sqlite3
@@ -76,6 +77,7 @@ def checkpoint(path):
 
 
 def worker(args):
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     output, implementation = Path(args.output).resolve(), Path(args.source_root).resolve()
     output.mkdir(parents=True, exist_ok=False)
     source_db, cache_db = Path(args.db).resolve(), Path(args.cache_db).resolve()

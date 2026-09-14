@@ -36,6 +36,8 @@ RSS 同时提供全部 worker 后代范围的采样峰值及实际 workload 区�
 
 corrected T→T+1 从确切 Day-T cache 副本起步；旧坏输入仅作 invalidation stress。小样本 profile 证明原字节/业务不变后才运行全市场，不扩展无限性能重构。本轮不预先承诺一分钟目标。
 
+首次 post-commit 全市场外层运行在 source resolution 暴露 MemoryError，原失败 trace 和进程族 RSS 必须保留。修复将 250-instrument 分批边界前移到完整 source/dependency/lookup/build/write，而非先保留全市场来源再只分批计算。每个 instrument 仍使用完整 source windows、相同 PIT、fingerprint、payload 和 feature spec；跨批保留 resolver 证据集合及紧凑 runtime features。row/family lifecycle 按互不重叠的 instrument 求和，比例用总分子/分母，阶段时间为各批实际成本之和，total 独立测量外层墙钟；具体批次与耗时保留在 stats。旧成功构建和失败执行分别绑定其原 commit，执行代码改动后的受影响验收重新运行。
+
 ## 运行与只读审计
 
 真实资产、DB、完整 provider cache 和 evidence 不提交 Git。`r16_r1_supervise.py` 提供明确预算、PID/create_time、后代 RSS、10 秒 checkpoint 和退出码；重连先检查 registry 及已观察进程身份。超时只处理本任务拥有且身份一致的进程，不按名称终止其他 Python。

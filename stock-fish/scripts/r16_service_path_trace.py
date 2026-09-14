@@ -9,6 +9,7 @@ import argparse
 from datetime import datetime, time as day_time
 import hashlib
 import json
+import logging
 from pathlib import Path
 import sqlite3
 import sys
@@ -181,6 +182,7 @@ def live_attempt(output, *, timeout=45):
 
 
 def main():
+    logging.basicConfig(level=logging.INFO, format="%(asctime)s %(message)s")
     parser = argparse.ArgumentParser()
     parser.add_argument('--db')
     parser.add_argument('--input-id')
