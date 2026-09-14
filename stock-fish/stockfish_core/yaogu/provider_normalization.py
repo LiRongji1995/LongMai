@@ -66,13 +66,18 @@ from .e2e_tracing import traced_stage
 
 @traced_stage('HISTORY_ARTIFACT_UPDATE', scope='ACTUAL_RAW_NORMALIZATION_AND_HISTORY_WRITES')
 def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None,
-                                  coverage_type='PROSPECTIVE_CAPTURED',progress=None):
+                                  coverage_type='PROSPECTIVE_CAPTURED',progress=None,retained_identity_base=None,
+                                  review_factor_conflicts=False,factor_review_base=None,factor_review_limits=None):
     day=_date(observation_date)
     if day is None or now.tzinfo is None:raise ValueError('OBSERVATION_DATE_AND_AWARE_CLOCK_REQUIRED')
     if coverage_type not in {'PROSPECTIVE_CAPTURED','RECONSTRUCTED_HISTORICAL','TEST_FIXTURE'}:
         raise ValueError('EXPLICIT_SUPPORTED_COVERAGE_TYPE_REQUIRED')
     sessions=tuple(sorted({_date(s) for s in sessions if _date(s) is not None and _date(s)<=day}))
     if not sessions or sessions[-1]!=day:raise ValueError('OBSERVATION_MUST_BE_VERIFIED_TRADING_SESSION')
+    if factor_review_base is not None:
+        if not review_factor_conflicts or history_store is None or history_base_ref != factor_review_base.history_artifact_ref:
+            raise ValueError('FACTOR_REVIEW_EXACT_HISTORY_BASE_REQUIRED')
+        history_store.manifest(history_base_ref,factor_review_base.history_artifact_hash)
     usable=[];receipts={};source_by={};gaps=[]
     for result in results:
         # This adapter has no authenticated retraction contract. Never silently
@@ -96,6 +101,33 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
             source_url=source.get('source_url'),instrument_ids=instrument_ids,business_sessions=business_sessions,**clock)
         if result['status'] not in ('COMPLETE','PARTIAL'):continue
         usable.append(result)
+    # A retained current-directory observation is evidence for its declared
+    # reference input, not a new observation of next-session eligibility.
+    # This explicit delta boundary does not infer validity from receipt age or
+    # from an ingestion clock later than the target business date.
+    retained_identity = {}
+    if retained_identity_base is not None:
+        if (history_store is None or not history_base_ref or
+                history_base_ref != retained_identity_base.history_artifact_ref or
+                not retained_identity_base.observation_date < day):
+            raise ValueError('RETAINED_IDENTITY_REQUIRES_MATCHING_PRIOR_HISTORY_BASE')
+        history_store.manifest(history_base_ref,retained_identity_base.history_artifact_hash)
+        prior_receipts = {r.receipt_id:r for r in retained_identity_base.receipts}
+        identity_datasets = {'mainboard_sse','master_szse','delisting_sse','tushare_stock_basic'}
+        for rid,receipt in receipts.items():
+            if receipt.dataset not in identity_datasets:
+                continue
+            if rid not in prior_receipts:
+                raise ValueError('UNBOUND_CURRENT_IDENTITY_SOURCE_IN_RETAINED_ONLY_MODE')
+            if receipt != prior_receipts[rid]:
+                raise ValueError('RETAINED_IDENTITY_RECEIPT_CHANGED')
+            retained_identity[rid] = {'dataset':receipt.dataset,
+                'reference_session':str(retained_identity_base.observation_date),
+                'target_session':str(day),'source_content_hash':receipt.content_hash,
+                'status':'UNKNOWN_FOR_NEW_SESSION',
+                'reason':'RETAINED_CURRENT_IDENTITY_HAS_NO_NEW_SESSION_APPLICABILITY_PROOF'}
+            gaps.append(dict(field='current_identity',source_ref=rid,status='UNKNOWN',
+                reason=retained_identity[rid]['reason'],impact='CURRENT_QUALIFICATION_NOT_CERTIFIED_BY_RETAINED_REFERENCE'))
     usable.sort(key=lambda r:datetime.fromisoformat(source_by[r['request_receipt_id']]['ingested_at']))
     masters={};master_refs=[];master_endpoints=set();history={};adjusted={};basic={};market_states={};theme_names={};theme_results=[]
     factor_captures=defaultdict(list); limit_pool={}; direct_limits={}; malformed_master_count=0; master_latest={};sse_delisting=None
@@ -266,9 +298,15 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
         masterclock=_clock(source_by[master['source']]);base={k:v for k,v in master.items() if k not in ('source','listed_on')};base['listed_on']=listing
         if basic_pair and _date(basic_pair[0].get('outDate')):base['delisted_on']=_date(basic_pair[0]['outDate'])
         extra_flags=('OUTCOME_ONLY',) if iid in outcome_only else ()
+        retained_master = master['source'] in retained_identity
+        if retained_master:
+            # Preserve the raw identity and price rows. The old directory does
+            # not establish current MAIN-board membership for this new day.
+            base['board'] = 'UNKNOWN'
+            extra_flags += ('RETAINED_REFERENCE_IDENTITY_NOT_VERIFIED_FOR_CURRENT_SESSION',)
         current_delisting=None;identity_refs=[]
-        if iid in masters and master['board']=='MAIN':
-            if master['exchange']=='SSE' and sse_delisting:
+        if iid in masters and master['board']=='MAIN' and not retained_master:
+            if master['exchange']=='SSE' and sse_delisting and sse_delisting[1] not in retained_identity:
                 current_delisting=iid[:6] in sse_delisting[0];identity_refs.append(sse_delisting[1])
                 identity_proofs.append(dict(instrument_id=iid,field='delisting_period',value=current_delisting,method='OFFICIAL_COMPLETE_CURRENT_EXCLUSION_SET',source_refs=[master['source'],sse_delisting[1]]))
             elif master['exchange']=='SZSE' and master['name'] and day>=date(2026,4,24):
@@ -394,8 +432,9 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
         last_session=state.effective_from
     securities=coalesced
     refs=tuple(sorted(set(master_refs)));universe_clock=dict(event_time=now,source_published_at=now,first_seen_at=now,ingested_at=now)
+    retained_master_refs = {rid for rid,value in retained_identity.items() if value['dataset']!='delisting_sse'}
     universe=UniverseSnapshot(snapshot_id='R03_MASTER_'+digest(masters)[:24],securities=tuple(securities),source_refs=refs,
-        complete=(master_endpoints=={'mainboard_sse','master_szse'} or ts_current_master_complete) and malformed_master_count==0,expected_count=len(masters)+malformed_master_count,**universe_clock)
+        complete=(master_endpoints=={'mainboard_sse','master_szse'} or ts_current_master_complete) and malformed_master_count==0 and not retained_master_refs,expected_count=len(masters)+malformed_master_count,**universe_clock)
     gaps.extend([dict(field='verified_daily_limit_and_exception_status',status='UNAVAILABLE',reason='RAW_PROVIDER_HAS_NO_OFFICIAL_DAILY_LIMIT_OR_VERIFIED_NORMAL_EXCEPTION_FLAG',impact='B_G_M_STRUCTURE_DISCOVERY_NOT_COMPLETE'),
         dict(field='historical_delisting_period',status='UNKNOWN',reason='CURRENT_OFFICIAL_EXCLUSION_SET_AND_CURRENT_SHORT_NAME_RULE_NOT_BACKFILLED',impact='HISTORICAL_QUALIFICATION_UNKNOWN'),
         dict(field='historical_board_identity',status='PARTIAL',reason='CURRENT_EXCHANGE_ROSTER_AND_LISTING_DATE_RETAINED_HISTORICAL_ISST_TRADESTATUS_RETAINED_BOARD_PIT_NOT_CERTIFIED',impact='HISTORICAL_QUALIFICATION'),
@@ -472,18 +511,31 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
     history_identity=history_writer.finish() if history_writer is not None else {}
     bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type=coverage_type,**history_identity)
     if history_store is not None:bundle._history_store=history_store
+    factor_review_report = None
+    if review_factor_conflicts:
+        from .factor_revision_review import apply_factor_revision_reviews
+        bundle,factor_review_report = apply_factor_revision_reviews(bundle,factor_captures,cutoff=now,
+            base_bundle=factor_review_base,progress=progress,**(factor_review_limits or {}))
+        history_identity = {'history_artifact_ref':bundle.history_artifact_ref,
+                            'history_artifact_hash':bundle.history_artifact_hash}
     report=dict(normalization_version='R03_SOURCE_ASSEMBLY_V1',fields_retained=fields,master_identity_count=len(masters),
         mainboard_identity_count=sum(m['board']=='MAIN' for m in masters.values()),current_master_complete=universe.complete,
         raw_instrument_count=len(bars.instrument_ids),themes=len(themes),gaps=gaps,limit_cross_validation=limit_proofs,current_identity_proofs=identity_proofs,
         outcome_only_instrument_ids=sorted(outcome_only),malformed_master_rows=malformed_master_count,funds_public_summary_rows=sum(map(len,fund_records.values())),funds_score_authorized_families=0,
         legitimate_empty_permitted=False,empty_block_reason='UNVERIFIED_REQUIRED_EVENTS_OR_SHARED_COMPONENTS',
         actual_capture_cutoff=now.isoformat(),historical_download_not_historical_publication=True)
+    report['retained_identity_scope'] = {'policy':'PRIOR_INPUT_CURRENT_IDENTITY_NOT_EXTENDED_TO_NEW_SESSION',
+        'reference_session':str(retained_identity_base.observation_date) if retained_identity_base is not None else None,
+        'base_history_artifact_ref':history_base_ref if retained_identity_base is not None else None,
+        'receipts':retained_identity,'receipt_content_and_clocks_modified':False,
+        'unknown_is_not_false':True,'ingestion_clock_is_not_historical_applicability_proof':True}
     from .provider_requests import TUSHARE_ENDPOINTS
     consumers={'tushare_stock_basic':'UniverseSnapshot','tushare_trade_cal':'CALENDAR_CROSSCHECK_REPORT',
         'tushare_daily':'DailyBar/PV/DNA/THEME/OUTCOMES','tushare_daily_basic':'DailyBar.turnover_fraction',
         'tushare_adj_factor':'DailyBar.comparable_OHLC','tushare_stk_limit':'DailyBar.limit_up/limit_down',
         'tushare_stock_st':'SecurityRecord.st','tushare_suspend_d':'SecurityRecord.suspended/dated_source_evidence','tushare_dc_index':'ThemeSnapshot.definition',
         'tushare_dc_member':'ThemeSnapshot.dated_members'}
+    if factor_review_report is not None:report['factor_revision_review']=factor_review_report
     report['additional_source_evidence']=additional_evidence
     report['tushare_calendar_crosscheck']=[{'source_receipt_id':r['request_receipt_id'],
         'sessions':sorted(str(_date(x.get('cal_date'))) for x in r['rows'] if str(x.get('is_open'))=='1'),
@@ -498,6 +550,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
     return bundle,report
 
 def normalize_capture(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None,
-                      coverage_type='PROSPECTIVE_CAPTURED',progress=None):
+                      coverage_type='PROSPECTIVE_CAPTURED',progress=None,retained_identity_base=None):
     return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store,
-        history_base_ref=history_base_ref,coverage_type=coverage_type,progress=progress)[0]
+        history_base_ref=history_base_ref,coverage_type=coverage_type,progress=progress,
+        retained_identity_base=retained_identity_base)[0]

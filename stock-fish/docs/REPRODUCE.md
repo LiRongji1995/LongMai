@@ -10,7 +10,7 @@
 $Python = (Get-Command python).Source # 使用已安装上述依赖的 Python 3.12 环境
 $Evidence = Join-Path $env:TEMP ('r16-r1-reproduce-' + [guid]::NewGuid().ToString('N'))
 New-Item -ItemType Directory -Path $Evidence | Out-Null
-& $Python stock-fish/scripts/run_core_tests.py tests/r05_product/test_r16_r1_contract_regressions.py tests/r05_product/test_r16_r1_production_oracle.py tests/r05_product/test_r16_r1_history.py tests/r05_product/test_r16_r1_e2e.py tests/r05_product/test_r16_r1_dependency_work.py -q
+& $Python stock-fish/scripts/run_core_tests.py tests/r05_product/test_r16_r1_contract_regressions.py tests/r05_product/test_r16_r1_production_oracle.py tests/r05_product/test_r16_r1_history.py tests/r05_product/test_r16_r1_e2e.py tests/r05_product/test_r16_r1_dependency_work.py tests/r05_product/test_r16_r1_live_incremental.py tests/r05_product/test_r16_r1_prospective_audit.py -q
 & $Python stock-fish/scripts/r16_production_oracle.py --output-dir "$Evidence/oracle"
 & $Python stock-fish/scripts/r16_service_path_trace.py --fixture --mode data-ready --output-dir "$Evidence/e2e" --budget-seconds 60
 Push-Location go-core
@@ -43,6 +43,14 @@ $Build = Get-Content "$Evidence/corrected/build-result.json" -Raw | ConvertFrom-
 & $Python stock-fish/scripts/r16_r1_readiness.py --db $Build.target_db --input-id $Build.input_t_plus_1_corrected --cutoff $Build.common_information_cutoff --output "$Evidence/readiness.json" --checkpoint-json "$Evidence/readiness.checkpoint.json" --budget-seconds 1200
 ```
 
+`r16_r1_base_basis_proof.py` 的旧 77bcb67 结果仅验证每行自身旧 refs 的 RAW/factor 算术，未证明跨 complete capture 的修订兼容。保留旧报告和 603083.SH 真实反例；typed review 修复冻结后，先运行 `test_r16_r1_factor_revision_review.py`，再通过上面的原 corrected builder 入口重构；其 opt-in hook 实际调用 `factor_revision_review.py`，无需另造 OHLC 或新 factor 数学规则。复核 normalization report 的 `factor_revision_review`：`reviews` 中旧/新行与 hash、null comparable/basis、真实 revision clocks；`outside_factor_scope` 的独立 provider；`retained_inline_originals` 的原 clocks。然后补跑冲突范围/来源/clocks 证明和受影响 history/PIT/readiness，再测这些新 input IDs 的 E2E/cache/benchmark。不把旧 PASS/旧性能数字搬入新验收。
+
+真实因子修订的独立消费者证明使用以下入口。它只投影冲突证券的原始字段，保留原 calendar/receipts/history ref，调用原 canonical resolver 和生产 `_bar`、return、MA，输出每次实际读取键；它不运行全市场资格或排名。唯一候选和单次视图各限 1000 行，多截止时间重复验证累计限 6000 次，60 秒硬预算。完整 corrected history/readiness 审计仍须另跑。
+
+```powershell
+& $Python stock-fish/scripts/r16_r1_factor_review_witness.py --build-result "$Evidence/e2e-offline/corrected-build/build-result.json" --output "$Evidence/factor-review-proof" --budget-seconds 60 --max-rows 1000 --max-visits 6000
+```
+
 不要使用 `--instrument-limit` 或 `--partition-limit` 宣称全量。history audit 原 invariant FAIL 返回非零；旧坏负例加 `--expect-invariant-failure`，只有真实 invariant 失败且 canonical 复核通过才包装为退出 0，raw 数据结果仍 FAIL。每个全量 audit 用 supervisor 设置初始 1200 秒预算，stdout/stderr/checkpoint 保留；超时保留而非删除重跑。
 
 ```powershell
@@ -51,7 +59,17 @@ $Build = Get-Content "$Evidence/corrected/build-result.json" -Raw | ConvertFrom-
 & $Python stock-fish/scripts/r16_r1_prospective_audit.py --repo-root . --db $ProductionReadOnlyDB --output "$Evidence/prospective" --port 8001 --budget-seconds 300
 ```
 
-live-attempt 与 offline-replay 的原始命令见对应 run.json；offline 不能替代 live。provider 失败预期保留非零并标 NOT_VERIFIED，不以重试全历史消除失败。
+live-attempt 与 offline-replay 的原始命令见对应 run.json；offline 不能替代 live。既有 live-attempt 成功只证明 provider 边界，不能把缺少编排说成 provider 失败。完整有界 live 路径需在最终源码冻结后另起一次新请求：
+
+```powershell
+& $Python stock-fish/scripts/r16_r1_supervise.py --output "$Evidence/live-incremental-process" --registry "$Evidence/live-incremental-registry.json" --label LIVE_INCREMENTAL --budget-seconds 960 --input-manifest $Inventory -- $Python stock-fish/scripts/r16_service_path_trace.py --mode live-incremental --db $Build.target_db --input-id $Build.input_t_plus_1_corrected --inventory $Inventory --output-dir "$Evidence/live-incremental" --budget-seconds 900
+```
+
+该命令只接受已验证且已完成 factor review 的非 official 隔离 corrected 基底，选择真实最近收市日并请求一次 baostock market_daily，再经原 normalizer/history/input 注册进入真实 Daily Primary API、job 和结果序列化。factor review hook 同时启用，但正常增量必须幂等；旧分区出现任何变化都拒绝并要求先独立 rectification。修复 writer/存储增长单独报告，不以放宽守卫把它归为正常日增量。旧 master 的 prior-input reference scope 不自动证明新日资格；严格保留模式在写 row 前降为 UNKNOWN，保留缺价交易日、factor 窗口外 UNKNOWN 和 RECON。eligible=0 仍保存真实 API/持久化结果，但必须标非空 feature 未触达；正例与已有非空 offline/data-ready 证据单列。具体边界见 [R16_R1_LIVE_INCREMENTAL.md](R16_R1_LIVE_INCREMENTAL.md)。
+
+保存 HTTP attempts、SDK operations、调用次数与实际原始 receipt；底层总网络请求不可测为 null/NOT_MEASURED。按 trace 的精确 document_id/job_id/run_id 从隔离库只读回读持久化 bytes/hash 与 RESULT_READY，失败不得写 VERIFIED。provider 实际失败时保留非零与原始错误，不以全历史重试替代。
+
+prospective 修复后的只读审计必须独立重跑：最新 score 分 signal run/epoch/revision group，核对 document/record 绑定，并保留 SQL JSON missing/null presence。父重算 epoch 的 NO_SAVED_SCORE 不得被其他 epoch 的记录填满；不重新计算或修改 official score。旧审计输出保留，saved plan/epoch 仍不证明 live scheduler 已载入或正在执行。
 
 ## 性能与最终检查
 

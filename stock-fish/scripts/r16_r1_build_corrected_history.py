@@ -25,6 +25,8 @@ DEFAULT_T = 'market_63f83798f5098898debce30e0810a0c54f6a0daffdc75ac6404d47d5f848
 DEFAULT_TP1 = 'market_04d95df6f6f699c7f88353d181308159526865877a666a7c3efb84be01b9c08d'
 
 
+FACTOR_REVIEW_LIMITS = {'max_instruments':1,'max_rows':1000,'budget_seconds':180}
+
 def git_metadata():
     root = Path(__file__).resolve().parents[2]
     def run(*args):
@@ -95,13 +97,13 @@ def base_current_price_receipt_ids(base):
     return ids
 
 
-def preserve_t_envelope_with_normalized_history(base,normalized_history):
+def preserve_t_envelope_with_normalized_history(base,normalized_history,factor_review_report=None):
     """Augment real normalized history while preserving the immutable T facts.
 
     Regenerating T prices merely to rebuild security flags can introduce a new
-    factor reference at unchanged revision clocks. Keep the already verified T
-    envelope, current bars and universe byte-for-byte instead of creating that
-    ambiguous recapture. Only genuinely ingested historical rows are new.
+    factor reference at unchanged revision clocks. Keep the T RAW fields and universe. Explicit factor-review rows replace
+    comparable authority at their actual source clocks; unchanged keys retain
+    the exact original current bar. The original input is never modified.
     """
     if not normalized_history.history_artifact_ref:
         raise ValueError('NORMALIZED_HISTORY_REFERENCE_REQUIRED')
@@ -110,7 +112,9 @@ def preserve_t_envelope_with_normalized_history(base,normalized_history):
         if receipt.receipt_id in receipts and receipts[receipt.receipt_id]!=receipt:
             raise ValueError('CORRECTED_T_RECEIPT_IDENTITY_CONFLICT')
         receipts[receipt.receipt_id]=receipt
+    from stockfish_core.yaogu.factor_revision_review import reviewed_t_inline_bars
     corrected = base.model_copy(update={
+        'bars':reviewed_t_inline_bars(base.bars,normalized_history,factor_review_report),
         'history_artifact_ref':normalized_history.history_artifact_ref,
         'history_artifact_hash':normalized_history.history_artifact_hash,
         'receipts':tuple(receipts.values()),'coverage_type':'RECONSTRUCTED_HISTORICAL'})
@@ -223,8 +227,9 @@ def build(source_db, inventory_path, output, *, base_input_id=DEFAULT_T,next_inp
         progress({'stage':'CORRECTED_T_NORMALIZATION_START','historical_price_captures':len(historical_prices)})
         normalized_t_history,normalization_t = normalize_capture_with_report(corrected_t_sources,base.observation_date,
             actual_cutoff,base.sessions,history_store=HistoryArtifactStore(store),
-            history_base_ref=base.history_artifact_ref,coverage_type='RECONSTRUCTED_HISTORICAL',progress=progress)
-        corrected_t = preserve_t_envelope_with_normalized_history(base,normalized_t_history)
+            history_base_ref=base.history_artifact_ref,coverage_type='RECONSTRUCTED_HISTORICAL',progress=progress,
+            review_factor_conflicts=True,factor_review_base=base,factor_review_limits=FACTOR_REVIEW_LIMITS)
+        corrected_t = preserve_t_envelope_with_normalized_history(base,normalized_t_history,normalization_t.get('factor_revision_review'))
         corrected_t_id = register_isolated_input(store,corrected_t,metadata={
             'parent_input_id':base_input_id,'rectification_policy':'RECONSTRUCTED_T_HISTORICAL_ADDITIONS_COMMON_INFORMATION_CUTOFF'})
         progress({'stage':'CORRECTED_T_DATED_ELIGIBILITY_CHECK_START'})
@@ -237,14 +242,15 @@ def build(source_db, inventory_path, output, *, base_input_id=DEFAULT_T,next_inp
         selection['corrected_t_selected_assets'] = old_metadata_assets
         selection['corrected_t_current_price_assets'] = current_t_assets
         selection['corrected_t_current_price_receipt_ids'] = current_t_ids
-        selection['corrected_t_current_price_policy'] = 'VERIFIED_ORIGINAL_CURRENT_CAPTURE_PRESERVED_IN_T_ENVELOPE_NOT_RENORMALIZED'
-        selection['corrected_t_envelope_policy'] = 'ONLY_REAL_NORMALIZED_HISTORY_REF_HASH_RECEIPT_UNION_AND_RECON_COVERAGE_CHANGE'
+        selection['corrected_t_current_price_policy'] = 'ORIGINAL_CURRENT_RAW_PRESERVED; VISIBLE_FACTOR_CONFLICT_REVIEW_APPLIED'
+        selection['corrected_t_envelope_policy'] = 'RAW_AND_QUALIFICATION_PRESERVED; EXPLICIT_FACTOR_REVIEW_REVISIONS_REPLACE_ONLY_COMPARABLE_AUTHORITY'
         selection['corrected_t_historical_price_receipt_ids'] = sorted(historical_ids)
         selection['comparison_policy'] = 'ORIGINAL_T_TO_CORRECTED_T_IS_REPAIR; CORRECTED_T_TO_T_PLUS_1_IS_NEW_DAY_AT_COMMON_ACTUAL_CUTOFF'
         progress({'stage':'NORMALIZATION_START','source_results':len(next_delta),'base_ref':corrected_t.history_artifact_ref})
         corrected,normalization = normalize_capture_with_report(next_delta,old_next.observation_date,actual_cutoff,sessions,
             history_store=HistoryArtifactStore(store),history_base_ref=corrected_t.history_artifact_ref,
-            coverage_type='RECONSTRUCTED_HISTORICAL',progress=progress)
+            coverage_type='RECONSTRUCTED_HISTORICAL',progress=progress,review_factor_conflicts=True,
+            factor_review_base=corrected_t,factor_review_limits=FACTOR_REVIEW_LIMITS)
         progress({'stage':'NORMALIZATION_DONE','history_artifact_ref':corrected.history_artifact_ref})
         corrected_id = register_isolated_input(store,corrected,metadata={
             'parent_input_id':base_input_id,'old_bad_input_id':next_input_id,

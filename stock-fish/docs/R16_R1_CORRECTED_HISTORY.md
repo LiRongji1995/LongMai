@@ -35,20 +35,30 @@ Four inputs are kept distinguishable:
 1. Original T, with unchanged bytes and history.
 2. A T wrapper changing only the coverage label. This policy change may change
    PIT fingerprints and is not a performance baseline for ordinary increment.
-3. Corrected T preserves the original T input envelope, current bars and universe
-   exactly. It updates only the history ref/hash produced by the real normalizer
-   for the two historical additions, the verified receipt union and RECON coverage.
-   The complete original T current capture is verified but not renormalized.
+3. Corrected T retains the original T current RAW prices, qualification fields
+   and their original source evidence. The real normalizer builds the two
+   historical additions, with verified receipt union and RECON coverage.
+   This is not a promise to preserve every comparable field exactly. A complete
+   new factor capture that contradicts the old basis requires a typed review in
+   its proven affected range: comparable values become UNKNOWN with the old
+   RAW/basis authority, new conflicting receipt and actual dependency clocks.
+   The complete original T current RAW capture is verified without inventing a
+   recapture. The typed review uses the module and exact fields below; final
+   acceptance still requires a source-frozen rerun.
    One preserved precommit counterexample omitted T current states and produced
    zero eligible stocks. A second regenerated current prices with an additional
    factor receipt at unchanged revision clocks: 600415.SH became CONFLICT even
    though all numerical fields were identical. The resolver correctly remains
-   fail-closed. Preserving the original current envelope avoids inventing this
-   recapture while keeping the real newly normalized historical rows. The builder
-   requires nonzero original/corrected eligible sets to agree and verifies their
-   current flags and RAW fields through production resolution.
+   fail-closed. Retaining the original RAW/qualification evidence avoids this
+   invented recapture; it does not authorize keeping known comparable values
+   after a separately proven factor contradiction. The builder requires nonzero
+   original/corrected eligible sets to agree and verifies their current flags
+   and RAW fields through production resolution. These qualification checks do
+   not prove factor-revision compatibility.
 4. Corrected T+1: corrected T as the base plus the complete new-day capture and
-   original T+1 metadata/receipts, through the same normalizer.
+   original T+1 metadata/receipts, through the same normalizer. Its base must
+   include the same verified historical review knowledge before ordinary
+   append stability is claimed.
 
 Corrected T and T+1 use one actual reconstruction cutoff later than all selected
 capture completion clocks. Their source receipt clocks remain original. The
@@ -67,6 +77,40 @@ observation date and aware source/registration instants, never hash text.
 Different bases tied at the same clocks are ambiguous and require an explicit
 selection. Artifact integrity does not establish DAILY/PV/MA readiness. Each
 row's price basis is preserved; consumer source/basis checks remain mandatory.
+
+The saved 77bcb67 base-basis proof checked each member against that member's
+own referenced RAW/factor series. Its arithmetic PASS did not test consistency
+with other complete captures containing later contradictory knowledge. The
+real 603083.SH counterexample demonstrates this missing proof boundary. Preserve
+that original report and its counterexample; do not relabel the old result as
+full cross-capture compatibility. The bounded typed-review repair must preserve
+RAW/qualification, downgrade only proven conflicting comparable fields, and
+carry all real supporting/rejecting refs and clocks. No fabricated later clock
+may be used to force a winner; same-instant ambiguity remains fail-closed.
+`factor_revision_review.py` uses the existing `factor_series` series-level
+refusal. It never substitutes the new factor's numeric value. Scope is restricted
+to the `DEFINITION:iid:` basis or explicit dependency on `adjustment_factors`
+from the same factor provider. Independent Tushare/direct-capture authority is
+reported in `outside_factor_scope` and retained. The implementation selects one
+canonical visible revision per key and rejects equal-clock ambiguity.
+
+The new typed DailyBar sets `comparable_open/high/low/close` and
+`comparable_basis` to null/None. It retains RAW, qualification and `event_time`,
+unions old/new source refs, and sets `source_published_at`, `first_seen_at` and
+`ingested_at` to each field's actual dependency maximum. It requires strict
+revision advance and visible parents; build time cannot manufacture authority.
+Any substituted original inline variants absent from history are first retained
+verbatim with their original clocks, including variants older than an already
+UNKNOWN selected row. T-envelope replacement is bound to the actual selected
+key/hash in `reviews` or `already_unknown`, never any UNKNOWN row sharing an iid.
+The report retains full `old_row`/`review_row`, hashes, `changed_fields`, refs,
+`actual_revision_clocks`, `retained_inline_originals` and bounded read counters.
+
+The existing per-row arithmetic proof and cross-capture compatibility proof
+remain separate obligations. Affected source-frozen acceptance is pending.
+Rectification writer/storage cost is reported separately from normal day append;
+the live path requires an already reviewed corrected base and still rejects
+every old-partition change rather than treating repair as normal increment.
 
 RAW × backward factor now requires a complete factor window containing both the
 immutable left anchor and the price session. A capture ending on 09-08 cannot
@@ -122,4 +166,7 @@ and Market/Sector/Capital/Theme/Limit/Auction/Intraday contexts remain
 `NOT_VERIFIED_NOT_RUN` until the production strategy run is separately audited.
 Final acceptance requires post-commit rebuilt artifacts, full validation and
 the independently measured E2E/performance evidence; precommit smoke is not
-that acceptance evidence. `MARKET_EDGE=NOT_ESTABLISHED` remains unchanged.
+that acceptance evidence. After the factor-review implementation is frozen,
+rerun the affected corrected build, cross-capture review proof, history/PIT and
+readiness comparisons, then E2E/cache/benchmark cases using those changed input
+IDs. Do not reuse old numbers or the old arithmetic PASS as final closure. `MARKET_EDGE=NOT_ESTABLISHED` remains unchanged.

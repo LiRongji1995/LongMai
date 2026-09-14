@@ -24,7 +24,7 @@ import time
 import traceback
 import zlib
 
-VERSION = "R16_R1_READ_ONLY_PROSPECTIVE_AUDIT_V1"
+VERSION = "R16_R1_READ_ONLY_PROSPECTIVE_AUDIT_V2_EPOCH_SCOPED"
 STAGE = "STAGE_AWARE_MOMENTUM_V2"
 HORIZONS = (1, 2, 3, 4, 5, 10, 20)
 METRICS = ("close_reference_change", "next_open_gap", "mfe_bound", "mae_bound",
@@ -312,9 +312,20 @@ class Audit:
         proof = self.verify_run_blob(document_id)
         paths = ["$." + key for key in RUN_FIELDS] + ["$.results." + STAGE + "." + key for key in STAGE_FIELDS]
         values = self.projection_values(document_id, paths)
-        run = dict(zip(RUN_FIELDS, values[:len(RUN_FIELDS)]))
-        stage = dict(zip(STAGE_FIELDS, values[len(RUN_FIELDS):]))
-        run["results"] = {STAGE: stage}
+        # json_extract maps both absent and explicit JSON null to None.
+        # Preserve presence for production dict.get(key, fallback) semantics.
+        presence_paths = ["$.results." + STAGE, *paths]
+        presence_query = ("SELECT json_array(" + ",".join("json_type(payload,?)" for _ in presence_paths)
+                          + ") FROM documents WHERE namespace=? AND document_id=?")
+        presence = json.loads(self.con.execute(presence_query, (*presence_paths, RUNS_NS, document_id)).fetchone()[0])
+        stage_kind, kinds = presence[0], presence[1:]
+        if stage_kind not in (None, "null", "object"):
+            raise ValueError("STAGE_RESULT_NOT_OBJECT_OR_NULL:" + document_id)
+        run = {key: value for key, value, kind in zip(RUN_FIELDS, values[:len(RUN_FIELDS)], kinds[:len(RUN_FIELDS)])
+               if kind is not None}
+        stage = {key: value for key, value, kind in zip(STAGE_FIELDS, values[len(RUN_FIELDS):], kinds[len(RUN_FIELDS):])
+                 if kind is not None}
+        run["results"] = {STAGE: stage} if stage_kind == "object" else ({STAGE: None} if stage_kind == "null" else {})
         args = []
         for key in ITEM_FIELDS:
             args.extend([key, "$." + key])
@@ -332,8 +343,11 @@ class Audit:
             except (KeyError, ValueError, zlib.error) as exc:
                 detail_errors.append({"instrument_id": item.get("instrument_id"), "detail_ref": item.get("detail_ref"), "error": str(exc)})
             items.append(item)
-        stage["items"] = items
+        if stage_kind == "object":
+            stage["items"] = items
         proof.update(projection_fields=paths, item_projection_fields=list(ITEM_FIELDS),
+                      projection_presence_sql=presence_query, projection_presence_paths=presence_paths,
+                      projection_json_types=presence,
                      parent_projection_sql="SELECT json_extract(payload," + ",".join("?" for _ in paths) + ") FROM documents WHERE namespace=? AND document_id=?",
                      item_projection_sql=query, item_projection_parameters=[*args, "$.results." + STAGE + ".items", RUNS_NS, document_id],
                      projected_item_count=len(items), missing_or_invalid_details=detail_errors,
@@ -371,7 +385,7 @@ class Audit:
                 "verification": "NOT_VERIFIED_DETAIL_CLOSURE" if errors else "PRODUCTION_PURE_CHECKER_OVER_HASH_BOUND_AUDIT_FIELDS",
                 "decision_cutoff": run.get("decision_cutoff") or run.get("cutoff"),
                 "actual_decision_cutoff": pv.get("actual_decision_cutoff"),
-                "stage_counts": (run["results"][STAGE] or {}).get("counts"),
+                "stage_counts": (run["results"].get(STAGE) or {}).get("counts"),
                 "primary_registry_rows": [p for p in small["stage_aware_prospective_primary_runs"] if p.get("run_id") == row["document_id"]],
             })
         self.write_json("parent_projections_manifest.json", self.projections)
@@ -502,43 +516,79 @@ class Audit:
         parent_checks = {row["run_id"]: row for row in rechecks}
         for document in small["recommendation_score_revisions"]:
             group = document.get("score_revision_group_id") or document.get("score_run_id")
+            # Never allow a reused/malformed group ID to merge runs or epochs.
+            group_scope = (document.get("signal_run_id"), document.get("validation_epoch_id"), group)
             try:
                 rank = (int(document.get("revision") or 0), aware(document["generated_at"]), document["score_run_id"])
             except (KeyError, ValueError):
                 issues.append({"score_run_id": document.get("score_run_id"), "reason": "INVALID_REVISION_CLOCK"})
                 rank = (-1, datetime.min.replace(tzinfo=timezone.utc), str(document.get("score_run_id")))
-            if group not in by_group or rank > by_group[group][0]:
-                by_group[group] = (rank, document)
+            if group_scope not in by_group or rank > by_group[group_scope][0]:
+                by_group[group_scope] = (rank, document)
             for record in document.get("records") or []:
-                parent = parent_checks.get(record.get("signal_run_id"))
-                eligible = bool(parent and parent.get("rechecked_official_signal_countable") is True
-                                and record.get("validation_epoch_id") == parent["frozen_identity"]["validation_epoch_id"]
+                binding_reasons = []
+                if not document.get("signal_run_id") or record.get("signal_run_id") != document.get("signal_run_id"):
+                    binding_reasons.append("SCORE_DOCUMENT_RECORD_SIGNAL_RUN_MISMATCH")
+                if not document.get("validation_epoch_id") or record.get("validation_epoch_id") != document.get("validation_epoch_id"):
+                    binding_reasons.append("SCORE_DOCUMENT_RECORD_EPOCH_MISMATCH")
+                if binding_reasons:
+                    issues.append({"score_run_id": document.get("score_run_id"), "score_id": record.get("score_id"),
+                                   "reasons": binding_reasons})
+                parent = parent_checks.get(document.get("signal_run_id"))
+                eligible = bool(not binding_reasons and parent and parent.get("rechecked_official_signal_countable") is True
                                 and document.get("validation_epoch_id") == parent["frozen_identity"]["validation_epoch_id"])
                 records.append({"score_run_id": document.get("score_run_id"), "revision": document.get("revision"),
                     "score_revision_group_id": group, "generated_at": document.get("generated_at"),
+                    "document_signal_run_id": document.get("signal_run_id"),
+                    "document_validation_epoch_id": document.get("validation_epoch_id"),
+                    "document_record_identity_matches": not binding_reasons,
+                    "document_record_binding_reasons": binding_reasons,
                     "saved_official_validation_signal_countable": document.get("official_validation_signal_countable"),
                     "parent_rechecked_countable_and_epoch_matches": eligible,
                     **{key: record.get(key) for key in SCORE_FIELDS}})
+        latest = [value[1] for _, value in sorted(by_group.items(), key=lambda item: text_json(item[0]))]
+        latest_ids = {row.get("score_run_id") for row in latest}
+        for record in records:
+            record["is_latest_in_document_run_epoch_revision_group"] = record["score_run_id"] in latest_ids
         self.write_json("all_saved_score_records.json", {"authority": "EXISTING_IMMUTABLE_SCORE_REVISIONS_ONLY_NO_SCORE_COMPUTATION",
             "records": records, "issues": issues, "count": len(records)})
-        latest = [value[1] for _, value in sorted(by_group.items())]
         observed = defaultdict(set)
+        documents_by_scope = defaultdict(list)
         for document in latest:
-            observed[(document.get("signal_run_id"), document.get("validation_epoch_id"))].update(
-                row.get("horizon") for row in document.get("records") or [] if type(row.get("horizon")) is int)
+            scope = (document.get("signal_run_id"), document.get("validation_epoch_id"))
+            documents_by_scope[scope].append(document)
+            observed[scope].update(row.get("horizon") for row in document.get("records") or []
+                                   if type(row.get("horizon")) is int and row["horizon"] > 0)
+        scopes = set(documents_by_scope)
+        # A frozen/computed parent epoch still needs an explicit NO_SAVED_SCORE
+        # inventory even if this run only has scores in another saved epoch.
+        scopes.update((rid, parent_checks[rid]["frozen_identity"]["validation_epoch_id"]) for rid in runs)
         coverage = []
-        for rid, run in runs.items():
-            epoch = (run.get("prospective_validation") or {}).get("validation_epoch_id") or run.get("validation_epoch_id")
+        for rid, epoch in sorted(scopes, key=text_json):
+            run = runs.get(rid) or {}
+            parent = parent_checks.get(rid)
+            frozen_epoch = (parent or {}).get("frozen_identity", {}).get("validation_epoch_id")
+            saved_epoch = (run.get("prospective_validation") or {}).get("validation_epoch_id") or run.get("validation_epoch_id")
+            epoch_verification = ("NOT_VERIFIED_PARENT" if parent is None else
+                                  "MATCHES_RECHECKED_FROZEN_EPOCH" if epoch == frozen_epoch else
+                                  "SAVED_SCORE_EPOCH_DIFFERS_FROM_RECHECKED_PARENT")
             for horizon in sorted(set(HORIZONS) | observed.get((rid, epoch), set())):
-                saved = [row for document in latest if document.get("signal_run_id") == rid
-                         for row in document.get("records") or [] if row.get("horizon") == horizon]
+                raw_saved = [row for document in documents_by_scope.get((rid, epoch), [])
+                             for row in document.get("records") or [] if type(row.get("horizon")) is int and row["horizon"] == horizon]
+                saved = [row for row in raw_saved if rid and epoch and row.get("signal_run_id") == rid
+                         and row.get("validation_epoch_id") == epoch]
                 coverage.append({"run_id": rid, "validation_epoch_id": epoch, "horizon": horizon,
-                    "saved_score_record_count": len(saved), "status": "SAVED_RECORDS" if saved else "NO_SAVED_SCORE",
+                    "parent_saved_validation_epoch_id": saved_epoch,
+                    "parent_rechecked_validation_epoch_id": frozen_epoch, "epoch_verification": epoch_verification,
+                    "saved_score_record_count": len(saved), "raw_saved_score_record_count": len(raw_saved),
+                    "excluded_document_record_identity_mismatch_count": len(raw_saved) - len(saved),
+                    "status": "SAVED_RECORDS" if saved else "NOT_VERIFIED_SCORE_RECORD_BINDING" if raw_saved else "NO_SAVED_SCORE",
                     "score_status_counts": dict(Counter(str(row.get("score_status")) for row in saved))})
-        self.write_json("latest_score_revision_groups.json", {"selection_policy": "LATEST_PER_IMMUTABLE_REVISION_GROUP_NOT_ONE_D1_HEADLINE",
+        self.write_json("latest_score_revision_groups.json", {"selection_policy": "LATEST_PER_RUN_EPOCH_IMMUTABLE_REVISION_GROUP_NOT_ONE_D1_HEADLINE",
             "score_run_ids": [row.get("score_run_id") for row in latest], "horizon_inventory": coverage})
         return {"saved_revision_documents": len(small["recommendation_score_revisions"]), "all_record_count": len(records),
                 "latest_group_score_run_ids": [row.get("score_run_id") for row in latest], "horizon_inventory": coverage,
+                "official_complete_records_scope": "ALL_SAVED_REVISIONS_NOT_UNIQUE_SIGNAL_DAYS_OR_LATEST_ONLY",
                 "official_complete_records": [row for row in records if row.get("official_recommendation_score") is True
                     and row.get("saved_official_validation_signal_countable") is True and row.get("score_status") == "COMPLETE"
                     and row.get("parent_rechecked_countable_and_epoch_matches") is True],
