@@ -1,0 +1,263 @@
+{
+  "facts": {
+    "row_count": 1300,
+    "facts_hash": "9034151d5802a4a8a4aacafb9642fee3ec0778378e66e7283a3b3640746e825a",
+    "latest_session": "2025-11-14",
+    "latest_facts": [
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "open",
+        "value": 13.15,
+        "exact_value": {
+          "numerator": "263",
+          "denominator": "20"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "high",
+        "value": 13.332,
+        "exact_value": {
+          "numerator": "3333",
+          "denominator": "250"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "low",
+        "value": 13.0185,
+        "exact_value": {
+          "numerator": "26037",
+          "denominator": "2000"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "close",
+        "value": 13.2,
+        "exact_value": {
+          "numerator": "66",
+          "denominator": "5"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "prev_close",
+        "value": 13.15,
+        "exact_value": {
+          "numerator": "263",
+          "denominator": "20"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "comparable_price",
+        "value": 13.2,
+        "exact_value": {
+          "numerator": "66",
+          "denominator": "5"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "price_basis",
+        "value": "TEST_FIXTURE_NO_ACTION",
+        "exact_value": null,
+        "status": "KNOWN",
+        "reason": null,
+        "unit": null
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "ret1_pct",
+        "value": -56.0,
+        "exact_value": {
+          "numerator": "-56",
+          "denominator": "1"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "percent"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "MA20",
+        "value": 13.5675,
+        "exact_value": {
+          "numerator": "5427",
+          "denominator": "400"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST000",
+        "session": "2025-11-14",
+        "field": "MA60",
+        "value": 12.005833,
+        "exact_value": {
+          "numerator": "14407",
+          "denominator": "1200"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "open",
+        "value": 14.256,
+        "exact_value": {
+          "numerator": "1782",
+          "denominator": "125"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "high",
+        "value": 14.7258,
+        "exact_value": {
+          "numerator": "73629",
+          "denominator": "5000"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "low",
+        "value": 14.1134,
+        "exact_value": {
+          "numerator": "70567",
+          "denominator": "5000"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "close",
+        "value": 14.58,
+        "exact_value": {
+          "numerator": "729",
+          "denominator": "50"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "prev_close",
+        "value": 14.256,
+        "exact_value": {
+          "numerator": "1782",
+          "denominator": "125"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "comparable_price",
+        "value": 14.58,
+        "exact_value": {
+          "numerator": "729",
+          "denominator": "50"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "price_basis",
+        "value": "TEST_FIXTURE_NO_ACTION",
+        "exact_value": null,
+        "status": "KNOWN",
+        "reason": null,
+        "unit": null
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "ret1_pct",
+        "value": 2.2727,
+        "exact_value": {
+          "numerator": "25",
+          "denominator": "11"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "percent"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "MA20",
+        "value": 12.9405,
+        "exact_value": {
+          "numerator": "25881",
+          "denominator": "2000"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      },
+      {
+        "instrument": "TEST001",
+        "session": "2025-11-14",
+        "field": "MA60",
+        "value": 11.8035,
+        "exact_value": {
+          "numerator": "23607",
+          "denominator": "2000"
+        },
+        "status": "KNOWN",
+        "reason": null,
+        "unit": "CNY"
+      }
+    ]
+  }
+}

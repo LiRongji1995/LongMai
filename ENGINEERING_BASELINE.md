@@ -1,3 +1,9 @@
+# R16-R1 可信证据修订（2026-09-14）
+
+本节优先于 R16 历史记录。严格 Contract/Comparator、原生产 Python oracle 与事实注入、真实本地 normalization 修复、外层请求到结果 trace，以及有限 source/dependency 优化见 [R16-R1 工程说明](stock-fish/docs/R16_R1_ENGINEERING.md)。版本、未知域和复现命令在该说明中明确；最终通过数、真实历史与性能判断只引用 post-commit Review Bundle。业务公式、正式信号/score 与 Go 生产边界保持。
+
+---
+
 # R16 Go 迁移 Phase 0 契约与可观测边界（2026-09-10）
 
 本节优先于下方历史记录。R16 建立 Go 迁移前的 Python 权威契约、正确性不变量、E2E trace 和 shadow equivalence 基础；生产计算仍由 Python `STAGE_AWARE_MOMENTUM_V2` 执行，Go core 仅为 Phase 0 影子事实切片与契约校验骨架，未接入正式荐股路径。策略语义、Focus gate、排序、阈值和 `DAILY_RECOMMENDATION_SCORE_V1` 公式均未修改，`MARKET_EDGE=NOT_ESTABLISHED` 保持。

@@ -54,11 +54,32 @@ def register_candidate_routes(app, service):
 
     @app.post('/api/daily-primary/run')
     def start_daily_primary_run():
-        value = body()
-        if set(value) - {'input_id', 'observation_date'}:
-            raise ValueError('select an existing market input only')
-        parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
-        return accepted(service.submit_daily_primary_strategy(input_id=value.get('input_id'), observation_date=parsed_date))
+        from .e2e_tracing import DailyPrimaryTrace, current_trace
+        trace = current_trace()
+        if trace is None:
+            trace = DailyPrimaryTrace(command='POST /api/daily-primary/run',
+                boundary='API_ROUTE_ENTRY_TO_FIRST_EXPORT_RESPONSE_BYTES')
+        service.daily_traces.add(trace)  # Register before an immediately finishing worker can run.
+        try:
+            with trace.activate():
+                with trace.stage('USER_REQUEST_COMMAND_START', metadata={'http_boundary': 'AFTER_SECURITY_GATE'}):
+                    value = body()
+                    if set(value) - {'input_id', 'observation_date'}:
+                        raise ValueError('select an existing market input only')
+                    parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
+                    job = service.submit_daily_primary_strategy(input_id=value.get('input_id'), observation_date=parsed_date)
+                    with trace.stage('REQUEST_ACCEPTED_RESPONSE_SERIALIZATION') as span:
+                        response, code = accepted(job)
+                        span['bytes_written'] = len(response.get_data())
+                        response.headers['X-Daily-Trace-Id'] = trace.trace_id
+                service._finalize_daily_trace_failure(trace)
+                persistence = service.daily_traces.persist(trace, 'REQUEST_ACCEPTED')
+                response.headers['X-Trace-Persistence'] = persistence['status']
+                return response, code
+        except BaseException:
+            trace.fail('REQUEST_FAILED')
+            service.daily_traces.persist(trace, 'REQUEST_FAILED')
+            raise
 
     @app.get('/api/strategy-experiments/<run_id>/summary')
     def strategy_experiment_summary(run_id):
@@ -73,12 +94,37 @@ def register_candidate_routes(app, service):
 
     @app.get('/api/strategy-experiments/<run_id>/export')
     def strategy_experiment_export(run_id):
-        if request.args.get('format', 'json') == 'csv':
-            return Response('\ufeff' + service.export_strategy_experiment_csv(run_id, strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection')),
-                            mimetype='text/csv; charset=utf-8',
-                            headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.csv'})
-        return Response(service.export_strategy_experiment_json(run_id, strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection')), mimetype='application/json',
-                        headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.json'})
+        import hashlib
+        trace = service.daily_traces.for_export(run_id)
+        try:
+            with trace.activate():
+                with trace.stage('REPORT_RENDER_API_RESPONSE', run_id=run_id) as response_span:
+                    with trace.stage('CANDIDATE_EXPORT', run_id=run_id, metadata={'includes_saved_result_serialization': True}):
+                        if request.args.get('format', 'json') == 'csv':
+                            payload = '\ufeff' + service.export_strategy_experiment_csv(run_id,
+                                strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection'))
+                            response = Response(payload, mimetype='text/csv; charset=utf-8',
+                                headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.csv'})
+                        else:
+                            payload = service.export_strategy_experiment_json(run_id,
+                                strategy_id=request.args.get('strategy_id'), selection=request.args.get('selection'))
+                            response = Response(payload, mimetype='application/json',
+                                headers={'Content-Disposition': 'attachment; filename=r05-strategy-experiment.json'})
+                    raw = response.get_data()
+                    response_span['bytes_written'] = len(raw)
+                with trace.stage('RESULT_READY', run_id=run_id) as span:
+                    span['bytes_written'] = len(raw)
+                    span['metadata']['response_sha256'] = hashlib.sha256(raw).hexdigest()
+                    span['metadata']['boundary'] = 'FLASK_RESPONSE_BYTES_AVAILABLE; TCP_AND_USER_RECEIPT_NOT_MEASURED'
+            trace.finish(run_id=run_id)
+            persistence = service.daily_traces.persist(trace, 'RESULT_READY')
+            response.headers['X-Daily-Trace-Id'] = trace.trace_id
+            response.headers['X-Trace-Persistence'] = persistence['status']
+            return response
+        except BaseException:
+            trace.fail('EXPORT_FAILED')
+            service.daily_traces.persist(trace, 'EXPORT_FAILED')
+            raise
 
     def parse_horizons(value):
         if value in (None, '', []):

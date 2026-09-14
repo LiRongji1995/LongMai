@@ -61,13 +61,26 @@ def _theme_type(name,endpoint):
     if re.search(r'融资融券|沪股通|深股通|沪深股通|昨日|涨停|连板|次新|新股|ST板|风险警示|MSCI|富时|标准普尔|沪深300|上证50|中证\d+|机构重仓|社保重仓|基金重仓|证金持股|专精特新',name,re.I):return 'QUALIFICATION'
     return 'EVENT'
 
-def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None):
+from .e2e_tracing import traced_stage
+
+
+@traced_stage('HISTORY_ARTIFACT_UPDATE', scope='ACTUAL_RAW_NORMALIZATION_AND_HISTORY_WRITES')
+def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None,
+                                  coverage_type='PROSPECTIVE_CAPTURED',progress=None):
     day=_date(observation_date)
     if day is None or now.tzinfo is None:raise ValueError('OBSERVATION_DATE_AND_AWARE_CLOCK_REQUIRED')
+    if coverage_type not in {'PROSPECTIVE_CAPTURED','RECONSTRUCTED_HISTORICAL','TEST_FIXTURE'}:
+        raise ValueError('EXPLICIT_SUPPORTED_COVERAGE_TYPE_REQUIRED')
     sessions=tuple(sorted({_date(s) for s in sessions if _date(s) is not None and _date(s)<=day}))
     if not sessions or sessions[-1]!=day:raise ValueError('OBSERVATION_MUST_BE_VERIFIED_TRADING_SESSION')
     usable=[];receipts={};source_by={};gaps=[]
     for result in results:
+        # This adapter has no authenticated retraction contract. Never silently
+        # append a tombstone while resurrecting a retained base observation.
+        if any(result.get(key) for key in ('retractions','tombstones','retracted','tombstone')) or any(
+                row.get('tombstone') or row.get('retracted') or str(row.get('operation','')).upper() in {'DELETE','RETRACT'}
+                for row in result.get('rows',()) if isinstance(row,dict)):
+            raise ValueError('SOURCE_RETRACTION_UNSUPPORTED_REQUIRES_EXPLICIT_REVIEW')
         rid=result.get('request_receipt_id');source=next((r for r in result.get('receipts',[]) if r.get('receipt_id')==rid),None)
         if not source:continue
         if datetime.fromisoformat(source['ingested_at'])>now:raise ValueError('CUTOFF_PRECEDES_ACTUAL_CAPTURE_COMPLETION')
@@ -239,7 +252,10 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
     securities=RecentRows();bars=RecentRows();limit_proofs=[];identity_proofs=[];fields=dict(historical_isST=0,historical_tradestatus=0,reference_prev_close=0,turnover_fraction=0,
         adjusted_comparable_rows=0,raw_rows=len(history),raw_mainboard_rows=0,verified_current_limit_rows=0,direct_published_limit_rows=0,
         vendor_pool_rule_cross_validated_limit_rows=0,outcome_only_raw_rows=0)
-    for iid,master in sorted(observations.items()):
+    for processed,(iid,master) in enumerate(sorted(observations.items()),1):
+        if progress is not None and (processed == 1 or processed % 64 == 0 or processed == len(observations)):
+            progress({'stage':'NORMALIZE_INSTRUMENTS','processed':processed,'total':len(observations),
+                      'bar_rows':bars.total,'gap_count':len(gaps)})
         listing=master['listed_on'];basic_pair=basic.get(iid)
         if listing is None and basic_pair:listing=_date(basic_pair[0].get('ipoDate'))
         if listing is None:
@@ -454,7 +470,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
             definition_version='FUNDS_EVIDENCE_V1',money_status='UNAVAILABLE',disclosure_status='WINDOW_UNVERIFIED',disclosure_complete=False,
             source_refs=refs,public_summary_records=records,reason_codes=['DISCLOSURE_WINDOW_AND_COMMON_THREE_SESSION_AUTHORITY_REQUIRED'],**_derived_clock(source_by,refs,day)))
     history_identity=history_writer.finish() if history_writer is not None else {}
-    bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type='PROSPECTIVE_CAPTURED',**history_identity)
+    bundle=MarketInput(observation_date=day,sessions=sessions,universe=universe,bars=tuple(bars),themes=tuple(themes),receipts=tuple(receipts.values()),funds=tuple(funds),coverage_type=coverage_type,**history_identity)
     if history_store is not None:bundle._history_store=history_store
     report=dict(normalization_version='R03_SOURCE_ASSEMBLY_V1',fields_retained=fields,master_identity_count=len(masters),
         mainboard_identity_count=sum(m['board']=='MAIN' for m in masters.values()),current_master_complete=universe.complete,
@@ -481,5 +497,7 @@ def normalize_capture_with_report(results,observation_date,now,sessions,*,histor
     if history_writer is not None:report['history_artifact']={**history_identity,'artifact_version':'CONTENT_ADDRESSED_HISTORY_ARTIFACT_V1','base_history_artifact_ref':history_base_ref,'total_bar_rows':bars.total,'daily_recent_bar_rows':len(bars),'new_row_bytes':history_writer.added_bytes,'new_rows':history_writer.added_rows}
     return bundle,report
 
-def normalize_capture(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None):
-    return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store,history_base_ref=history_base_ref)[0]
+def normalize_capture(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None,
+                      coverage_type='PROSPECTIVE_CAPTURED',progress=None):
+    return normalize_capture_with_report(results,observation_date,now,sessions,history_store=history_store,
+        history_base_ref=history_base_ref,coverage_type=coverage_type,progress=progress)[0]

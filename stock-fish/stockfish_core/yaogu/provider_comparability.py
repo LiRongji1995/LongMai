@@ -73,9 +73,27 @@ def comparable_rows(iid, raw_rows, adjusted_rows, captures):
         days = [d for d, _ in series]
         basis = DEFINITION + ':' + iid + ':' + digest([series[0][0], str(series[0][1])])[:20]
         converted = {}
+        # A complete factor snapshot certifies only its requested end date.
+        # Extending it to a later session invents absence of corporate actions.
+        coverage_windows = [(date.fromisoformat(str(c[3])), date.fromisoformat(str(c[2])))
+                            for c in captures if len(c) > 3 and c[2] and c[3]]
+        coverage_ends = [end for start, end in coverage_windows]
+        covered_to = max(coverage_ends) if coverage_ends else None
+        beyond_coverage = False
+        unproven_window = False
         for session, (raw, raw_ref) in raw_rows:
+            if covered_to is not None and session > covered_to:
+                beyond_coverage = True
+                continue
             index = bisect_right(days, session.isoformat()) - 1
             if index < 0:
+                continue
+            # A late, disjoint empty window cannot certify the unobserved gap.
+            # Require a complete snapshot containing the immutable left anchor
+            # and the raw session. Missing window bounds are not evidence.
+            anchor = date.fromisoformat(series[0][0])
+            if not any(start <= anchor <= session <= end for start, end in coverage_windows):
+                unproven_window = True
                 continue
             factor = series[index][1]
             prices = {name: positive(raw.get(name)) for name in ('open', 'high', 'low', 'close')}
@@ -91,7 +109,9 @@ def comparable_rows(iid, raw_rows, adjusted_rows, captures):
                 refs.append(observed[1])
             converted[session] = ({**{'comparable_' + name: value for name, value in values.items()},
                                    'comparable_basis': basis}, tuple(dict.fromkeys(refs)))
-        return converted, 'VERIFIED_PROVIDER_FACTOR_DEFINITION' if len(converted) == len(raw_rows) else 'FACTOR_LEFT_BOUNDARY_OR_RAW_GAP'
+        return converted, ('FACTOR_CAPTURE_END_BEFORE_RAW_SESSION' if beyond_coverage else
+                           'FACTOR_COMPLETE_ANCHORED_WINDOW_NOT_PROVEN' if unproven_window else
+                           'VERIFIED_PROVIDER_FACTOR_DEFINITION' if len(converted) == len(raw_rows) else 'FACTOR_LEFT_BOUNDARY_OR_RAW_GAP')
     # No factor source: a single capture is internally comparable. Different
     # captures are deliberately distinct until factor evidence links them.
     converted = {}

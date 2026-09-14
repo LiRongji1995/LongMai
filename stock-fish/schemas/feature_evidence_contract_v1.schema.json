@@ -3,7 +3,10 @@
   "$id": "https://github.com/LiRongji1995/stockfish-qlib-quant-system/schemas/feature_evidence_contract_v1.schema.json",
   "title": "FEATURE_EVIDENCE_CONTRACT_V1",
   "type": "object",
-  "required": ["manifest", "facts"],
+  "required": [
+    "manifest",
+    "facts"
+  ],
   "properties": {
     "manifest": {
       "type": "object",
@@ -20,29 +23,84 @@
         "source_manifest_hash",
         "provenance_root_hash",
         "builder_version",
-        "coverage_summary"
+        "coverage_summary",
+        "schema_revision"
       ],
       "properties": {
-        "contract_version": { "const": "FEATURE_EVIDENCE_CONTRACT_V1" },
-        "snapshot_id": { "type": "string", "minLength": 1 },
-        "as_of_session": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "decision_cutoff": { "type": "string", "minLength": 1 },
-        "created_at": { "type": "string", "minLength": 1 },
-        "universe_version": { "type": ["string", "null"] },
-        "universe_hash": { "type": ["string", "null"] },
-        "calendar_revision": { "type": "string", "minLength": 1 },
-        "source_policy_revision": { "type": ["string", "null"] },
-        "feature_spec_revision": { "type": "string", "minLength": 1 },
-        "source_manifest_hash": { "type": "string", "minLength": 1 },
-        "provenance_root_hash": { "type": "string", "minLength": 1 },
-        "builder_version": { "type": "string", "minLength": 1 },
-        "coverage_summary": { "type": "object" }
+        "contract_version": {
+          "const": "FEATURE_EVIDENCE_CONTRACT_V1"
+        },
+        "snapshot_id": {
+          "type": "string",
+          "minLength": 1
+        },
+        "as_of_session": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "decision_cutoff": {
+          "type": "string",
+          "minLength": 1
+        },
+        "created_at": {
+          "type": "string",
+          "minLength": 1
+        },
+        "universe_version": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "universe_hash": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "calendar_revision": {
+          "type": [
+            "string",
+            "null"
+          ],
+          "minLength": 1
+        },
+        "source_policy_revision": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "feature_spec_revision": {
+          "type": "string",
+          "minLength": 1
+        },
+        "source_manifest_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "provenance_root_hash": {
+          "type": "string",
+          "minLength": 1
+        },
+        "builder_version": {
+          "type": "string",
+          "minLength": 1
+        },
+        "coverage_summary": {
+          "type": "object"
+        },
+        "schema_revision": {
+          "const": "FEATURE_EVIDENCE_SCHEMA_R16_R1"
+        }
       },
       "additionalProperties": true
     },
     "facts": {
       "type": "array",
-      "items": { "$ref": "#/$defs/fact" }
+      "items": {
+        "$ref": "#/$defs/fact"
+      }
     }
   },
   "$defs": {
@@ -58,27 +116,1147 @@
         "field",
         "value_json",
         "status",
-        "provenance"
+        "provenance",
+        "schema_revision",
+        "value",
+        "reason",
+        "unit",
+        "eligibility_reason"
       ],
       "properties": {
-        "contract_version": { "const": "FEATURE_EVIDENCE_CONTRACT_V1" },
-        "instrument": { "type": "string", "minLength": 1 },
-        "exchange": { "enum": ["SSE", "SZSE", "BSE", "UNKNOWN"] },
-        "session": { "type": "string", "pattern": "^\\d{4}-\\d{2}-\\d{2}$" },
-        "eligibility": { "type": "string", "minLength": 1 },
-        "eligibility_reason": { "type": ["string", "null"] },
-        "field_group": {
-          "enum": ["PRICE", "RETURN", "ROLLING", "ACTIVITY", "MARKET", "SECTOR", "CAPITAL", "EVENT"]
+        "contract_version": {
+          "const": "FEATURE_EVIDENCE_CONTRACT_V1"
         },
-        "field": { "type": "string", "minLength": 1 },
+        "instrument": {
+          "type": "string",
+          "minLength": 1
+        },
+        "exchange": {
+          "enum": [
+            "SSE",
+            "SZSE",
+            "BSE",
+            "UNKNOWN"
+          ]
+        },
+        "session": {
+          "type": "string",
+          "pattern": "^\\d{4}-\\d{2}-\\d{2}$"
+        },
+        "eligibility": {
+          "type": "string",
+          "minLength": 1
+        },
+        "eligibility_reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "field_group": {
+          "enum": [
+            "PRICE",
+            "RETURN",
+            "ROLLING",
+            "ACTIVITY",
+            "MARKET",
+            "SECTOR",
+            "CAPITAL",
+            "EVENT"
+          ]
+        },
+        "field": {
+          "type": "string",
+          "minLength": 1
+        },
         "value": {},
-        "value_json": { "type": "string" },
-        "status": { "enum": ["KNOWN", "UNKNOWN", "NOT_APPLICABLE", "UNVERIFIED"] },
-        "unit": { "type": ["string", "null"] },
-        "provenance": { "type": "object" },
-        "source_label": { "type": "string" }
+        "value_json": {
+          "type": "string"
+        },
+        "status": {
+          "enum": [
+            "KNOWN",
+            "UNKNOWN",
+            "NOT_APPLICABLE",
+            "UNVERIFIED"
+          ]
+        },
+        "unit": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "provenance": {
+          "type": "object"
+        },
+        "source_label": {
+          "type": "string"
+        },
+        "schema_revision": {
+          "const": "FEATURE_EVIDENCE_SCHEMA_R16_R1"
+        },
+        "reason": {
+          "type": [
+            "string",
+            "null"
+          ]
+        },
+        "exact_value": {
+          "type": [
+            "object",
+            "null"
+          ],
+          "required": [
+            "numerator",
+            "denominator"
+          ],
+          "properties": {
+            "numerator": {
+              "type": "string",
+              "pattern": "^-?(0|[1-9][0-9]*)$"
+            },
+            "denominator": {
+              "type": "string",
+              "pattern": "^[1-9][0-9]*$"
+            }
+          },
+          "additionalProperties": false
+        }
       },
-      "additionalProperties": true
+      "additionalProperties": false,
+      "allOf": [
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "open"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "high"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "low"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "close"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "prev_close"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "comparable_price"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "PRICE"
+              },
+              "field": {
+                "const": "price_basis"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "RETURN"
+              },
+              "field": {
+                "const": "ret1_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "RETURN"
+              },
+              "field": {
+                "const": "ret3_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "RETURN"
+              },
+              "field": {
+                "const": "ret5_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "RETURN"
+              },
+              "field": {
+                "const": "ret10_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "RETURN"
+              },
+              "field": {
+                "const": "ret20_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ROLLING"
+              },
+              "field": {
+                "const": "MA20"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ROLLING"
+              },
+              "field": {
+                "const": "MA60"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ROLLING"
+              },
+              "field": {
+                "const": "MA120"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ROLLING"
+              },
+              "field": {
+                "const": "MA250"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ACTIVITY"
+              },
+              "field": {
+                "const": "amount_cny"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "CNY"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ACTIVITY"
+              },
+              "field": {
+                "const": "turnover_fraction"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "fraction"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ACTIVITY"
+              },
+              "field": {
+                "const": "activity"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "ACTIVITY"
+              },
+              "field": {
+                "const": "A"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "ratio"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "EVENT"
+              },
+              "field": {
+                "const": "limit_event_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "EVENT"
+              },
+              "field": {
+                "const": "close_limit_up"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "EVENT"
+              },
+              "field": {
+                "const": "touched_limit_up"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "EVENT"
+              },
+              "field": {
+                "const": "close_limit_down"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "boolean"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "MARKET"
+              },
+              "field": {
+                "const": "relative_strength_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "MARKET"
+              },
+              "field": {
+                "const": "RS_market_1d_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "SECTOR"
+              },
+              "field": {
+                "const": "RS_sector_1d_pct"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": "percent"
+              },
+              "value": {
+                "anyOf": [
+                  {
+                    "type": [
+                      "null",
+                      "number"
+                    ]
+                  },
+                  {
+                    "type": "string",
+                    "pattern": "^-?(?:0|[1-9][0-9]*)(?:\\.[0-9]+)?(?:[eE][+-]?[0-9]+)?$"
+                  }
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "MARKET"
+              },
+              "field": {
+                "const": "market_context_state"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "MARKET"
+              },
+              "field": {
+                "const": "market_compatibility_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "SECTOR"
+              },
+              "field": {
+                "const": "sector_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "CAPITAL"
+              },
+              "field": {
+                "const": "funds_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "field_group": {
+                "const": "CAPITAL"
+              },
+              "field": {
+                "const": "capital_evidence_status"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "unit": {
+                "const": null
+              },
+              "value": {
+                "type": [
+                  "null",
+                  "string"
+                ]
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "enum": [
+                  "UNKNOWN",
+                  "NOT_APPLICABLE"
+                ]
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "type": "null"
+              },
+              "value_json": {
+                "const": "null"
+              },
+              "reason": {
+                "type": "string",
+                "minLength": 1
+              }
+            }
+          }
+        },
+        {
+          "if": {
+            "properties": {
+              "status": {
+                "const": "KNOWN"
+              }
+            }
+          },
+          "then": {
+            "properties": {
+              "value": {
+                "not": {
+                  "type": "null"
+                }
+              },
+              "provenance": {
+                "required": [
+                  "status",
+                  "pit_status",
+                  "source_refs",
+                  "visible_at",
+                  "decision_cutoff"
+                ],
+                "properties": {
+                  "status": {
+                    "const": "KNOWN"
+                  },
+                  "pit_status": {
+                    "const": "VISIBLE"
+                  },
+                  "source_refs": {
+                    "type": "array",
+                    "minItems": 1,
+                    "items": {
+                      "type": "string",
+                      "minLength": 1
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+      ]
     }
-  }
+  },
+  "description": "Strict R16_R1 revision. Legacy V1 remains readable for audit but fails this acceptance schema. Python/Go semantic validators additionally enforce unique keys, exact/display consistency, finite numeric values and visible-at cutoff."
 }

@@ -1,0 +1,15 @@
+[
+  {
+    "instrument": "600000.SH",
+    "exchange": "SSE",
+    "session": "2026-09-08",
+    "open": null,
+    "high": null,
+    "low": null,
+    "close": null,
+    "prev_close": null,
+    "comparable_close": null,
+    "comparable_basis": "TEST",
+    "source_revision_id": "A"
+  }
+]

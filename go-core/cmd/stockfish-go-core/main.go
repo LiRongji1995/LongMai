@@ -1,7 +1,6 @@
 package main
 
 import (
-	"encoding/json"
 	"flag"
 	"log"
 	"os"
@@ -22,10 +21,13 @@ func main() {
 		log.Fatal(err)
 	}
 	var rows []shadow.SourceRow
-	if err := json.Unmarshal(raw, &rows); err != nil {
+	if err := contract.DecodeJSONStrict(raw, &rows); err != nil {
 		log.Fatal(err)
 	}
-	facts := shadow.BuildFacts(rows)
+	facts, err := shadow.BuildFacts(rows)
+	if err != nil {
+		log.Fatal(err)
+	}
 	file, err := os.Create(*output)
 	if err != nil {
 		log.Fatal(err)

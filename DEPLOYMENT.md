@@ -1,3 +1,9 @@
+# R16-R1 修订（2026-09-14）
+
+本节优先于下方历史部署记录。生产仍为 Python Daily Primary；Go 只作验证切片，未切换服务或正式 DB。严格 contract、真实外层 trace、PIT instant resolver 与隔离 corrected history 的边界见 [R16-R1 工程说明](stock-fish/docs/R16_R1_ENGINEERING.md)。派生版本为 `DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_R1_PIT_INSTANT`，旧缓存保留。验收采用冻结 commit 后的外置 evidence，不把源码说明视为全量 PASS。只读审计不得调用会写计划/epoch 的 candidate-schedule 路径。
+
+---
+
 # R16 Go 迁移 Phase 0 部署补充（2026-09-10）
 
 本节优先于下方历史部署记录。R16 不切换运行服务、不更换权威数据库、不启用 Go 生产计算。当前实际仓库仍为 `D:/stockfish-qlib-quant-system`，业务目录 `stock-fish`，权威数据库仍是 `stock-fish/data/stockfish.sqlite3`，state root 仍是 `stock-fish/data/core`；不提交真实 DB、state、cache、日志、模型或 review bundle。

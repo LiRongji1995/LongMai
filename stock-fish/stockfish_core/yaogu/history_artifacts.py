@@ -119,6 +119,12 @@ class HistoryArtifactStore:
     def __init__(self, store):
         self.store = store
         self._manifests = {}
+        if getattr(store, 'read_only', False):
+            with store.transaction(write=False) as con:
+                present = {row[0] for row in con.execute("SELECT name FROM sqlite_master WHERE type='table'")}
+            if not {'history_evidence_rows', 'history_partition_members', 'documents'} <= present:
+                raise IntegrityError('HISTORY_READ_ONLY_SCHEMA_MISSING')
+            return
         with store.transaction() as con:
             con.execute('CREATE TABLE IF NOT EXISTS history_evidence_rows (row_hash TEXT PRIMARY KEY, kind TEXT NOT NULL, instrument_id TEXT NOT NULL, session TEXT NOT NULL, payload TEXT NOT NULL)')
             con.execute('CREATE TABLE IF NOT EXISTS history_partition_members (partition_hash TEXT NOT NULL, row_hash TEXT NOT NULL, kind TEXT NOT NULL, instrument_id TEXT NOT NULL, session TEXT NOT NULL, PRIMARY KEY(partition_hash,row_hash))')
@@ -129,6 +135,8 @@ class HistoryArtifactStore:
                     con.execute(f"CREATE TRIGGER IF NOT EXISTS {table}_no_{action.lower()} BEFORE {action} ON {table} BEGIN SELECT RAISE(ABORT, 'immutable history artifact'); END")
 
     def writer(self, receipts=(), *, base_ref=None):
+        if getattr(self.store, 'read_only', False):
+            raise IntegrityError('READ_ONLY_HISTORY_WRITER_REJECTED')
         return HistoryWriter(self, receipts, base_ref=base_ref)
 
     def manifest(self, ref, expected_hash=None):
@@ -200,6 +208,9 @@ class HistoryArtifactStore:
         return manifest
 
 
+from .e2e_tracing import traced_stage
+
+
 class HistoryWriter:
     """Disk staging holds descriptors; Python memory is at most one input row."""
     def __init__(self, owner, receipts=(), *, base_ref=None):
@@ -223,6 +234,7 @@ class HistoryWriter:
         self.added_rows += inserted; self.added_bytes += len(payload.encode()) * inserted
         self.con.execute(f'INSERT OR IGNORE INTO {self.table} VALUES(?,?,?,?)', (row_hash, kind, value.instrument_id, session))
 
+    @traced_stage('HISTORY_ARTIFACT_COMMIT', includes='ROW_COMMIT_AND_IMMUTABLE_MANIFEST_WRITE')
     def finish(self):
         try:
             partitions = {p['session']: p for p in self.base['partitions']} if self.base else {}

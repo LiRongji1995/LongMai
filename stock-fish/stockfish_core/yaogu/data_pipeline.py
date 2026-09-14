@@ -180,34 +180,34 @@ class MainboardPipeline:
             from .history_artifacts import HistoryArtifactStore
             self.history_store = HistoryArtifactStore(service.store)
 
-    def _latest_prior_history_artifact(self, day):
+    def _latest_prior_history_artifact(self, day, *, cutoff=None):
         if self.service is None or not hasattr(self.service, 'store'):
             return None
-        candidates = []
-        offset = 0
-        store = self.service.store
-        while True:
-            rows = store.list_documents('candidate_input_indexes', limit=1000, offset=offset)
-            for row in rows:
-                payload = row['payload']
-                observed = _date(payload.get('observation_date'))
-                input_id = payload.get('input_id') or row['document_id']
-                if observed is None or observed >= day or not input_id:
-                    continue
-                document = store.get_document('candidate_inputs', input_id)
-                if document and document.get('history_artifact_ref') and document.get('history_artifact_hash'):
-                    candidates.append({
-                        'input_id': input_id,
-                        'observation_date': str(observed),
-                        'history_artifact_ref': document['history_artifact_ref'],
-                        'history_artifact_hash': document['history_artifact_hash'],
-                    })
-            if len(rows) < 1000:
-                break
-            offset += len(rows)
-        if not candidates:
+        from .history_base_selection import select_prior_history_base
+        allowed = {'baostock','tushare'}
+        if getattr(self.service,'allow_test_fixture',False):
+            allowed.add('TEST_FIXTURE')
+        return select_prior_history_base(self.service.store,observation_date=day,
+            cutoff=cutoff or datetime.now(SH),allowed_price_providers=allowed)
+
+    def _validate_history_base_for_results(self, selected, results, day, cutoff):
+        if selected is None:
             return None
-        return max(candidates, key=lambda item: (item['observation_date'], item['input_id']))
+        from .history_base_selection import validate_history_base
+        raw = self.service.store.get_document_bytes('candidate_inputs', selected['input_id'],
+            expected_hash=selected['input_id'].removeprefix('market_'))
+        if raw is None:
+            raise ValueError('SELECTED_HISTORY_BASE_INPUT_MISSING')
+        base = MarketInput.model_validate_json(raw)
+        if base.history_artifact_ref != selected['history_artifact_ref'] or base.history_artifact_hash != selected['history_artifact_hash']:
+            raise ValueError('SELECTED_HISTORY_BASE_IDENTITY_CHANGED')
+        # Selection already verified the immutable partition descriptors.  The
+        # exact actual captured schemas must pass again at each normalization.
+        proof = validate_history_base(base, self.history_store, observation_date=day, cutoff=cutoff,
+            allowed_price_providers=set(selected['price_providers']), verify_partitions=False,
+            incoming_price_receipts=results)
+        proof['partition_integrity'] = selected['partition_integrity']
+        return {**selected, **proof}
 
     def capture(self, output_dir, now, *, observation_date=None, checkpoint=lambda: None, progress=lambda _: None):
         if now.tzinfo is None or now.utcoffset() is None:
@@ -262,7 +262,7 @@ class MainboardPipeline:
             structure_start = sessions[max(0, len(sessions)-22)]
             v2_long_history_start = history_start
             demand = published_outcome_demand(self.service, day, sessions)
-            history_base = self._latest_prior_history_artifact(day) if self.history_store is not None else None
+            history_base = self._latest_prior_history_artifact(day,cutoff=datetime.now(SH)) if self.history_store is not None else None
             missing_listing=[]
             for r in initial:
                 if r.get('endpoint') not in ('mainboard_sse','master_szse'):
@@ -417,7 +417,10 @@ class MainboardPipeline:
                 normalization_options['history_store'] = self.history_store
             if history_base is not None and 'history_base_ref' in signature:
                 normalization_options['history_base_ref'] = history_base['history_artifact_ref']
-            bundle = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions, **normalization_options)
+            captured_results = queue.results()
+            normalization_cutoff = datetime.now(SH)
+            history_base = self._validate_history_base_for_results(history_base, captured_results, day, normalization_cutoff)
+            bundle = normalize(captured_results, observation_date=day, now=normalization_cutoff, sessions=sessions, **normalization_options)
             if isinstance(bundle, tuple):
                 bundle, gaps = bundle
             else:
@@ -441,7 +444,10 @@ class MainboardPipeline:
                 for iid in candidate_ids:
                     funds.append(add('money_flow', {'stock':iid[:6], 'market':iid[-2:].lower()}, 'OptionalFundsCapture', current=True))
             drain('OptionalFundsCapture', funds)
-            normalized = normalize(queue.results(), observation_date=day, now=datetime.now(SH), sessions=sessions, **normalization_options)
+            captured_results = queue.results()
+            normalization_cutoff = datetime.now(SH)
+            history_base = self._validate_history_base_for_results(history_base, captured_results, day, normalization_cutoff)
+            normalized = normalize(captured_results, observation_date=day, now=normalization_cutoff, sessions=sessions, **normalization_options)
             if isinstance(normalized, tuple):
                 bundle, gaps = normalized
             else:

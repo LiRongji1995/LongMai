@@ -1,0 +1,65 @@
+{
+  "reason": "Correct field provenance to union all consumed window parent refs and maximum row/parent visibility; previous non-current dependencies were linked by token hash but omitted from top-level proof. Existing inputs and numeric/status/reason expectations are unchanged. This is an explicit precommit correction, never automatic verification behavior.",
+  "cases": [
+    {
+      "case_id": "NORMAL",
+      "old_facts_hash": "299989796dec2b8f3dad4d88efce5bcbfa0e81280050b6f373f8534b567e0a51",
+      "new_facts_hash": "3046cf5f62aa3dc75542ca8d273199e1e68a8d14863e8f1e9868145b01a36c1e",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "TRADING_SESSION_GAP",
+      "old_facts_hash": "18e4e7fb0387e89e19a33f348d75d03d6300214fc3154477bbab6eb4ca2d5eeb",
+      "new_facts_hash": "1f3bcd3fef5ec993e065db03bda7ef90c16af579c62f57883e9462794e1e8225",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "MISSING_UNKNOWN",
+      "old_facts_hash": "baa625adb51117c08832f0173631e91b50c36d71bff3f17c9647ace73929432c",
+      "new_facts_hash": "9abfbe33e0ea9e205058c2031d8c9a92cd730adf77d960d220a567c4a517bf66",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "SOURCE_REVISION",
+      "old_facts_hash": "88e941725410aa061e2b3abe5a9b5412bccd1ab119be404d8f84a83b51f76948",
+      "new_facts_hash": "b8a0cb473402bad6d29ea12639ab0b76463f14b453759fa0dfce12c57be37d2a",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "HISTORICAL_PIT_FUTURE_SOURCE",
+      "old_facts_hash": "b6f64f8c0ce1748050fcbfb40f9263da56c23bbffee9e2a9638538f05224a0bd",
+      "new_facts_hash": "b511693f93ced5b70c6892c9467bb451bf4d4a2cfa52ac7d6f473164ecd1d940",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "INLINE_HIGHER_REVISION",
+      "old_facts_hash": "5beb1b2b93b1d3b7fb23321defb79775f0966eef6c6ebb149bb5b022a6d9a4d2",
+      "new_facts_hash": "9034151d5802a4a8a4aacafb9642fee3ec0778378e66e7283a3b3640746e825a",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "UNIT_AND_ROUNDING",
+      "old_facts_hash": "ac9c00254908bba224a9d1b6361f7927be49550fe889de5ab6a121447eafd274",
+      "new_facts_hash": "7fa9a33378731b76b796928c80d0543d631817e398300bb16eb82be4a01dd69f",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "BASIS_UNSPECIFIED_NEGATIVE",
+      "old_facts_hash": "bd8debd8bc68cfc6d581ef96664fd50cf019b67c81a656071b8894b9a11498da",
+      "new_facts_hash": "9a14911e85ee791a96370ec6dc1001935deba7eb3bb8c6c699e68d69743efdad",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "CROSS_OFFSET_REVISION",
+      "old_facts_hash": "2c37c0ae0b0fe8257e555611e368eb9be275a73b3a5b5f75470c2c982fbfe087",
+      "new_facts_hash": "2a9a3ba194cbb1f2d242f4f556a5c5bf3733c7e4c38ed00aabc76d5668c0446c",
+      "numeric_status_reason_unchanged": true
+    },
+    {
+      "case_id": "BUSINESS_SLICE_RANK_TIE",
+      "old_facts_hash": "fde183e2e8e42f8adec025a5866b8f021ff4f47a4e280b9300c8d37d9de8bda9",
+      "new_facts_hash": "d22c901d5d66730112d700cd1dcc9fccfb9cf3ed96889d0ac7a8aff906ae9a3e",
+      "numeric_status_reason_unchanged": true
+    }
+  ]
+}

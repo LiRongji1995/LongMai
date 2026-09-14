@@ -102,6 +102,7 @@ class JobService:
         self.owner_id = f"worker_{uuid4().hex}"
         self._lock = threading.RLock()
         self._handlers: dict[str, Callable[[JobContext], Any]] = {}
+        self._terminal_observers: dict[str, Callable[[dict], Any]] = {}
         self._futures: dict[str, Future] = {}
         self._closed = False
         self._storage_failure = False
@@ -128,11 +129,26 @@ class JobService:
         connection.execute("INSERT INTO job_events(job_id,state,progress,recorded_at,detail) VALUES(?,?,?,?,?)",
                            (job_id, state, progress, utc_now().isoformat(), canonical_json(detail)))
 
-    def register(self, kind: str, worker: Callable[[JobContext], Any]) -> None:
+    def register(self, kind: str, worker: Callable[[JobContext], Any], *, on_terminal=None) -> None:
         if not isinstance(kind, str) or not kind or not callable(worker):
             raise ValueError("kind and callable worker are required")
         with self._lock:
             self._handlers[kind] = worker
+            if on_terminal is not None:
+                if not callable(on_terminal):
+                    raise ValueError("terminal observer must be callable")
+                self._terminal_observers[kind] = on_terminal
+
+    def _notify_terminal(self, job_id):
+        # Observability runs after the domain transaction. It must never turn a
+        # committed result into a failed job or mask a storage failure.
+        try:
+            job = self.get(job_id)
+            observer = self._terminal_observers.get(job['kind']) if job else None
+            if observer is not None and job['state'] in TERMINAL_STATES:
+                observer(job)
+        except Exception:
+            pass
 
     def create(self, kind: str, payload: dict, *, job_id: str | None = None,
                retry_of: str | None = None) -> dict:
@@ -240,6 +256,8 @@ class JobService:
                            "risk", "recommendation", "tracker", "jobs", "storage"}
                 error["component"] = exc.component if isinstance(exc.component, str) and exc.component in allowed else "core"
             self._finish_safely(job_id, "FAILED", error=error)
+        finally:
+            self._notify_terminal(job_id)
 
     def _finish_safely(self, job_id: str, state: str, **kwargs) -> None:
         try:
@@ -361,6 +379,7 @@ class JobService:
             connection.execute("UPDATE jobs SET state=?,cancel_requested=1,updated_at=?,finished_at=?,revision=revision+1 WHERE job_id=?",
                                (state, now, now if state == "CANCELLED" else None, job_id))
             self._event(connection, job_id, state, row["progress"], {})
+        self._notify_terminal(job_id)
         return self.get(job_id)
 
     def retry(self, job_id: str, worker: Callable[[JobContext], Any] | None = None) -> dict:

@@ -371,6 +371,40 @@ class SQLiteStore:
                     'checked_at': checked_at, 'scope': scope}
 
 
+class ReadOnlySQLiteStore(SQLiteStore):
+    """Existing SQLite evidence, without directory creation or migrations.
+
+    URI mode=ro protects the database even when a caller obtains a connection;
+    query_only also prohibits temporary writes. Never use immutable=1 on a live
+    WAL database because it can hide committed WAL content.
+    """
+    read_only = True
+
+    def __init__(self, path: str | Path, *, timeout: float = 15.0):
+        self.path = Path(path).resolve(strict=True)
+        self.timeout = timeout
+        self._health_lock = RLock()
+        if timeout <= 0 or not self.path.is_file():
+            raise ValueError("existing database and positive timeout required")
+
+    def _connect(self):
+        connection = sqlite3.connect(self.path.as_uri() + '?mode=ro', uri=True,
+                                     timeout=self.timeout, isolation_level=None)
+        connection.row_factory = sqlite3.Row
+        connection.execute('PRAGMA query_only=ON')
+        return connection
+
+    @contextmanager
+    def transaction(self, *, write: bool = True):
+        if write:
+            raise StorageError('READ_ONLY_EVIDENCE_STORE_WRITE_REJECTED')
+        with super().transaction(write=False) as connection:
+            yield connection
+
+    def _migrate(self):
+        raise StorageError('READ_ONLY_EVIDENCE_STORE_MIGRATION_REJECTED')
+
+
 def _validate_page(limit: int, offset: int) -> None:
     if isinstance(limit, bool) or not isinstance(limit, int) or not 1 <= limit <= 10000:
         raise ValueError("limit must be between 1 and 10000")

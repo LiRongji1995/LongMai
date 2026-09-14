@@ -1,3 +1,9 @@
+# R16-R1 当前修订入口（2026-09-14）
+
+本节优先于下方 R16 历史快照。当前工作限 R16-R1：Contract/Comparator 修复、生产 oracle、corrected 历史、真实外层 trace 和有限重复工作优化；不开始 R17、不调选股语义、不启用 Go 生产。详见 [工程边界](R16_R1_ENGINEERING.md)、[生产 oracle](R16_R1_PRODUCTION_ORACLE.md)、[历史构建](R16_R1_CORRECTED_HISTORY.md) 与 [复现](REPRODUCE.md)。resolver/派生缓存使用 R16_R1_PIT_INSTANT 身份，旧输入和证据只读保留。实际 readiness/official/score/运行进程必须读取本次 post-commit 审计，不能沿用下文日期化数值。
+
+---
+
 # StockRecommendation 中文项目综述
 
 本文是无需旧聊天历史即可阅读的项目讨论材料。日常执行先读短版 [Codex 日常研究操作协议](CODEX_DAILY_RESEARCH.md)；用户入口见 [README](../README.md)，项目执行约定见 [AGENTS.md](../AGENTS.md)。本文描述已经存在的规则、入口与限制，不授权改变策略，也不等于独立源码审计。

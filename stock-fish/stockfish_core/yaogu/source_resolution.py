@@ -7,7 +7,7 @@ must be derived from the same resolved rows.
 from __future__ import annotations
 
 from collections import defaultdict
-from datetime import date, datetime
+from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
@@ -17,7 +17,7 @@ from .contracts import digest
 from .history_artifacts import daily_bar_payload, history_receipts
 
 
-CANONICAL_SOURCE_RESOLVER_VERSION = "CANONICAL_RESOLVED_SOURCE_VIEW_V1"
+CANONICAL_SOURCE_RESOLVER_VERSION = "CANONICAL_RESOLVED_SOURCE_VIEW_V2_R16_R1_PIT_INSTANT"
 PRICE_SOURCE_REQUIREMENT = "PRICE_DAILY_BAR_WITH_COMPARABLE_AND_ACTIVITY_FIELDS"
 MISSING_VISIBLE_BAR = "MISSING_VISIBLE_BAR"
 CONFLICTING_PRICE_REVISION = "CONFLICTING_PRICE_REVISION"
@@ -67,7 +67,16 @@ def _row_hash(value, provided=None):
 
 
 def _revision_key(row):
-    return tuple(str(row.get(field)) for field in REVISION_FIELDS)
+    # Offset-bearing timestamps must sort by instant. Keep the original text in
+    # source_revision; only the comparison key is normalized to UTC.
+    values = []
+    for field in REVISION_FIELDS:
+        value = row.get(field)
+        clock = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+        if clock.tzinfo is None or clock.utcoffset() is None:
+            raise ValueError("SOURCE_REVISION_REQUIRES_AWARE_TIME")
+        values.append(clock.astimezone(timezone.utc).isoformat(timespec="microseconds"))
+    return tuple(values)
 
 
 def _value_projection(row):
@@ -112,13 +121,14 @@ def _provenance_for(row, receipts):
     }
 
 
-def _candidate(source_kind, row, row_hash, receipts):
+def _candidate(source_kind, row, row_hash, receipts, *, revision_key=None, provenance=None):
     values = _value_projection(row)
-    provenance = _provenance_for(row, receipts)
+    provenance = _provenance_for(row, receipts) if provenance is None else provenance
+    revision_key = _revision_key(row) if revision_key is None else revision_key
     return {
         "source_kind": source_kind,
         "row_hash": row_hash,
-        "revision_key": _revision_key(row),
+        "revision_key": revision_key,
         "source_revision": {
             "source_published_at": str(row.get("source_published_at")),
             "ingested_at": str(row.get("ingested_at")),
@@ -130,7 +140,7 @@ def _candidate(source_kind, row, row_hash, receipts):
         "dependency_material_hash": digest({
             "source_kind": source_kind,
             "row_hash": row_hash,
-            "revision_key": _revision_key(row),
+            "revision_key": revision_key,
             "provenance": provenance,
             "values": values,
         }),
@@ -233,7 +243,7 @@ def _read_history_rows(ctx, wanted_sessions, wanted_ids, consider):
 def canonical_price_source_view(ctx, source_sessions, instrument_ids):
     """Return one PIT-resolved price source view for planning and computation.
 
-    Non-selected lower revisions remain candidates but do not enter dependency
+    All revisions undergo PIT validation. Lower revisions do not enter dependency
     identity, so harmless inline rows do not invalidate cached payloads.  A
     selected revision, conflict, or disappearance changes the token.
     """
@@ -257,6 +267,9 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
     receipts = _receipt_index(ctx.bundle)
     grouped = defaultdict(list)
     rejected = []
+    provenance_cache = {}  # Scoped to this immutable receipt index, never global.
+    work = {"rows_considered": 0, "pit_checks": 0, "candidate_constructions": 0,
+            "lower_revision_pruned_after_pit": 0, "provenance_constructions": 0, "provenance_reuses": 0}
 
     def consider(value, source_kind, provided_hash=None):
         row = daily_bar_payload(value)
@@ -264,6 +277,7 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
         iid = row.get("instrument_id")
         if session not in wanted_sessions or iid not in wanted_ids:
             return
+        work["rows_considered"] += 1
         row_hash = _row_hash(value, provided_hash)
         if row.get("quality") == "INVALID":
             rejected.append({
@@ -275,6 +289,7 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
                 "reason_codes": ["INVALID_PRICE_QUALITY"],
             })
             return
+        work["pit_checks"] += 1
         proof = ctx.resolver.resolve(row, instrument_id=iid, session=session, require_session=True, record_hash=row_hash)
         if not proof.allowed:
             rejected.append({
@@ -286,7 +301,24 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
                 "reason_codes": list(proof.reason_codes),
             })
             return
-        grouped[(iid, session)].append(_candidate(source_kind, row, row_hash, receipts))
+        # The resolver above records used/rejected evidence even for lower
+        # revisions. Prune only the expensive candidate after that decision.
+        revision = _revision_key(row)
+        choices = grouped[(iid, session)]
+        if choices and revision < choices[0]["revision_key"]:
+            work["lower_revision_pruned_after_pit"] += 1
+            return
+        if choices and revision > choices[0]["revision_key"]:
+            choices.clear()
+        refs = tuple(sorted(row.get("source_refs") or []))
+        if refs not in provenance_cache:
+            provenance_cache[refs] = _provenance_for(row, receipts)
+            work["provenance_constructions"] += 1
+        else:
+            work["provenance_reuses"] += 1
+        choices.append(_candidate(source_kind, row, row_hash, receipts,
+                                  revision_key=revision, provenance=provenance_cache[refs]))
+        work["candidate_constructions"] += 1
 
     if ctx.bundle.history_artifact_ref:
         _read_history_rows(ctx, wanted_sessions, wanted_ids, consider)
@@ -324,6 +356,7 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
         "rejected_count": len(rejected),
         "conflict_count": len(conflicts),
         "source_mode": "CANONICAL_RESOLVED_PRICE_SOURCE_VIEW",
+        "work_counters": work,
     }
     if cache is not None:
         cache[key] = result

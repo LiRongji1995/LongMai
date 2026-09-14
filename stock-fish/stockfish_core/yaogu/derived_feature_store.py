@@ -21,7 +21,7 @@ from .contracts import digest
 
 LEGACY_STORE_VERSION = "DERIVED_FEATURE_STORE_V1"
 STORE_VERSION = "DERIVED_FEATURE_STORE_V2"
-FEATURE_SPEC_VERSION = "DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_CANONICAL_SOURCE"
+FEATURE_SPEC_VERSION = "DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_R1_PIT_INSTANT"
 PRICE_BASE_FEATURE_SPEC_ID = "DERIVED_PRICE_FEATURE_SPEC_V1"
 ROLLING_PRICE_FEATURE_SPEC_ID = "ROLLING_PRICE_FEATURE_SPEC_V1"
 ACTIVITY_FEATURE_SPEC_ID = "ACTIVITY_FEATURE_SPEC_V1"
@@ -356,7 +356,7 @@ def _source_token_for_view(source_view, iid, source_session):
     }
 
 
-def _source_summary_for_range(source_view, source_mode, iid, source_sessions):
+def _source_summary_for_range(source_view, source_mode, iid, source_sessions, *, token_cache=None, work=None):
     hasher = hashlib.sha256()
     hasher.update(_json({"source_mode": source_mode, "instrument_id": iid}).encode("utf-8") + b"\n")
     first_token = None
@@ -364,7 +364,13 @@ def _source_summary_for_range(source_view, source_mode, iid, source_sessions):
     missing_count = 0
     conflict_count = 0
     for source_session in source_sessions:
-        token = _source_token_for_view(source_view, iid, source_session)
+        if token_cache is None:
+            token = _source_token_for_view(source_view, iid, source_session)
+            encoded = _json(token).encode("utf-8") + b"\n"
+        else:
+            token, encoded = token_cache[source_session]
+        if work is not None:
+            work["window_token_visits"] += 1
         if first_token is None:
             first_token = token
         last_token = token
@@ -372,7 +378,7 @@ def _source_summary_for_range(source_view, source_mode, iid, source_sessions):
             missing_count += 1
         if token.get("status") == "CONFLICT":
             conflict_count += 1
-        hasher.update(_json(token).encode("utf-8") + b"\n")
+        hasher.update(encoded)
     return {
         "source_mode": source_mode,
         "resolver_version": source_view.get("resolver_version"),
@@ -386,8 +392,8 @@ def _source_summary_for_range(source_view, source_mode, iid, source_sessions):
     }
 
 
-def _dependency_identity(ctx, family, iid, session, source_sessions, source_view, source_mode):
-    source_summary = _source_summary_for_range(source_view, source_mode, iid, source_sessions)
+def _dependency_identity(ctx, family, iid, session, source_sessions, source_view, source_mode, *, token_cache=None, work=None):
+    source_summary = _source_summary_for_range(source_view, source_mode, iid, source_sessions, token_cache=token_cache, work=work)
     spec = FEATURE_FAMILY_SPECS[family]
     source_fingerprint = digest({
         "resolver_version": source_view.get("resolver_version"),
@@ -441,11 +447,13 @@ def dependency_plan_for_context(ctx, sessions, instrument_ids, *, source_view=No
     sessions = tuple(_date_text(session) for session in sessions)
     instrument_ids = tuple(instrument_ids)
     session_positions = {_date_text(value): index for index, value in enumerate(ctx.sessions)}
+    ranges = {(session, family): _source_session_range(ctx, session, family)
+              for session in sessions for family in MATERIALIZED_FAMILIES}
     source_sessions = sorted({
         source_session
         for session in sessions
         for family in MATERIALIZED_FAMILIES
-        for source_session in _source_session_range(ctx, session, family)
+        for source_session in ranges[(session, family)]
     }, key=session_positions.__getitem__)
     if source_view is None:
         from .source_resolution import canonical_price_source_view
@@ -453,7 +461,15 @@ def dependency_plan_for_context(ctx, sessions, instrument_ids, *, source_view=No
         source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
     source_mode = source_view.get("source_mode", "CANONICAL_RESOLVED_PRICE_SOURCE_VIEW")
     plan = {}
+    work = {"token_serializations": 0, "window_token_visits": 0, "range_constructions": len(ranges)}
     for iid in instrument_ids:
+        # Reuse the exact original projected token bytes across overlapping
+        # windows. Retain only one instrument's serialized material at a time.
+        token_cache = {}
+        for source_session in source_sessions:
+            token = _source_token_for_view(source_view, iid, source_session)
+            token_cache[source_session] = (token, _json(token).encode("utf-8") + b"\n")
+            work["token_serializations"] += 1
         for session in sessions:
             plan[(iid, session)] = {
                 family: _dependency_identity(
@@ -461,12 +477,15 @@ def dependency_plan_for_context(ctx, sessions, instrument_ids, *, source_view=No
                     family,
                     iid,
                     session,
-                    _source_session_range(ctx, session, family),
+                    ranges[(session, family)],
                     source_view,
                     source_mode,
+                    token_cache=token_cache,
+                    work=work,
                 )
                 for family in MATERIALIZED_FAMILIES
             }
+    source_view["dependency_work_counters"] = work
     return plan
 
 
@@ -980,9 +999,9 @@ def _selected_compact_bars(ctx, source_sessions, instrument_ids, *, source_view=
         from .source_resolution import canonical_price_source_view
 
         source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
-    from .source_resolution import selected_rows
-
-    return selected_rows(source_view)
+    selected = source_view["selected"]
+    return {(iid, _date_text(session)): selected[(iid, _date_text(session))]
+            for iid in instrument_ids for session in source_sessions if (iid, _date_text(session)) in selected}
 
 
 def _same_basis(rows):
@@ -1115,6 +1134,7 @@ def build_missing_features(ctx, identity, missing_keys, *, dependency_plan=None,
 
 
 def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, input_hash, mode="DAILY_INCREMENTAL"):
+    from .e2e_tracing import measured_stage
     started = time.perf_counter()
     identity = identity_for_context(ctx, input_hash)
     sessions = [ctx.sessions[index] for index in _target_indices(ctx)]
@@ -1130,12 +1150,18 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
     source_view_started = time.perf_counter()
     from .source_resolution import canonical_price_source_view
 
-    source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
+    with measured_stage("SOURCE_RESOLUTION", item_count=len(source_sessions) * len(instrument_ids)) as span:
+        source_view = canonical_price_source_view(ctx, source_sessions, instrument_ids)
+        span["metadata"] = source_view.get("work_counters", {})
     after_source_view = time.perf_counter()
     dependency_plan_started = time.perf_counter()
-    dependency_plan = dependency_plan_for_context(ctx, sessions, instrument_ids, source_view=source_view)
+    with measured_stage("DEPENDENCY_PLANNING", item_count=len(sessions) * len(instrument_ids)) as span:
+        dependency_plan = dependency_plan_for_context(ctx, sessions, instrument_ids, source_view=source_view)
+        span["metadata"] = source_view.get("dependency_work_counters", {})
     after_dependency_plan = time.perf_counter()
-    cached = store.get_many(identity, instrument_ids, sessions, dependency_plan=dependency_plan)
+    with measured_stage("CACHE_LOOKUP") as span:
+        cached = store.get_many(identity, instrument_ids, sessions, dependency_plan=dependency_plan)
+        span["cache_stats"] = getattr(store, "last_get_many_stats", {})
     after_lookup = time.perf_counter()
     wanted = {(iid, _date_text(session)) for iid in instrument_ids for session in sessions}
     missing = [(iid, session_by_text[session]) for iid, session in sorted(wanted - set(cached))]
@@ -1147,6 +1173,8 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
         "conflicts": [],
     }
     chunk_size = 250
+    computation_seconds = 0.0
+    write_seconds = 0.0
     after_build = time.perf_counter()
     if missing:
         missing_by_instrument = defaultdict(list)
@@ -1160,10 +1188,16 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
                 for iid in chunk_iids
                 for pair in missing_by_instrument[iid]
             ]
-            built = build_missing_features(ctx, identity, chunk_missing, dependency_plan=dependency_plan, source_view=source_view)
+            chunk_started = time.perf_counter()
+            with measured_stage("FEATURE_COMPUTATION", item_count=len(chunk_missing)):
+                built = build_missing_features(ctx, identity, chunk_missing, dependency_plan=dependency_plan, source_view=source_view)
+            computation_seconds += time.perf_counter() - chunk_started
             built_count += len(built)
             if built:
-                chunk_put_stats = store.put_many(identity, built)
+                chunk_started = time.perf_counter()
+                with measured_stage("FEATURE_CACHE_WRITE", item_count=len(built)):
+                    chunk_put_stats = store.put_many(identity, built)
+                write_seconds += time.perf_counter() - chunk_started
                 put_stats["inserted_family_rows"] += chunk_put_stats.get("inserted_family_rows", 0)
                 put_stats["reused_existing_family_rows"] += chunk_put_stats.get("reused_existing_family_rows", 0)
                 put_stats["integrity_conflicts"] += chunk_put_stats.get("integrity_conflicts", 0)
@@ -1212,18 +1246,31 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
         "bytes_read": None,
         "bytes_written": None,
         "timing_seconds": {
+            "pre_cache_hit": after_lookup - started,
             "source_resolution": after_source_view - source_view_started,
             "dependency_plan": after_dependency_plan - dependency_plan_started,
             "lookup": after_lookup - after_dependency_plan,
             "build_missing_setup": after_build - after_lookup,
             "build_and_write_missing_chunks": after_write - after_build,
-            "build_missing": after_write - after_lookup,
-            "write_missing": after_write - after_build,
+            "build_missing": computation_seconds,
+            "write_missing": write_seconds,
             "total": after_write - started,
         },
         "incremental_semantics": "FEATURE_DEPENDENCY_FINGERPRINT_REUSE_ACROSS_REQUEST_SESSIONS",
         "authority": "CACHE_MISS_REBUILDS_FROM_MARKET_INPUT_HISTORY_ARTIFACT_AND_SOURCE_EVIDENCE",
+        "source_work_counters": source_view.get("work_counters", {}),
+        "dependency_work_counters": source_view.get("dependency_work_counters", {}),
     }
+    if not missing:
+        from .e2e_tracing import current_trace
+        trace = current_trace()
+        if trace is not None:
+            trace.mark("FEATURE_COMPUTATION", "SKIPPED", "ALL_REQUIRED_FEATURE_FAMILIES_REUSED")
+    # Drop only this context's ownership. External references and dependency
+    # first/last tokens remain valid; never clear the shared view contents.
+    for key, value in list(ctx.scalar_cache.items()):
+        if isinstance(key, tuple) and key and key[0] == "R16_CANONICAL_PRICE_SOURCE_VIEW" and value is source_view:
+            del ctx.scalar_cache[key]
     ctx.scalar_cache[CONTEXT_STATS_KEY] = stats
     ctx.scalar_cache[LEGACY_CONTEXT_STATS_KEY] = stats
     return stats

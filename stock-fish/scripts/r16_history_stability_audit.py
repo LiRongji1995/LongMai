@@ -27,7 +27,7 @@ ROOT = Path(__file__).resolve().parents[1]
 REPO_ROOT = ROOT.parent
 sys.path.insert(0, str(ROOT))
 
-from stockfish_core.storage import SQLiteStore  # noqa: E402
+from stockfish_core.storage import ReadOnlySQLiteStore  # noqa: E402
 from stockfish_core.yaogu.contracts import DailyBar, MarketInput  # noqa: E402
 from stockfish_core.yaogu.history_artifacts import (  # noqa: E402
     bind_history,
@@ -76,6 +76,9 @@ VIOLATION_CATEGORIES = {
     "BUG_IN_MERGE/RESOLUTION",
     "SOURCE_BECAME_UNAVAILABLE",
     "UNKNOWN",
+    "UNVERIFIED_SOURCE_REVISION",
+    "UNVERIFIED_SOURCE_ADDITION",
+    "UNVERIFIED_COMPARABILITY_LOSS",
 }
 
 
@@ -232,18 +235,18 @@ def _classify(t_token, tp1_token, session, day_t, day_tp1, cutoff_t):
         if t_token.row_hash == tp1_token.row_hash:
             return "UNCHANGED"
         if t_token.value_hash == tp1_token.value_hash:
-            return "LEGITIMATE_SOURCE_REVISION"
+            return "UNVERIFIED_SOURCE_REVISION"
         if _lost_comparable_payload(t_token, tp1_token):
-            return "BUG_IN_ARTIFACT_BUILD"
+            return "UNVERIFIED_COMPARABILITY_LOSS"
         if _has_newer_visible_revision(tp1_token, cutoff_t):
-            return "LEGITIMATE_SOURCE_REVISION"
+            return "UNVERIFIED_SOURCE_REVISION"
         if t_token.source_kind != tp1_token.source_kind:
             return "SOURCE_REPLACED"
         return "SOURCE_REPLACED"
     if t_token.status == "SELECTED" and tp1_token.status == "MISSING":
         return "SOURCE_DISAPPEARED"
     if t_token.status == "MISSING" and tp1_token.status == "SELECTED":
-        return "LEGITIMATE_SOURCE_REVISION" if _has_newer_visible_revision(tp1_token, cutoff_t) else "BUG_IN_ARTIFACT_BUILD"
+        return "UNVERIFIED_SOURCE_ADDITION"
     if "CONFLICT" in {t_token.status, tp1_token.status}:
         return "BUG_IN_MERGE/RESOLUTION"
     return "UNKNOWN"
@@ -872,7 +875,12 @@ def _targeted_canonical_checks(
         if _date_text(session) > _date_text(ctx_t.observation_date) and _date_text(session) <= _date_text(ctx_tp1.observation_date)
     ]
     if appended_sessions and common_instruments:
-        pit_ctx = _prepare_context(bundle_tp1, ctx_t.cutoff)
+        # A common-information RECONSTRUCTED comparison can legitimately use a
+        # cutoff after T+1. The independent no-future-event probe still tests
+        # actual Day T end, rather than falsely expecting known later data to
+        # be absent at that later comparison cutoff.
+        pit_cutoff = min(ctx_t.cutoff,datetime.fromisoformat(str(ctx_t.observation_date)+'T23:59:59.999999+08:00'))
+        pit_ctx = _prepare_context(bundle_tp1, pit_cutoff)
         checks.append(_single_context_canonical_check(
             pit_ctx,
             [(iid, appended_sessions[-1]) for iid in common_instruments[:50]],
@@ -881,6 +889,8 @@ def _targeted_canonical_checks(
             case_id="FUTURE_LEAK_PIT_APPENDED_SESSION_CASES",
             batch_size=batch_size,
         ))
+        checks[-1]['pit_probe_cutoff'] = pit_cutoff.isoformat()
+        checks[-1]['historical_comparison_cutoff_t'] = ctx_t.cutoff.isoformat()
     else:
         checks.append({
             "case_id": "FUTURE_LEAK_PIT_APPENDED_SESSION_CASES",
@@ -911,17 +921,17 @@ def _targeted_canonical_checks(
 def _root_cause_and_fix_status(counts):
     source_disappeared = counts.get("SOURCE_DISAPPEARED", 0)
     artifact_build_bug = counts.get("BUG_IN_ARTIFACT_BUILD", 0)
-    if artifact_build_bug:
-        root_cause = "HISTORY_ARTIFACT_REBUILT_WITHOUT_PRIOR_COMPARABLE_FACTOR_COMPOSITE_ROWS"
+    unverified = sum(value for key,value in counts.items() if key.startswith('UNVERIFIED_'))
+    if unverified:
+        root_cause = "SOURCE_DIFFERENCE_REQUIRES_INDEPENDENT_CAPTURE_NORMALIZATION_MEMBERSHIP_PROOF"
+    elif artifact_build_bug:
+        root_cause = "ARTIFACT_DIFFERENCE_REQUIRES_BUILD_EVIDENCE_FOR_CAUSAL_ATTRIBUTION"
     elif source_disappeared:
         root_cause = "CANONICAL_RESOLVER_CONFIRMED_SOURCE_DISAPPEARANCE_IN_T_PLUS_1"
     else:
         root_cause = "CANONICAL_RESOLVER_NO_HISTORICAL_SOURCE_DISAPPEARANCE_FOR_COMPARED_RANGE"
-    if source_disappeared or artifact_build_bug:
-        fix_status = (
-            "R16 fixes future artifact builds by carrying the prior registered history artifact as the normalization "
-            "base_ref, and fixes cache dependency completeness by sharing the canonical resolved source view."
-        )
+    if sum(counts.get(category,0) for category in VIOLATION_CATEGORIES):
+        fix_status = "Strict append-only invariant is not established; retain differences and require independent source/build proof."
     else:
         fix_status = "Append-only invariant holds for the compared historical range under the canonical resolved source view."
     return root_cause, fix_status
@@ -940,12 +950,13 @@ def audit(
     canonical_batch_size=300,
     canonical_session_batch_size=32,
     run_canonical_checks=True,
+    db_path_tp1=None,
 ):
     logger = ProgressLogger(checkpoint_json, interval_seconds=progress_interval_seconds)
     logger.event("LOAD_INPUTS_START", force=True, db_path=str(Path(db_path).resolve()))
-    store = SQLiteStore(db_path)
+    store = ReadOnlySQLiteStore(db_path)
     bundle_t = _load_bundle(store, input_id_t)
-    bundle_tp1 = _load_bundle(store, input_id_tp1)
+    bundle_tp1 = _load_bundle(ReadOnlySQLiteStore(db_path_tp1) if db_path_tp1 else store, input_id_tp1)
     ctx_t = _prepare_context(bundle_t, _cutoff(bundle_t, cutoff_t))
     ctx_tp1 = _prepare_context(bundle_tp1, _cutoff(bundle_tp1, cutoff_tp1))
     logger.event("LOAD_INPUTS_DONE", force=True, input_t=input_id_t, input_t_plus_1=input_id_tp1)
@@ -1002,6 +1013,8 @@ def audit(
         "generated_at": datetime.now().astimezone().isoformat(),
         "elapsed_seconds": elapsed,
         "db_path": str(Path(db_path).resolve()),
+        "db_path_t_plus_1": str(Path(db_path_tp1 or db_path).resolve()),
+        "source_access": "READ_ONLY_SQLITE_NO_MIGRATIONS",
         "input_t": {
             "input_id": input_id_t,
             "observation_date": str(bundle_t.observation_date),
@@ -1091,6 +1104,9 @@ def write_md(path, result):
     for key in (
         "UNCHANGED",
         "APPENDED_NEW_SESSION",
+        "UNVERIFIED_SOURCE_REVISION",
+        "UNVERIFIED_SOURCE_ADDITION",
+        "UNVERIFIED_COMPARABILITY_LOSS",
         "LEGITIMATE_SOURCE_REVISION",
         "SOURCE_REPLACED",
         "SOURCE_DISAPPEARED",
@@ -1125,6 +1141,9 @@ def write_md(path, result):
 def main(argv=None):
     parser = argparse.ArgumentParser()
     parser.add_argument("--db", default=str(ROOT / "data" / "stockfish.sqlite3"))
+    parser.add_argument("--db-t-plus-1", default=None)
+    parser.add_argument("--expect-invariant-failure", action="store_true",
+                        help="Negative-test wrapper: succeeds only when the invariant actually fails")
     parser.add_argument("--input-id-t", default=DEFAULT_T)
     parser.add_argument("--input-id-t-plus-1", default=DEFAULT_TP1)
     parser.add_argument("--cutoff-t", default=None)
@@ -1153,6 +1172,7 @@ def main(argv=None):
         canonical_batch_size=args.canonical_batch_size,
         canonical_session_batch_size=args.canonical_session_batch_size,
         run_canonical_checks=not args.skip_canonical_target_checks,
+        db_path_tp1=args.db_t_plus_1,
     )
     output_json = Path(args.output_json)
     output_json.parent.mkdir(parents=True, exist_ok=True)
@@ -1167,7 +1187,12 @@ def main(argv=None):
         "canonical_target_checks": result["targeted_canonical_resolver_checks"]["status"],
         "elapsed_seconds": result["elapsed_seconds"],
     }, ensure_ascii=False, indent=2))
+    failed = result['append_only_invariant']['status'] != 'PASS'
+    canonical_ok = result['targeted_canonical_resolver_checks']['status'] == 'PASS'
+    if args.expect_invariant_failure:
+        return 0 if failed and canonical_ok else 1
+    return 0 if not failed and canonical_ok else 1
 
 
 if __name__ == "__main__":
-    main()
+    raise SystemExit(main())

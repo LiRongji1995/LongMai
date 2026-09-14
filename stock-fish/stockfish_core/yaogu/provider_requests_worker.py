@@ -5,6 +5,36 @@ from datetime import date,datetime,timezone
 from pathlib import Path
 from zoneinfo import ZoneInfo
 
+# One identity source for actual successful captures and retained-base checks.
+# The auth-failure envelope intentionally remains the older failure-only V1.
+TUSHARE_USABLE_FIELD_VERSION = 'TUSHARE_HTTP_PRO_R05_V2'
+
+
+def baostock_field_version(sdk):
+    return 'BAOSTOCK_' + getattr(sdk, '__version__', 'unknown') + '_R03_V1'
+
+
+def supported_price_schema_identities():
+    """Schemas emitted by the installed adapters; no login/request/token use."""
+    from .provider_requests import ENDPOINTS
+    schemas = set()
+    try:
+        import baostock as sdk
+    except ImportError:
+        sdk = None
+    price_endpoints = {'market_daily', 'history', 'history_adjusted', 'adjustment_factors',
+                       'tushare_daily', 'tushare_adj_factor'}
+    for endpoint, definition in ENDPOINTS.items():
+        if endpoint not in price_endpoints:
+            continue
+        provider = definition['provider']
+        if provider == 'baostock' and sdk is not None and getattr(sdk, '__version__', None) not in (None, '', 'unknown'):
+            schemas.add((provider, endpoint, baostock_field_version(sdk)))
+        elif provider == 'tushare':
+            schemas.add((provider, endpoint, TUSHARE_USABLE_FIELD_VERSION))
+    return schemas
+
+
 _transport = {}
 _attempt_counts = {'HTTP':0,'SDK':0}
 
@@ -145,7 +175,7 @@ def _baostock_session_request(endpoint,params,partial_path=None):
                     security_statuses.append(dict(code=code,status='FETCH_FAILED',row_count=0,cursor_exhausted=False,
                         error_code=error,failure_category=category,exception_classes=classes,captured_at=datetime.now(timezone.utc).isoformat()))
                 write_partial(partial_path,dict(status='PARTIAL',rows=rows,pagination_complete=False,
-                    field_version='BAOSTOCK_'+getattr(bs,'__version__','unknown')+'_R03_V1',
+                    field_version=baostock_field_version(bs),
                     source_url='https://baostock.com/',coverage={'security_statuses':security_statuses},http_responses=[]))
         elif endpoint=='stock_basic':
             rows=[]
@@ -160,11 +190,11 @@ def _baostock_session_request(endpoint,params,partial_path=None):
                 rows.extend(bs_rows(bs.query_history_k_data_plus(code,fields,start_date=params['start_date'],
                     end_date=params['end_date'],frequency='d',adjustflag=flag),maximum=505))
                 write_partial(partial_path,dict(status='PARTIAL',rows=rows,pagination_complete=False,
-                    field_version='BAOSTOCK_'+getattr(bs,'__version__','unknown')+'_R03_V1',
+                    field_version=baostock_field_version(bs),
                     source_url='https://baostock.com/',coverage={'returned_rows':len(rows)},http_responses=[]))
         failed=[row for row in security_statuses if row['status']!='COMPLETE']
         status='PARTIAL' if failed and any(row['status']=='COMPLETE' for row in security_statuses) else 'FETCH_FAILED' if failed else 'COMPLETE'
-        return dict(status=status,rows=rows,pagination_complete=not failed,field_version='BAOSTOCK_'+getattr(bs,'__version__','unknown')+'_R03_V1',
+        return dict(status=status,rows=rows,pagination_complete=not failed,field_version=baostock_field_version(bs),
             source_url='https://baostock.com/',coverage={'returned_rows':len(rows),'requested_codes':params.get('codes'),
                 'returned_codes':sorted({r.get('code') for r in rows if r.get('code')}),'cursor_exhausted':not failed,'security_statuses':security_statuses},
             gaps=[{'code':row['code'],'status':row['status'],'error_code':row['error_code']} for row in failed],
@@ -356,7 +386,7 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
             gaps=['TUSHARE_TOKEN_REQUIRED'],diagnostics={'transport':'HTTP_POST','token_env_names':['TUSHARE_TOKEN','TUSHARE_PRO_TOKEN']})
     clean_params={k:_compact_date(v) for k,v in params.items() if v not in (None,'')}
     limit=int(definition.get('page_limit',5000));offset=0;rows=[];field_names=[];attempts=0;first_error=None;first_category=None
-    identity={'endpoint':endpoint,'parameters':clean_params,'limit':limit,'field_version':'TUSHARE_HTTP_PRO_R05_V2'}
+    identity={'endpoint':endpoint,'parameters':clean_params,'limit':limit,'field_version':TUSHARE_USABLE_FIELD_VERSION}
     recovered=read_partial(partial_path)
     recovered_pages=0;pages=0
     if recovered and recovered.get('checkpoint_identity')==identity:
@@ -369,7 +399,7 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
             return recovered
     def checkpoint(complete=False):
         value=dict(status='COMPLETE' if complete else 'PARTIAL',rows=rows,pagination_complete=complete,
-            field_version='TUSHARE_HTTP_PRO_R05_V2',source_url=definition['doc_url'],
+            field_version=TUSHARE_USABLE_FIELD_VERSION,source_url=definition['doc_url'],
             checkpoint_identity=identity,next_offset=offset,http_responses=captured,
             coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'api_name':definition['api_name'],
                 'returned_rows':len(rows),'fields':field_names,'http_requests':attempts,'limit':limit,

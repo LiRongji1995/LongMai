@@ -1,3 +1,13 @@
+# R16-R1 strict compatibility revision
+
+This section supersedes the historical R16 description below. Schema revision is `FEATURE_EVIDENCE_SCHEMA_R16_R1`; old structurally plausible snapshots must pass independent validation and binding again. JSONL+manifest retain authoritative values and full provenance. Display CSV/Parquet are not equivalence inputs. Unknown fact extensions and duplicate object/logical keys are rejected.
+
+`ret1_pct` is percent (4 decimal HALF_EVEN), OHLC 8 decimals, MA 6 decimals. Optional reduced-rational `exact_value` preserves the internal production value used by the test-only Strategy injection; its rounded display representation is independently checked. A tolerance never bypasses identity, unit, status, reason, exact value or source provenance.
+
+Missing/null facts remain null+UNKNOWN. KNOWN requires the explicit verified source/PIT rules and an aware visible clock at or before the cutoff; a nonempty provenance object alone is insufficient. Manifest revisions bind actual calendar/source/spec identities. See [R16-R1 engineering policy](../R16_R1_ENGINEERING.md), [production oracle](../R16_R1_PRODUCTION_ORACLE.md), and the executable schema for field types, permitted metadata differences and slice limits. No strategy label migrates to Go.
+
+---
+
 # Feature Evidence Contract V1
 
 Status: R16 Phase 0 boundary. Production Daily Primary still runs in Python.

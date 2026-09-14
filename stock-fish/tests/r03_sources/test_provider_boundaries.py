@@ -189,10 +189,13 @@ def factor(day='2000-01-01',value='2'):
 def test_factor_back_adjustment_exact_and_incremental_basis_stable():
     original=[factor()];new=original+[factor('2026-09-03','3')]
     rows=[(DAY,(raw(),'raw'))]
-    a,_=comparable_rows('600000.SH',rows,{},[(original,'factor1','2026-09-02')])
-    b,_=comparable_rows('600000.SH',rows,{},[(original,'factor1','2026-09-02'),(new,'factor2','2026-09-04')])
-    assert a[DAY][0]['comparable_close']==22 and b[DAY][0]['comparable_close']==33
-    assert a[DAY][0]['comparable_basis']==b[DAY][0]['comparable_basis']
+    # The first capture only certifies prices through September 2. Its old
+    # expectation for September 4 improperly assumed no future action.
+    prior_day=date(2026,9,2)
+    a,_=comparable_rows('600000.SH',[(prior_day,(raw(session=prior_day),'raw'))],{},[(original,'factor1','2026-09-02','1990-01-01')])
+    b,_=comparable_rows('600000.SH',rows,{},[(original,'factor1','2026-09-02','1990-01-01'),(new,'factor2','2026-09-04','1990-01-01')])
+    assert a[prior_day][0]['comparable_close']==22 and b[DAY][0]['comparable_close']==33
+    assert a[prior_day][0]['comparable_basis']==b[DAY][0]['comparable_basis']
 
 
 def test_conflicting_historical_factor_cannot_mix_captures():
@@ -208,7 +211,7 @@ def test_late_added_corporate_action_inside_prior_complete_window_is_revision():
 
 def test_hfq_disagreement_blocks_comparable_series():
     adj={DAY:(raw(adjustflag='1',close='21'),'adj')}
-    values,status=comparable_rows('600000.SH',[(DAY,(raw(),'raw'))],adj,[([factor()],'f1')])
+    values,status=comparable_rows('600000.SH',[(DAY,(raw(),'raw'))],adj,[([factor()],'f1',str(DAY),'1990-01-01')])
     assert not values and status=='RAW_FACTOR_HFQ_CROSS_VALIDATION_FAILED'
 
 
@@ -218,7 +221,7 @@ def test_no_left_factor_never_fills_one():
 
 
 def test_future_factor_cannot_change_earlier_price():
-    values,_=comparable_rows('600000.SH',[(DAY,(raw(),'raw'))],{},[([factor(),factor('2026-09-05','999')],'f1')])
+    values,_=comparable_rows('600000.SH',[(DAY,(raw(),'raw'))],{},[([factor(),factor('2026-09-05','999')],'f1','2026-09-05','1990-01-01')])
     assert values[DAY][0]['comparable_close']==22
 
 

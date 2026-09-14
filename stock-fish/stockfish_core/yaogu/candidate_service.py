@@ -57,6 +57,8 @@ class CandidateService:
         self.allow_test_fixture = allow_test_fixture
         self._coverage_lock = RLock()
         self._coverage_projection_cache = None
+        from .e2e_tracing import TraceRegistry
+        self.daily_traces = TraceRegistry(store)
         from .evidence_service import EvidenceService
         self.public_evidence = EvidenceService(store, allow_test_fixture=allow_test_fixture)
         self.root.mkdir(parents=True, exist_ok=True)
@@ -64,7 +66,8 @@ class CandidateService:
         self.jobs.register('auction_review', self._auction_job)
         self.jobs.register('candidate_outcomes', self._outcome_job)
         self.jobs.register('strategy_experiments', self._strategy_experiment_job)
-        self.jobs.register('daily_primary_strategy', self._daily_primary_strategy_job)
+        self.jobs.register('daily_primary_strategy', self._daily_primary_strategy_job,
+                           on_terminal=self._daily_primary_trace_terminal)
         self.jobs.register('strategy_outcomes', self._strategy_outcome_job)
         self.jobs.register('strategy_tracking', self._strategy_tracking_job)
         if not self._all('strategy_configs'):
@@ -511,9 +514,50 @@ class CandidateService:
             'cutoff': utc_now().isoformat()}, job_id=job_id)
 
     def submit_daily_primary_strategy(self, *, input_id=None, observation_date=None, job_id=None):
-        resolved,_=self.strategy_input(input_id,observation_date)
-        return self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
-            'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST'}, job_id=job_id)
+        from .e2e_tracing import DailyPrimaryTrace, current_trace
+        trace = current_trace()
+        if trace is None:
+            trace = self.daily_traces.add(DailyPrimaryTrace(input_id=input_id,
+                command='CandidateService.submit_daily_primary_strategy', boundary='SERVICE_SUBMIT_TO_EXPORT_PARTIAL'))
+        with trace.activate():
+            with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'SUBMISSION'}):
+                resolved, bundle = self.strategy_input(input_id, observation_date)
+            trace.update(input_id=resolved, snapshot_id=bundle.universe.snapshot_id,
+                         as_of_session=str(bundle.observation_date))
+            with trace.stage('DATA_FRESHNESS_STATUS_CHECK') as span:
+                span['metadata'].update(self.input_freshness(bundle))
+                span['metadata']['selection_policy'] = 'SAVED_INPUT_ALLOWED_EXISTING_RESEARCH_SEMANTICS'
+            with trace.stage('CALENDAR_TRADING_SESSION_RESOLUTION', item_count=len(bundle.sessions)) as span:
+                span['metadata'].update(calendar_hash=digest([str(day) for day in bundle.sessions]),
+                    target_session=str(self._stage_aware_target_session(bundle)))
+            trace.mark('PROVIDER_REFRESH_INCREMENTAL_INGESTION', 'SKIPPED', 'EXPLICIT_SAVED_INPUT_PATH_NO_PROVIDER_REQUEST')
+            trace.mark('HISTORY_ARTIFACT_UPDATE', 'SKIPPED', 'IMMUTABLE_SAVED_HISTORY_LOADED',
+                       history_artifact_hash=bundle.history_artifact_hash)
+            with trace.stage('JOB_SUBMISSION'):
+                job = self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
+                    'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST',
+                    'trace_id': trace.trace_id}, job_id=job_id)
+            self.daily_traces.for_job(job)
+            return job
+
+    def _daily_primary_trace_terminal(self, job):
+        trace = self.daily_traces.for_job(job)
+        if trace.trace['end'] is not None:
+            return
+        trace.update(business_job_state=job['state'])
+        self._finalize_daily_trace_failure(trace)
+
+    def _finalize_daily_trace_failure(self, trace):
+        state = trace.trace.get('business_job_state')
+        if trace.trace.get('terminal_failure'):
+            trace.fail(trace.trace['terminal_failure'])
+            if trace.trace['end'] is not None:
+                self.daily_traces.persist(trace, 'FAILED')
+            return
+        if (trace.trace['end'] is None and state in {'FAILED', 'CANCELLED', 'INTERRUPTED'} and
+                not any(row['status'] == 'RUNNING' for row in trace.snapshot()['stages'])):
+            trace.finish(status=state, metadata={'result_ready': False})
+            self.daily_traces.persist(trace, state)
 
     def _stage_aware_target_session(self, bundle):
         sessions = sorted(date.fromisoformat(str(day)[:10]) for day in bundle.sessions)
@@ -624,29 +668,26 @@ class CandidateService:
         result['content_hash']=digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
-    def _build_daily_primary_strategy_result(self, input_id, bundle, cutoff, config, *, market_session=None,
+    def _build_daily_primary_strategy_result(self, input_id, bundle, cutoff, config, **kwargs):
+        from .e2e_tracing import DailyPrimaryTrace, current_trace
+        outer = current_trace()
+        trace = outer or DailyPrimaryTrace(input_id=input_id, snapshot_id=bundle.universe.snapshot_id,
+            as_of_session=bundle.observation_date, command='private Daily Primary builder', boundary='INTERNAL_ONLY')
+        with trace.activate():
+            with trace.stage('STRATEGY_COMPUTE', item_count=len(bundle.universe.securities)):
+                result = self._build_daily_primary_strategy_result_impl(input_id, bundle, cutoff, config, **kwargs)
+        if outer is None:
+            # This private boundary has not committed or serialized an API result.
+            result['e2e_trace'] = trace.finish(run_id=result['run_id'])
+            from .history_artifacts import digest_json_stream
+            result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k != 'content_hash'})
+        return result
+
+    def _build_daily_primary_strategy_result_impl(self, input_id, bundle, cutoff, config, *, market_session=None,
                                              validation_role='MANUAL_OR_REPLAY', primary_signal_cutoff=None,
                                              scheduler_job_id=None, capture_timing=None):
         from .derived_feature_store import DerivedFeatureStore
-        from .e2e_tracing import DailyPrimaryTrace
         from .strategy_experiments import run_active_daily_strategy
-        trace = DailyPrimaryTrace(input_id=input_id, snapshot_id=bundle.universe.snapshot_id,
-                                  as_of_session=bundle.observation_date,
-                                  command='CandidateService._build_daily_primary_strategy_result',
-                                  benchmark_version='SERVICE_DAILY_PRIMARY_TRACE')
-        trace.record_stage('USER_REQUEST_COMMAND_START', metadata={'market_session': market_session, 'validation_role': validation_role})
-        trace.record_stage('CALENDAR_TRADING_SESSION_RESOLUTION', item_count=len(bundle.sessions),
-                           metadata={'observation_date': str(bundle.observation_date), 'decision_cutoff': cutoff.isoformat()})
-        trace.record_stage('DATA_FRESHNESS_STATUS_CHECK', item_count=len(bundle.receipts),
-                           metadata={'coverage_type': bundle.coverage_type})
-        trace.record_stage('PROVIDER_REFRESH_INCREMENTAL_INGESTION',
-                           metadata={'status': 'DONE_BEFORE_STRATEGY_JOB_OR_NOT_REQUIRED'})
-        trace.record_stage('HISTORY_ARTIFACT_UPDATE',
-                           metadata={'status': 'DONE_BEFORE_STRATEGY_JOB_OR_NOT_REQUIRED',
-                                     'history_artifact_hash': bundle.history_artifact_hash})
-        trace.record_stage('MARKET_INPUT_CREATION_OR_LOAD', item_count=len(bundle.bars),
-                           snapshot_id=bundle.universe.snapshot_id)
-        started = perf_time.perf_counter()
         result = run_active_daily_strategy(
             bundle,
             cutoff=cutoff,
@@ -655,7 +696,6 @@ class CandidateService:
             derived_store=DerivedFeatureStore(self.store),
             execution_profile='DAILY_PRIMARY_FAST',
         )
-        strategy_elapsed_ms = (perf_time.perf_counter() - started) * 1000
         result['input_id'] = input_id
         result['generated_at'] = utc_now().isoformat()
         latest = self._latest_input_publication(input_id)
@@ -711,26 +751,6 @@ class CandidateService:
         })
         result['signal_data_quality'] = signal_data_quality(result)
         from .history_artifacts import digest_json_stream
-        derived_stats = result.get('derived_feature_store') or {}
-        timings = derived_stats.get('timing_seconds') or {}
-        trace.record_stage('SOURCE_RESOLUTION', elapsed_ms=1000 * (timings.get('source_resolution') or 0),
-                           item_count=(derived_stats.get('eligible_count') or 0) * len(derived_stats.get('target_sessions') or []))
-        trace.record_stage('DEPENDENCY_PLANNING', elapsed_ms=1000 * (timings.get('dependency_plan') or 0),
-                           item_count=derived_stats.get('requested_feature_rows'),
-                           cache_stats=derived_stats.get('family_cache'))
-        trace.record_stage('CACHE_LOOKUP', elapsed_ms=1000 * (timings.get('lookup') or 0),
-                           item_count=derived_stats.get('requested_feature_rows'), cache_stats=derived_stats)
-        trace.record_stage('FEATURE_COMPUTATION', elapsed_ms=1000 * (timings.get('build_missing') or 0),
-                           item_count=derived_stats.get('built_rows'), cache_stats=derived_stats.get('row_lifecycle'))
-        trace.record_stage('STRATEGY_COMPUTE', elapsed_ms=strategy_elapsed_ms,
-                           item_count=counts.get('eligible'))
-        trace.record_stage('PERSISTENCE', metadata={'status': 'PERSISTED_BY_CALLER_TRANSACTION'})
-        trace.record_stage('CANDIDATE_EXPORT', item_count=counts.get('eligible'),
-                           metadata={'status': 'PROJECTION_WRITTEN_BY_CALLER_TRANSACTION'})
-        trace.record_stage('REPORT_RENDER_API_RESPONSE', metadata={'status': 'API_SERIALIZATION_BY_CALLER'})
-        trace.record_stage('RESULT_READY', metadata={'status': 'SUCCEEDED'})
-        result['e2e_trace'] = trace.finish(status='SUCCEEDED', run_id=result['run_id'],
-                                           result_hash=digest_json_stream(result.get('results', {})))
         result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
@@ -979,26 +999,37 @@ class CandidateService:
         return ctx.complete(terminal, write)
 
     def _daily_primary_strategy_job(self, ctx):
-        payload=ctx.payload
-        _,bundle=self.input(payload['input_id'])
-        config=self.current_config()
-        cutoff=datetime.fromisoformat(payload['cutoff'])
-        ctx.update(.2,'运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
-        result = self._build_daily_primary_strategy_result(
-            payload['input_id'], bundle, cutoff, config,
-            market_session=payload.get('market_session', 'ON_DEMAND_DAILY_PRIMARY'),
-            validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
-            primary_signal_cutoff=payload.get('primary_signal_cutoff'),
-            scheduler_job_id=payload.get('scheduler_job_id'),
-        )
-        stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
-        counts = stage.get('counts') or {}
-        terminal={'strategy_experiment_run_id':result['run_id'],'run_id':result['run_id'],
-            'status':'complete','quality':stage.get('status'),'execution_profile':'DAILY_PRIMARY_FAST',
-            'stage_aware_counts':{key:counts.get(key,0) for key in ('eligible','focus','watch','rejected','unknown')}}
-        def write(connection):
-            self._write_strategy_result(connection, result, created_at=payload['cutoff'])
-        return ctx.complete(terminal, write)
+        payload = ctx.payload
+        trace = self.daily_traces.for_job(self.jobs.get(ctx.job_id))
+        with trace.activate():
+            with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER'}):
+                _, bundle = self.input(payload['input_id'])
+                config = self.current_config()
+            cutoff = datetime.fromisoformat(payload['cutoff'])
+            trace.update(decision_cutoff=payload['cutoff'], config_hash=config.config_hash)
+            ctx.update(.2, '运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
+            result = self._build_daily_primary_strategy_result(
+                payload['input_id'], bundle, cutoff, config,
+                market_session=payload.get('market_session', 'ON_DEMAND_DAILY_PRIMARY'),
+                validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
+                primary_signal_cutoff=payload.get('primary_signal_cutoff'),
+                scheduler_job_id=payload.get('scheduler_job_id'))
+            stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
+            counts = stage.get('counts') or {}
+            terminal = {'strategy_experiment_run_id': result['run_id'], 'run_id': result['run_id'],
+                'status': 'complete', 'quality': stage.get('status'), 'execution_profile': 'DAILY_PRIMARY_FAST',
+                'stage_aware_counts': {key: counts.get(key, 0) for key in ('eligible', 'focus', 'watch', 'rejected', 'unknown')}}
+            def write(connection):
+                self._write_strategy_result(connection, result, created_at=payload['cutoff'])
+                self.store._put_document(connection, 'daily_primary_trace_links', trace.trace_id,
+                    {'trace_id': trace.trace_id, 'run_id': result['run_id'], 'job_id': ctx.job_id,
+                     'input_id': payload['input_id'], 'result_hash': result['content_hash']})
+            with trace.stage('PERSISTENCE', run_id=result['run_id'], metadata={'includes_transaction_commit': True}):
+                outcome = ctx.complete(terminal, write)
+            self.daily_traces.bind_run(trace, result['run_id'])
+            trace.update(status='READY_FOR_EXPORT', result_hash=result['content_hash'], business_job_state='SUCCEEDED')
+            self.daily_traces.persist(trace, 'BUSINESS_COMMITTED')
+            return outcome
 
     def _write_strategy_projection(self, connection, run):
         from .strategy_tracking import authoritative_strategy_items
