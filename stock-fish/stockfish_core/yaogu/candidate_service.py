@@ -339,19 +339,42 @@ class CandidateService:
         if activation is not None:
             terminal['activated'] = activation_allowed
         strategy_primary_result = None
+        strategy_primary_attempt = None
         if payload.get('market_session') == 'EVENING':
-            ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 daily fast primary；保留实际资料截止')
-            strategy_primary_result = self._build_daily_primary_strategy_result(
-                payload['input_id'], bundle, cutoff, config,
-                market_session='EVENING',
-                validation_role='PROSPECTIVE_PRIMARY',
-                primary_signal_cutoff='SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
-                scheduler_job_id=ctx.job_id,
-                capture_timing=payload.get('capture_timing'),
-            )
-            terminal['strategy_primary_run_id'] = strategy_primary_result['run_id']
-            terminal['stage_aware_primary_run_id'] = strategy_primary_result['run_id']
-            terminal['stage_aware_primary_validation_role'] = 'PROSPECTIVE_PRIMARY'
+            ctx.update(.88, '检查 Daily Primary 必需输入是否足以发布正式 Stage Aware primary')
+            readiness = self._daily_primary_readiness(payload['input_id'], bundle, cutoff, config)
+            if not readiness['global_required_ready']:
+                strategy_primary_attempt = self._daily_primary_attempt(job_id=ctx.job_id,
+                    input_id=payload['input_id'], cutoff=cutoff, final_status='NOT_READY',
+                    readiness=readiness, refresh_actions=[], strategy_started=False,
+                    strategy_completed=False, persistence_completed=False, export_completed=False,
+                    recommendation_published=False)
+                terminal['daily_primary_final_status'] = 'NOT_READY'
+                terminal['stage_aware_primary_not_ready_reasons'] = [
+                    row['code'] for row in readiness.get('blocking_requirements') or ()]
+            else:
+                ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 daily fast primary；保留实际资料截止')
+                strategy_primary_result = self._build_daily_primary_strategy_result(
+                    payload['input_id'], bundle, cutoff, config,
+                    market_session='EVENING',
+                    validation_role='PROSPECTIVE_PRIMARY',
+                    primary_signal_cutoff='SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
+                    scheduler_job_id=ctx.job_id,
+                    capture_timing=payload.get('capture_timing'),
+                )
+                export_validation = self._daily_primary_export_validation(strategy_primary_result)
+                stage = strategy_primary_result['results']['STAGE_AWARE_MOMENTUM_V2']
+                strategy_primary_attempt = self._daily_primary_attempt(job_id=ctx.job_id,
+                    input_id=payload['input_id'], cutoff=cutoff, final_status='READY',
+                    readiness=readiness, refresh_actions=[], run_id=strategy_primary_result['run_id'],
+                    strategy_started=True, strategy_completed=True, persistence_completed=True,
+                    export_completed=True, recommendation_published=True,
+                    stage_aware_counts=stage.get('counts') or {},
+                    export_validation=export_validation)
+                terminal['strategy_primary_run_id'] = strategy_primary_result['run_id']
+                terminal['stage_aware_primary_run_id'] = strategy_primary_result['run_id']
+                terminal['stage_aware_primary_validation_role'] = 'PROSPECTIVE_PRIMARY'
+                terminal['daily_primary_final_status'] = 'READY'
         def publish(connection):
             self.store._put_document(connection, 'candidate_runs', result.run_id, value)
             self.store._put_document(connection, 'candidate_run_summaries', result.run_id,
@@ -371,6 +394,8 @@ class CandidateService:
                      **(payload.get('capture_timing') or {})})
             if strategy_primary_result is not None:
                 self._write_strategy_result(connection, strategy_primary_result, created_at=payload['decision_cutoff'])
+            if strategy_primary_attempt is not None:
+                self._write_daily_primary_attempt(connection, strategy_primary_attempt)
         return ctx.complete(terminal, publish)
 
     def _publication_authority(self, run_id):
@@ -519,9 +544,10 @@ class CandidateService:
         if trace is None:
             trace = self.daily_traces.add(DailyPrimaryTrace(input_id=input_id,
                 command='CandidateService.submit_daily_primary_strategy', boundary='SERVICE_SUBMIT_TO_EXPORT_PARTIAL'))
+        explicit_input = input_id is not None
         with trace.activate():
             with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'SUBMISSION'}):
-                if input_id is not None:
+                if explicit_input:
                     if not input_id.startswith('market_') or len(input_id) != 71:
                         raise UnavailableError('RULE_INPUT_MISSING_OR_CORRUPT', 'candidate')
                     index = self.store.get_document('candidate_input_indexes', input_id)
@@ -540,12 +566,20 @@ class CandidateService:
                             raise UnavailableError('FIXTURE_NOT_ALLOWED_IN_USER_HISTORY', 'candidate')
                         resolved, bundle = input_id, None
                 else:
-                    resolved, bundle = self.strategy_input(input_id, observation_date)
-                    index = {'observation_date': str(bundle.observation_date),
-                             'coverage_type': bundle.coverage_type,
-                             'max_session': str(max(bundle.sessions)) if bundle.sessions else None,
-                             'snapshot_id': bundle.universe.snapshot_id,
-                             'history_artifact_hash': bundle.history_artifact_hash}
+                    try:
+                        resolved, bundle = self.strategy_input(input_id, observation_date)
+                        index = {'observation_date': str(bundle.observation_date),
+                                 'coverage_type': bundle.coverage_type,
+                                 'max_session': str(max(bundle.sessions)) if bundle.sessions else None,
+                                 'snapshot_id': bundle.universe.snapshot_id,
+                                 'history_artifact_hash': bundle.history_artifact_hash}
+                    except UnavailableError:
+                        if getattr(self, 'scheduler', None) is None:
+                            raise
+                        resolved, bundle = None, None
+                        index = {'observation_date': observation_date.isoformat() if observation_date else None,
+                                 'coverage_type': None, 'max_session': None, 'snapshot_id': None,
+                                 'history_artifact_hash': None}
             trace.update(input_id=resolved, snapshot_id=index.get('snapshot_id'),
                          as_of_session=index.get('observation_date'))
             with trace.stage('DATA_FRESHNESS_STATUS_CHECK') as span:
@@ -569,6 +603,10 @@ class CandidateService:
                        history_artifact_hash=index.get('history_artifact_hash'))
             with trace.stage('JOB_SUBMISSION'):
                 job = self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
+                    'requested_input_id': input_id,
+                    'requested_observation_date': observation_date.isoformat() if observation_date else None,
+                    'refresh_allowed': not explicit_input,
+                    'refresh_attempt_limit': 1,
                     'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST',
                     'trace_id': trace.trace_id}, job_id=job_id)
             self.daily_traces.for_job(job)
@@ -604,6 +642,155 @@ class CandidateService:
             return later[0] if later else None
         except Exception:
             return None
+
+    def _daily_primary_readiness(self, input_id, bundle, cutoff, config):
+        from .daily_primary_readiness import evaluate_daily_primary_readiness
+        return evaluate_daily_primary_readiness(input_id, bundle, cutoff, config_hash=config.config_hash)
+
+    @staticmethod
+    def _daily_primary_attempt_id(job_id):
+        return 'daily_primary_attempt_' + digest({'job_id': job_id})
+
+    def _write_daily_primary_attempt(self, connection, attempt):
+        self.store._put_document(connection, 'daily_primary_attempts', attempt['attempt_id'], attempt)
+
+    @staticmethod
+    def _daily_primary_terminal_invariants(value):
+        status = value.get('final_status')
+        if status == 'NOT_READY':
+            if value.get('strategy_started') or value.get('recommendation_published'):
+                raise ValueError('DAILY_PRIMARY_NOT_READY_INVARIANT_BROKEN')
+        if status == 'READY':
+            required = ('readiness_passed', 'strategy_completed', 'persistence_completed',
+                        'export_completed', 'recommendation_published')
+            if any(value.get(key) is not True for key in required):
+                raise ValueError('DAILY_PRIMARY_READY_INVARIANT_BROKEN')
+        if status == 'FAILED' and value.get('recommendation_published'):
+            raise ValueError('DAILY_PRIMARY_FAILED_PUBLISHED_INVARIANT_BROKEN')
+
+    def _daily_primary_attempt(self, *, job_id, input_id, cutoff, final_status, readiness,
+                               refresh_actions=None, run_id=None, strategy_started=False,
+                               strategy_completed=False, persistence_completed=False,
+                               export_completed=False, recommendation_published=False,
+                               stage_aware_counts=None, error=None, export_validation=None,
+                               readiness_evaluations=None):
+        value = {
+            'attempt_version': 'DAILY_PRIMARY_RELIABILITY_V1',
+            'attempt_id': self._daily_primary_attempt_id(job_id),
+            'job_id': job_id,
+            'input_id': input_id,
+            'observation_date': (readiness or {}).get('observation_date'),
+            'decision_cutoff': cutoff.isoformat(),
+            'final_status': final_status,
+            'status': 'complete' if final_status in {'READY', 'READY_WITH_LIMITATIONS'} else final_status.lower(),
+            'readiness_passed': bool((readiness or {}).get('global_required_ready')),
+            'readiness': readiness,
+            'readiness_evaluations': list(readiness_evaluations or []),
+            'blocking_requirements': (readiness or {}).get('blocking_requirements') or [],
+            'refresh_actions': list(refresh_actions or []),
+            'strategy_started': bool(strategy_started),
+            'strategy_completed': bool(strategy_completed),
+            'strategy_invocation_count': 1 if strategy_started else 0,
+            'persistence_completed': bool(persistence_completed),
+            'export_completed': bool(export_completed),
+            'export_validation': export_validation,
+            'recommendation_published': bool(recommendation_published),
+            'run_id': run_id,
+            'stage_aware_counts': stage_aware_counts or {},
+            'error': error,
+            'market_edge': 'NOT_ESTABLISHED',
+        }
+        self._daily_primary_terminal_invariants(value)
+        return value
+
+    @staticmethod
+    def _daily_primary_export_validation(result):
+        raw = json.dumps(result, ensure_ascii=False, sort_keys=True, separators=(',', ':'), allow_nan=False).encode('utf-8')
+        stage = (result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}
+        if stage.get('items') is None or not isinstance(stage.get('counts'), dict):
+            raise ValueError('DAILY_PRIMARY_EXPORT_VIEW_SCHEMA_UNUSABLE')
+        return {
+            'validation_version': 'DAILY_PRIMARY_EXPORT_READY_V1',
+            'status': 'COMPLETE',
+            'strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
+            'selection': 'all',
+            'payload_bytes': len(raw),
+            'serialization': 'JSON_ALLOW_NAN_FALSE',
+        }
+
+    def _daily_primary_incremental_refresh(self, *, target_observation_date, cutoff, trace, prior_readiness):
+        scheduler = getattr(self, 'scheduler', None)
+        if scheduler is None:
+            return {'status': 'SKIPPED', 'reason': 'SCHEDULER_NOT_CONFIGURED'}
+        now = utc_now()
+        archive = self.root / 'daily_primary_refreshes' / ('refresh_' + digest({
+            'target_observation_date': target_observation_date,
+            'cutoff': cutoff.isoformat(),
+            'requested_at': now.isoformat(),
+        }))
+        if getattr(scheduler, 'custom_capture', False):
+            bundle = scheduler.capture(archive, now)
+        else:
+            bundle = scheduler._capture(archive, now, None)
+        if target_observation_date and str(bundle.observation_date) != target_observation_date:
+            return {'status': 'NO_MATCHING_INPUT', 'reason': 'REFRESH_OBSERVATION_DATE_MISMATCH',
+                    'target_observation_date': target_observation_date,
+                    'refreshed_observation_date': str(bundle.observation_date)}
+        input_id = self.register_input(bundle, activate=False)
+        return {'status': 'COMPLETE', 'input_id': input_id,
+                'observation_date': str(bundle.observation_date),
+                'coverage_type': bundle.coverage_type}
+
+    def _resolve_daily_primary_worker_input(self, payload):
+        requested_date = date.fromisoformat(payload['requested_observation_date']) if payload.get('requested_observation_date') else None
+        if payload.get('input_id'):
+            return self.input(payload['input_id'], requested_date)
+        return self.strategy_input(None, requested_date)
+
+    def _daily_primary_not_ready_outcome(self, ctx, trace, *, input_id, cutoff, readiness, refresh_actions,
+                                         readiness_evaluations=None):
+        attempt = self._daily_primary_attempt(job_id=ctx.job_id, input_id=input_id, cutoff=cutoff,
+            final_status='NOT_READY', readiness=readiness, refresh_actions=refresh_actions,
+            strategy_started=False, strategy_completed=False, persistence_completed=False,
+            export_completed=False, recommendation_published=False,
+            readiness_evaluations=readiness_evaluations)
+        def write(connection):
+            self._write_daily_primary_attempt(connection, attempt)
+        with trace.stage('PERSISTENCE', metadata={'final_status': 'NOT_READY',
+                                                  'recommendation_published': False}):
+            outcome = ctx.complete(attempt, write)
+        trace.update(status='NOT_READY', business_job_state='SUCCEEDED',
+                     result_ready=False, recommendation_published=False)
+        trace.finish(status='NOT_READY', metadata={'result_ready': False,
+            'final_status': 'NOT_READY', 'strategy_started': False,
+            'recommendation_published': False})
+        self.daily_traces.persist(trace, 'NOT_READY')
+        return outcome
+
+    def _daily_primary_failed_outcome(self, ctx, trace, *, input_id, cutoff, readiness,
+                                      refresh_actions, exc, strategy_started, run_id=None,
+                                      readiness_evaluations=None):
+        error = {'code': 'DAILY_PRIMARY_INTERNAL_FAILURE',
+                 'message': 'daily primary failed after readiness passed; no official recommendation published',
+                 'component': 'candidate',
+                 'type': type(exc).__name__}
+        attempt = self._daily_primary_attempt(job_id=ctx.job_id, input_id=input_id, cutoff=cutoff,
+            final_status='FAILED', readiness=readiness, refresh_actions=refresh_actions,
+            run_id=run_id, strategy_started=strategy_started, strategy_completed=False,
+            persistence_completed=False, export_completed=False, recommendation_published=False,
+            error={'type': type(exc).__name__, 'code': error['code']},
+            readiness_evaluations=readiness_evaluations)
+        def write(connection):
+            self._write_daily_primary_attempt(connection, attempt)
+        with trace.stage('PERSISTENCE', metadata={'final_status': 'FAILED',
+                                                  'recommendation_published': False}):
+            outcome = ctx.fail(attempt, error, write)
+        trace.fail('DAILY_PRIMARY_INTERNAL_FAILURE')
+        trace.finish(status='FAILED', metadata={'result_ready': False,
+            'final_status': 'FAILED', 'strategy_started': strategy_started,
+            'recommendation_published': False, 'error_type': type(exc).__name__})
+        self.daily_traces.persist(trace, 'FAILED')
+        return outcome
 
     def _build_strategy_experiment_result(self, input_id, bundle, cutoff, config, *, market_session=None,
                                           validation_role='MANUAL_OR_REPLAY', primary_signal_cutoff=None,
@@ -996,6 +1183,7 @@ class CandidateService:
                 if row.get('validation_epoch_id') == selected_id and row.get('official_primary_capture') is True]
         attempted = {row['signal_observation_date'] for row in rows}
         failed_capture_days = set()
+        not_ready_primary_days = set()
         # A failed capture has no signal row, but remains operational evidence.
         from .scheduler import SH
         for job in self._all('candidate_schedule_events'):
@@ -1005,9 +1193,18 @@ class CandidateService:
                 saved_job = self.jobs.get(job.get('job_id') or job['event_id'])
                 if saved_job and saved_job['state'] in {'FAILED','CANCELLED','INTERRUPTED'}:
                     failed_capture_days.add(attempt_day)
+        events_by_job = {row.get('job_id'): row for row in self._all('candidate_schedule_events')
+                         if row.get('validation_epoch_id') == selected_id and row.get('market_session') == 'EVENING'}
+        for attempt in self._all('daily_primary_attempts'):
+            if attempt.get('final_status') != 'NOT_READY' or attempt.get('job_id') not in events_by_job:
+                continue
+            day = attempt.get('observation_date')
+            if day:
+                attempted.add(day)
+                not_ready_primary_days.add(day)
         evaluable = {row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is True}
         no_focus = {row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is True and (row.get('counts') or {}).get('focus') == 0}
-        unavailable = ({row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is not True} | failed_capture_days) - evaluable
+        unavailable = ({row['signal_observation_date'] for row in rows if row.get('official_validation_signal_countable') is not True} | failed_capture_days | not_ready_primary_days) - evaluable
         return {'validation_epoch_id': selected_id, 'current_validation_epoch_id': current['validation_epoch_id'],
             'identity': identity, 'epoch': registered, 'read_only': True,
             'primary_capture_attempted_days': len(attempted), 'evaluable_official_signal_days': len(evaluable),
@@ -1036,34 +1233,91 @@ class CandidateService:
         payload = ctx.payload
         trace = self.daily_traces.for_job(self.jobs.get(ctx.job_id))
         with trace.activate():
+            refresh_actions = []
+            readiness_evaluations = []
+            input_id = payload.get('input_id')
+            readiness = None
+            strategy_started = False
+            result = None
             with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER'}):
-                _, bundle = self.input(payload['input_id'])
+                input_id, bundle = self._resolve_daily_primary_worker_input(payload)
                 config = self.current_config()
             cutoff = datetime.fromisoformat(payload['cutoff'])
             trace.update(decision_cutoff=payload['cutoff'], config_hash=config.config_hash)
-            ctx.update(.2, '运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
-            result = self._build_daily_primary_strategy_result(
-                payload['input_id'], bundle, cutoff, config,
-                market_session=payload.get('market_session', 'ON_DEMAND_DAILY_PRIMARY'),
-                validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
-                primary_signal_cutoff=payload.get('primary_signal_cutoff'),
-                scheduler_job_id=payload.get('scheduler_job_id'))
-            stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
-            counts = stage.get('counts') or {}
-            terminal = {'strategy_experiment_run_id': result['run_id'], 'run_id': result['run_id'],
-                'status': 'complete', 'quality': stage.get('status'), 'execution_profile': 'DAILY_PRIMARY_FAST',
-                'stage_aware_counts': {key: counts.get(key, 0) for key in ('eligible', 'focus', 'watch', 'rejected', 'unknown')}}
-            def write(connection):
-                self._write_strategy_result(connection, result, created_at=payload['cutoff'])
-                self.store._put_document(connection, 'daily_primary_trace_links', trace.trace_id,
-                    {'trace_id': trace.trace_id, 'run_id': result['run_id'], 'job_id': ctx.job_id,
-                     'input_id': payload['input_id'], 'result_hash': result['content_hash']})
-            with trace.stage('PERSISTENCE', run_id=result['run_id'], metadata={'includes_transaction_commit': True}):
-                outcome = ctx.complete(terminal, write)
-            self.daily_traces.bind_run(trace, result['run_id'])
-            trace.update(status='READY_FOR_EXPORT', result_hash=result['content_hash'], business_job_state='SUCCEEDED')
-            self.daily_traces.persist(trace, 'BUSINESS_COMMITTED')
-            return outcome
+            with trace.stage('STRATEGY_INPUT_READINESS', metadata={'evaluation': 'BEFORE_REFRESH'}) as span:
+                readiness = self._daily_primary_readiness(input_id, bundle, cutoff, config)
+                readiness_evaluations.append({'evaluation': 'BEFORE_REFRESH', 'readiness': readiness})
+                span['metadata'].update(final_readiness=readiness['final_readiness'],
+                    blocking_requirements=[row['code'] for row in readiness.get('blocking_requirements') or ()],
+                    instrument_required_incomplete_count=readiness.get('instrument_required_incomplete_count'))
+            if (not readiness['global_required_ready'] and payload.get('refresh_allowed')
+                    and int(payload.get('refresh_attempt_limit') or 0) > 0):
+                with trace.stage('PROVIDER_REFRESH_INCREMENTAL_INGESTION',
+                                 metadata={'reason': 'GLOBAL_REQUIRED_NOT_READY'}):
+                    try:
+                        action = self._daily_primary_incremental_refresh(
+                            target_observation_date=payload.get('requested_observation_date') or readiness.get('observation_date'),
+                            cutoff=cutoff, trace=trace, prior_readiness=readiness)
+                    except UnavailableError as exc:
+                        action = {'status': 'SOURCE_NOT_READY', 'reason': str(exc.reason),
+                                  'component': exc.component}
+                    refresh_actions.append(action)
+                if action.get('status') == 'COMPLETE':
+                    with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER_AFTER_REFRESH'}):
+                        input_id, bundle = self.input(action['input_id'])
+                    with trace.stage('STRATEGY_INPUT_READINESS', metadata={'evaluation': 'AFTER_REFRESH'}) as span:
+                        readiness = self._daily_primary_readiness(input_id, bundle, cutoff, config)
+                        readiness_evaluations.append({'evaluation': 'AFTER_REFRESH', 'readiness': readiness})
+                        span['metadata'].update(final_readiness=readiness['final_readiness'],
+                            blocking_requirements=[row['code'] for row in readiness.get('blocking_requirements') or ()],
+                            instrument_required_incomplete_count=readiness.get('instrument_required_incomplete_count'))
+            if not readiness['global_required_ready']:
+                ctx.update(.95, 'Daily Primary 必需输入未就绪；不启动策略，不发布正式推荐')
+                return self._daily_primary_not_ready_outcome(ctx, trace, input_id=input_id, cutoff=cutoff,
+                    readiness=readiness, refresh_actions=refresh_actions,
+                    readiness_evaluations=readiness_evaluations)
+            try:
+                ctx.update(.2, '运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
+                strategy_started = True
+                result = self._build_daily_primary_strategy_result(
+                    input_id, bundle, cutoff, config,
+                    market_session=payload.get('market_session', 'ON_DEMAND_DAILY_PRIMARY'),
+                    validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
+                    primary_signal_cutoff=payload.get('primary_signal_cutoff'),
+                    scheduler_job_id=payload.get('scheduler_job_id'))
+                export_validation = self._daily_primary_export_validation(result)
+                stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
+                counts = stage.get('counts') or {}
+                terminal = self._daily_primary_attempt(job_id=ctx.job_id, input_id=input_id, cutoff=cutoff,
+                    final_status='READY', readiness=readiness, refresh_actions=refresh_actions,
+                    run_id=result['run_id'], strategy_started=True, strategy_completed=True,
+                    persistence_completed=True, export_completed=True, recommendation_published=True,
+                    stage_aware_counts={key: counts.get(key, 0) for key in ('eligible', 'focus', 'watch', 'rejected', 'unknown')},
+                    export_validation=export_validation, readiness_evaluations=readiness_evaluations)
+                terminal.update(strategy_experiment_run_id=result['run_id'], run_id=result['run_id'],
+                    quality=stage.get('status'), execution_profile='DAILY_PRIMARY_FAST')
+                def write(connection):
+                    self._write_strategy_result(connection, result, created_at=payload['cutoff'])
+                    self._write_daily_primary_attempt(connection, terminal)
+                    self.store._put_document(connection, 'daily_primary_trace_links', trace.trace_id,
+                        {'trace_id': trace.trace_id, 'run_id': result['run_id'], 'job_id': ctx.job_id,
+                         'input_id': input_id, 'result_hash': result['content_hash']})
+                with trace.stage('PERSISTENCE', run_id=result['run_id'], metadata={'includes_transaction_commit': True,
+                                                                                   'final_status': 'READY'}):
+                    outcome = ctx.complete(terminal, write)
+                self.daily_traces.bind_run(trace, result['run_id'])
+                trace.update(status='READY_FOR_EXPORT', result_hash=result['content_hash'], business_job_state='SUCCEEDED',
+                             final_status='READY', recommendation_published=True)
+                self.daily_traces.persist(trace, 'BUSINESS_COMMITTED')
+                return outcome
+            except Exception as exc:
+                from ..jobs import JobCancelled
+                if isinstance(exc, JobCancelled):
+                    raise
+                return self._daily_primary_failed_outcome(ctx, trace, input_id=input_id, cutoff=cutoff,
+                    readiness=readiness, refresh_actions=refresh_actions, exc=exc,
+                    strategy_started=strategy_started, run_id=(result or {}).get('run_id'),
+                    readiness_evaluations=readiness_evaluations)
 
     def _write_strategy_projection(self, connection, run):
         from .strategy_tracking import authoritative_strategy_items

@@ -195,30 +195,23 @@ def test_one_request_fixture_reaches_real_api_commit_and_result_ready_with_unkno
         assert accepted.status_code==202
         job = _wait_job(core,accepted.json['job_id'])
         deadline=time.monotonic()+5
-        while trace.trace['status']!='READY_FOR_EXPORT' and time.monotonic()<deadline:time.sleep(.01)
-        assert job['state']=='SUCCEEDED' and job['result']['stage_aware_counts']['eligible']==0
-        with trace.activate():response=client.get('/api/strategy-experiments/'+job['result']['run_id']+'/export')
-        assert response.status_code==200 and response.data
+        while trace.trace['status']=='RUNNING' and time.monotonic()<deadline:time.sleep(.01)
+        assert job['state']=='SUCCEEDED'
+        assert job['result']['final_status']=='NOT_READY'
+        assert job['result']['strategy_started'] is False
+        assert job['result']['recommendation_published'] is False
         report=core.candidates.daily_traces.report(trace)
-        assert report['e2e_verified'] is not telemetry_failure
+        assert report['e2e_verified'] is False
         summary=harness.live_incremental_summary(manifest,job,report)
-        assert summary['normal_incremental_live_e2e']==('FAILED_TRACE_VALIDATION' if telemetry_failure else 'VERIFIED_ENGINEERING_PATH_WITH_EXPLICIT_DATA_GAPS')
+        assert summary['normal_incremental_live_e2e']=='FAILED_TRACE_VALIDATION'
         assert summary['nonempty_feature_path']=='NOT_EXERCISED_NO_ELIGIBLE_FACT_POPULATION'
         assert_measured(trace)
         live=[s for s in trace.trace['stages'] if s['name']=='PROVIDER_REFRESH_INCREMENTAL_INGESTION' and s['status']=='SUCCESS']
         assert len(live)==1 and trace.trace['actual_network_requests'] is None
         assert trace.trace['actual_http_attempts']==0 and trace.trace['actual_sdk_operations']==3
-        if telemetry_failure:
-            assert report['persistence_by_phase']['RESULT_READY']['status']=='TRACE_PERSIST_FAILED'
-        else:
-            saved=store.get_document('daily_primary_trace_snapshots',report['persistence_by_phase']['RESULT_READY']['document_id'])
-            assert saved['status']=='SUCCESS' and any(s['name']=='RESULT_READY' and s['bytes_written']==len(response.data) for s in saved['stages'])
+        assert report['persistence_by_phase']['NOT_READY']['status']=='SUCCESS'
         assert not store.list_documents('candidate_input_activations')
         assert not store.list_documents('stage_aware_prospective_primary_runs')
-        direct=run_active_daily_strategy(load_bundle(store,iid),cutoff=datetime.fromisoformat(job['payload']['cutoff']))
-        actual=response.get_json()
-        assert actual['prospective_validation']['official_primary_capture'] is False
-        assert actual['prospective_validation']['official_validation_signal_countable'] is False
-        assert actual['results']['STAGE_AWARE_MOMENTUM_V2']['counts']==direct['results']['STAGE_AWARE_MOMENTUM_V2']['counts']
+        assert not store.list_documents('strategy_experiment_runs')
     finally:
         core.close()

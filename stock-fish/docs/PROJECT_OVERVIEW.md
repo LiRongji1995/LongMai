@@ -1,3 +1,9 @@
+# Daily Primary Reliability v1 当前修订入口（2026-09-21）
+
+本节优先于下方 R16-R1/R16 历史快照。当前新增的是 Daily Primary 正式路径可靠性屏障：`daily_primary_readiness.py` 在 `STAGE_AWARE_MOMENTUM_V2` 策略外侧复用现有 context/coverage diagnostics，先判断 strategy-input readiness，再允许策略启动、持久化与发布。GLOBAL REQUIRED 未就绪时终态为 `NOT_READY`，不启动策略、不发布正式推荐；instrument-level 缺失进入 typed diagnostics，并由既有策略语义保持 `UNKNOWN`，不静默改成 `REJECTED`。内部执行、持久化或导出失败在 readiness 通过后保留为 `FAILED`。本修订不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值或 `MARKET_EDGE=NOT_ESTABLISHED`；`READY_WITH_LIMITATIONS` 仅保留语义，不在 v1 中主动使用。性能 <60 秒、内存回归、Go Phase 2、Score、Enhanced Evidence、market-edge 和历史重审仍不属于本轮。
+
+---
+
 # R16-R1 当前修订入口（2026-09-14）
 
 本节优先于下方 R16 历史快照。当前工作限 R16-R1：Contract/Comparator 修复、生产 oracle、corrected 历史、真实外层 trace 和有限重复工作优化；不开始 R17、不调选股语义、不启用 Go 生产。详见 [工程边界](R16_R1_ENGINEERING.md)、[生产 oracle](R16_R1_PRODUCTION_ORACLE.md)、[历史构建](R16_R1_CORRECTED_HISTORY.md) 与 [复现](REPRODUCE.md)。resolver/派生缓存使用 R16_R1_PIT_INSTANT 身份，旧输入和证据只读保留。实际 readiness/official/score/运行进程必须读取本次 post-commit 审计，不能沿用下文日期化数值。
@@ -70,7 +76,7 @@ V2全部3,041只中FOCUS0、WATCH0、REJECTED2851、UNKNOWN190，仍为 `SIGNAL_
 | 模块 | 实际职责与边界 |
 |---|---|
 | [app.py](../app.py)、[api.py](../stockfish_core/api.py) | 本地 Web/API 外壳；请求只能选择已登记输入 ID，不能通过 HTTP 声明任意文件可信或上传假收益 |
-| [service.py](../stockfish_core/service.py)、[candidate_service.py](../stockfish_core/yaogu/candidate_service.py) | 组装服务、调用正式计算、原子发布与持久结果；R14/R15 日常 primary 调用 active V2 快路径并保存 compact summary/detail，research endpoint 仍保留完整多臂实验 |
+| [service.py](../stockfish_core/service.py)、[candidate_service.py](../stockfish_core/yaogu/candidate_service.py)、[daily_primary_readiness.py](../stockfish_core/yaogu/daily_primary_readiness.py) | 组装服务、调用正式计算、原子发布与持久结果；日常 primary 先做 GLOBAL REQUIRED / instrument-level readiness 判断，再调用 active V2 快路径并保存 compact summary/detail；research endpoint 仍保留完整多臂实验 |
 | [data_pipeline.py](../stockfish_core/yaogu/data_pipeline.py)、[request_queue.py](../stockfish_core/yaogu/request_queue.py) | 全主板分层请求、缓存复用、续采、失败分类和预算；不是无限重试或每天全量重下 |
 | [contracts.py](../stockfish_core/yaogu/contracts.py)、[visibility.py](../stockfish_core/yaogu/visibility.py) | 类型、单位、来源四时钟、父回执及逐行可见性；拒绝未来或无法核验的证据 |
 | [jobs.py](../stockfish_core/jobs.py)、[scheduler.py](../stockfish_core/yaogu/scheduler.py) | SQLite 持久任务；核心单执行 worker、最多 20 个待执行任务；应用进程内唯一调度器；20:30 official primary 走 Daily Primary Fast Path |

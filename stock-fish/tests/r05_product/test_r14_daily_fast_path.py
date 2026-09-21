@@ -143,7 +143,7 @@ def test_cold_recompute_after_cache_clear_is_business_equivalent(tmp_path):
 def _service(tmp_path, monkeypatch):
     import stockfish_core.yaogu.candidate_service as module
 
-    bundle, cutoff = make_bundle(7)
+    bundle, cutoff = make_bundle(7, session_count=260)
     monkeypatch.setattr(module, "utc_now", lambda: cutoff)
     core = ApplicationService(
         root=tmp_path / "state",

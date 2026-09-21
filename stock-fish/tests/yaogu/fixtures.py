@@ -5,15 +5,16 @@ from zoneinfo import ZoneInfo
 from stockfish_core.yaogu.contracts import MarketInput,digest
 
 TZ=ZoneInfo('Asia/Shanghai')
-def make_bundle(count=6):
-    days=[];d=date(2026,2,2)
-    while len(days)<85:
+def make_bundle(count=6, *, session_count=85, start_date=date(2026,2,2)):
+    days=[];d=start_date
+    while len(days)<session_count:
         if d.weekday()<5:days.append(d)
         d+=timedelta(days=1)
     start=datetime.combine(days[0],time(0),TZ)
     def clocks(stamp):return {'event_time':stamp,'source_published_at':stamp,'first_seen_at':stamp,'ingested_at':stamp}
     securities=[];bars=[]; ids=[f'TEST{i:03d}' for i in range(count)]
-    patterns={0:{84},1:{83,84},2:{82,83,84},3:{80,82},4:{82,83}}
+    last=len(days)-1
+    patterns={0:{last},1:{last-1,last},2:{last-2,last-1,last},3:{last-4,last-2},4:{last-2,last-1}}
     for number,iid in enumerate(ids):
         securities.append(dict(instrument_id=iid,exchange='SSE',board='MAIN',security_type='A_COMMON',listed_on=days[0],effective_from=days[0],st=False,suspended=False,name=iid,source_refs=['fixture-master'],**clocks(start)))
         prev=Decimal('10.00')

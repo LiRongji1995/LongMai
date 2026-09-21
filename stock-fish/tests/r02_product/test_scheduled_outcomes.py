@@ -1,5 +1,5 @@
 """Independent after-close observation jobs: explicit TEST_FIXTURE input revisions."""
-from datetime import datetime,time,timedelta
+from datetime import date,datetime,time,timedelta
 from decimal import Decimal,ROUND_HALF_UP
 import pytest
 
@@ -8,6 +8,7 @@ from stockfish_core.observed_data import exchange_calendar_2026
 from stockfish_core.service import ApplicationService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.candidate_service import CandidateRequest
+from stockfish_core.yaogu.contracts import digest
 from stockfish_core.yaogu.scheduler import CandidateScheduler
 from tests.yaogu.fixtures import make_bundle,TZ
 from tests.r02_product.test_candidate_product_path import ControlledFixtureClock,ForbiddenLegacyQuant,wait_job
@@ -16,7 +17,7 @@ from tests.r02_product.test_candidate_product_path import ControlledFixtureClock
 def observer(tmp_path,monkeypatch):
     import stockfish_core.yaogu.candidate_service as candidate_module
     monkeypatch.delenv('STOCKFISH_API_KEY',raising=False)
-    bundle,cutoff=make_bundle(6)
+    bundle,cutoff=make_bundle(6, session_count=260, start_date=date(2025,8,4))
     next_dates=tuple(d for d in exchange_calendar_2026().sessions if d>bundle.observation_date)[:10]
     bundle=bundle.model_copy(update={'sessions':(*bundle.sessions,*next_dates)})
     clock=ControlledFixtureClock(cutoff)
@@ -274,11 +275,11 @@ def test_r12_failed_price_source_primary_is_capture_but_not_countable(observer):
     evening=next(e for e in scheduler.tick() if e['market_session']=='EVENING')
     done=wait_job(client,evening['job_id'])
     assert done['state']=='SUCCEEDED',done
-    run=core.candidates.strategy_experiment(done['result']['stage_aware_primary_run_id'])
-    prospective=run['prospective_validation']
-    assert prospective['official_primary_capture'] is True
-    assert prospective['official_validation_signal_countable'] is False
-    assert run['signal_data_quality']['data_quality_status']=='SIGNAL_DATA_UNAVAILABLE'
+    assert done['result']['daily_primary_final_status']=='NOT_READY'
+    assert 'stage_aware_primary_run_id' not in done['result']
+    attempt=core.store.get_document('daily_primary_attempts','daily_primary_attempt_'+digest({'job_id':evening['job_id']}))
+    assert attempt['strategy_started'] is False
+    assert attempt['recommendation_published'] is False
     state=core.candidates.validation_state()
     assert state['primary_capture_attempted_days']==1
     assert state['evaluable_official_signal_days']==0

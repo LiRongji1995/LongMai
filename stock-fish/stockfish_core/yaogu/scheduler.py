@@ -200,9 +200,13 @@ class CandidateScheduler:
             readiness_blockers.append('PRIMARY_SCHEDULE_NOT_REGISTERED')
         validation_state = self.service.validation_state(primary.get('validation_epoch_id'))
         latest_capture = validation_state.get('latest_primary_capture')
+        not_ready_attempt = next((row for row in self.service._all('daily_primary_attempts')
+                                  if row.get('job_id') == job_id and row.get('final_status') == 'NOT_READY'), None)
         if primary_run:
             status = 'PROSPECTIVE_PRIMARY_PERSISTED'
         elif latest_capture and latest_capture.get('signal_observation_date') == primary.get('signal_session'):
+            status = 'PRIMARY_CAPTURE_PERSISTED_SIGNAL_DATA_UNAVAILABLE'
+        elif not_ready_attempt:
             status = 'PRIMARY_CAPTURE_PERSISTED_SIGNAL_DATA_UNAVAILABLE'
         elif event and event.get('status') == 'MISSED_SERVICE_OFFLINE':
             status = 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'
