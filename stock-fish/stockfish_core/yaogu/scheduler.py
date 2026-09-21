@@ -517,7 +517,8 @@ class CandidateScheduler:
         candidate_payload = {'input_id': input_id, 'config_hash': config.config_hash,
             'profile': 'FUNDS_V1' if config.funds_primary else 'DAILY_V1', 'decision_cutoff': actual_cutoff.isoformat(),
             'market_session': payload['market_session'], 'parent_run_id': parent.run_id if parent else None,
-            'revision': parent.revision + 1 if parent else 1, 'capture_timing': timing}
+            'revision': parent.revision + 1 if parent else 1, 'capture_timing': timing,
+            'expected_observation_session': payload['session']}
         activation = {'input_id': input_id, 'observation_date': bundle.observation_date.isoformat(),
                       'activated_at': actual_cutoff.isoformat(), 'coverage_type': bundle.coverage_type}
         # Raw files may have been prepared already. Activation, candidate authority

@@ -5,7 +5,9 @@ import json
 import os
 from pathlib import Path
 import time
+from datetime import date, datetime
 from decimal import Decimal
+from zoneinfo import ZoneInfo
 
 import pytest
 
@@ -13,7 +15,10 @@ from stockfish_core.api import create_app
 from stockfish_core.service import ApplicationService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.contracts import digest
+from stockfish_core.yaogu.scheduler import CandidateScheduler
 from tests.yaogu.fixtures import make_bundle
+
+TZ = ZoneInfo("Asia/Shanghai")
 
 
 def _wait_job(core, job_id, *, timeout=20):
@@ -26,7 +31,15 @@ def _wait_job(core, job_id, *, timeout=20):
     raise AssertionError(f"job did not finish: {job_id}")
 
 
-def _core(tmp_path, monkeypatch, bundle):
+class _MutableClock:
+    def __init__(self, current):
+        self.current = current
+
+    def __call__(self):
+        return self.current
+
+
+def _core(tmp_path, monkeypatch, bundle, *, now=None):
     import stockfish_core.yaogu.candidate_service as module
 
     cutoff = make_bundle(1, session_count=260)[1].replace(
@@ -34,7 +47,8 @@ def _core(tmp_path, monkeypatch, bundle):
         month=bundle.observation_date.month,
         day=bundle.observation_date.day,
     )
-    monkeypatch.setattr(module, "utc_now", lambda: cutoff)
+    clock = now or cutoff
+    monkeypatch.setattr(module, "utc_now", clock if callable(clock) else lambda: clock)
     core = ApplicationService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "service.sqlite3"),
@@ -43,6 +57,18 @@ def _core(tmp_path, monkeypatch, bundle):
     )
     input_id = core.candidates.register_input(bundle, activate=False)
     return core, input_id, cutoff
+
+
+def _empty_core(tmp_path, monkeypatch, *, now):
+    import stockfish_core.yaogu.candidate_service as module
+
+    monkeypatch.setattr(module, "utc_now", now if callable(now) else lambda: now)
+    return ApplicationService(
+        root=tmp_path / "state",
+        store=SQLiteStore(tmp_path / "service.sqlite3"),
+        allow_test_fixture=True,
+        data_dir=tmp_path / "no_model",
+    )
 
 
 def _attempt(core, job_id):
@@ -61,6 +87,59 @@ def _with_liquid_amount(bundle, instrument_ids):
             if bar.instrument_id in wanted else bar
             for bar in bundle.bars
         )
+    })
+
+
+def _shift_clocked(obj, delta, extra=None):
+    updates = {name: getattr(obj, name) + delta
+               for name in ("event_time", "source_published_at", "first_seen_at", "ingested_at")}
+    if extra:
+        updates.update(extra)
+    return obj.model_copy(update=updates)
+
+
+def _shift_optional_day(value, delta):
+    return value + delta if value is not None else None
+
+
+def _bundle_ending_on(bundle, observation_date):
+    delta = observation_date - bundle.observation_date
+    securities = tuple(_shift_clocked(sec, delta, {
+        "listed_on": sec.listed_on + delta,
+        "effective_from": sec.effective_from + delta,
+        "effective_to": _shift_optional_day(sec.effective_to, delta),
+        "delisted_on": _shift_optional_day(sec.delisted_on, delta),
+    }) for sec in bundle.universe.securities)
+    bars = tuple(_shift_clocked(bar, delta, {"session": bar.session + delta}) for bar in bundle.bars)
+    themes = tuple(_shift_clocked(theme, delta, {
+        "effective_from": theme.effective_from + delta,
+        "effective_to": _shift_optional_day(theme.effective_to, delta),
+    }) for theme in bundle.themes)
+    receipts = tuple(_shift_clocked(receipt, delta, {
+        "business_sessions": tuple(day + delta for day in receipt.business_sessions),
+    }) for receipt in bundle.receipts)
+    universe = _shift_clocked(bundle.universe, delta, {"securities": securities})
+    return bundle.model_copy(update={
+        "observation_date": observation_date,
+        "sessions": tuple(day + delta for day in bundle.sessions),
+        "universe": universe,
+        "bars": bars,
+        "themes": themes,
+        "receipts": receipts,
+    })
+
+
+def _capture_visible_at(bundle, visible_at):
+    def visible(obj):
+        return obj.model_copy(update={"first_seen_at": visible_at, "ingested_at": visible_at})
+
+    return bundle.model_copy(update={
+        "universe": visible(bundle.universe).model_copy(update={
+            "securities": tuple(visible(sec) for sec in bundle.universe.securities),
+        }),
+        "bars": tuple(visible(bar) for bar in bundle.bars),
+        "themes": tuple(visible(theme) for theme in bundle.themes),
+        "receipts": tuple(visible(receipt) for receipt in bundle.receipts),
     })
 
 
@@ -128,7 +207,7 @@ def test_scenario_a_complete_required_data_becomes_ready(tmp_path, monkeypatch):
 
 
 def test_scenario_b_initially_missing_refresh_succeeds(tmp_path, monkeypatch):
-    ready, _ = make_bundle(7, session_count=260)
+    ready, _ = make_bundle(7, session_count=260, start_date=date(2026, 1, 1))
     bad = _without_bars(ready, lambda bar: bar.session == ready.observation_date)
     core, _bad_input_id, _ = _core(tmp_path, monkeypatch, bad)
     try:
@@ -153,8 +232,42 @@ def test_scenario_b_initially_missing_refresh_succeeds(tmp_path, monkeypatch):
         core.close()
 
 
-def test_scenario_c_required_data_never_ready_does_not_start_strategy(tmp_path, monkeypatch):
+def test_scenario_b2_real_refresh_implementation_registers_expected_session(tmp_path, monkeypatch):
+    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
+    expected = date(2026, 9, 18)
     ready, _ = make_bundle(7, session_count=260)
+    ready = _bundle_ending_on(ready, expected)
+    clock = _MutableClock(request_started)
+    core = _empty_core(tmp_path, monkeypatch, now=clock)
+    try:
+        scheduler = CandidateScheduler(core.candidates, capture=lambda *_args: ready, clock=clock)
+        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
+        action = attempt["refresh_actions"][0]
+        evaluations = attempt["readiness_evaluations"]
+
+        assert scheduler.custom_capture is True
+        assert job["state"] == "SUCCEEDED", job
+        assert attempt["final_status"] == "READY"
+        assert evaluations[0]["readiness"]["global_required_ready"] is False
+        assert evaluations[-1]["freshness"]["freshness_status"] == "FRESH"
+        assert action["status"] == "COMPLETE"
+        assert action["target_observation_date"] == str(expected)
+        assert action["observation_date"] == str(expected)
+        assert action["refresh_implementation_path"].startswith("CandidateService._daily_primary_incremental_refresh")
+        assert action["scheduler_capture_invoked"] is True
+        assert attempt["input_id"] == action["input_id"]
+        assert attempt["expected_observation_session"] == str(expected)
+        assert attempt["strategy_started"] is True
+        assert export_response.status_code == 200
+        _scenario_evidence("scenario_b2_real_refresh_implementation", core=core, accepted=accepted,
+                           job=job, attempt=attempt, trace=trace, export_response=export_response,
+                           extra={"refresh_action": action})
+    finally:
+        core.close()
+
+
+def test_scenario_c_required_data_never_ready_does_not_start_strategy(tmp_path, monkeypatch):
+    ready, _ = make_bundle(7, session_count=260, start_date=date(2026, 1, 1))
     bad = _without_bars(ready, lambda bar: bar.session == ready.observation_date)
     core, _bad_input_id, _ = _core(tmp_path, monkeypatch, bad)
     calls = {"strategy": 0}
@@ -178,6 +291,119 @@ def test_scenario_c_required_data_never_ready_does_not_start_strategy(tmp_path, 
         _scenario_evidence("scenario_c_never_ready", core=core, accepted=accepted,
                            job=job, attempt=attempt, trace=trace, export_response=export_response,
                            extra={"strategy_invocation_count_observed": calls["strategy"]})
+    finally:
+        core.close()
+
+
+def test_scenario_g_stale_but_complete_input_refreshes_expected_session(tmp_path, monkeypatch):
+    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
+    stale_day = date(2026, 9, 17)
+    expected = date(2026, 9, 18)
+    ready, _ = make_bundle(7, session_count=260)
+    stale = _bundle_ending_on(ready, stale_day)
+    fresh = _bundle_ending_on(ready, expected)
+    clock = _MutableClock(request_started)
+    core, stale_input_id, _ = _core(tmp_path, monkeypatch, stale, now=clock)
+    try:
+        CandidateScheduler(core.candidates, capture=lambda *_args: fresh, clock=clock)
+        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
+        initial = attempt["readiness_evaluations"][0]
+        action = attempt["refresh_actions"][0]
+
+        assert job["state"] == "SUCCEEDED", job
+        assert initial["readiness"]["freshness"]["freshness_status"] == "STALE_INPUT"
+        assert "OBSERVATION_SESSION_STALE" in [
+            row["code"] for row in initial["readiness"]["blocking_requirements"]
+        ]
+        assert initial["readiness"]["global_required_ready"] is False
+        assert action["target_observation_date"] == str(expected)
+        assert action["target_observation_date"] != str(stale_day)
+        assert attempt["input_id"] != stale_input_id
+        assert attempt["observation_date"] == str(expected)
+        assert attempt["freshness"]["freshness_status"] == "FRESH"
+        assert attempt["final_status"] == "READY"
+        assert attempt["strategy_started"] is True
+        assert export_response.status_code == 200
+        _scenario_evidence("scenario_g_stale_but_complete", core=core, accepted=accepted,
+                           job=job, attempt=attempt, trace=trace, export_response=export_response,
+                           extra={"initial_input_id": stale_input_id, "refresh_action": action})
+    finally:
+        core.close()
+
+
+def test_scheduled_evening_rejects_stale_complete_input(tmp_path, monkeypatch):
+    stale_day = date(2026, 9, 17)
+    expected = date(2026, 9, 18)
+    request_started = datetime(2026, 9, 21, 20, 30, tzinfo=TZ)
+    ready, _ = make_bundle(7, session_count=260)
+    stale = _bundle_ending_on(ready, stale_day)
+    core, input_id, _ = _core(tmp_path, monkeypatch, stale, now=request_started)
+    try:
+        config = core.candidates.current_config()
+        job = core.jobs.submit("candidate_run", {
+            "input_id": input_id,
+            "config_hash": config.config_hash,
+            "profile": "DAILY_V1",
+            "decision_cutoff": request_started.isoformat(),
+            "market_session": "EVENING",
+            "parent_run_id": None,
+            "revision": 1,
+            "expected_observation_session": str(expected),
+        }, job_id="schedule_stale_evening_fixture")
+        done = _wait_job(core, job["job_id"])
+        attempt = _attempt(core, job["job_id"])
+
+        assert done["state"] == "SUCCEEDED", done
+        assert done["result"]["daily_primary_final_status"] == "NOT_READY"
+        assert "stage_aware_primary_run_id" not in done["result"]
+        assert attempt["final_status"] == "NOT_READY"
+        assert attempt["daily_primary_mode"] == "SCHEDULED_EVENING"
+        assert attempt["strategy_started"] is False
+        assert attempt["recommendation_published"] is False
+        assert "OBSERVATION_SESSION_STALE" in [
+            row["code"] for row in attempt["blocking_requirements"]
+        ]
+        _scenario_evidence("scheduled_evening_stale_complete_barrier", core=core,
+                           job=done, attempt=attempt,
+                           extra={"input_id": input_id, "expected_observation_session": str(expected)})
+    finally:
+        core.close()
+
+
+def test_scenario_h_refresh_visibility_sets_actual_decision_cutoff(tmp_path, monkeypatch):
+    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
+    visible_at = datetime(2026, 9, 21, 10, 7, tzinfo=TZ)
+    expected = date(2026, 9, 18)
+    ready, _ = make_bundle(7, session_count=260)
+    ready = _capture_visible_at(_bundle_ending_on(ready, expected), visible_at)
+    clock = _MutableClock(request_started)
+    core = _empty_core(tmp_path, monkeypatch, now=clock)
+
+    def delayed_capture(*_args):
+        clock.current = visible_at
+        return ready
+
+    try:
+        CandidateScheduler(core.candidates, capture=delayed_capture, clock=clock)
+        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
+        action = attempt["refresh_actions"][0]
+        actual = datetime.fromisoformat(attempt["actual_decision_cutoff"])
+        visible = datetime.fromisoformat(action["refreshed_data_visible_at"])
+
+        assert job["state"] == "SUCCEEDED", job
+        assert attempt["request_started_at"] == request_started.isoformat()
+        assert attempt["actual_decision_cutoff"] != attempt["request_started_at"]
+        assert action["capture_started_at"] == request_started.isoformat()
+        assert action["capture_completed_at"] == visible_at.isoformat()
+        assert actual >= visible
+        assert actual == visible_at
+        run = core.candidates.strategy_experiment(job["result"]["run_id"])
+        assert run["decision_cutoff"] == visible_at.isoformat()
+        assert run["prospective_validation"]["actual_decision_cutoff"] == visible_at.isoformat()
+        assert export_response.status_code == 200
+        _scenario_evidence("scenario_h_refresh_cutoff_visibility", core=core, accepted=accepted,
+                           job=job, attempt=attempt, trace=trace, export_response=export_response,
+                           extra={"refresh_action": action, "strategy_decision_cutoff": run["decision_cutoff"]})
     finally:
         core.close()
 
@@ -239,6 +465,41 @@ def test_scenario_e_none_bar_and_incomplete_window_are_typed_not_crashes(tmp_pat
         _scenario_evidence("scenario_e_none_and_window_typed", core=core, accepted=accepted,
                            job=job, attempt=attempt, trace=trace, export_response=export_response,
                            extra={"diagnostics": sample})
+    finally:
+        core.close()
+
+
+def test_typed_diagnostics_preserve_amount_turnover_and_adjustment_names(tmp_path, monkeypatch):
+    bundle, _ = make_bundle(12, session_count=260)
+    target = "TEST006"
+    current = bundle.observation_date
+    window = set(bundle.sessions[-6:])
+    changed = bundle.model_copy(update={
+        "bars": tuple(
+            bar.model_copy(update={
+                "amount_cny": None if bar.instrument_id == target and bar.session in window else bar.amount_cny,
+                "turnover_fraction": None if bar.instrument_id == target and bar.session == current else bar.turnover_fraction,
+            })
+            for bar in bundle.bars
+        )
+    })
+    core, input_id, _ = _core(tmp_path, monkeypatch, changed)
+    try:
+        accepted, job, attempt, trace, export_response = _run_daily_primary(core, input_id=input_id)
+        assert job["state"] == "SUCCEEDED", job
+        optional = {
+            row["instrument_id"]: row
+            for row in attempt["readiness"]["instrument_optional_evidence_gap_sample"]
+        }
+        typed = set(optional[target]["typed_reason_codes"])
+        assert "MISSING_AMOUNT" in typed
+        assert "MISSING_TURNOVER" in typed
+        assert "MISSING_ADJUSTMENT_FACTOR" in typed
+        assert "MISSING_FACTOR" not in typed
+        assert optional[target]["requiredness"] == "OPTIONAL"
+        _scenario_evidence("typed_diagnostics_preserve_specific_reasons", core=core, accepted=accepted,
+                           job=job, attempt=attempt, trace=trace, export_response=export_response,
+                           extra={"instrument_id": target, "typed_reason_codes": sorted(typed)})
     finally:
         core.close()
 

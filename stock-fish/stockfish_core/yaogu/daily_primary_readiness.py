@@ -11,7 +11,7 @@ from fractions import Fraction
 from .coverage_diagnostics import DEFAULT_FULL_MARKET_GATE, EXCHANGES
 
 
-READINESS_VERSION = "DAILY_PRIMARY_RELIABILITY_V1"
+READINESS_VERSION = "DAILY_PRIMARY_RELIABILITY_V1_1"
 REQUIRED = "REQUIRED"
 OPTIONAL = "OPTIONAL"
 ENHANCEMENT = "ENHANCEMENT"
@@ -21,12 +21,20 @@ INSTRUMENT = "INSTRUMENT"
 MISSING_REASON_TYPES = {
     "MISSING_CURRENT_RAW": "MISSING_BAR",
     "MISSING_HISTORY_SESSION": "INCOMPLETE_WINDOW",
-    "MISSING_AMOUNT": "MISSING_FACTOR",
-    "MISSING_TURNOVER": "MISSING_FACTOR",
-    "MISSING_ADJUSTMENT_FACTOR": "MISSING_FACTOR",
+    "MISSING_AMOUNT": "MISSING_AMOUNT",
+    "MISSING_TURNOVER": "MISSING_TURNOVER",
+    "MISSING_ADJUSTMENT_FACTOR": "MISSING_ADJUSTMENT_FACTOR",
     "MISSING_COMPARABLE_CLOSE": "MISSING_COMPARABLE_CLOSE",
     "COMPARABLE_BASIS_MISMATCH": "INCOMPARABLE_BASIS",
     "INSUFFICIENT_MA_HISTORY": "INCOMPLETE_WINDOW",
+}
+
+INSTRUMENT_REQUIRED_REASON_TYPES = {
+    "MISSING_CURRENT_RAW",
+    "MISSING_HISTORY_SESSION",
+    "MISSING_COMPARABLE_CLOSE",
+    "COMPARABLE_BASIS_MISMATCH",
+    "INSUFFICIENT_MA_HISTORY",
 }
 
 GLOBAL_PRICE_LAYERS = {
@@ -136,17 +144,21 @@ def evaluate_daily_primary_readiness(input_id: str | None, bundle, cutoff, *,
     ))
 
     instrument_incomplete = []
+    instrument_optional_gaps = []
     for row in diagnostics.get("missing_reason_ledger") or ():
         reasons = [reason for reason in (row.get("missing_reasons") or ()) if reason != "NONE"]
         if not reasons:
             continue
-        instrument_incomplete.append({
+        required_reasons = [reason for reason in reasons if reason in INSTRUMENT_REQUIRED_REASON_TYPES]
+        target = instrument_incomplete if required_reasons else instrument_optional_gaps
+        target.append({
             "instrument_id": row.get("instrument_id"),
             "scope": INSTRUMENT,
-            "requiredness": REQUIRED,
+            "requiredness": REQUIRED if required_reasons else OPTIONAL,
             "status": "INCOMPLETE",
             "reason_codes": sorted(set(reasons)),
             "typed_reason_codes": _typed_reasons(reasons),
+            "required_reason_codes": sorted(set(required_reasons)),
             "primary_reason": row.get("primary_reason"),
             "trend_computable": row.get("trend_computable"),
             "pv_complete": row.get("pv_complete"),
@@ -175,6 +187,8 @@ def evaluate_daily_primary_readiness(input_id: str | None, bundle, cutoff, *,
         "optional_or_enhancement_limitations": optional_missing,
         "instrument_required_incomplete_count": len(instrument_incomplete),
         "instrument_required_incomplete_sample": instrument_incomplete[:100],
+        "instrument_optional_evidence_gap_count": len(instrument_optional_gaps),
+        "instrument_optional_evidence_gap_sample": instrument_optional_gaps[:100],
         "instrument_incomplete_reason_aggregates": diagnostics.get("reason_aggregates") or {},
         "data_coverage_diagnostics": {k: v for k, v in diagnostics.items() if k != "missing_reason_ledger"},
         "missing_reason_ledger_count": len(diagnostics.get("missing_reason_ledger") or []),

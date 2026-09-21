@@ -1,8 +1,8 @@
-# Daily Primary Reliability v1（2026-09-21）
+# Daily Primary Reliability v1.1（2026-09-21）
 
-本节优先于下方 R16-R1/R16 历史记录。Daily Primary 正式路径新增最小可靠性屏障：`daily_primary_readiness.py` 复用现有 strategy context 与 coverage diagnostics，区分 collection state、strategy-input readiness、strategy execution 与 publish eligibility。GLOBAL REQUIRED 未就绪时记录 `daily_primary_attempts` 终态 `NOT_READY`，不启动 `STAGE_AWARE_MOMENTUM_V2`、不写正式 strategy run、不发布推荐；instrument-level 缺失记录 typed incomplete diagnostics，并继续由现有策略产生 `UNKNOWN`。readiness 通过后若策略、持久化或导出失败，终态为 `FAILED`，不伪装成缺数。`READY` 需要 readiness、strategy、persistence、export、published 全部完成。
+本节优先于下方 R16-R1/R16 历史记录。Daily Primary 正式路径在 v1 屏障外补齐 v1.1 closure：normal latest 先解析 `expected_observation_session`，将 `OBSERVATION_SESSION_STALE/STALE_INPUT` 作为 GLOBAL REQUIRED blocker；refresh 目标固定为 expected session；refresh 完成后以刷新数据合法可见时钟更新 `actual_decision_cutoff`，再重跑 freshness + readiness，不能因 refresh request COMPLETE 直接启动策略。显式 historical observation date / specific input 路径不受 latest freshness barrier 误伤。GLOBAL REQUIRED 未就绪时记录 `daily_primary_attempts` 终态 `NOT_READY`，不启动 `STAGE_AWARE_MOMENTUM_V2`、不写正式 strategy run、不发布推荐；instrument-level 缺失记录 typed diagnostics，amount/turnover/adjustment factor 不再被压成 `MISSING_FACTOR`，并继续由现有策略产生 `UNKNOWN`。readiness 通过后若策略、持久化或导出失败，终态为 `FAILED`，不伪装成缺数。`READY` 需要 freshness/readiness、strategy、persistence、export、published 全部完成。
 
-本轮不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、Focus gate、排序、阈值、score 或 `MARKET_EDGE=NOT_ESTABLISHED`。`READY_WITH_LIMITATIONS` 仅保留严格语义，v1 不用它掩盖 REQUIRED 缺失。性能 <60 秒、内存回归、Go 迁移下一阶段、Score、Enhanced Evidence、market-edge 评估和历史全市场重审仍保持 OPEN/OUT OF SCOPE；验收以 post-commit Review Bundle 中 A-F 场景机器证据和定向回归日志为准。
+本轮不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、Focus gate、排序、阈值、score 或 `MARKET_EDGE=NOT_ESTABLISHED`。`READY_WITH_LIMITATIONS` 仅保留严格语义，v1.1 不用它掩盖 REQUIRED 缺失。live provider E2E、多次 retry/timeout、scheduled automatic retry、性能 <60 秒、内存回归、Go 迁移下一阶段、Score、Enhanced Evidence、market-edge 评估和历史全市场重审仍保持 OPEN/OUT OF SCOPE；验收以 post-commit Review Bundle 中 A/B/B2/C/D/E/F/G/H 场景机器证据和定向回归日志为准。
 
 ---
 

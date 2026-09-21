@@ -1,6 +1,6 @@
-# Daily Primary Reliability v1 当前修订入口（2026-09-21）
+# Daily Primary Reliability v1.1 当前修订入口（2026-09-21）
 
-本节优先于下方 R16-R1/R16 历史快照。当前新增的是 Daily Primary 正式路径可靠性屏障：`daily_primary_readiness.py` 在 `STAGE_AWARE_MOMENTUM_V2` 策略外侧复用现有 context/coverage diagnostics，先判断 strategy-input readiness，再允许策略启动、持久化与发布。GLOBAL REQUIRED 未就绪时终态为 `NOT_READY`，不启动策略、不发布正式推荐；instrument-level 缺失进入 typed diagnostics，并由既有策略语义保持 `UNKNOWN`，不静默改成 `REJECTED`。内部执行、持久化或导出失败在 readiness 通过后保留为 `FAILED`。本修订不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值或 `MARKET_EDGE=NOT_ESTABLISHED`；`READY_WITH_LIMITATIONS` 仅保留语义，不在 v1 中主动使用。性能 <60 秒、内存回归、Go Phase 2、Score、Enhanced Evidence、market-edge 和历史重审仍不属于本轮。
+本节优先于下方 R16-R1/R16 历史快照。Daily Primary v1.1 在既有可靠性屏障外补齐 latest freshness closure：normal latest 请求先用交易日历解析 `expected_observation_session`，内部完整但 observation date 陈旧的 input 会以 `OBSERVATION_SESSION_STALE/STALE_INPUT` 阻断；refresh 目标使用 expected session，refresh 完成后以新数据合法可见时钟更新 `actual_decision_cutoff` 并重跑 freshness + readiness。显式 historical observation date / specific input 路径保留历史语义，不被 latest barrier 误伤。GLOBAL REQUIRED 未就绪时终态为 `NOT_READY`，不启动策略、不发布正式推荐；instrument-level 缺失进入 typed diagnostics，amount/turnover/adjustment factor 保留各自 reason，并由既有策略语义保持 `UNKNOWN`，不静默改成 `REJECTED`。内部执行、持久化或导出失败在 readiness 通过后保留为 `FAILED`。本修订不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值或 `MARKET_EDGE=NOT_ESTABLISHED`；live provider E2E、多次 retry/timeout、scheduled automatic retry、性能 <60 秒、内存回归、Go Phase 2、Score、Enhanced Evidence、market-edge 和历史重审仍不属于本轮。
 
 ---
 

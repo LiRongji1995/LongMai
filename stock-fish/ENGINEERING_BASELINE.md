@@ -1,3 +1,9 @@
+# Daily Primary Reliability v1.1 当前工程补充（2026-09-21）
+
+Daily Primary v1.1 只关闭 latest freshness closure：normal latest 解析 `expected_observation_session`，stale-but-complete input 以 `OBSERVATION_SESSION_STALE/STALE_INPUT` 阻断；refresh target 采用 expected session；refresh 后根据新数据合法可见时钟写入 `actual_decision_cutoff`，再重跑 freshness + readiness。显式 historical observation date / specific input 仍可按指定输入执行，不强制等于 latest。typed diagnostics 保留 `MISSING_AMOUNT`、`MISSING_TURNOVER`、`MISSING_ADJUSTMENT_FACTOR`，并把非阻断证据缺口与 REQUIRED blocker 分开。Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值、score 与 `MARKET_EDGE=NOT_ESTABLISHED` 不变；live provider E2E、多次 retry/timeout、scheduled automatic retry、性能、内存、Score、Enhanced Evidence 和 market-edge 仍为 OPEN/OUT OF SCOPE。
+
+---
+
 # R16-R1 当前工程补充
 
 当前修订见 [R16-R1 工程说明](docs/R16_R1_ENGINEERING.md) 与 [复现命令](docs/REPRODUCE.md)。该说明优先于下方历史描述，最终验收由冻结源码后的外置 raw evidence 和页面端独立审阅决定。

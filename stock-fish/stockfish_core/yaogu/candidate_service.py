@@ -249,17 +249,29 @@ class CandidateService:
                    'parent_run_id': parent.run_id if parent else None, 'revision': parent.revision + 1 if parent else 1}
         return self.jobs.submit('candidate_run', payload, job_id=job_id)
 
-    def input_freshness(self,bundle):
+    def expected_daily_primary_observation_session(self, now=None):
         from zoneinfo import ZoneInfo
         from ..observed_data import exchange_calendar_2026
-        now=utc_now().astimezone(ZoneInfo('Asia/Shanghai'))
+        now=(now or utc_now()).astimezone(ZoneInfo('Asia/Shanghai'))
         known=exchange_calendar_2026().sessions
         sessions=[d for d in known if d<now.date() or d==now.date() and now.time().replace(tzinfo=None)>=time(15)]
-        expected=max(sessions) if sessions and now.year==2026 else None
+        return max(sessions) if sessions and now.year==2026 else None
+
+    def input_freshness(self,bundle, *, now=None, expected_observation_date=None):
+        from zoneinfo import ZoneInfo
+        from ..observed_data import exchange_calendar_2026
+        now=(now or utc_now()).astimezone(ZoneInfo('Asia/Shanghai'))
+        known=exchange_calendar_2026().sessions
+        expected=expected_observation_date or self.expected_daily_primary_observation_session(now)
         age=sum(bundle.observation_date<d<=expected for d in known) if expected else None
+        stale=expected is None or bundle.observation_date!=expected
         return {'stale':expected is None or bundle.observation_date!=expected,
                 'expected_observation_date':str(expected) if expected else None,
-                'observation_age_sessions':age,'freshness_policy':'LATEST_VERIFIED_EXCHANGE_SESSION_CLOSED_AT_1500_SH_V1'}
+                'expected_observation_session':str(expected) if expected else None,
+                'observation_age_sessions':age,
+                'freshness_status':'STALE_INPUT' if stale else 'FRESH',
+                'freshness_reason':'OBSERVATION_SESSION_STALE' if stale else None,
+                'freshness_policy':'LATEST_VERIFIED_EXCHANGE_SESSION_CLOSED_AT_1500_SH_V1'}
 
     def authorized_emotion_history(self, bundle, config, cutoff):
         """Resolve durable market_emotions through the same run/job authority.
@@ -342,13 +354,19 @@ class CandidateService:
         strategy_primary_attempt = None
         if payload.get('market_session') == 'EVENING':
             ctx.update(.88, '检查 Daily Primary 必需输入是否足以发布正式 Stage Aware primary')
-            readiness = self._daily_primary_readiness(payload['input_id'], bundle, cutoff, config)
+            expected_session = date.fromisoformat(payload['expected_observation_session']) if payload.get('expected_observation_session') else bundle.observation_date
+            readiness = self._daily_primary_readiness(payload['input_id'], bundle, cutoff, config,
+                enforce_latest=True, expected_observation_session=expected_session,
+                daily_primary_mode='SCHEDULED_EVENING')
             if not readiness['global_required_ready']:
                 strategy_primary_attempt = self._daily_primary_attempt(job_id=ctx.job_id,
                     input_id=payload['input_id'], cutoff=cutoff, final_status='NOT_READY',
                     readiness=readiness, refresh_actions=[], strategy_started=False,
                     strategy_completed=False, persistence_completed=False, export_completed=False,
-                    recommendation_published=False)
+                    recommendation_published=False,
+                    request_started_at=cutoff,
+                    expected_observation_session=str(expected_session),
+                    daily_primary_mode='SCHEDULED_EVENING')
                 terminal['daily_primary_final_status'] = 'NOT_READY'
                 terminal['stage_aware_primary_not_ready_reasons'] = [
                     row['code'] for row in readiness.get('blocking_requirements') or ()]
@@ -370,7 +388,10 @@ class CandidateService:
                     strategy_started=True, strategy_completed=True, persistence_completed=True,
                     export_completed=True, recommendation_published=True,
                     stage_aware_counts=stage.get('counts') or {},
-                    export_validation=export_validation)
+                    export_validation=export_validation,
+                    request_started_at=cutoff,
+                    expected_observation_session=str(expected_session),
+                    daily_primary_mode='SCHEDULED_EVENING')
                 terminal['strategy_primary_run_id'] = strategy_primary_result['run_id']
                 terminal['stage_aware_primary_run_id'] = strategy_primary_result['run_id']
                 terminal['stage_aware_primary_validation_role'] = 'PROSPECTIVE_PRIMARY'
@@ -544,10 +565,12 @@ class CandidateService:
         if trace is None:
             trace = self.daily_traces.add(DailyPrimaryTrace(input_id=input_id,
                 command='CandidateService.submit_daily_primary_strategy', boundary='SERVICE_SUBMIT_TO_EXPORT_PARTIAL'))
-        explicit_input = input_id is not None
+        explicit_input = input_id is not None or observation_date is not None
+        request_started_at = utc_now()
+        expected_observation_session = None if explicit_input else self.expected_daily_primary_observation_session(request_started_at)
         with trace.activate():
             with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'SUBMISSION'}):
-                if explicit_input:
+                if input_id is not None:
                     if not input_id.startswith('market_') or len(input_id) != 71:
                         raise UnavailableError('RULE_INPUT_MISSING_OR_CORRUPT', 'candidate')
                     index = self.store.get_document('candidate_input_indexes', input_id)
@@ -588,17 +611,26 @@ class CandidateService:
                         coverage_type=index.get('coverage_type'), max_session=index.get('max_session'),
                         worker_full_input_validation_required=True)
                 else:
-                    span['metadata'].update(self.input_freshness(bundle))
-                span['metadata']['selection_policy'] = 'SAVED_INPUT_ALLOWED_EXISTING_RESEARCH_SEMANTICS'
+                    span['metadata'].update(self.input_freshness(bundle,
+                        now=request_started_at, expected_observation_date=expected_observation_session))
+                span['metadata']['selection_policy'] = (
+                    'EXPLICIT_HISTORICAL_OR_SAVED_INPUT_ALLOWED'
+                    if explicit_input else 'NORMAL_LATEST_REQUIRES_EXPECTED_CLOSED_SESSION')
+                span['metadata']['daily_primary_mode'] = 'EXPLICIT_SAVED_OR_HISTORICAL' if explicit_input else 'NORMAL_LATEST'
             with trace.stage('CALENDAR_TRADING_SESSION_RESOLUTION',
                              item_count=0 if bundle is None else len(bundle.sessions)) as span:
                 if bundle is None:
                     span['metadata'].update(max_session=index.get('max_session'),
-                        resolution_deferred_to_worker=True)
+                        resolution_deferred_to_worker=True,
+                        expected_observation_session=str(expected_observation_session) if expected_observation_session else None)
                 else:
                     span['metadata'].update(calendar_hash=digest([str(day) for day in bundle.sessions]),
-                        target_session=str(self._stage_aware_target_session(bundle)))
-            trace.mark('PROVIDER_REFRESH_INCREMENTAL_INGESTION', 'SKIPPED', 'EXPLICIT_SAVED_INPUT_PATH_NO_PROVIDER_REQUEST')
+                        target_session=str(self._stage_aware_target_session(bundle)),
+                        expected_observation_session=str(expected_observation_session) if expected_observation_session else None)
+            if explicit_input:
+                trace.mark('PROVIDER_REFRESH_INCREMENTAL_INGESTION', 'SKIPPED', 'EXPLICIT_SAVED_INPUT_PATH_NO_PROVIDER_REQUEST')
+            else:
+                trace.mark('PROVIDER_REFRESH_INCREMENTAL_INGESTION', 'NOT_MEASURED', 'NORMAL_LATEST_WORKER_MAY_REFRESH_EXPECTED_SESSION')
             trace.mark('HISTORY_ARTIFACT_UPDATE', 'SKIPPED', 'IMMUTABLE_SAVED_HISTORY_LOADED',
                        history_artifact_hash=index.get('history_artifact_hash'))
             with trace.stage('JOB_SUBMISSION'):
@@ -607,7 +639,11 @@ class CandidateService:
                     'requested_observation_date': observation_date.isoformat() if observation_date else None,
                     'refresh_allowed': not explicit_input,
                     'refresh_attempt_limit': 1,
-                    'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST',
+                    'cutoff': request_started_at.isoformat(),
+                    'request_started_at': request_started_at.isoformat(),
+                    'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
+                    'daily_primary_mode': 'EXPLICIT_SAVED_OR_HISTORICAL' if explicit_input else 'NORMAL_LATEST',
+                    'execution_profile': 'DAILY_PRIMARY_FAST',
                     'trace_id': trace.trace_id}, job_id=job_id)
             self.daily_traces.for_job(job)
             return job
@@ -643,9 +679,59 @@ class CandidateService:
         except Exception:
             return None
 
-    def _daily_primary_readiness(self, input_id, bundle, cutoff, config):
+    @staticmethod
+    def _max_evidence_clock(bundle):
+        clocks = []
+        for obj in [bundle.universe, *bundle.receipts, *bundle.bars, *bundle.themes]:
+            for name in ('event_time', 'source_published_at', 'first_seen_at', 'ingested_at'):
+                value = getattr(obj, name, None)
+                if value is not None:
+                    clocks.append(value)
+        return max(clocks) if clocks else None
+
+    def _daily_primary_readiness(self, input_id, bundle, cutoff, config, *,
+                                 enforce_latest=False, expected_observation_session=None,
+                                 daily_primary_mode=None):
         from .daily_primary_readiness import evaluate_daily_primary_readiness
-        return evaluate_daily_primary_readiness(input_id, bundle, cutoff, config_hash=config.config_hash)
+        readiness = evaluate_daily_primary_readiness(input_id, bundle, cutoff, config_hash=config.config_hash)
+        freshness = self.input_freshness(
+            bundle,
+            expected_observation_date=expected_observation_session,
+        ) if enforce_latest else None
+        if enforce_latest:
+            passed = bool(freshness and not freshness.get('stale'))
+            requirement = {
+                'code': 'OBSERVATION_SESSION_FRESH' if passed else 'OBSERVATION_SESSION_STALE',
+                'scope': 'GLOBAL',
+                'requiredness': 'REQUIRED',
+                'status': 'PASS' if passed else 'FAIL',
+                'details': {
+                    'reason_code': None if passed else 'STALE_INPUT',
+                    'expected_observation_session': freshness.get('expected_observation_session'),
+                    'input_observation_date': freshness.get('observation_date') or str(bundle.observation_date),
+                    'observation_age_sessions': freshness.get('observation_age_sessions'),
+                    'freshness_policy': freshness.get('freshness_policy'),
+                    'daily_primary_mode': daily_primary_mode,
+                },
+            }
+            requirements = [requirement] + list(readiness.get('requirements') or [])
+            blocking = list(readiness.get('blocking_requirements') or [])
+            if not passed:
+                blocking = [requirement] + blocking
+            readiness = {
+                **readiness,
+                'requirements': requirements,
+                'blocking_requirements': blocking,
+                'global_required_ready': readiness.get('global_required_ready') and passed,
+                'final_readiness': 'READY_FOR_STRATEGY' if readiness.get('global_required_ready') and passed else 'NOT_READY',
+            }
+        return {
+            **readiness,
+            'freshness': freshness,
+            'expected_observation_session': freshness.get('expected_observation_session') if freshness else (
+                str(expected_observation_session) if expected_observation_session else None),
+            'daily_primary_mode': daily_primary_mode,
+        }
 
     @staticmethod
     def _daily_primary_attempt_id(job_id):
@@ -673,14 +759,20 @@ class CandidateService:
                                strategy_completed=False, persistence_completed=False,
                                export_completed=False, recommendation_published=False,
                                stage_aware_counts=None, error=None, export_validation=None,
-                               readiness_evaluations=None):
+                               readiness_evaluations=None, request_started_at=None,
+                               expected_observation_session=None, daily_primary_mode=None):
         value = {
-            'attempt_version': 'DAILY_PRIMARY_RELIABILITY_V1',
+            'attempt_version': 'DAILY_PRIMARY_RELIABILITY_V1_1',
             'attempt_id': self._daily_primary_attempt_id(job_id),
             'job_id': job_id,
             'input_id': input_id,
             'observation_date': (readiness or {}).get('observation_date'),
+            'request_started_at': (request_started_at or cutoff).isoformat(),
             'decision_cutoff': cutoff.isoformat(),
+            'actual_decision_cutoff': cutoff.isoformat(),
+            'expected_observation_session': expected_observation_session or (readiness or {}).get('expected_observation_session'),
+            'daily_primary_mode': daily_primary_mode or (readiness or {}).get('daily_primary_mode'),
+            'freshness': (readiness or {}).get('freshness'),
             'final_status': final_status,
             'status': 'complete' if final_status in {'READY', 'READY_WITH_LIMITATIONS'} else final_status.lower(),
             'readiness_passed': bool((readiness or {}).get('global_required_ready')),
@@ -722,7 +814,7 @@ class CandidateService:
         scheduler = getattr(self, 'scheduler', None)
         if scheduler is None:
             return {'status': 'SKIPPED', 'reason': 'SCHEDULER_NOT_CONFIGURED'}
-        now = utc_now()
+        now = scheduler.clock() if hasattr(scheduler, 'clock') else utc_now()
         archive = self.root / 'daily_primary_refreshes' / ('refresh_' + digest({
             'target_observation_date': target_observation_date,
             'cutoff': cutoff.isoformat(),
@@ -730,16 +822,36 @@ class CandidateService:
         }))
         if getattr(scheduler, 'custom_capture', False):
             bundle = scheduler.capture(archive, now)
+            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler.capture'
         else:
             bundle = scheduler._capture(archive, now, None)
+            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler._capture -> MainboardPipeline.capture'
+        capture_completed_at = scheduler.clock() if hasattr(scheduler, 'clock') else utc_now()
+        visible_at = self._max_evidence_clock(bundle) or capture_completed_at
+        actual_decision_cutoff = max(cutoff, capture_completed_at, visible_at)
         if target_observation_date and str(bundle.observation_date) != target_observation_date:
             return {'status': 'NO_MATCHING_INPUT', 'reason': 'REFRESH_OBSERVATION_DATE_MISMATCH',
                     'target_observation_date': target_observation_date,
-                    'refreshed_observation_date': str(bundle.observation_date)}
+                    'refreshed_observation_date': str(bundle.observation_date),
+                    'refresh_implementation_path': implementation_path,
+                    'scheduler_capture_invoked': True,
+                    'capture_started_at': now.isoformat(),
+                    'capture_completed_at': capture_completed_at.isoformat(),
+                    'refreshed_data_visible_at': visible_at.isoformat(),
+                    'actual_decision_cutoff': actual_decision_cutoff.isoformat()}
         input_id = self.register_input(bundle, activate=False)
         return {'status': 'COMPLETE', 'input_id': input_id,
+                'target_observation_date': target_observation_date,
                 'observation_date': str(bundle.observation_date),
-                'coverage_type': bundle.coverage_type}
+                'coverage_type': bundle.coverage_type,
+                'refresh_implementation_path': implementation_path,
+                'scheduler_class': type(scheduler).__name__,
+                'scheduler_capture_invoked': True,
+                'capture_started_at': now.isoformat(),
+                'capture_completed_at': capture_completed_at.isoformat(),
+                'refreshed_data_visible_at': visible_at.isoformat(),
+                'actual_decision_cutoff': actual_decision_cutoff.isoformat(),
+                'prior_readiness_final': (prior_readiness or {}).get('final_readiness')}
 
     def _resolve_daily_primary_worker_input(self, payload):
         requested_date = date.fromisoformat(payload['requested_observation_date']) if payload.get('requested_observation_date') else None
@@ -747,13 +859,73 @@ class CandidateService:
             return self.input(payload['input_id'], requested_date)
         return self.strategy_input(None, requested_date)
 
+    def _daily_primary_missing_input_readiness(self, *, cutoff, config, reason,
+                                               expected_observation_session=None,
+                                               daily_primary_mode=None):
+        requirement = {
+            'code': 'MARKET_INPUT_MISSING',
+            'scope': 'GLOBAL',
+            'requiredness': 'REQUIRED',
+            'status': 'FAIL',
+            'details': {
+                'reason_code': reason,
+                'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
+                'daily_primary_mode': daily_primary_mode,
+            },
+        }
+        if expected_observation_session:
+            stale = {
+                'code': 'OBSERVATION_SESSION_STALE',
+                'scope': 'GLOBAL',
+                'requiredness': 'REQUIRED',
+                'status': 'FAIL',
+                'details': {
+                    'reason_code': 'STALE_INPUT',
+                    'expected_observation_session': str(expected_observation_session),
+                    'input_observation_date': None,
+                    'freshness_policy': 'LATEST_VERIFIED_EXCHANGE_SESSION_CLOSED_AT_1500_SH_V1',
+                    'daily_primary_mode': daily_primary_mode,
+                },
+            }
+            blocking = [stale, requirement]
+            requirements = [stale, requirement]
+        else:
+            blocking = [requirement]
+            requirements = [requirement]
+        return {
+            'readiness_version': 'DAILY_PRIMARY_RELIABILITY_V1_1',
+            'input_id': None,
+            'config_hash': config.config_hash,
+            'observation_date': None,
+            'decision_cutoff': cutoff.isoformat(),
+            'final_readiness': 'NOT_READY',
+            'global_required_ready': False,
+            'blocking_requirements': blocking,
+            'requirements': requirements,
+            'instrument_required_incomplete_count': 0,
+            'instrument_required_incomplete_sample': [],
+            'missing_reason_ledger_count': 0,
+            'freshness': {
+                'stale': True,
+                'freshness_status': 'MISSING_INPUT',
+                'freshness_reason': reason,
+                'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
+                'expected_observation_date': str(expected_observation_session) if expected_observation_session else None,
+                'freshness_policy': 'LATEST_VERIFIED_EXCHANGE_SESSION_CLOSED_AT_1500_SH_V1',
+            },
+            'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
+            'daily_primary_mode': daily_primary_mode,
+        }
+
     def _daily_primary_not_ready_outcome(self, ctx, trace, *, input_id, cutoff, readiness, refresh_actions,
-                                         readiness_evaluations=None):
+                                         readiness_evaluations=None, request_started_at=None,
+                                         expected_observation_session=None, daily_primary_mode=None):
         attempt = self._daily_primary_attempt(job_id=ctx.job_id, input_id=input_id, cutoff=cutoff,
             final_status='NOT_READY', readiness=readiness, refresh_actions=refresh_actions,
             strategy_started=False, strategy_completed=False, persistence_completed=False,
             export_completed=False, recommendation_published=False,
-            readiness_evaluations=readiness_evaluations)
+            readiness_evaluations=readiness_evaluations, request_started_at=request_started_at,
+            expected_observation_session=expected_observation_session, daily_primary_mode=daily_primary_mode)
         def write(connection):
             self._write_daily_primary_attempt(connection, attempt)
         with trace.stage('PERSISTENCE', metadata={'final_status': 'NOT_READY',
@@ -769,7 +941,8 @@ class CandidateService:
 
     def _daily_primary_failed_outcome(self, ctx, trace, *, input_id, cutoff, readiness,
                                       refresh_actions, exc, strategy_started, run_id=None,
-                                      readiness_evaluations=None):
+                                      readiness_evaluations=None, request_started_at=None,
+                                      expected_observation_session=None, daily_primary_mode=None):
         error = {'code': 'DAILY_PRIMARY_INTERNAL_FAILURE',
                  'message': 'daily primary failed after readiness passed; no official recommendation published',
                  'component': 'candidate',
@@ -779,7 +952,8 @@ class CandidateService:
             run_id=run_id, strategy_started=strategy_started, strategy_completed=False,
             persistence_completed=False, export_completed=False, recommendation_published=False,
             error={'type': type(exc).__name__, 'code': error['code']},
-            readiness_evaluations=readiness_evaluations)
+            readiness_evaluations=readiness_evaluations, request_started_at=request_started_at,
+            expected_observation_session=expected_observation_session, daily_primary_mode=daily_primary_mode)
         def write(connection):
             self._write_daily_primary_attempt(connection, attempt)
         with trace.stage('PERSISTENCE', metadata={'final_status': 'FAILED',
@@ -1239,43 +1413,89 @@ class CandidateService:
             readiness = None
             strategy_started = False
             result = None
-            with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER'}):
-                input_id, bundle = self._resolve_daily_primary_worker_input(payload)
-                config = self.current_config()
+            config = self.current_config()
+            request_started_at = datetime.fromisoformat(payload.get('request_started_at') or payload['cutoff'])
             cutoff = datetime.fromisoformat(payload['cutoff'])
-            trace.update(decision_cutoff=payload['cutoff'], config_hash=config.config_hash)
+            daily_primary_mode = payload.get('daily_primary_mode') or 'NORMAL_LATEST'
+            expected_observation_session = (
+                date.fromisoformat(payload['expected_observation_session'])
+                if payload.get('expected_observation_session') else None
+            )
+            enforce_latest = daily_primary_mode == 'NORMAL_LATEST'
+            missing_input_reason = None
+            with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER'}):
+                try:
+                    input_id, bundle = self._resolve_daily_primary_worker_input(payload)
+                except UnavailableError as exc:
+                    if not payload.get('refresh_allowed'):
+                        raise
+                    input_id, bundle = None, None
+                    missing_input_reason = exc.reason
+            trace.update(decision_cutoff=cutoff.isoformat(), request_started_at=request_started_at.isoformat(),
+                         expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
+                         config_hash=config.config_hash, daily_primary_mode=daily_primary_mode)
             with trace.stage('STRATEGY_INPUT_READINESS', metadata={'evaluation': 'BEFORE_REFRESH'}) as span:
-                readiness = self._daily_primary_readiness(input_id, bundle, cutoff, config)
-                readiness_evaluations.append({'evaluation': 'BEFORE_REFRESH', 'readiness': readiness})
+                if bundle is None:
+                    readiness = self._daily_primary_missing_input_readiness(
+                        cutoff=cutoff, config=config,
+                        reason=missing_input_reason or 'VERIFIED_RESEARCH_INPUT_NOT_REGISTERED',
+                        expected_observation_session=expected_observation_session,
+                        daily_primary_mode=daily_primary_mode)
+                else:
+                    readiness = self._daily_primary_readiness(
+                        input_id, bundle, cutoff, config,
+                        enforce_latest=enforce_latest,
+                        expected_observation_session=expected_observation_session,
+                        daily_primary_mode=daily_primary_mode)
+                readiness_evaluations.append({'evaluation': 'BEFORE_REFRESH',
+                    'freshness': readiness.get('freshness'), 'readiness': readiness})
                 span['metadata'].update(final_readiness=readiness['final_readiness'],
+                    freshness=readiness.get('freshness'),
                     blocking_requirements=[row['code'] for row in readiness.get('blocking_requirements') or ()],
                     instrument_required_incomplete_count=readiness.get('instrument_required_incomplete_count'))
             if (not readiness['global_required_ready'] and payload.get('refresh_allowed')
                     and int(payload.get('refresh_attempt_limit') or 0) > 0):
                 with trace.stage('PROVIDER_REFRESH_INCREMENTAL_INGESTION',
-                                 metadata={'reason': 'GLOBAL_REQUIRED_NOT_READY'}):
+                                 metadata={'reason': 'GLOBAL_REQUIRED_NOT_READY',
+                                           'refresh_target_observation_date': (
+                                               str(expected_observation_session) if expected_observation_session
+                                               else payload.get('requested_observation_date') or readiness.get('observation_date'))}) as span:
                     try:
                         action = self._daily_primary_incremental_refresh(
-                            target_observation_date=payload.get('requested_observation_date') or readiness.get('observation_date'),
+                            target_observation_date=(
+                                str(expected_observation_session) if expected_observation_session
+                                else payload.get('requested_observation_date') or readiness.get('observation_date')),
                             cutoff=cutoff, trace=trace, prior_readiness=readiness)
                     except UnavailableError as exc:
                         action = {'status': 'SOURCE_NOT_READY', 'reason': str(exc.reason),
                                   'component': exc.component}
                     refresh_actions.append(action)
+                    span['metadata'].update(action)
                 if action.get('status') == 'COMPLETE':
+                    cutoff = datetime.fromisoformat(action.get('actual_decision_cutoff') or cutoff.isoformat())
+                    trace.update(decision_cutoff=cutoff.isoformat(), actual_decision_cutoff=cutoff.isoformat())
                     with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'WORKER_AFTER_REFRESH'}):
                         input_id, bundle = self.input(action['input_id'])
                     with trace.stage('STRATEGY_INPUT_READINESS', metadata={'evaluation': 'AFTER_REFRESH'}) as span:
-                        readiness = self._daily_primary_readiness(input_id, bundle, cutoff, config)
-                        readiness_evaluations.append({'evaluation': 'AFTER_REFRESH', 'readiness': readiness})
+                        readiness = self._daily_primary_readiness(
+                            input_id, bundle, cutoff, config,
+                            enforce_latest=enforce_latest,
+                            expected_observation_session=expected_observation_session,
+                            daily_primary_mode=daily_primary_mode)
+                        readiness_evaluations.append({'evaluation': 'AFTER_REFRESH',
+                            'freshness': readiness.get('freshness'), 'readiness': readiness})
                         span['metadata'].update(final_readiness=readiness['final_readiness'],
+                            freshness=readiness.get('freshness'),
                             blocking_requirements=[row['code'] for row in readiness.get('blocking_requirements') or ()],
                             instrument_required_incomplete_count=readiness.get('instrument_required_incomplete_count'))
             if not readiness['global_required_ready']:
                 ctx.update(.95, 'Daily Primary 必需输入未就绪；不启动策略，不发布正式推荐')
                 return self._daily_primary_not_ready_outcome(ctx, trace, input_id=input_id, cutoff=cutoff,
                     readiness=readiness, refresh_actions=refresh_actions,
-                    readiness_evaluations=readiness_evaluations)
+                    readiness_evaluations=readiness_evaluations,
+                    request_started_at=request_started_at,
+                    expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
+                    daily_primary_mode=daily_primary_mode)
             try:
                 ctx.update(.2, '运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
                 strategy_started = True
@@ -1293,7 +1513,10 @@ class CandidateService:
                     run_id=result['run_id'], strategy_started=True, strategy_completed=True,
                     persistence_completed=True, export_completed=True, recommendation_published=True,
                     stage_aware_counts={key: counts.get(key, 0) for key in ('eligible', 'focus', 'watch', 'rejected', 'unknown')},
-                    export_validation=export_validation, readiness_evaluations=readiness_evaluations)
+                    export_validation=export_validation, readiness_evaluations=readiness_evaluations,
+                    request_started_at=request_started_at,
+                    expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
+                    daily_primary_mode=daily_primary_mode)
                 terminal.update(strategy_experiment_run_id=result['run_id'], run_id=result['run_id'],
                     quality=stage.get('status'), execution_profile='DAILY_PRIMARY_FAST')
                 def write(connection):
@@ -1317,7 +1540,10 @@ class CandidateService:
                 return self._daily_primary_failed_outcome(ctx, trace, input_id=input_id, cutoff=cutoff,
                     readiness=readiness, refresh_actions=refresh_actions, exc=exc,
                     strategy_started=strategy_started, run_id=(result or {}).get('run_id'),
-                    readiness_evaluations=readiness_evaluations)
+                    readiness_evaluations=readiness_evaluations,
+                    request_started_at=request_started_at,
+                    expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
+                    daily_primary_mode=daily_primary_mode)
 
     def _write_strategy_projection(self, connection, run):
         from .strategy_tracking import authoritative_strategy_items
