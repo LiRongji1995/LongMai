@@ -126,7 +126,7 @@ def _factor_backed_basis(bar):
 
 
 def _same_comparable_window(bars):
-    if not bars:
+    if not bars or any(row is None for row in bars):
         return False
     basis = bars[0].get("comparable_basis")
     return bool(basis) and all(row and row.get("comparable_basis") == basis and _comparable_ok(row) for row in bars)

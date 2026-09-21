@@ -19,6 +19,7 @@ __pycache__/
 node_modules/
 build/
 dist/
+go-core/bin/
 
 # Local deployment assets and state (never publish these directories)
 /data/

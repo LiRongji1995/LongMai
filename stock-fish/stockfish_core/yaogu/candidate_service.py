@@ -521,18 +521,52 @@ class CandidateService:
                 command='CandidateService.submit_daily_primary_strategy', boundary='SERVICE_SUBMIT_TO_EXPORT_PARTIAL'))
         with trace.activate():
             with trace.stage('MARKET_INPUT_CREATION_OR_LOAD', metadata={'phase': 'SUBMISSION'}):
-                resolved, bundle = self.strategy_input(input_id, observation_date)
-            trace.update(input_id=resolved, snapshot_id=bundle.universe.snapshot_id,
-                         as_of_session=str(bundle.observation_date))
+                if input_id is not None:
+                    if not input_id.startswith('market_') or len(input_id) != 71:
+                        raise UnavailableError('RULE_INPUT_MISSING_OR_CORRUPT', 'candidate')
+                    index = self.store.get_document('candidate_input_indexes', input_id)
+                    if index is None:
+                        resolved, bundle = self.strategy_input(input_id, observation_date)
+                        index = {'observation_date': str(bundle.observation_date),
+                                 'coverage_type': bundle.coverage_type,
+                                 'max_session': str(max(bundle.sessions)) if bundle.sessions else None,
+                                 'snapshot_id': bundle.universe.snapshot_id,
+                                 'history_artifact_hash': bundle.history_artifact_hash}
+                    else:
+                        wanted = observation_date.isoformat() if observation_date is not None else None
+                        if wanted is not None and index.get('observation_date') != wanted:
+                            raise ValueError('registered input observation date mismatch')
+                        if not self.allow_test_fixture and index.get('coverage_type') == 'TEST_FIXTURE':
+                            raise UnavailableError('FIXTURE_NOT_ALLOWED_IN_USER_HISTORY', 'candidate')
+                        resolved, bundle = input_id, None
+                else:
+                    resolved, bundle = self.strategy_input(input_id, observation_date)
+                    index = {'observation_date': str(bundle.observation_date),
+                             'coverage_type': bundle.coverage_type,
+                             'max_session': str(max(bundle.sessions)) if bundle.sessions else None,
+                             'snapshot_id': bundle.universe.snapshot_id,
+                             'history_artifact_hash': bundle.history_artifact_hash}
+            trace.update(input_id=resolved, snapshot_id=index.get('snapshot_id'),
+                         as_of_session=index.get('observation_date'))
             with trace.stage('DATA_FRESHNESS_STATUS_CHECK') as span:
-                span['metadata'].update(self.input_freshness(bundle))
+                if bundle is None:
+                    span['metadata'].update(status='SAVED_INPUT_INDEX_ONLY',
+                        coverage_type=index.get('coverage_type'), max_session=index.get('max_session'),
+                        worker_full_input_validation_required=True)
+                else:
+                    span['metadata'].update(self.input_freshness(bundle))
                 span['metadata']['selection_policy'] = 'SAVED_INPUT_ALLOWED_EXISTING_RESEARCH_SEMANTICS'
-            with trace.stage('CALENDAR_TRADING_SESSION_RESOLUTION', item_count=len(bundle.sessions)) as span:
-                span['metadata'].update(calendar_hash=digest([str(day) for day in bundle.sessions]),
-                    target_session=str(self._stage_aware_target_session(bundle)))
+            with trace.stage('CALENDAR_TRADING_SESSION_RESOLUTION',
+                             item_count=0 if bundle is None else len(bundle.sessions)) as span:
+                if bundle is None:
+                    span['metadata'].update(max_session=index.get('max_session'),
+                        resolution_deferred_to_worker=True)
+                else:
+                    span['metadata'].update(calendar_hash=digest([str(day) for day in bundle.sessions]),
+                        target_session=str(self._stage_aware_target_session(bundle)))
             trace.mark('PROVIDER_REFRESH_INCREMENTAL_INGESTION', 'SKIPPED', 'EXPLICIT_SAVED_INPUT_PATH_NO_PROVIDER_REQUEST')
             trace.mark('HISTORY_ARTIFACT_UPDATE', 'SKIPPED', 'IMMUTABLE_SAVED_HISTORY_LOADED',
-                       history_artifact_hash=bundle.history_artifact_hash)
+                       history_artifact_hash=index.get('history_artifact_hash'))
             with trace.stage('JOB_SUBMISSION'):
                 job = self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
                     'cutoff': utc_now().isoformat(), 'execution_profile': 'DAILY_PRIMARY_FAST',

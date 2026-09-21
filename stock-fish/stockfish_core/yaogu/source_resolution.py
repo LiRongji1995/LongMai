@@ -11,6 +11,7 @@ from datetime import date, datetime, timezone
 from decimal import Decimal
 import hashlib
 import json
+from zoneinfo import ZoneInfo
 
 from ..storage import IntegrityError
 from .contracts import digest
@@ -21,6 +22,7 @@ CANONICAL_SOURCE_RESOLVER_VERSION = "CANONICAL_RESOLVED_SOURCE_VIEW_V2_R16_R1_PI
 PRICE_SOURCE_REQUIREMENT = "PRICE_DAILY_BAR_WITH_COMPARABLE_AND_ACTIVITY_FIELDS"
 MISSING_VISIBLE_BAR = "MISSING_VISIBLE_BAR"
 CONFLICTING_PRICE_REVISION = "CONFLICTING_PRICE_REVISION"
+SH = ZoneInfo("Asia/Shanghai")
 
 PRICE_VALUE_FIELDS = (
     "open",
@@ -81,6 +83,120 @@ def _revision_key(row):
 
 def _value_projection(row):
     return {field: _text(row.get(field)) for field in PRICE_VALUE_FIELDS}
+
+
+def _runtime_row_payload(value):
+    if isinstance(value, dict):
+        return dict(value)
+    if hasattr(value, "model_dump"):
+        return value.model_dump(mode="json")
+    return dict(value)
+
+
+def _stamp(value):
+    result = value if isinstance(value, datetime) else datetime.fromisoformat(str(value).replace("Z", "+00:00"))
+    if result.tzinfo is None or result.utcoffset() is None:
+        raise ValueError("EXPLICIT_TIMEZONE_REQUIRED")
+    return result
+
+
+def _day(value):
+    return value if isinstance(value, date) and not isinstance(value, datetime) else date.fromisoformat(str(value)[:10])
+
+
+def _runtime_clock_reason(row, cutoff):
+    event_time = _stamp(row["event_time"])
+    source_published_at = _stamp(row["source_published_at"])
+    first_seen_at = _stamp(row["first_seen_at"])
+    ingested_at = _stamp(row["ingested_at"])
+    if first_seen_at > ingested_at:
+        return "EVENT_OR_PUBLICATION_NOT_VISIBLE", (event_time, source_published_at, first_seen_at, ingested_at)
+    if max(event_time, source_published_at) > cutoff:
+        return "EVENT_OR_PUBLICATION_NOT_VISIBLE", (event_time, source_published_at, first_seen_at, ingested_at)
+    if max(event_time, source_published_at, first_seen_at, ingested_at) > cutoff:
+        return "CAPTURE_AFTER_CUTOFF", (event_time, source_published_at, first_seen_at, ingested_at)
+    return None, (event_time, source_published_at, first_seen_at, ingested_at)
+
+
+def _revision_key_from_clocks(clocks):
+    return tuple(value.astimezone(timezone.utc).isoformat(timespec="microseconds")
+                 for value in (clocks[1], clocks[3], clocks[2]))
+
+
+def _runtime_receipt_view(ctx):
+    if ctx.bundle.coverage_type != "PROSPECTIVE_CAPTURED":
+        return None
+    cache = getattr(ctx, "scalar_cache", None)
+    key = ("GO_FAST_RUNTIME_RECEIPT_VIEW", ctx.bundle.history_artifact_ref, ctx.bundle.history_artifact_hash, str(ctx.cutoff))
+    if cache is not None and key in cache:
+        return cache[key]
+    receipts = {}
+    for receipt in history_receipts(ctx.bundle):
+        raw = receipt.model_dump(mode="json") if hasattr(receipt, "model_dump") else dict(receipt)
+        reason, clocks = _runtime_clock_reason(raw, ctx.resolver.cutoff)
+        receipts[raw["receipt_id"]] = {
+            "raw": raw,
+            "clock_reason": reason,
+            "first_seen_at": clocks[2],
+            "ingested_at": clocks[3],
+            "status": raw.get("status"),
+            "instrument_ids": set(raw.get("instrument_ids") or ()),
+            "business_sessions": {_date_text(value) for value in raw.get("business_sessions") or ()},
+        }
+    result = {
+        "receipts": receipts,
+        "conflicts": set(getattr(ctx.resolver, "conflicts", set())),
+        "sessions": {_day(value) for value in ctx.sessions},
+        "cutoff_day": ctx.resolver.cutoff.astimezone(SH).date(),
+    }
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def _runtime_visible_prospective(ctx, row, iid, session, row_hash, receipt_view):
+    try:
+        reason, clocks = _runtime_clock_reason(row, ctx.resolver.cutoff)
+        if reason:
+            return False, (reason,), None
+        if row.get("instrument_id") != iid:
+            return False, ("INSTRUMENT_ID_MISMATCH",), None
+        observed = _day(session)
+        if row.get("session") is None or _day(row["session"]) != observed:
+            return False, ("BUSINESS_SESSION_MISMATCH",), None
+        if observed > receipt_view["cutoff_day"] or observed > ctx.bundle.observation_date:
+            return False, ("FUTURE_BUSINESS_SESSION",), None
+        if observed not in receipt_view["sessions"]:
+            return False, ("BUSINESS_SESSION_NOT_IN_EXCHANGE_CALENDAR",), None
+        if min(clocks[0], clocks[1]).astimezone(SH).date() < observed:
+            return False, ("EVENT_OR_PUBLICATION_PRECEDES_BUSINESS_SESSION",), None
+        refs = tuple(row.get("source_refs") or ())
+        if not refs:
+            return False, ("SOURCE_REFERENCE_REQUIRED",), None
+        receipts = receipt_view["receipts"]
+        for ref in refs:
+            if ref in receipt_view["conflicts"]:
+                return False, ("SOURCE_REFERENCE_CONFLICT",), None
+            parent = receipts.get(ref)
+            if parent is None:
+                return False, ("SOURCE_REFERENCE_UNRESOLVED",), None
+            if parent["status"] not in ("COMPLETE", "PARTIAL"):
+                return False, ("SOURCE_STATUS_" + str(parent["status"]),), None
+            if parent["clock_reason"]:
+                return False, (parent["clock_reason"],), None
+            if parent["instrument_ids"] and iid not in parent["instrument_ids"]:
+                return False, ("SOURCE_INSTRUMENT_SCOPE_MISMATCH",), None
+            if parent["business_sessions"] and _date_text(observed) not in parent["business_sessions"]:
+                return False, ("SOURCE_SESSION_SCOPE_MISMATCH",), None
+            if clocks[2] < parent["first_seen_at"] or clocks[3] < parent["ingested_at"]:
+                return False, ("ROW_CAPTURE_PRECEDES_PARENT_RECEIPT",), None
+            if ref not in ctx.resolver.used:
+                ctx.resolver.used[ref] = parent["raw"]
+        if ctx.bundle.history_artifact_ref and hasattr(ctx.resolver, "history_record_hashes"):
+            ctx.resolver.history_record_hashes[iid].add(bytes.fromhex(row_hash))
+        return True, (), _revision_key_from_clocks(clocks)
+    except (TypeError, ValueError, KeyError):
+        return False, ("INVALID_EVIDENCE_ENVELOPE",), None
 
 
 def _receipt_index(bundle):
@@ -356,6 +472,139 @@ def canonical_price_source_view(ctx, source_sessions, instrument_ids):
         "rejected_count": len(rejected),
         "conflict_count": len(conflicts),
         "source_mode": "CANONICAL_RESOLVED_PRICE_SOURCE_VIEW",
+        "work_counters": work,
+    }
+    if cache is not None:
+        cache[key] = result
+    return result
+
+
+def runtime_price_source_view(ctx, source_sessions, instrument_ids):
+    """PIT-resolved runtime rows for Go fast-path feature materialization.
+
+    This intentionally omits dependency/provenance token materialization.  It
+    preserves the same visibility and latest-revision selection semantics as
+    canonical_price_source_view, and is only used by the feature-flagged Go
+    mechanical fact path.
+    """
+    source_sessions = tuple(_date_text(session) for session in source_sessions)
+    instrument_ids = tuple(instrument_ids)
+    cache = getattr(ctx, "scalar_cache", None)
+    key = (
+        "GO_FAST_RUNTIME_PRICE_SOURCE_VIEW",
+        ctx.bundle.history_artifact_ref,
+        ctx.bundle.history_artifact_hash,
+        tuple(source_sessions),
+        tuple(instrument_ids),
+        str(ctx.cutoff),
+        str(ctx.bundle.coverage_type),
+    )
+    if cache is not None and key in cache:
+        return cache[key]
+
+    wanted_sessions = set(source_sessions)
+    wanted_ids = set(instrument_ids)
+    receipt_view = _runtime_receipt_view(ctx)
+    grouped = defaultdict(list)
+    rejected = []
+    work = {"rows_considered": 0, "pit_checks": 0, "runtime_candidates": 0, "lower_revision_pruned_after_pit": 0}
+
+    def consider(value, source_kind, provided_hash=None):
+        row = _runtime_row_payload(value)
+        session = _date_text(row.get("session"))
+        iid = row.get("instrument_id")
+        if session not in wanted_sessions or iid not in wanted_ids:
+            return
+        work["rows_considered"] += 1
+        row_hash = _row_hash(value, provided_hash)
+        if row.get("quality") == "INVALID":
+            rejected.append({
+                "kind": "BAR",
+                "instrument_id": iid,
+                "session": session,
+                "source_kind": source_kind,
+                "row_hash": row_hash,
+                "reason_codes": ["INVALID_PRICE_QUALITY"],
+            })
+            return
+        work["pit_checks"] += 1
+        if receipt_view is None:
+            proof = ctx.resolver.resolve(row, instrument_id=iid, session=session, require_session=True, record_hash=row_hash)
+            allowed = proof.allowed
+            reason_codes = tuple(proof.reason_codes)
+            revision = None
+        else:
+            allowed, reason_codes, revision = _runtime_visible_prospective(ctx, row, iid, session, row_hash, receipt_view)
+        if not allowed:
+            rejected.append({
+                "kind": "BAR",
+                "instrument_id": iid,
+                "session": session,
+                "source_kind": source_kind,
+                "row_hash": row_hash,
+                "reason_codes": list(reason_codes),
+            })
+            return
+        revision = revision or _revision_key(row)
+        choices = grouped[(iid, session)]
+        if choices and revision < choices[0]["revision_key"]:
+            work["lower_revision_pruned_after_pit"] += 1
+            return
+        if choices and revision > choices[0]["revision_key"]:
+            choices.clear()
+        runtime_row = {
+            "instrument_id": iid,
+            "session": session,
+            "comparable_close": row.get("comparable_close"),
+            "comparable_basis": row.get("comparable_basis"),
+            "amount_cny": row.get("amount_cny"),
+            "turnover_fraction": row.get("turnover_fraction"),
+            "source_refs": tuple(row.get("source_refs") or ()),
+        }
+        grouped[(iid, session)].append({
+            "revision_key": revision,
+            "row_hash": row_hash,
+            "runtime_row": runtime_row,
+        })
+        work["runtime_candidates"] += 1
+
+    if ctx.bundle.history_artifact_ref:
+        _read_history_rows(ctx, wanted_sessions, wanted_ids, consider)
+    for bar in ctx.bundle.bars:
+        consider(bar, "INLINE_MARKET_INPUT")
+
+    selected = {}
+    conflicts = []
+    for iid in instrument_ids:
+        for session in source_sessions:
+            candidates = grouped.get((iid, session), ())
+            if not candidates:
+                continue
+            latest = max(candidate["revision_key"] for candidate in candidates)
+            choices = [candidate for candidate in candidates if candidate["revision_key"] == latest]
+            if len({choice["row_hash"] for choice in choices}) != 1:
+                conflicts.append({
+                    "kind": "BAR",
+                    "instrument_id": iid,
+                    "session": session,
+                    "reason_codes": [CONFLICTING_PRICE_REVISION],
+                    "conflicting_row_hashes": sorted(choice["row_hash"] for choice in choices),
+                })
+                continue
+            selected[(iid, session)] = choices[0]["runtime_row"]
+    if rejected:
+        ctx.rejected_evidence.extend(rejected)
+    if conflicts:
+        ctx.rejected_evidence.extend(conflicts)
+    result = {
+        "resolver_version": CANONICAL_SOURCE_RESOLVER_VERSION,
+        "requirement": PRICE_SOURCE_REQUIREMENT,
+        "source_sessions": list(source_sessions),
+        "instrument_ids": list(instrument_ids),
+        "selected": selected,
+        "rejected_count": len(rejected),
+        "conflict_count": len(conflicts),
+        "source_mode": "GO_FAST_RUNTIME_PRICE_SOURCE_VIEW",
         "work_counters": work,
     }
     if cache is not None:
