@@ -1,3 +1,11 @@
+# Daily Primary Critical Capture Boundary v1 当前工程补充（2026-09-22）
+
+Daily Primary normal latest refresh 现在使用 `DAILY_PRIMARY_CRITICAL` capture purpose 进入既有 MainboardPipeline。该路径只执行 observation session、universe/master identity、eligibility/status、current raw price、comparable basis、adjustment factor evidence、V2 core history window 和 source/provenance receipts；`PublishedCandidateOutcomeCapture`、outcome maturity、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 与 tracking artifacts 保留为 `BACKGROUND_RESEARCH`，不阻塞 readiness decision。RequestQueue 只新增 `purpose/purposes` metadata，不改变 provider identity、receipt、normalizer、history artifact 或 PIT 语义。
+
+本轮不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值、score 与 `MARKET_EDGE=NOT_ESTABLISHED`。`UNKNOWN_HISTORICAL_STATUS`、缺 current price、缺 comparable basis 或缺 core history window 仍为 `NOT_READY`。详细边界见 [DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1.md](docs/DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1.md)。
+
+---
+
 # Daily Primary Reliability v1.1 当前工程补充（2026-09-21）
 
 Daily Primary v1.1 只关闭 latest freshness closure：normal latest 解析 `expected_observation_session`，stale-but-complete input 以 `OBSERVATION_SESSION_STALE/STALE_INPUT` 阻断；refresh target 采用 expected session；refresh 后根据新数据合法可见时钟写入 `actual_decision_cutoff`，再重跑 freshness + readiness。显式 historical observation date / specific input 仍可按指定输入执行，不强制等于 latest。typed diagnostics 保留 `MISSING_AMOUNT`、`MISSING_TURNOVER`、`MISSING_ADJUSTMENT_FACTOR`，并把非阻断证据缺口与 REQUIRED blocker 分开。Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、排序、阈值、score 与 `MARKET_EDGE=NOT_ESTABLISHED` 不变；live provider E2E、多次 retry/timeout、scheduled automatic retry、性能、内存、Score、Enhanced Evidence 和 market-edge 仍为 OPEN/OUT OF SCOPE。

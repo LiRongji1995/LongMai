@@ -4,6 +4,8 @@
 
 **R15 当前默认：** 普通“下一交易日荐股”“今天 V2 名单”“盘后正式名单”和 20:30 official primary 必须走 `DAILY_PRIMARY_FAST`，即只运行 active `STAGE_AWARE_MOMENTUM_V2`、更新/读取 `DERIVED_FEATURE_STORE_V2`、保存 compact canonical run。`DERIVED_FEATURE_STORE_V1` 作为 legacy ignored/read-only 保留；R14 的 same-input warm 不是 true daily incremental 证据。只有用户明确要求多策略比较、historical replay、DNA/THEME/PV/V2 comparison 或深度研究时，才走 `RESEARCH_FULL`。
 
+**2026-09-22 补充：** Daily Primary latest refresh 的采集层增加 `DAILY_PRIMARY_CRITICAL` purpose，只捕获 readiness 与 active V2 所需关键输入；outcome、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 和 tracking artifacts 属于 `BACKGROUND_RESEARCH`，不阻塞 READY decision。缺 eligibility/status、current price、comparable basis 或 core history window 仍必须 `NOT_READY`，不启动策略。
+
 ## 1. 请求与权限
 
 | 用户怎样说 | Codex 应怎样做 |

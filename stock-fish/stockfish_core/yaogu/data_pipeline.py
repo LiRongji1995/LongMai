@@ -16,7 +16,58 @@ from .request_queue import RequestQueue, RequestBudget, capture_priority
 from .provider_requests import execute_request, FIELD_VERSION
 
 PIPELINE_VERSION = 'MAINBOARD_DATA_DAG_R12_FULL_MARKET_COMPARABLE_PRIORITY_V1'
+CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL = 'DAILY_PRIMARY_CRITICAL'
+CAPTURE_PURPOSE_BACKGROUND_RESEARCH = 'BACKGROUND_RESEARCH'
+CRITICAL_CAPTURE_STAGES = {
+    'MainBoardMasterCapture',
+    'ExchangeCalendarCapture',
+    'CurrentEligibilityStatusCapture',
+    'CurrentDailyPriceCapture',
+    'MarketBreadthCapture',
+    'MarketBreadthRegisteredAlternative',
+    'StructureHistoryCapture',
+    'HistoricalSecurityReplayCapture',
+}
+BACKGROUND_RESEARCH_STAGES = {
+    'PublishedCandidateOutcomeCapture',
+    'MarketBreadthLimitEvidence',
+    'MarketBreadthDirectLimitEvidence',
+    'CurrentThemeCapture',
+    'TushareOptionalEnrichment',
+    'CandidateAndPeerHistoryCapture',
+    'OptionalFundsCapture',
+}
 SH = ZoneInfo('Asia/Shanghai')
+
+
+def capture_stage_purpose(stage):
+    return (CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
+            if stage in CRITICAL_CAPTURE_STAGES
+            else CAPTURE_PURPOSE_BACKGROUND_RESEARCH)
+
+
+def _request_payload(row):
+    payload = row.get('payload') if isinstance(row, dict) else row['payload']
+    return json.loads(payload)
+
+
+def _task_boundary_summary(queue):
+    rows = [dict(row) for row in queue.connection.execute('SELECT * FROM requests')]
+    critical, background = [], []
+    for row in rows:
+        payload = _request_payload(row)
+        purposes = set(payload.get('purposes') or [payload.get('purpose') or capture_stage_purpose(payload.get('stage'))])
+        target = critical if CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL in purposes else background
+        target.append(row)
+    def summarize(selected):
+        counts = {state: sum(row['state'] == state for row in selected)
+                  for state in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
+        stages = sorted({stage for row in selected for stage in (_request_payload(row).get('stages') or [_request_payload(row).get('stage')]) if stage})
+        return {'requests': len(selected), 'states': counts,
+                'pending_count': len([row for row in selected if row['state'] != 'COMPLETE']),
+                'stages': stages}
+    return {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL: summarize(critical),
+            CAPTURE_PURPOSE_BACKGROUND_RESEARCH: summarize(background)}
 
 
 def _write_once(path, value):
@@ -209,9 +260,13 @@ class MainboardPipeline:
         proof['partition_integrity'] = selected['partition_integrity']
         return {**selected, **proof}
 
-    def capture(self, output_dir, now, *, observation_date=None, checkpoint=lambda: None, progress=lambda _: None):
+    def capture(self, output_dir, now, *, observation_date=None, purpose=CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
+                checkpoint=lambda: None, progress=lambda _: None):
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('REAL_AWARE_CAPTURE_CLOCK_REQUIRED')
+        if purpose not in {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL, CAPTURE_PURPOSE_BACKGROUND_RESEARCH}:
+            raise ValueError('UNREGISTERED_CAPTURE_PURPOSE')
+        critical_only = purpose == CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
         from ..observed_data import exchange_calendar_2026
         local = now.astimezone(SH)
         registered = tuple(sorted(exchange_calendar_2026().sessions))
@@ -225,13 +280,15 @@ class MainboardPipeline:
         started = datetime.now(SH)
         stages = []
         with RequestQueue(self.root, budget=self.budget) as queue:
-            def add(endpoint, parameters, stage, *, current=False):
+            def add(endpoint, parameters, stage, *, current=False, purpose=None):
                 priority = capture_priority(endpoint)
                 if endpoint == 'market_daily' and parameters.get('date') == str(day): priority = 0
                 if endpoint == 'master_all' and parameters.get('date') != str(day): priority = 2
                 if endpoint == 'stock_basic_all': priority = 2
+                task_purpose = purpose or capture_stage_purpose(stage)
                 return queue.enqueue(endpoint, parameters, stage=stage, definition_version=FIELD_VERSION,
-                                     cache_epoch=epoch if current else None, priority=priority)
+                                     cache_epoch=epoch if current else None, priority=priority,
+                                     purpose=task_purpose)
 
             def drain(stage, ids):
                 before = queue.calls;http_before=queue.transport_counts().get('HTTP',0)
@@ -261,7 +318,7 @@ class MainboardPipeline:
             history_start = sessions[max(0, len(sessions)-stage_aware_history_sessions)]
             structure_start = sessions[max(0, len(sessions)-22)]
             v2_long_history_start = history_start
-            demand = published_outcome_demand(self.service, day, sessions)
+            demand = [] if critical_only else published_outcome_demand(self.service, day, sessions)
             history_base = self._latest_prior_history_artifact(day,cutoff=datetime.now(SH)) if self.history_store is not None else None
             missing_listing=[]
             for r in initial:
@@ -294,6 +351,17 @@ class MainboardPipeline:
                         'candidate_history_requests': 'DETERMINED_AFTER_ALL_POOL_STRUCTURE_DISCOVERY',
                         'theme_member_requests': 'DETERMINED_BY_REGISTERED_PROVIDER_THEME_DIRECTORY'},
                     'budget': vars(self.budget), 'published_outcome_demand': demand,
+                    'capture_purpose': purpose,
+                    'task_classification': {
+                        'classification_version': 'DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1',
+                        'critical_purpose': CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+                        'background_purpose': CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
+                        'critical_stages': sorted(CRITICAL_CAPTURE_STAGES),
+                        'background_stages': sorted(BACKGROUND_RESEARCH_STAGES),
+                        'critical_only': critical_only,
+                    },
+                    'background_research_deferred': critical_only,
+                    'background_research_deferred_stages': sorted(BACKGROUND_RESEARCH_STAGES) if critical_only else [],
                     'optional_tushare_requests':[{'endpoint':ep,'parameters':params} for ep,params in tushare_request_plan(day,sessions)],
                     'scope_policy': 'ALL_DIRECTORY_MEMBERS_BEFORE_SCORE_NO_LIMIT_UP_POOL_OR_CODE_QUOTA'}
             _write_once(output / 'plan.json', plan)
@@ -302,8 +370,8 @@ class MainboardPipeline:
             breadth = [add('master_all', {'date': str(day)}, 'MarketBreadthCapture', current=True),
                        add('spot_all', {}, 'MarketBreadthCapture', current=True)]
             current_price = add('market_daily', {'date': str(day)}, 'CurrentDailyPriceCapture', current=True)
-            current_status_evidence = [add('delisting_sse', {}, 'MainBoardMasterCapture', current=True)]
-            theme_list = add('concept_list', {}, 'CurrentThemeCapture', current=True)
+            current_status_evidence = [add('delisting_sse', {}, 'CurrentEligibilityStatusCapture', current=True)]
+            theme_list = None if critical_only else add('concept_list', {}, 'CurrentThemeCapture', current=True)
             drain('CurrentIdentityAndBreadth', breadth + basics + current_status_evidence + [current_price])
             selected_theme_endpoint = 'concept_members'
             if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([breadth[-1]])):
@@ -367,45 +435,50 @@ class MainboardPipeline:
             structures += [add('adjustment_factors', {'codes':ids[i:i+100],
                 'start_date':'1990-01-01', 'end_date':str(day)}, 'StructureHistoryCapture')
                 for i in range(0,len(ids),100)]
-            current_limit = add('limit_up_pool', {'date':str(day)}, 'MarketBreadthLimitEvidence', current=True)
-            direct_limits = [add('daily_limits_eastmoney', {'date':str(day), 'codes':ids[i:i+20]},
-                'MarketBreadthDirectLimitEvidence', current=True) for i in range(0,len(ids),20)]
-            outcome_requests = [rid for item in demand for endpoint in ('history','history_adjusted')
-                                for rid in history(item['instrument_id'], date.fromisoformat(item['start_date']), day,
-                                                   'PublishedCandidateOutcomeCapture', endpoint)]
-            outcome_ids=sorted({item['instrument_id'] for item in demand})
-            outcome_requests += [add('stock_basic', {'codes':outcome_ids[i:i+100]}, 'PublishedCandidateOutcomeCapture', current=True)
-                                 for i in range(0,len(outcome_ids),100)]
+            current_limit = None
+            direct_limits = []
+            outcome_requests = []
+            if not critical_only:
+                current_limit = add('limit_up_pool', {'date':str(day)}, 'MarketBreadthLimitEvidence', current=True)
+                direct_limits = [add('daily_limits_eastmoney', {'date':str(day), 'codes':ids[i:i+20]},
+                    'MarketBreadthDirectLimitEvidence', current=True) for i in range(0,len(ids),20)]
+                outcome_requests = [rid for item in demand for endpoint in ('history','history_adjusted')
+                                    for rid in history(item['instrument_id'], date.fromisoformat(item['start_date']), day,
+                                                       'PublishedCandidateOutcomeCapture', endpoint)]
+                outcome_ids=sorted({item['instrument_id'] for item in demand})
+                outcome_requests += [add('stock_basic', {'codes':outcome_ids[i:i+100]}, 'PublishedCandidateOutcomeCapture', current=True)
+                                     for i in range(0,len(outcome_ids),100)]
             # All P0 current inputs precede P1 comparison bases, then P2
             # full-market long-window history. Optional context cannot spend
             # this core budget.
             drain('StructureHistoryCapture', structures)
             # Mature results remain explicit demand even for former losers.
-            drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
-            # Price/amount completeness is independent of optional board-event
-            # evidence; quote-by-quote calls cannot consume PV's initial budget.
-            import os
-            token_configured=bool(os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'))
-            ts_plan=tushare_request_plan(day,sessions)
-            if not token_configured:
-                # One explicit request per endpoint records AUTH_REQUIRED with
-                # zero HTTP, instead of hundreds of identical auth failures.
-                ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
-            ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
-            drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
-            drain('CurrentThemeDirectory', [theme_list])
-            if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
-                theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
-                selected_theme_endpoint = 'concept_members_sina'
-                drain('CurrentThemeRegisteredAlternative', [theme_list])
-            directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
-            theme_requests = []
-            for theme in directory:
-                symbol = theme.get('label') or theme.get('板块代码') or theme.get('theme_id') or theme.get('板块名称')
-                if symbol:
-                    theme_requests.append(add(selected_theme_endpoint, {'symbol':str(symbol)}, 'CurrentThemeCapture', current=True))
-            drain('CurrentThemeCapture', theme_requests)
-            drain('TushareOptionalEnrichment',ts_ids)
+            if not critical_only:
+                drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
+                # Price/amount completeness is independent of optional board-event
+                # evidence; quote-by-quote calls cannot consume PV's initial budget.
+                import os
+                token_configured=bool(os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'))
+                ts_plan=tushare_request_plan(day,sessions)
+                if not token_configured:
+                    # One explicit request per endpoint records AUTH_REQUIRED with
+                    # zero HTTP, instead of hundreds of identical auth failures.
+                    ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
+                ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
+                drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
+                drain('CurrentThemeDirectory', [theme_list])
+                if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
+                    theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
+                    selected_theme_endpoint = 'concept_members_sina'
+                    drain('CurrentThemeRegisteredAlternative', [theme_list])
+                directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
+                theme_requests = []
+                for theme in directory:
+                    symbol = theme.get('label') or theme.get('板块代码') or theme.get('theme_id') or theme.get('板块名称')
+                    if symbol:
+                        theme_requests.append(add(selected_theme_endpoint, {'symbol':str(symbol)}, 'CurrentThemeCapture', current=True))
+                drain('CurrentThemeCapture', theme_requests)
+                drain('TushareOptionalEnrichment',ts_ids)
             normalize = self.normalizer
             if normalize is None:
                 from .provider_normalization import normalize_capture_with_report
@@ -426,8 +499,76 @@ class MainboardPipeline:
             else:
                 gaps = []
             bundle = MarketInput.model_validate(bundle)
-            from .engine import run
             config = self.config
+            if critical_only:
+                actual_cutoff = datetime.now(SH)
+                queue_summary = queue.summary()
+                boundary_summary = _task_boundary_summary(queue)
+                from .daily_primary_readiness import evaluate_daily_primary_readiness
+                readiness = evaluate_daily_primary_readiness(
+                    'market_'+digest(bundle), bundle, actual_cutoff,
+                    config_hash=config.config_hash if config is not None else None)
+                critical_completed = queue_summary['status'] == 'COMPLETE'
+                background_summary = boundary_summary[CAPTURE_PURPOSE_BACKGROUND_RESEARCH]
+                report = {'pipeline_version': PIPELINE_VERSION, 'started_at': started.isoformat(),
+                    'completed_at': actual_cutoff.isoformat(), 'observation_date': str(day),
+                    'raw_bundle_hash': digest(bundle), 'input_id': 'market_'+digest(bundle),
+                    'coverage_type': bundle.coverage_type,
+                    'history_artifact_ref':bundle.history_artifact_ref,
+                    'history_artifact_hash':bundle.history_artifact_hash,
+                    'frozen_config_hash': config.config_hash if config is not None else None,
+                    'scope': 'DAILY_PRIMARY_CRITICAL_CAPTURE_ONLY_REUSING_MAINBOARD_DAG',
+                    'capture_purpose': purpose,
+                    'task_classification': {
+                        'classification_version': 'DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1',
+                        'critical_purpose': CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+                        'background_purpose': CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
+                        'critical_stages': sorted(CRITICAL_CAPTURE_STAGES),
+                        'background_stages': sorted(BACKGROUND_RESEARCH_STAGES),
+                        'critical_only': True,
+                    },
+                    'critical_path_trace': {
+                        'request': 'DAILY_PRIMARY_REQUEST',
+                        'critical_tasks': sorted(CRITICAL_CAPTURE_STAGES),
+                        'background_tasks': sorted(BACKGROUND_RESEARCH_STAGES),
+                        'critical_completed': critical_completed,
+                        'background_pending': background_summary['pending_count'],
+                        'readiness': 'READY' if readiness.get('global_required_ready') else 'NOT_READY',
+                        'strategy_started': None,
+                    },
+                    'capture_boundary': boundary_summary,
+                    'master_ids': ids, 'structure_candidate_ids': [],
+                    'frozen_peer_ids': [], 'v2_long_history': {
+                        'required_history_sessions': stage_aware_history_sessions,
+                        'requested_start': str(v2_long_history_start),
+                        'requested_end': str(day),
+                        'requested_sessions': sum(v2_long_history_start <= s <= day for s in sessions),
+                        'universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
+                        'raw_daily_endpoint': 'market_daily',
+                        'raw_daily_request_granularity': 'ONE_REQUEST_PER_EXCHANGE_SESSION_ALL_MARKET_ROWS',
+                        'adjustment_factor_policy': 'ALL_DIRECTORY_IDS_BATCHED_INDEPENDENTLY_OF_DAILY_CANDIDATE_IDS',
+                        'historical_security_policy': 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE',
+                    },
+                    'history_append_base': history_base,
+                    'published_outcome_demand': [],
+                    'published_outcome_demand_policy': 'DEFERRED_BACKGROUND_RESEARCH_NOT_COMPUTED_ON_DAILY_PRIMARY_CRITICAL_PATH',
+                    'background_research_deferred': True,
+                    'background_research_deferred_stages': sorted(BACKGROUND_RESEARCH_STAGES),
+                    'stages': stages, 'queue': queue_summary,
+                    'daily_primary_readiness': readiness,
+                    'consumer_status': readiness['final_readiness'],
+                    'consumer_coverage': readiness.get('data_coverage_diagnostics', {}).get('coverage_scope'),
+                    'consumer_emotion': None,
+                    'candidate_count': 0, 'full_score_count': 0,
+                    'field_level_gaps': gaps, 'market_edge': 'NOT_ESTABLISHED',
+                    'actual_daily_ready': bool(readiness.get('global_required_ready')),
+                    'remaining_requests': [{k:r[k] for k in ('request_id','state','attempts','failure_category','payload')}
+                                           for r in queue.rows() if r['state']!='COMPLETE']}
+                _write_once(output/'market-input.json', bundle.model_dump(mode='json'))
+                _write_once(output/'capture-report.json', report)
+                self.last_report = report
+                return bundle
+            from .engine import run
             preview = run(bundle, config=config, cutoff=datetime.now(SH), profile='DAILY_V1')
             candidate_ids = sorted({i.instrument_id for i in preview.items})
             peer_ids = sorted({iid for item in preview.items for theme in item.theme_evidence
@@ -456,6 +597,7 @@ class MainboardPipeline:
             actual_cutoff = datetime.now(SH)
             check = run(bundle, config=config, cutoff=actual_cutoff, profile='DAILY_V1')
             queue_summary = queue.summary()
+            boundary_summary = _task_boundary_summary(queue)
             report = {'pipeline_version': PIPELINE_VERSION, 'started_at': started.isoformat(),
                 'completed_at': actual_cutoff.isoformat(), 'observation_date': str(day),
                 'raw_bundle_hash': digest(bundle), 'input_id': 'market_'+digest(bundle),
@@ -464,6 +606,25 @@ class MainboardPipeline:
                 'history_artifact_hash':bundle.history_artifact_hash,
                 'frozen_config_hash': check.config_hash,
                 'scope': 'FULL_MAINBOARD_DIRECTORY_DISCOVERY_WITH_PERSISTENT_PENDING_REQUESTS',
+                'capture_purpose': purpose,
+                'task_classification': {
+                    'classification_version': 'DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1',
+                    'critical_purpose': CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+                    'background_purpose': CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
+                    'critical_stages': sorted(CRITICAL_CAPTURE_STAGES),
+                    'background_stages': sorted(BACKGROUND_RESEARCH_STAGES),
+                    'critical_only': False,
+                },
+                'critical_path_trace': {
+                    'request': 'BACKGROUND_RESEARCH_CAPTURE_COMPATIBILITY_PATH',
+                    'critical_tasks': sorted(CRITICAL_CAPTURE_STAGES),
+                    'background_tasks': sorted(BACKGROUND_RESEARCH_STAGES),
+                    'critical_completed': boundary_summary[CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL]['pending_count'] == 0,
+                    'background_pending': boundary_summary[CAPTURE_PURPOSE_BACKGROUND_RESEARCH]['pending_count'],
+                    'readiness': None,
+                    'strategy_started': None,
+                },
+                'capture_boundary': boundary_summary,
                 'master_ids': ids, 'structure_candidate_ids': candidate_ids, 'frozen_peer_ids': peer_ids,
                 'v2_long_history': {
                     'required_history_sessions': stage_aware_history_sessions,

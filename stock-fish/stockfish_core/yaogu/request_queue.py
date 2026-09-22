@@ -172,7 +172,7 @@ class RequestQueue:
         return datetime.now(timezone.utc).isoformat()
 
     def enqueue(self, endpoint, parameters, *, stage, definition_version, dependencies=(), cache_epoch=None,
-                provider=None, session=None, priority=None):
+                provider=None, session=None, priority=None, purpose=None):
         # Stage is provenance, not identity: one history response can satisfy
         # breadth, structure, scoring and outcome dependencies without re-fetch.
         identity = logical_identity(endpoint, parameters, definition_version, cache_epoch=cache_epoch,
@@ -183,7 +183,11 @@ class RequestQueue:
         priority = capture_priority(endpoint) if priority is None else priority
         if isinstance(priority, bool) or not isinstance(priority, int) or not 0 <= priority <= 5:
             raise ValueError('CAPTURE_PRIORITY_MUST_BE_P0_TO_P5')
-        payload = dict(identity, stage=stage, stages=[stage], priority=priority,
+        purpose = purpose or 'BACKGROUND_RESEARCH'
+        if not isinstance(purpose, str) or not purpose:
+            raise ValueError('CAPTURE_PURPOSE_REQUIRED')
+        payload = dict(identity, stage=stage, stages=[stage], purpose=purpose, purposes=[purpose],
+                       priority=priority,
                        dependencies=sorted(set(dependencies)-{request_id}))
         existing = self.connection.execute('SELECT * FROM requests WHERE request_id=?', (request_id,)).fetchone()
         if existing is not None and existing['state']=='COMPLETE' and (endpoint in NONEMPTY_CORE_ENDPOINTS or endpoint in FINAL_SESSION_RELEASE_CLOCKS):
@@ -218,6 +222,7 @@ class RequestQueue:
             prior = json.loads(existing['payload'])
             payload.update(priority=min(priority, prior.get('priority', priority)) if request_id in self.requested_ids else priority,
                 stages=sorted(set(prior.get('stages', [prior.get('stage', stage)])) | {stage}),
+                purposes=sorted(set(prior.get('purposes', [prior.get('purpose', purpose)])) | {purpose}),
                 dependencies=sorted((set(prior.get('dependencies', ())) | set(dependencies))-{request_id}))
             self.connection.execute('UPDATE requests SET payload=? WHERE request_id=?',
                                     (json.dumps(payload, sort_keys=True), request_id))

@@ -1,3 +1,11 @@
+# Daily Primary Critical Capture Boundary v1（2026-09-22）
+
+本节优先于下方 v1.1/R16 历史记录。Daily Primary normal latest refresh 现在通过 `DAILY_PRIMARY_CRITICAL` purpose 调用既有 MainboardPipeline，只捕获 readiness 与 active `STAGE_AWARE_MOMENTUM_V2` 所需关键输入：observation session、universe/master identity、eligibility/status、current raw price、comparable basis、adjustment factor evidence、V2 core history window 和 source/provenance receipts。RequestQueue 增加 `purpose/purposes` metadata，但 provider logical identity、receipt、normalization、history artifact、PIT 语义不变。Outcome/history maturity、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 和 tracking artifacts 标记为 `BACKGROUND_RESEARCH`，继续可由 full capture / 后台研究路径处理，但不阻塞 Daily Primary readiness。
+
+本轮不改变 Trend、START、ACCELERATION、HIGH_LEVEL_REPAIR、TREND_PULLBACK、FOCUS/WATCH/REJECTED/UNKNOWN、Focus gate、排序、阈值、score、Enhanced Evidence 或 `MARKET_EDGE=NOT_ESTABLISHED`。`UNKNOWN_HISTORICAL_STATUS`、缺 current price、缺 comparable basis、缺 core history window 仍正确阻塞 READY；background backlog 不得伪装成 critical 缺口。详细边界见 [Daily Primary Critical Capture Boundary v1](stock-fish/docs/DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1.md)。
+
+---
+
 # Daily Primary Reliability v1.1（2026-09-21）
 
 本节优先于下方 R16-R1/R16 历史记录。Daily Primary 正式路径在 v1 屏障外补齐 v1.1 closure：normal latest 先解析 `expected_observation_session`，将 `OBSERVATION_SESSION_STALE/STALE_INPUT` 作为 GLOBAL REQUIRED blocker；refresh 目标固定为 expected session；refresh 完成后以刷新数据合法可见时钟更新 `actual_decision_cutoff`，再重跑 freshness + readiness，不能因 refresh request COMPLETE 直接启动策略。显式 historical observation date / specific input 路径不受 latest freshness barrier 误伤。GLOBAL REQUIRED 未就绪时记录 `daily_primary_attempts` 终态 `NOT_READY`，不启动 `STAGE_AWARE_MOMENTUM_V2`、不写正式 strategy run、不发布推荐；instrument-level 缺失记录 typed diagnostics，amount/turnover/adjustment factor 不再被压成 `MISSING_FACTOR`，并继续由现有策略产生 `UNKNOWN`。readiness 通过后若策略、持久化或导出失败，终态为 `FAILED`，不伪装成缺数。`READY` 需要 freshness/readiness、strategy、persistence、export、published 全部完成。

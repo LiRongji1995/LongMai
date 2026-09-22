@@ -42,7 +42,7 @@ class CandidateScheduler:
         self.service.jobs.register('scheduled_candidate_capture', self._capture_job)
         self.plan()
 
-    def _capture(self, output_dir, now, ctx=None):
+    def _capture(self, output_dir, now, ctx=None, *, purpose=None, observation_date=None):
         from .data_pipeline import MainboardPipeline
         config=self.service.config(ctx.payload['config_hash']) if ctx else self.service.current_config()
         pipeline = MainboardPipeline(self.service.root / 'provider_cache', service=self.service, config=config)
@@ -50,7 +50,13 @@ class CandidateScheduler:
             if ctx:
                 ctx.update(.05, '全主板采集：本次请求 %d，缓存 %d，待续采 %d' % (
                     value['network_requests_this_run'], value['cache_hits_this_run'], len(value['pending_request_ids'])))
-        bundle = pipeline.capture(output_dir, now, checkpoint=ctx.check_cancelled if ctx else lambda: None, progress=progress)
+        capture_kwargs = {}
+        if purpose is not None:
+            capture_kwargs['purpose'] = purpose
+        if observation_date is not None:
+            capture_kwargs['observation_date'] = observation_date
+        bundle = pipeline.capture(output_dir, now, checkpoint=ctx.check_cancelled if ctx else lambda: None,
+                                  progress=progress, **capture_kwargs)
         report = dict(pipeline.last_report)
         report['capture_job_id'] = ctx.job_id if ctx else None
         self.service.store.put_document('candidate_pipeline_attempts', 'pipeline_'+digest(report), report)

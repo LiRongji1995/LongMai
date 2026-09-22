@@ -824,8 +824,11 @@ class CandidateService:
             bundle = scheduler.capture(archive, now)
             implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler.capture'
         else:
-            bundle = scheduler._capture(archive, now, None)
-            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler._capture -> MainboardPipeline.capture'
+            from .data_pipeline import CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
+            target_date = date.fromisoformat(target_observation_date) if target_observation_date else None
+            bundle = scheduler._capture(archive, now, None, purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+                                        observation_date=target_date)
+            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler._capture -> MainboardPipeline.capture(DAILY_PRIMARY_CRITICAL)'
         capture_completed_at = scheduler.clock() if hasattr(scheduler, 'clock') else utc_now()
         visible_at = self._max_evidence_clock(bundle) or capture_completed_at
         actual_decision_cutoff = max(cutoff, capture_completed_at, visible_at)
@@ -833,6 +836,7 @@ class CandidateService:
             return {'status': 'NO_MATCHING_INPUT', 'reason': 'REFRESH_OBSERVATION_DATE_MISMATCH',
                     'target_observation_date': target_observation_date,
                     'refreshed_observation_date': str(bundle.observation_date),
+                    'capture_purpose': 'DAILY_PRIMARY_CRITICAL',
                     'refresh_implementation_path': implementation_path,
                     'scheduler_capture_invoked': True,
                     'capture_started_at': now.isoformat(),
@@ -844,6 +848,7 @@ class CandidateService:
                 'target_observation_date': target_observation_date,
                 'observation_date': str(bundle.observation_date),
                 'coverage_type': bundle.coverage_type,
+                'capture_purpose': 'DAILY_PRIMARY_CRITICAL',
                 'refresh_implementation_path': implementation_path,
                 'scheduler_class': type(scheduler).__name__,
                 'scheduler_capture_invoked': True,
