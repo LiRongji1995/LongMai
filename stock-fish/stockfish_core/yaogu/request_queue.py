@@ -259,6 +259,16 @@ class RequestQueue:
 
     def rows(self, ids=None):
         selected = set(ids) if ids is not None else self.requested_ids
+        if not selected:
+            return []
+        rows = []
+        selected = list(selected)
+        for offset in range(0, len(selected), 500):
+            batch = selected[offset:offset+500]
+            placeholders = ','.join('?' for _ in batch)
+            rows.extend(dict(r) for r in self.connection.execute(
+                'SELECT * FROM requests WHERE request_id IN (' + placeholders + ')',
+                batch))
         def order(row):
             p = json.loads(row['payload'])
             session = p['parameters'].get('date', p['parameters'].get('end_date', ''))
@@ -266,8 +276,7 @@ class RequestQueue:
             except (ValueError, TypeError): ordinal = 0
             return (p.get('priority', capture_priority(p['endpoint'])),
                     p['endpoint'] == 'master_all', -ordinal, row['request_id'])
-        return sorted((dict(r) for r in self.connection.execute('SELECT * FROM requests')
-                       if r['request_id'] in selected), key=order)
+        return sorted(rows, key=order)
 
     def retry_blocked(self, ids, *, reason='EXPLICIT_OPERATOR_RETRY', actor='LOCAL_OPERATOR'):
         """Permit one explicit maintenance retry without deleting audit history."""
@@ -481,13 +490,19 @@ class RequestQueue:
     def summary(self):
         rows = self.rows()
         counts = {s: sum(r['state'] == s for r in rows) for s in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
-        stored = list(self.connection.execute('SELECT state FROM requests'))
-        logical = list(self.connection.execute('SELECT r.state FROM requests r JOIN logical_requests l ON l.request_id=r.request_id'))
+        stored_count = self.connection.execute('SELECT COUNT(*) FROM requests').fetchone()[0]
+        logical_count = self.connection.execute('SELECT COUNT(*) FROM logical_requests').fetchone()[0]
+        logical_states = {s: 0 for s in counts}
+        for row in self.connection.execute(
+                'SELECT r.state, COUNT(*) AS count FROM requests r '
+                'JOIN logical_requests l ON l.request_id=r.request_id GROUP BY r.state'):
+            if row['state'] in logical_states:
+                logical_states[row['state']] = row['count']
         return {'queue_version': QUEUE_VERSION, 'logical_identity_version': LOGICAL_REQUEST_VERSION,
                 'requested': len(rows), 'states': counts,
-                'stored_request_rows':len(stored), 'active_logical_requests':len(logical),
-                'legacy_duplicate_rows_preserved':len(stored)-len(logical),
-                'active_logical_states':{s:sum(r['state']==s for r in logical) for s in counts},
+                'stored_request_rows':stored_count, 'active_logical_requests':logical_count,
+                'legacy_duplicate_rows_preserved':stored_count-logical_count,
+                'active_logical_states':logical_states,
                 'priority_policy':'P0_CURRENT_IDENTITY_PRICE_P1_COMPARABILITY_P2_LONG_HISTORY_P3_LIMITS_P4_THEME_P5_ENRICHMENT',
                 'task_attempts_this_run': self.calls,
                 'http_attempts_this_run': self.transport_counts().get('HTTP',0),
