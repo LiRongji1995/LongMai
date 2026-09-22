@@ -284,7 +284,7 @@ def _low_current_comparable(bundle, pass_count):
     })
 
 
-def test_fast_decision_early_not_ready_stops_before_long_history_maintenance(tmp_path, monkeypatch):
+def test_fast_decision_waits_for_structure_history_before_comparable_not_ready(tmp_path, monkeypatch):
     bundle, cutoff = _market_fixture(12, session_count=260)
     low_comparable = _low_current_comparable(bundle, pass_count=4)
     calls = []
@@ -309,12 +309,13 @@ def test_fast_decision_early_not_ready_stops_before_long_history_maintenance(tmp
         decision = report["daily_primary_fast_decision"]
 
         assert decision["decision"] == "NOT_READY"
-        assert decision["sufficient"] is True
+        assert decision["reason"] == "GLOBAL_REQUIRED_BLOCKER_CONCLUSIVE"
         assert decision["selected_blocker"]["code"] == "CURRENT_COMPARABLE_PRICE_COVERAGE"
+        assert decision["queue"]["pending_structure_history"] is False
         assert report["critical_path_trace"]["critical_completed"] is False
         assert report["critical_path_trace"]["strategy_started"] is False
-        assert any("StructureHistoryCapture" in row["payload"] for row in report["remaining_requests"])
-        assert sum(1 for endpoint, _params in calls if endpoint == "market_daily") < 260
+        assert not any("StructureHistoryCapture" in row["payload"] for row in report["remaining_requests"])
+        assert sum(1 for endpoint, _params in calls if endpoint == "market_daily") >= 260
 
         input_id = core.candidates.register_input(captured, activate=False)
         job, attempt = _run_daily_primary(core, input_id)
@@ -326,6 +327,45 @@ def test_fast_decision_early_not_ready_stops_before_long_history_maintenance(tmp
         assert not core.store.list_documents("strategy_experiment_runs")
     finally:
         core.close()
+
+
+def test_fast_decision_does_not_stop_on_comparable_while_structure_history_pending():
+    readiness = {
+        "global_required_ready": False,
+        "gate_fraction": 0.98,
+        "blocking_requirements": [{
+            "code": "CURRENT_COMPARABLE_PRICE_COVERAGE",
+            "scope": "GLOBAL",
+            "requiredness": "REQUIRED",
+            "status": "FAIL",
+            "details": {
+                "coverage": {
+                    "ALL": {"numerator": 4, "denominator": 12},
+                    "SSE": {"numerator": 4, "denominator": 12},
+                    "SZSE": {"numerator": 0, "denominator": 0},
+                }
+            },
+        }],
+    }
+    payload = {
+        "endpoint": "market_daily",
+        "parameters": {"date": "2026-09-01"},
+        "stage": "StructureHistoryCapture",
+        "stages": ["StructureHistoryCapture"],
+        "purpose": CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+        "purposes": [CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL],
+        "priority": 2,
+    }
+
+    decision = evaluate_fast_decision_sufficiency(
+        readiness,
+        [{"payload": json.dumps(payload), "state": "PENDING"}],
+        checkpoint="TEST_PENDING_STRUCTURE",
+    )
+
+    assert decision["decision"] == "CONTINUE_REFRESH"
+    assert decision["sufficient"] is False
+    assert decision["reason"] == "MISSING_EVIDENCE_CAN_STILL_CHANGE_REQUIRED_GATE"
 
 
 def test_fast_decision_continues_when_pending_factor_batch_can_still_reach_gate():

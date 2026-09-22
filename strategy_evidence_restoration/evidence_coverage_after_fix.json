@@ -1,0 +1,243 @@
+{
+  "artifact": "evidence_coverage_after_fix.json",
+  "evidence_rules": {
+    "labels_used": [
+      "ACTUAL_EXECUTION",
+      "STATIC_SOURCE_REVIEW",
+      "CODEX_CLAIM",
+      "INFERENCE",
+      "NOT_VERIFIED"
+    ],
+    "market_edge": "NOT_ESTABLISHED",
+    "strategy_improvement_claimed": false
+  },
+  "coverage_before": {
+    "evidence_label": "ACTUAL_EXECUTION",
+    "source_scope": "latest audited local Daily Primary attempt",
+    "job_id": "job_6275fa7eddf14659a82e51b15adb89be",
+    "input_id": "market_6f214509b1d48ed55fa75e2da15dd2b12ec5476245dab4393bcbec5bf55a665d",
+    "final_status": "NOT_READY",
+    "strategy_started": false,
+    "items": {
+      "trend_history": {
+        "gate": 0.98,
+        "coverage": {
+          "numerator": 0,
+          "denominator": 3040,
+          "coverage_pct": 0.0
+        },
+        "status": "MISSING",
+        "blocker": "CORE_TREND_INPUT_COVERAGE"
+      },
+      "structure_history": {
+        "coverage": {
+          "ma_and_long_slope_computable": {
+            "numerator": 0,
+            "denominator": 3040,
+            "coverage_pct": 0.0
+          },
+          "required_amount_history": {
+            "numerator": 0,
+            "denominator": 3040,
+            "coverage_pct": 0.0
+          }
+        },
+        "status": "MISSING"
+      },
+      "comparable_price": {
+        "gate": 0.98,
+        "coverage": {
+          "ALL": {
+            "numerator": 1321,
+            "denominator": 3040,
+            "coverage_pct": 43.453947368421055
+          },
+          "SSE": {
+            "numerator": 663,
+            "denominator": 1623,
+            "coverage_pct": 40.85027726432532
+          },
+          "SZSE": {
+            "numerator": 658,
+            "denominator": 1417,
+            "coverage_pct": 46.43613267466478
+          }
+        },
+        "status": "MISSING",
+        "blocker": "CURRENT_COMPARABLE_PRICE_COVERAGE"
+      },
+      "current_raw_price": {
+        "coverage": {
+          "numerator": 3040,
+          "denominator": 3040,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "turnover": {
+        "coverage": {
+          "numerator": 3040,
+          "denominator": 3040,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "eligibility": {
+        "coverage": {
+          "numerator": 3040,
+          "denominator": 3040,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "historical_replay": {
+        "coverage": "NOT_FOUND_IN_READINESS_PAYLOAD",
+        "status": "NOT_VERIFIED"
+      },
+      "market_breadth": {
+        "coverage": "NO_TERMINAL_BLOCKER_IN_LATEST_READINESS",
+        "status": "NOT_VERIFIED"
+      },
+      "provenance": {
+        "history_artifact_hash": "4e29d20cfae88c5550e6595237d568905bed932469ebe890db1121e8f5b6f276",
+        "status": "AVAILABLE"
+      }
+    }
+  },
+  "coverage_after": {
+    "evidence_label": "ACTUAL_EXECUTION",
+    "source_scope": "controlled TEST_FIXTURE Daily Primary validation in isolated state",
+    "validation_root": "D:\\stockfish-qlib-quant-system\\work\\strategy_evidence_restoration_validation",
+    "input_id": "market_ea63aa2841c9aadc4d849214d2e4c87624dd864879a81bd8f02862314ab89c91",
+    "run_id": "strategy_experiment_b8f4414ab4cc6b2f910cc624d39efb937fa2f339ed4c241438c5690c4ce6434b",
+    "trace_id": "trace_e3a536047a7b45c3be461008b8859b22",
+    "final_status": "READY",
+    "strategy_started": true,
+    "capture": {
+      "market_daily_call_count": 260,
+      "remaining_structure_history": 0,
+      "critical_completed": true,
+      "fast_decision": {
+        "version": "DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1",
+        "decision": "READY",
+        "sufficient": true,
+        "reason": "FINAL_CRITICAL_CAPTURE_EVALUATION"
+      }
+    },
+    "items": {
+      "trend_history": {
+        "coverage": {
+          "ALL": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "SSE": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          }
+        },
+        "status": "AVAILABLE"
+      },
+      "structure_history": {
+        "coverage": {
+          "has_required_amount_history": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma5": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma10": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma20": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma60": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma120": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_ma250": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_long_ma_slope": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          }
+        },
+        "status": "AVAILABLE"
+      },
+      "comparable_price": {
+        "coverage": {
+          "has_valid_comparable_basis": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          },
+          "has_6_session_comparable_close": {
+            "numerator": 12,
+            "denominator": 12,
+            "coverage_pct": 100.0
+          }
+        },
+        "status": "AVAILABLE",
+        "note": "TEST_FIXTURE comparable basis used fixture no-action comparable prices; provider adjustment-factor count is not applicable to this isolated validation."
+      },
+      "current_raw_price": {
+        "coverage": {
+          "numerator": 12,
+          "denominator": 12,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "turnover": {
+        "coverage": {
+          "numerator": 12,
+          "denominator": 12,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "eligibility": {
+        "coverage": {
+          "numerator": 12,
+          "denominator": 12,
+          "coverage_pct": 100.0
+        },
+        "status": "AVAILABLE"
+      },
+      "historical_replay": {
+        "coverage": "CONTROLLED_FIXTURE_NOT_USED_FOR_PROVIDER_REPLAY_VALIDATION",
+        "status": "NOT_VERIFIED"
+      },
+      "market_breadth": {
+        "coverage": "CONTROLLED_FIXTURE_READINESS_READY",
+        "status": "AVAILABLE_FOR_CONTROLLED_EXECUTION"
+      },
+      "provenance": {
+        "trace_id": "trace_e3a536047a7b45c3be461008b8859b22",
+        "attempt_id": "daily_primary_attempt_099597f5040b5f6defa26c93703f571ef95f58e15e44dd9365907dc55940748e",
+        "status": "AVAILABLE"
+      }
+    }
+  }
+}

@@ -212,6 +212,8 @@ def _conclusive_blocker(readiness: dict, blocker: dict, summary: dict,
                         gate: Fraction | None) -> dict | None:
     code = blocker.get("code")
     if code == "CURRENT_COMPARABLE_PRICE_COVERAGE":
+        if summary.get("pending_structure_history"):
+            return None
         max_result = _max_possible_factor_result(readiness, blocker, summary, gate)
         if not max_result["can_still_pass"]:
             return {
