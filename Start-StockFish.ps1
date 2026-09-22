@@ -29,7 +29,7 @@ if (-not $DatabasePath) { $DatabasePath = if ($env:STOCKFISH_DB_PATH) { $env:STO
 if (-not $StateRoot) { $StateRoot = if ($env:STOCKFISH_STATE_DIR) { $env:STOCKFISH_STATE_DIR } else { Join-Path $Repository 'data/core' } }
 $DatabasePath = [System.IO.Path]::GetFullPath($DatabasePath)
 $StateRoot = [System.IO.Path]::GetFullPath($StateRoot)
-$HealthUrl = "http://127.0.0.1:$Port/api/health"
+$HealthUrl = "http://127.0.0.1:$Port/health/ready"
 $VenvConfiguration = Join-Path $Repository '.venv\pyvenv.cfg'
 $BasePython = $null
 if (Test-Path -LiteralPath $VenvConfiguration -PathType Leaf) {
@@ -88,14 +88,13 @@ function Test-Health {
         }
         if ($readinessKey) { $healthHeaders['Authorization'] = 'Bearer ' + $readinessKey }
         $health = Invoke-RestMethod -Method Get -Uri $HealthUrl -Headers $healthHeaders -TimeoutSec 5
-        foreach ($component in @('application', 'tracker', 'jobs')) {
-            if ($health.components.$component.status -ne 'healthy') { return $false }
-        }
-        if ([System.IO.Path]::GetFullPath($health.components.tracker.path) -ine $DatabasePath) { return $false }
-        $script:ScheduleProbe = Invoke-RestMethod -Method Get -Uri "http://127.0.0.1:$Port/api/candidate-schedule" -Headers $healthHeaders -TimeoutSec 10
-        $runtime = $script:ScheduleProbe.prospective_validation
-        if (-not $runtime.scheduler_thread_alive) { return $false }
-        if ([System.IO.Path]::GetFullPath($runtime.service_identity.state_root) -ine (Join-Path $StateRoot 'yaogu')) { return $false }
+        if ($health.status -ne 'ready' -or -not $health.ready) { return $false }
+        if ($health.checks.database_connection.status -ne 'ok') { return $false }
+        if ($health.checks.jobs.status -ne 'ok') { return $false }
+        if ($health.checks.scheduler.status -ne 'ok') { return $false }
+        if ([System.IO.Path]::GetFullPath($health.service_identity.db_path) -ine $DatabasePath) { return $false }
+        if ([System.IO.Path]::GetFullPath($health.service_identity.state_root) -ine (Join-Path $StateRoot 'yaogu')) { return $false }
+        $script:ScheduleProbe = [pscustomobject]@{ prospective_validation = $health }
         return $true
     } catch { return $false }
 }

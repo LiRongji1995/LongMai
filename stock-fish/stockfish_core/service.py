@@ -368,12 +368,13 @@ class ApplicationService:
                                    "message": "requested quant coverage unavailable; diagnostics retained"}, lambda connection: None)
         return value
 
-    def health(self):
+    def health(self, *, deep: bool = False):
         research = self.research.health()
+        storage_health = self.store.health() if deep else self.store.readiness()
         components = {"application": {"status": "healthy"}, "market_data": {"status": "unavailable", "reason": "TRUSTED_SNAPSHOT_NOT_SELECTED"},
                       "quant": self.quant.health(), "model_registry": self.registry.health(),
                       "research": {"status": research["status"], "role": research["role"]}, "llm": research["llm"],
-                      "tracker": self.store.health(), "jobs": self.jobs.health()}
+                      "tracker": storage_health, "jobs": self.jobs.health(storage_health=storage_health)}
         try:
             snapshot_id = self.active_snapshot_id()
             if snapshot_id:
@@ -395,4 +396,48 @@ class ApplicationService:
                             and components["model_registry"].get("production_validated", 0) > 0
                             and all(components[k]["status"] == "healthy" for k in ("application", "quant", "tracker", "jobs")))
         return {"status": status, "components": components, "production_ready": production_ready,
+                "health_contract": "deep_integrity" if deep else "readiness_compatible",
                 "policy_version": self.recommendations.policy.version}
+
+    def readiness(self):
+        storage = self.store.readiness()
+        jobs = self.jobs.health(storage_health=storage)
+        candidates = getattr(self, 'candidates', None)
+        scheduler = getattr(self, 'candidate_scheduler', None) or getattr(candidates, 'scheduler', None)
+        thread = getattr(scheduler, 'thread', None)
+        scheduler_alive = bool(thread and thread.is_alive())
+        candidate_root = str(candidates.root) if candidates is not None else None
+        checks = {
+            "application": {"status": "ok"},
+            "database_connection": {
+                "status": "ok" if storage["status"] == "healthy" else "not_ready",
+                "path": storage.get("path"),
+                "schema_version": storage.get("schema_version"),
+            },
+            "jobs": {
+                "status": "ok" if jobs["status"] == "healthy" else "not_ready",
+                "accepting_work": jobs.get("accepting_work"),
+                "active_workers": jobs.get("active_workers"),
+            },
+            "scheduler": {
+                "status": "ok" if scheduler_alive else "not_ready",
+                "thread_alive": scheduler_alive,
+                "thread_name": thread.name if thread else None,
+            },
+        }
+        reason_codes = []
+        if storage["status"] != "healthy":
+            reason_codes.append("DATABASE_NOT_READY")
+        if jobs["status"] != "healthy":
+            reason_codes.append("JOBS_NOT_READY")
+        if not scheduler_alive:
+            reason_codes.append("SCHEDULER_THREAD_NOT_ALIVE")
+        ready = not reason_codes
+        return {"status": "ready" if ready else "not_ready", "ready": ready, "checks": checks,
+                "reason_codes": reason_codes, "health_contract": "readiness",
+                "service_identity": {"state_root": candidate_root, "db_path": str(self.store.path),
+                                     "scheduler_thread_name": thread.name if thread else None,
+                                     "scheduler_thread_ident": thread.ident if thread else None,
+                                     "scheduler_thread_native_id": getattr(thread, 'native_id', None) if thread else None,
+                                     "port": getattr(self, 'runtime_port', None)},
+                "deep_integrity": "NOT_CHECKED_USE_/health/deep"}

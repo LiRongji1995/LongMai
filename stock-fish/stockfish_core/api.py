@@ -150,15 +150,52 @@ def create_app(service: ApplicationService | None = None) -> Flask:
                 "status": status, "message": job.get("message") or result.get("message", ""),
                 "error": job.get("error"), "progress": job["progress"]}
 
+    def checked_core_health(*, deep=False):
+        try:
+            return core.health(deep=deep)
+        except TypeError as exc:
+            if "deep" not in str(exc):
+                raise
+            return core.health()
+
+    def checked_readiness():
+        if hasattr(core, "readiness"):
+            return core.readiness()
+        checked = checked_core_health(deep=False)
+        status = checked.get("status")
+        ready = status in {"healthy", "ready"}
+        return {"status": "ready" if ready else "not_ready", "ready": ready,
+                "checks": {"application": {"status": "ok" if ready else "not_ready"}},
+                "reason_codes": [] if ready else ["APPLICATION_NOT_READY"],
+                "health_contract": "readiness", "deep_integrity": "NOT_CHECKED_USE_/health/deep"}
+
     @app.get("/")
     def index():
         return send_from_directory(static, "index.html")
+
+    @app.get("/health/live")
+    def health_live():
+        return jsonify(status="alive", alive=True, health_contract="liveness",
+                       checks={"process": "alive", "http": "responsive"})
+
+    @app.get("/health/ready")
+    def health_ready():
+        value = checked_readiness()
+        return jsonify(value), 200 if value.get("ready") is True else 503
+
+    @app.get("/health/deep")
+    @app.get("/api/health/deep")
+    def health_deep():
+        candidates = getattr(core, 'candidates', None)
+        checked = checked_core_health(deep=True)
+        return jsonify(**checked, candidate_research=candidates.health(storage_health=checked.get('components',{}).get('tracker')) if candidates is not None else
+                       {'status': 'UNAVAILABLE', 'reason_codes': ['CANDIDATE_SERVICE_NOT_CONFIGURED']})
 
     @app.get("/api/health")
     @app.get("/api/config/health")
     def health():
         candidates = getattr(core, 'candidates', None)
-        checked=core.health()
+        checked=checked_core_health(deep=False)
         return jsonify(**checked, candidate_research=candidates.health(storage_health=checked.get('components',{}).get('tracker')) if candidates is not None else
                        {'status': 'UNAVAILABLE', 'reason_codes': ['CANDIDATE_SERVICE_NOT_CONFIGURED']})
 

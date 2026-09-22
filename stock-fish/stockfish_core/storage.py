@@ -321,6 +321,40 @@ class SQLiteStore:
         with self._health_lock:
             return self._health_checked()
 
+    def readiness(self) -> dict:
+        """Cheap storage readiness check for startup and request routing.
+
+        Deep integrity remains in ``health()``. This check proves that the
+        service can open the configured database and see the expected schema
+        contract without traversing large immutable payloads.
+        """
+        checked_at = utc_now().isoformat()
+        scope = {'connection': 'CHECKED', 'journal_mode': 'CHECKED',
+                 'schema_version': 'CHECKED', 'migration_checksums': 'CHECKED',
+                 'deep_integrity': 'NOT_CHECKED_USE_/health/deep',
+                 'payload_hashes': 'NOT_CHECKED_READINESS_MUST_BE_LIGHTWEIGHT'}
+        try:
+            with self.transaction(write=False) as connection:
+                mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                schema_version = connection.execute("SELECT MAX(version) FROM schema_migrations").fetchone()[0]
+                migration_valid = {row['version']: row['checksum'] for row in connection.execute(
+                    'SELECT version,checksum FROM schema_migrations')} == {v: _hash_text(s) for v, s in _MIGRATIONS}
+                required_tables = {'documents', 'recommendation_records', 'evaluation_observations',
+                                   'jobs', 'job_events', 'schema_migrations'}
+                existing_tables = {row['name'] for row in connection.execute(
+                    "SELECT name FROM sqlite_master WHERE type='table'")}
+                missing_tables = sorted(required_tables - existing_tables)
+                valid = mode == 'wal' and schema_version == max(v for v, _ in _MIGRATIONS) and migration_valid and not missing_tables
+                return {"component": "storage", "status": "healthy" if valid else "unavailable",
+                        "journal_mode": mode, "schema_version": schema_version,
+                        "path": str(self.path), 'checked_at': checked_at, 'scope': scope,
+                        'migration_checksums_valid': migration_valid,
+                        'missing_required_tables': missing_tables,
+                        'integrity_guarantee': 'READINESS_ONLY_DEEP_INTEGRITY_NOT_CHECKED'}
+        except (StorageError, OSError, ValueError, TypeError, KeyError, sqlite3.Error):
+            return {"component": "storage", "status": "unavailable", "reason_codes": ["STORAGE_UNAVAILABLE"],
+                    'checked_at': checked_at, 'scope': scope, "path": str(self.path)}
+
     def _health_checked(self) -> dict:
         checked_at = utc_now().isoformat()
         scope = {'structure': 'CHECKED', 'payload_hashes': 'CHECKED_ALL_IMMUTABLE_FACT_TABLES',

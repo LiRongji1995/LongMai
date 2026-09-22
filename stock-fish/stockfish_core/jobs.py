@@ -413,8 +413,8 @@ class JobService:
                 self._event(connection, row["job_id"], state, row["progress"], {"error": error})
             return len(rows)
 
-    def health(self) -> dict:
-        storage = self.store.health()
+    def health(self, *, storage_health: dict | None = None) -> dict:
+        storage = storage_health or self.store.readiness()
         return {"component": "jobs", "status": "healthy" if storage["status"] == "healthy" and not self._storage_failure and not self._closed else "unavailable",
                 "active_workers": len(self._futures), "accepting_work": not self._closed and not self._storage_failure,
                 "persistent": True, "recovery": "INTERRUPTED_REQUIRES_EXPLICIT_RETRY"}
