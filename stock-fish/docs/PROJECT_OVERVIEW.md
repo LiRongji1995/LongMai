@@ -1,3 +1,9 @@
+# Daily Primary Fast Decision v1 当前修订入口（2026-09-22）
+
+本节优先于下方 critical capture/v1.1/R16 历史快照。Daily Primary latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内增加 evidence sufficiency checkpoint：每次关键 RequestQueue 进展后，复用现有 Daily Primary readiness 结果判断是否已经足够给出第一次用户决策。v1 只提前结束可审计的 `NOT_READY`，例如 comparable coverage 已经低于 gate 且剩余 adjustment-factor batch 即使全成功也无法补齐；factor batch 仍可能补齐、core evidence 仍可能改变 gate 时继续 refresh。`READY` 不提前启动策略，仍需 unchanged readiness 通过后再执行 `STAGE_AWARE_MOMENTUM_V2`、持久化、导出和发布。策略语义、eligibility、UNKNOWN、PIT、provenance、comparable basis、Focus/Watch/Rejected/Unknown、score 与 `MARKET_EDGE=NOT_ESTABLISHED` 均不变。说明见 [DAILY_PRIMARY_FAST_DECISION_V1.md](DAILY_PRIMARY_FAST_DECISION_V1.md)。
+
+---
+
 # Daily Primary Critical Capture Boundary v1 当前修订入口（2026-09-22）
 
 本节优先于下方 v1.1/R16 历史快照。Daily Primary latest refresh 增加 `DAILY_PRIMARY_CRITICAL` capture purpose，复用现有 `MainboardPipeline`、RequestQueue、provider receipt、normalizer、history artifact 与 PIT/provenance 机制，只执行 observation session、主板 universe/master、eligibility/status、current raw price、comparable basis、adjustment factor evidence、Stage Aware V2 core history window 和 source receipts。`PublishedCandidateOutcomeCapture`、outcome maturity、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 与 tracking artifacts 继续保留为 `BACKGROUND_RESEARCH`，不再阻塞用户请求的 readiness decision。正式 readiness、eligibility、UNKNOWN、comparable basis、Strategy semantics、Focus/Watch/Rejected/Unknown、score 与 `MARKET_EDGE=NOT_ESTABLISHED` 均不变；缺关键输入仍为 `NOT_READY` 且不启动策略。设计说明见 [DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1.md](DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1.md)。

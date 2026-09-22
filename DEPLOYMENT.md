@@ -1,3 +1,9 @@
+# Daily Primary Fast Decision v1 部署补充（2026-09-22）
+
+本节优先于下方历史部署记录。生产仍为 Python Daily Primary；服务入口仍是 `/api/daily-primary/run` / `CandidateService.submit_daily_primary_strategy()` 与 active `STAGE_AWARE_MOMENTUM_V2`。normal latest refresh 走 `DAILY_PRIMARY_CRITICAL` capture，并在 critical request queue 进展后评估 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1`。该评估只可能提前结束 first user `NOT_READY`，不会提前运行策略或降低 READY gate。provider identity、receipt、normalization、history artifact、PIT 语义、DB/state 路径和调度入口不变。
+
+---
+
 # R16-R1 修订（2026-09-14）
 
 本节优先于下方历史部署记录。生产仍为 Python Daily Primary；Go 只作验证切片，未切换服务或正式 DB。严格 contract、真实外层 trace、PIT instant resolver 与隔离 corrected history 的边界见 [R16-R1 工程说明](stock-fish/docs/R16_R1_ENGINEERING.md)。派生版本为 `DERIVED_FEATURE_STORE_V2_FAMILY_SPECS_R16_R1_PIT_INSTANT`，旧缓存保留。验收采用冻结 commit 后的外置 evidence，不把源码说明视为全量 PASS。只读审计不得调用会写计划/epoch 的 candidate-schedule 路径。

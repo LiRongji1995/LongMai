@@ -32,6 +32,8 @@ Normal latest `/api/daily-primary/run` still performs v1.1 freshness/readiness f
 
 Manual/full `/api/candidate-data-pipeline/capture` remains the compatibility research capture path and still drains the background stages. RequestQueue payloads now carry `purpose`/`purposes` metadata in addition to the existing `stage`/`stages`; this metadata is not part of provider logical identity and does not change cache reuse or source hashes.
 
+`DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1` adds a checkpoint inside the critical capture path.  The checkpoint reuses the unchanged readiness result and can return early only for conclusive `NOT_READY`; it does not early-start strategy.  Details are in [Daily Primary Fast Decision v1](DAILY_PRIMARY_FAST_DECISION_V1.md).
+
 ## Correctness Guardrails
 
 No strategy semantics changed. The following remain unchanged:
@@ -48,6 +50,8 @@ Critical capture may still return `NOT_READY` when eligibility, current price, c
 
 Targeted tests are in `tests/r05_product/test_daily_primary_critical_capture_boundary_v1.py`:
 
+- early `NOT_READY` stops before long-history maintenance when comparable coverage is already impossible to repair
+- pending factor batches that can still repair comparable coverage continue refresh
 - complete critical capture with 10,000 pending `PublishedCandidateOutcomeCapture` rows still reaches Daily Primary `READY`
 - unknown historical eligibility remains `NOT_READY` and does not start strategy
 - missing current price, comparable basis or history window remains `NOT_READY` with typed blockers

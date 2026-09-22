@@ -58,6 +58,7 @@ class CandidateScheduler:
         bundle = pipeline.capture(output_dir, now, checkpoint=ctx.check_cancelled if ctx else lambda: None,
                                   progress=progress, **capture_kwargs)
         report = dict(pipeline.last_report)
+        self.last_capture_report = report
         report['capture_job_id'] = ctx.job_id if ctx else None
         self.service.store.put_document('candidate_pipeline_attempts', 'pipeline_'+digest(report), report)
         return bundle

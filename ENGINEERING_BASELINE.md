@@ -1,3 +1,11 @@
+# Daily Primary Fast Decision v1（2026-09-22）
+
+本节优先于下方 critical capture/v1.1/R16 历史记录。Daily Primary normal latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内加入 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1` evidence checkpoint。checkpoint 复用现有 readiness 输出，只判断第一次用户决策是否已有足够证据；v1 可在 GLOBAL REQUIRED blocker 已经可审计且剩余无关 maintenance 不会改变结论时提前返回 `NOT_READY`，例如 comparable coverage 已低于 gate 且 pending adjustment-factor batch 的最大可能补齐仍不足。若 factor/history evidence 仍可能改变 REQUIRED gate，则继续 refresh。
+
+本轮不降低 READY 标准，不改变 eligibility、PIT、provenance、comparable basis、Stage Aware V2 语义、Focus/Watch/Rejected/Unknown、排序、阈值、score、Enhanced Evidence 或 `MARKET_EDGE=NOT_ESTABLISHED`；`NOT_READY` 仍不启动策略、不发布正式推荐。详细边界见 [Daily Primary Fast Decision v1](stock-fish/docs/DAILY_PRIMARY_FAST_DECISION_V1.md)。
+
+---
+
 # Daily Primary Critical Capture Boundary v1（2026-09-22）
 
 本节优先于下方 v1.1/R16 历史记录。Daily Primary normal latest refresh 现在通过 `DAILY_PRIMARY_CRITICAL` purpose 调用既有 MainboardPipeline，只捕获 readiness 与 active `STAGE_AWARE_MOMENTUM_V2` 所需关键输入：observation session、universe/master identity、eligibility/status、current raw price、comparable basis、adjustment factor evidence、V2 core history window 和 source/provenance receipts。RequestQueue 增加 `purpose/purposes` metadata，但 provider logical identity、receipt、normalization、history artifact、PIT 语义不变。Outcome/history maturity、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 和 tracking artifacts 标记为 `BACKGROUND_RESEARCH`，继续可由 full capture / 后台研究路径处理，但不阻塞 Daily Primary readiness。

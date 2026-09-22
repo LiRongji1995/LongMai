@@ -12,6 +12,7 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from .contracts import MarketInput, digest
+from .daily_primary_fast_decision import evaluate_fast_decision_sufficiency
 from .request_queue import RequestQueue, RequestBudget, capture_priority
 from .provider_requests import execute_request, FIELD_VERSION
 
@@ -38,6 +39,12 @@ BACKGROUND_RESEARCH_STAGES = {
     'OptionalFundsCapture',
 }
 SH = ZoneInfo('Asia/Shanghai')
+
+
+class _FastDecisionCaptureComplete(Exception):
+    def __init__(self, bundle):
+        super().__init__('DAILY_PRIMARY_FAST_DECISION_CAPTURE_COMPLETE')
+        self.bundle = bundle
 
 
 def capture_stage_purpose(stage):
@@ -259,7 +266,7 @@ class MainboardPipeline:
         return {**selected, **proof}
 
     def capture(self, output_dir, now, *, observation_date=None, purpose=CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
-                checkpoint=lambda: None, progress=lambda _: None):
+                checkpoint=lambda: None, progress=lambda _: None, fast_decision=True):
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('REAL_AWARE_CAPTURE_CLOCK_REQUIRED')
         if purpose not in {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL, CAPTURE_PURPOSE_BACKGROUND_RESEARCH}:
@@ -277,6 +284,7 @@ class MainboardPipeline:
         epoch = str(day)
         started = datetime.now(SH)
         stages = []
+        fast_decision_checkpoint = None
         with RequestQueue(self.root, budget=self.budget) as queue:
             def add(endpoint, parameters, stage, *, current=False, purpose=None):
                 priority = capture_priority(endpoint)
@@ -290,13 +298,19 @@ class MainboardPipeline:
 
             def drain(stage, ids):
                 before = queue.calls;http_before=queue.transport_counts().get('HTTP',0)
-                queue.drain(self.executor, ids=ids, checkpoint=checkpoint, progress=progress)
+                def drain_progress(value):
+                    progress(value)
+                    if fast_decision_checkpoint is not None:
+                        fast_decision_checkpoint(stage, value)
+                queue.drain(self.executor, ids=ids, checkpoint=checkpoint, progress=drain_progress)
                 rows = queue.rows(ids)
                 stages.append({'stage': stage, 'request_ids': list(ids), 'requested': len(rows),
                                'complete': sum(r['state'] == 'COMPLETE' for r in rows),
                                'task_attempts': queue.calls-before,
                                'http_attempts':queue.transport_counts().get('HTTP',0)-http_before,
                                'status': 'COMPLETE' if rows and all(r['state']=='COMPLETE' for r in rows) else 'PARTIAL'})
+                if fast_decision_checkpoint is not None:
+                    fast_decision_checkpoint(stage, queue.summary())
 
             masters = [add(ep, {}, 'MainBoardMasterCapture', current=True) for ep in ('mainboard_sse', 'master_szse')]
             calendar_id = add('calendar', {'start_date': str(day-timedelta(days=800)), 'end_date': str(day)}, 'ExchangeCalendarCapture')
@@ -446,68 +460,43 @@ class MainboardPipeline:
                 outcome_ids=sorted({item['instrument_id'] for item in demand})
                 outcome_requests += [add('stock_basic', {'codes':outcome_ids[i:i+100]}, 'PublishedCandidateOutcomeCapture', current=True)
                                      for i in range(0,len(outcome_ids),100)]
-            # All P0 current inputs precede P1 comparison bases, then P2
-            # full-market long-window history. Optional context cannot spend
-            # this core budget.
-            drain('StructureHistoryCapture', structures)
-            # Mature results remain explicit demand even for former losers.
-            if not critical_only:
-                drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
-                # Price/amount completeness is independent of optional board-event
-                # evidence; quote-by-quote calls cannot consume PV's initial budget.
-                import os
-                token_configured=bool(os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'))
-                ts_plan=tushare_request_plan(day,sessions)
-                if not token_configured:
-                    # One explicit request per endpoint records AUTH_REQUIRED with
-                    # zero HTTP, instead of hundreds of identical auth failures.
-                    ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
-                ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
-                drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
-                drain('CurrentThemeDirectory', [theme_list])
-                if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
-                    theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
-                    selected_theme_endpoint = 'concept_members_sina'
-                    drain('CurrentThemeRegisteredAlternative', [theme_list])
-                directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
-                theme_requests = []
-                for theme in directory:
-                    symbol = theme.get('label') or theme.get('板块代码') or theme.get('theme_id') or theme.get('板块名称')
-                    if symbol:
-                        theme_requests.append(add(selected_theme_endpoint, {'symbol':str(symbol)}, 'CurrentThemeCapture', current=True))
-                drain('CurrentThemeCapture', theme_requests)
-                drain('TushareOptionalEnrichment',ts_ids)
             normalize = self.normalizer
             if normalize is None:
                 from .provider_normalization import normalize_capture_with_report
                 normalize = normalize_capture_with_report
             import inspect
             signature = inspect.signature(normalize).parameters
-            normalization_options = {}
-            if self.history_store is not None and 'history_store' in signature:
-                normalization_options['history_store'] = self.history_store
-            if history_base is not None and 'history_base_ref' in signature:
-                normalization_options['history_base_ref'] = history_base['history_artifact_ref']
-            captured_results = queue.results()
-            normalization_cutoff = datetime.now(SH)
-            history_base = self._validate_history_base_for_results(history_base, captured_results, day, normalization_cutoff)
-            bundle = normalize(captured_results, observation_date=day, now=normalization_cutoff, sessions=sessions, **normalization_options)
-            if isinstance(bundle, tuple):
-                bundle, gaps = bundle
-            else:
-                gaps = []
-            bundle = MarketInput.model_validate(bundle)
             config = self.config
-            if critical_only:
-                actual_cutoff = datetime.now(SH)
+
+            def normalization_options(*, write_history):
+                options = {}
+                if write_history and self.history_store is not None and 'history_store' in signature:
+                    options['history_store'] = self.history_store
+                if write_history and history_base is not None and 'history_base_ref' in signature:
+                    options['history_base_ref'] = history_base['history_artifact_ref']
+                return options
+
+            def normalize_current_queue(*, write_history):
+                nonlocal history_base
+                captured_results = queue.results()
+                normalization_cutoff = datetime.now(SH)
+                if write_history:
+                    history_base = self._validate_history_base_for_results(
+                        history_base, captured_results, day, normalization_cutoff)
+                current = normalize(captured_results, observation_date=day, now=normalization_cutoff,
+                                    sessions=sessions, **normalization_options(write_history=write_history))
+                if isinstance(current, tuple):
+                    bundle, gaps = current
+                else:
+                    bundle, gaps = current, []
+                return MarketInput.model_validate(bundle), gaps, normalization_cutoff
+
+            def finish_critical_capture(bundle, gaps, actual_cutoff, readiness, *, fast_decision_result=None):
                 queue_summary = queue.summary()
                 boundary_summary = _task_boundary_summary(queue)
-                from .daily_primary_readiness import evaluate_daily_primary_readiness
-                readiness = evaluate_daily_primary_readiness(
-                    'market_'+digest(bundle), bundle, actual_cutoff,
-                    config_hash=config.config_hash if config is not None else None)
-                critical_completed = queue_summary['status'] == 'COMPLETE'
+                critical_summary = boundary_summary[CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL]
                 background_summary = boundary_summary[CAPTURE_PURPOSE_BACKGROUND_RESEARCH]
+                early = bool(fast_decision_result and fast_decision_result.get('decision') == 'NOT_READY')
                 report = {'pipeline_version': PIPELINE_VERSION, 'started_at': started.isoformat(),
                     'completed_at': actual_cutoff.isoformat(), 'observation_date': str(day),
                     'raw_bundle_hash': digest(bundle), 'input_id': 'market_'+digest(bundle),
@@ -524,15 +513,26 @@ class MainboardPipeline:
                         'critical_stages': sorted(CRITICAL_CAPTURE_STAGES),
                         'background_stages': sorted(BACKGROUND_RESEARCH_STAGES),
                         'critical_only': True,
+                        'decision_roles': {
+                            'IMMEDIATE': sorted(stage for stage in CRITICAL_CAPTURE_STAGES
+                                                if stage != 'HistoricalSecurityReplayCapture'),
+                            'DEFERRED': sorted(BACKGROUND_RESEARCH_STAGES | {'HistoricalSecurityReplayCapture'}),
+                        },
                     },
                     'critical_path_trace': {
                         'request': 'DAILY_PRIMARY_REQUEST',
                         'critical_tasks': sorted(CRITICAL_CAPTURE_STAGES),
                         'background_tasks': sorted(BACKGROUND_RESEARCH_STAGES),
-                        'critical_completed': critical_completed,
+                        'critical_completed': critical_summary['pending_count'] == 0,
                         'background_pending': background_summary['pending_count'],
                         'readiness': 'READY' if readiness.get('global_required_ready') else 'NOT_READY',
-                        'strategy_started': None,
+                        'strategy_started': False if early else None,
+                    },
+                    'daily_primary_fast_decision': fast_decision_result or {
+                        'version': 'DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1',
+                        'sufficient': readiness.get('global_required_ready') and critical_summary['pending_count'] == 0,
+                        'decision': 'READY' if readiness.get('global_required_ready') else 'CONTINUE_REFRESH',
+                        'reason': 'FINAL_CRITICAL_CAPTURE_EVALUATION',
                     },
                     'capture_boundary': boundary_summary,
                     'master_ids': ids, 'structure_candidate_ids': [],
@@ -565,6 +565,101 @@ class MainboardPipeline:
                 _write_once(output/'market-input.json', bundle.model_dump(mode='json'))
                 _write_once(output/'capture-report.json', report)
                 self.last_report = report
+                return report
+
+            last_fast_decision_signature = None
+
+            def fast_decision_signature():
+                adjustment_states = {}
+                current_states = {}
+                pending_factor_codes = 0
+                structure_pending = False
+                for row in queue.rows():
+                    payload = json.loads(row['payload'])
+                    state = row['state']
+                    endpoint = payload.get('endpoint')
+                    row_stage = payload.get('stage')
+                    if endpoint == 'adjustment_factors':
+                        adjustment_states[state] = adjustment_states.get(state, 0) + 1
+                        if state not in {'COMPLETE', 'BLOCKED'}:
+                            pending_factor_codes += len((payload.get('parameters') or {}).get('codes') or ())
+                    if endpoint == 'market_daily' and row_stage == 'CurrentDailyPriceCapture':
+                        current_states[state] = current_states.get(state, 0) + 1
+                    if row_stage == 'StructureHistoryCapture' and state not in {'COMPLETE', 'BLOCKED'}:
+                        structure_pending = True
+                return (tuple(sorted(current_states.items())),
+                        tuple(sorted(adjustment_states.items())),
+                        pending_factor_codes,
+                        structure_pending)
+
+            def evaluate_fast_checkpoint(stage, _summary):
+                nonlocal last_fast_decision_signature
+                if not (critical_only and fast_decision and config is not None):
+                    return
+                signature_value = fast_decision_signature()
+                if signature_value == last_fast_decision_signature:
+                    return
+                last_fast_decision_signature = signature_value
+                try:
+                    bundle, gaps, actual_cutoff = normalize_current_queue(write_history=False)
+                    from .daily_primary_readiness import evaluate_daily_primary_readiness
+                    readiness = evaluate_daily_primary_readiness(
+                        'market_'+digest(bundle), bundle, actual_cutoff,
+                        config_hash=config.config_hash if config is not None else None)
+                    decision = evaluate_fast_decision_sufficiency(
+                        readiness, queue.rows(), checkpoint=stage)
+                except Exception:
+                    return
+                if decision.get('sufficient') and decision.get('decision') == 'NOT_READY':
+                    finish_critical_capture(bundle, gaps, actual_cutoff, readiness,
+                                            fast_decision_result=decision)
+                    raise _FastDecisionCaptureComplete(bundle)
+
+            fast_decision_checkpoint = evaluate_fast_checkpoint
+            # All P0 current inputs precede P1 comparison bases, then P2
+            # full-market long-window history. Optional context cannot spend
+            # this core budget.
+            try:
+                fast_decision_checkpoint('PRE_STRUCTURE_HISTORY', queue.summary())
+                drain('StructureHistoryCapture', structures)
+            except _FastDecisionCaptureComplete as done:
+                return done.bundle
+            # Mature results remain explicit demand even for former losers.
+            if not critical_only:
+                drain('PublishedCandidateOutcomeCapture', sorted(set(outcome_requests)))
+                # Price/amount completeness is independent of optional board-event
+                # evidence; quote-by-quote calls cannot consume PV's initial budget.
+                import os
+                token_configured=bool(os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN'))
+                ts_plan=tushare_request_plan(day,sessions)
+                if not token_configured:
+                    # One explicit request per endpoint records AUTH_REQUIRED with
+                    # zero HTTP, instead of hundreds of identical auth failures.
+                    ts_plan=list({ep:(ep,params) for ep,params in ts_plan}.values())
+                ts_ids=[add(ep,params,'TushareOptionalEnrichment',current=ep=='tushare_stock_basic') for ep,params in ts_plan]
+                drain('MarketBreadthLimitEvidence', [current_limit] + direct_limits)
+                drain('CurrentThemeDirectory', [theme_list])
+                if not any(r.get('status')=='COMPLETE' and r.get('pagination_complete') for r in queue.results([theme_list])):
+                    theme_list = add('concept_list_sina', {}, 'CurrentThemeCapture', current=True)
+                    selected_theme_endpoint = 'concept_members_sina'
+                    drain('CurrentThemeRegisteredAlternative', [theme_list])
+                directory = [r for result in queue.results([theme_list]) for r in result.get('rows', ())]
+                theme_requests = []
+                for theme in directory:
+                    symbol = theme.get('label') or theme.get('板块代码') or theme.get('theme_id') or theme.get('板块名称')
+                    if symbol:
+                        theme_requests.append(add(selected_theme_endpoint, {'symbol':str(symbol)}, 'CurrentThemeCapture', current=True))
+                drain('CurrentThemeCapture', theme_requests)
+                drain('TushareOptionalEnrichment',ts_ids)
+            bundle, gaps, normalization_cutoff = normalize_current_queue(write_history=True)
+            config = self.config
+            if critical_only:
+                actual_cutoff = datetime.now(SH)
+                from .daily_primary_readiness import evaluate_daily_primary_readiness
+                readiness = evaluate_daily_primary_readiness(
+                    'market_'+digest(bundle), bundle, actual_cutoff,
+                    config_hash=config.config_hash if config is not None else None)
+                finish_critical_capture(bundle, gaps, actual_cutoff, readiness)
                 return bundle
             from .engine import run
             preview = run(bundle, config=config, cutoff=datetime.now(SH), profile='DAILY_V1')
@@ -586,7 +681,8 @@ class MainboardPipeline:
             captured_results = queue.results()
             normalization_cutoff = datetime.now(SH)
             history_base = self._validate_history_base_for_results(history_base, captured_results, day, normalization_cutoff)
-            normalized = normalize(captured_results, observation_date=day, now=normalization_cutoff, sessions=sessions, **normalization_options)
+            normalized = normalize(captured_results, observation_date=day, now=normalization_cutoff, sessions=sessions,
+                                   **normalization_options(write_history=True))
             if isinstance(normalized, tuple):
                 bundle, gaps = normalized
             else:

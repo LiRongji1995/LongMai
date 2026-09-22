@@ -1,3 +1,11 @@
+# Daily Primary Fast Decision v1 当前工程补充（2026-09-22）
+
+Daily Primary normal latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内加入 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1` evidence checkpoint。checkpoint 只复用现有 readiness 输出，判断已有证据是否足够结束第一次用户等待；当前 v1 只提前返回可审计 `NOT_READY`，不提前运行策略。若 `CURRENT_COMPARABLE_PRICE_COVERAGE` 低于 gate，且 pending adjustment-factor batch 的最大可能补齐仍无法达到 full-market/per-exchange gate，可提前停止长历史/maintenance 等待；若 missing factor batch 仍可能补齐，则继续 refresh。
+
+本轮不改变 READY gate、eligibility、PIT、provenance、comparable basis、Stage Aware V2 任何 MA/slope/return window、Focus/Watch/Rejected/Unknown、排序、阈值、score 与 `MARKET_EDGE=NOT_ESTABLISHED`。`NOT_READY` 仍不启动策略、不发布正式推荐。详细边界见 [DAILY_PRIMARY_FAST_DECISION_V1.md](docs/DAILY_PRIMARY_FAST_DECISION_V1.md)。
+
+---
+
 # Daily Primary Critical Capture Boundary v1 当前工程补充（2026-09-22）
 
 Daily Primary normal latest refresh 现在使用 `DAILY_PRIMARY_CRITICAL` capture purpose 进入既有 MainboardPipeline。该路径只执行 observation session、universe/master identity、eligibility/status、current raw price、comparable basis、adjustment factor evidence、V2 core history window 和 source/provenance receipts；`PublishedCandidateOutcomeCapture`、outcome maturity、theme、limit evidence、Tushare/funds enrichment、candidate/peer deep history 与 tracking artifacts 保留为 `BACKGROUND_RESEARCH`，不阻塞 readiness decision。RequestQueue 只新增 `purpose/purposes` metadata，不改变 provider identity、receipt、normalizer、history artifact 或 PIT 语义。

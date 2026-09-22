@@ -15,6 +15,7 @@ from stockfish_core.yaogu.data_pipeline import (
     CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
     MainboardPipeline,
 )
+from stockfish_core.yaogu.daily_primary_fast_decision import evaluate_fast_decision_sufficiency
 from stockfish_core.yaogu.request_queue import RequestBudget, RequestQueue, logical_identity
 from tests.yaogu.fixtures import make_bundle
 
@@ -268,6 +269,102 @@ def _missing_history_window(bundle):
     return bundle.model_copy(update={
         "bars": tuple(bar for bar in bundle.bars if bar.session in retained)
     })
+
+
+def _low_current_comparable(bundle, pass_count):
+    current = bundle.observation_date
+    ordered = sorted({bar.instrument_id for bar in bundle.bars if bar.session == current})
+    allowed = set(ordered[:pass_count])
+    return bundle.model_copy(update={
+        "bars": tuple(
+            bar if bar.session != current or bar.instrument_id in allowed
+            else bar.model_copy(update={"comparable_close": None, "comparable_basis": None})
+            for bar in bundle.bars
+        )
+    })
+
+
+def test_fast_decision_early_not_ready_stops_before_long_history_maintenance(tmp_path, monkeypatch):
+    bundle, cutoff = _market_fixture(12, session_count=260)
+    low_comparable = _low_current_comparable(bundle, pass_count=4)
+    calls = []
+    core = _service(tmp_path / "app", monkeypatch, now=cutoff)
+    try:
+        pipeline = MainboardPipeline(
+            tmp_path / "provider_cache",
+            service=core.candidates,
+            config=core.candidates.current_config(),
+            executor=_provider_source(low_comparable, calls),
+            normalizer=_normalizer(low_comparable),
+            budget=RequestBudget(max_requests=1000, max_seconds=60, minimum_interval_seconds=0),
+        )
+
+        captured = pipeline.capture(
+            tmp_path / "critical_fast_decision",
+            cutoff,
+            observation_date=low_comparable.observation_date,
+            purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+        )
+        report = pipeline.last_report
+        decision = report["daily_primary_fast_decision"]
+
+        assert decision["decision"] == "NOT_READY"
+        assert decision["sufficient"] is True
+        assert decision["selected_blocker"]["code"] == "CURRENT_COMPARABLE_PRICE_COVERAGE"
+        assert report["critical_path_trace"]["critical_completed"] is False
+        assert report["critical_path_trace"]["strategy_started"] is False
+        assert any("StructureHistoryCapture" in row["payload"] for row in report["remaining_requests"])
+        assert sum(1 for endpoint, _params in calls if endpoint == "market_daily") < 260
+
+        input_id = core.candidates.register_input(captured, activate=False)
+        job, attempt = _run_daily_primary(core, input_id)
+
+        assert job["state"] == "SUCCEEDED", job
+        assert attempt["final_status"] == "NOT_READY"
+        assert attempt["strategy_started"] is False
+        assert attempt["recommendation_published"] is False
+        assert not core.store.list_documents("strategy_experiment_runs")
+    finally:
+        core.close()
+
+
+def test_fast_decision_continues_when_pending_factor_batch_can_still_reach_gate():
+    readiness = {
+        "global_required_ready": False,
+        "gate_fraction": 0.98,
+        "blocking_requirements": [{
+            "code": "CURRENT_COMPARABLE_PRICE_COVERAGE",
+            "scope": "GLOBAL",
+            "requiredness": "REQUIRED",
+            "status": "FAIL",
+            "details": {
+                "coverage": {
+                    "ALL": {"numerator": 4, "denominator": 12},
+                    "SSE": {"numerator": 4, "denominator": 12},
+                    "SZSE": {"numerator": 0, "denominator": 0},
+                }
+            },
+        }],
+    }
+    payload = {
+        "endpoint": "adjustment_factors",
+        "parameters": {"codes": [f"{600000 + index:06d}.SH" for index in range(12)]},
+        "stage": "StructureHistoryCapture",
+        "stages": ["StructureHistoryCapture"],
+        "purpose": CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+        "purposes": [CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL],
+        "priority": 1,
+    }
+
+    decision = evaluate_fast_decision_sufficiency(
+        readiness,
+        [{"payload": json.dumps(payload), "state": "PENDING"}],
+        checkpoint="TEST_PENDING_FACTOR",
+    )
+
+    assert decision["decision"] == "CONTINUE_REFRESH"
+    assert decision["sufficient"] is False
+    assert decision["reason"] == "MISSING_EVIDENCE_CAN_STILL_CHANGE_REQUIRED_GATE"
 
 
 def test_real_critical_dependency_missing_is_not_ready_with_typed_reason(tmp_path, monkeypatch):
