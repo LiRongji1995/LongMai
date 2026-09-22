@@ -46,28 +46,26 @@ def capture_stage_purpose(stage):
             else CAPTURE_PURPOSE_BACKGROUND_RESEARCH)
 
 
-def _request_payload(row):
-    payload = row.get('payload') if isinstance(row, dict) else row['payload']
-    return json.loads(payload)
-
-
 def _task_boundary_summary(queue):
-    rows = [dict(row) for row in queue.connection.execute('SELECT * FROM requests')]
-    critical, background = [], []
-    for row in rows:
-        payload = _request_payload(row)
-        purposes = set(payload.get('purposes') or [payload.get('purpose') or capture_stage_purpose(payload.get('stage'))])
-        target = critical if CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL in purposes else background
-        target.append(row)
-    def summarize(selected):
-        counts = {state: sum(row['state'] == state for row in selected)
-                  for state in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
-        stages = sorted({stage for row in selected for stage in (_request_payload(row).get('stages') or [_request_payload(row).get('stage')]) if stage})
-        return {'requests': len(selected), 'states': counts,
-                'pending_count': len([row for row in selected if row['state'] != 'COMPLETE']),
-                'stages': stages}
-    return {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL: summarize(critical),
-            CAPTURE_PURPOSE_BACKGROUND_RESEARCH: summarize(background)}
+    def summarize(patterns, stages):
+        where = ' OR '.join('payload LIKE ?' for _ in patterns)
+        params = ['%' + pattern + '%' for pattern in patterns]
+        rows = list(queue.connection.execute(
+            'SELECT state, COUNT(*) AS count FROM requests WHERE ' + where + ' GROUP BY state',
+            params))
+        counts = {state: 0 for state in ('PENDING', 'RUNNING', 'COMPLETE', 'PARTIAL', 'BLOCKED')}
+        for row in rows:
+            if row['state'] in counts:
+                counts[row['state']] = row['count']
+        return {'requests': sum(counts.values()), 'states': counts,
+                'pending_count': sum(count for state, count in counts.items() if state != 'COMPLETE'),
+                'stages': sorted(stages)}
+    critical_patterns = [CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL, *CRITICAL_CAPTURE_STAGES]
+    background_patterns = [CAPTURE_PURPOSE_BACKGROUND_RESEARCH, *BACKGROUND_RESEARCH_STAGES]
+    critical = summarize(critical_patterns, CRITICAL_CAPTURE_STAGES)
+    background = summarize(background_patterns, BACKGROUND_RESEARCH_STAGES)
+    return {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL: critical,
+            CAPTURE_PURPOSE_BACKGROUND_RESEARCH: background}
 
 
 def _write_once(path, value):
