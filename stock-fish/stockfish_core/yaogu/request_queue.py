@@ -143,6 +143,10 @@ class RequestQueue:
         Previously hourly requests remain immutable audit records. One stable
         alias selects the newest complete response, otherwise resumable work.
         """
+        request_count = self.connection.execute('SELECT COUNT(*) FROM requests').fetchone()[0]
+        aliased_count = self.connection.execute('SELECT COUNT(DISTINCT request_id) FROM logical_requests').fetchone()[0]
+        if request_count == aliased_count:
+            return
         grouped = {}
         for row in self.connection.execute('SELECT * FROM requests'):
             payload = json.loads(row['payload'])

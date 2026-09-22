@@ -15,7 +15,7 @@ from stockfish_core.yaogu.data_pipeline import (
     CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
     MainboardPipeline,
 )
-from stockfish_core.yaogu.request_queue import RequestBudget, RequestQueue
+from stockfish_core.yaogu.request_queue import RequestBudget, RequestQueue, logical_identity
 from tests.yaogu.fixtures import make_bundle
 
 
@@ -140,18 +140,22 @@ def _normalizer(base):
 def _seed_published_outcome_backlog(queue_root: Path, count=10000):
     with RequestQueue(queue_root, budget=RequestBudget(max_requests=0)) as queue:
         rows = []
+        aliases = []
         for index in range(count):
+            parameters = {
+                "codes": [f"BG{index:06d}.SH"],
+                "start_date": "2026-01-01",
+                "end_date": "2026-01-02",
+            }
+            identity = logical_identity(
+                "history",
+                parameters,
+                "TEST_FIXTURE_V1",
+                provider="TEST_FIXTURE",
+                session="2026-01-02",
+            )
             payload = {
-                "logical_identity_version": "PROVIDER_ENDPOINT_PARAMETERS_SESSION_V1",
-                "endpoint": "history",
-                "provider": "TEST_FIXTURE",
-                "parameters": {
-                    "codes": [f"BG{index:06d}.SH"],
-                    "start_date": "2026-01-01",
-                    "end_date": "2026-01-02",
-                },
-                "session": "2026-01-02",
-                "definition_version": "TEST_FIXTURE_V1",
+                **identity,
                 "stage": "PublishedCandidateOutcomeCapture",
                 "stages": ["PublishedCandidateOutcomeCapture"],
                 "purpose": CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
@@ -159,11 +163,16 @@ def _seed_published_outcome_backlog(queue_root: Path, count=10000):
                 "priority": 2,
                 "dependencies": [],
             }
-            rows.append((f"background_outcome_{index:06d}", json.dumps(payload, sort_keys=True),
-                         "PENDING", queue.timestamp()))
+            request_id = f"background_outcome_{index:06d}"
+            rows.append((request_id, json.dumps(payload, sort_keys=True), "PENDING", queue.timestamp()))
+            aliases.append(("request_" + digest(identity), request_id))
         queue.connection.executemany(
             "INSERT INTO requests(request_id,payload,state,updated_at) VALUES(?,?,?,?)",
             rows,
+        )
+        queue.connection.executemany(
+            "INSERT INTO logical_requests(logical_id,request_id) VALUES(?,?)",
+            aliases,
         )
         queue.connection.commit()
 
