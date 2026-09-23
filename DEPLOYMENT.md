@@ -1,3 +1,11 @@
+# Daily Observation Monitor 部署增量（2026-09-23）
+
+【事实】新增只读 GET `/api/daily-research/observation` 与现有 CLI `daily-observation`，复用原实例、DB/state、日历和交付/后验服务；没有 schema migration、第二数据库或新后台任务。源码更新后需由原管理脚本重新加载实例才能提供新路由；Start 会复用健康旧进程，不能把源码落盘视为路由已经生效。按实际授权核对原 PID/环境/路径、作业空闲和备份后执行既有启停流程。使用和验收口径见 [观察工具说明](stock-fish/docs/PHASE1_OBSERVATION_MONITOR.md)。
+
+【需要验证】工程检查与真实 HTTP/CLI 验证记录在本轮 observation monitor report；不以 READY 页面或测试 fixture 宣称自然 20 日已完成。以下记录按原日期和任务理解。
+
+---
+
 # Phase 1 每日荐股闭环部署边界（2026-09-23）
 
 【事实】源码新增 `/daily-research` 只读页面与 `/api/daily-research/*` 日报/快照/后验入口，继续使用已有 Python 服务、单写入 SQLiteStore 和 state；Go 保持影子验证。新 snapshot 与原 run 同事务，后台 outcome 追加保存。现有 scheduler 增加有限重试、30 分钟协作期限及有界后台工作；口径与命令见 [Phase 1 文档](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。

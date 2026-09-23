@@ -26,6 +26,12 @@ def test_latest_without_registered_input_records_not_ready_and_requested_identit
         assert attempt['strategy_version'] == job['payload']['research_identity']['signal_implementation_version']
         assert attempt['config_version'] == job['payload']['research_identity']['signal_config_hash']
         assert attempt['target_session'] == '2026-09-24'
+        # Durable job completion precedes the worker's final trace append.
+        # Wait for that same worker, so the full fingerprint isolates the GET.
+        with core.jobs._lock:
+            worker = core.jobs._futures.get(job['job_id'])
+        if worker is not None:
+            worker.result(timeout=5)
         before = fingerprint(core)
         result = create_app(core).test_client().get('/api/daily-research/report?target_session=2026-09-24')
         assert result.status_code == 200, result.text

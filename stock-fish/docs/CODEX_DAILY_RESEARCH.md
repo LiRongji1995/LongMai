@@ -1,5 +1,9 @@
 # Codex 日常研究操作协议
 
+## 每日运行观察（2026-09-23）
+
+【事实】运行检查优先 `daily-observation`，可指定 `--target-session YYYY-MM-DD --days 20`，读取 GET `/api/daily-research/observation`。默认查询今天/最近交易日；盘后下一目标日须显式指定。无记录 NOT_AVAILABLE 与已确认 MISSED 分开；READY 零推荐是正常交付。此命令无更新选项、无 POST、无采集，见 [使用和计数口径](PHASE1_OBSERVATION_MONITOR.md)。
+
 ## Phase 1 增量协议（2026-09-23）
 
 【事实】每日闭环默认复用冻结 V2 run：`daily-report --target-session YYYY-MM-DD` 查交付或失败，`daily-report --run-id RUN_ID` 查原运行，`daily-outcomes RUN_ID` 查 T+1..T+20；均沿用 `scripts/codex_research.py`。只有明确更新后验时添加 `--update --input-id INPUT_ID`。页面 `/daily-research` 与 `/api/daily-research/*` 读取同一权威结果，详见 [Phase 1 说明与完整 API/CLI](PHASE1_DAILY_RESEARCH_LOOP.md)。

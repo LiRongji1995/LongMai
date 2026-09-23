@@ -1,5 +1,9 @@
 # StockFish + Qlib Quant System
 
+## Daily Observation Monitor（2026-09-23）
+
+【事实】用 `daily-observation` 查看当前交付、原冻结推荐、后验状态和最近 20 个交易日；只读现有数据，无记录显示 NOT_AVAILABLE，正常空推荐仍是 READY。入口及计数口径见 [观察工具说明](stock-fish/docs/PHASE1_OBSERVATION_MONITOR.md)。
+
 ## Phase 1 每日荐股闭环（2026-09-23）
 
 【事实】本轮源码增加同一原 run 的四类冻结快照、版本身份、证据解释、T+1..T+20 价格观察与日报出口。使用 `/daily-research` 页面或 Codex 的 `daily-report` / `daily-outcomes` 入口；主动策略仍为 Python `STAGE_AWARE_MOMENTUM_V2`，Go 仍是影子验证。完整口径见 [Phase 1 每日荐股闭环](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。

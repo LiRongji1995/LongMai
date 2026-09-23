@@ -1,3 +1,11 @@
+# Daily Observation Monitor 增量（2026-09-23）
+
+【事实】新增现有服务的只读 observation API 和 `daily-observation` CLI，按原 Daily Research delivery 状态、真实持久化 snapshot、单 run outcome summary 展示最多 20 个交易日。新模块是状态消费者，无新数据库、调度器或推荐逻辑，不改 V2、readiness 或后验计算。详见 [观察工具说明](PHASE1_OBSERVATION_MONITOR.md)。
+
+【需要验证】连续自然 20 日交付、真实数据覆盖和后验成熟仍需实际记录。下方源码交付时的“未部署”等陈述保留其原时间语境，当前实例以本机启用及观察核验报告为准。
+
+---
+
 # Phase 1 每日荐股闭环增量（2026-09-23）
 
 【事实】本轮在既有 Python Daily Primary、不可变 run/detail 与同一 SQLiteStore 上增加冻结 Recommendation Snapshot、轻量 Research Identity、完整 FOCUS/WATCH 日报、失败交付状态和 T+1..T+20 每会话价格后验。策略与配置、原 decision、readiness/evidence 标准及旧 score 保持；Go 仍为影子切片，没有迁移生产。模块、时钟/分母、API/CLI 见 [PHASE1_DAILY_RESEARCH_LOOP.md](PHASE1_DAILY_RESEARCH_LOOP.md)。

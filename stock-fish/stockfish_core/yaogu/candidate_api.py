@@ -38,6 +38,14 @@ def register_candidate_routes(app, service):
             raise ValueError('daily report format must be json or markdown')
         return jsonify(report)
 
+    @app.get('/api/daily-research/observation')
+    def daily_observation():
+        from .daily_observation import observation_report
+        if set(request.args) - {'target_session', 'days', 'as_of'}:
+            raise ValueError('unknown daily observation parameter')
+        return jsonify(observation_report(service, target_session=request.args.get('target_session'),
+                       days=int(request.args.get('days', '20')), as_of=request.args.get('as_of')))
+
     @app.get('/api/daily-research/runs/<run_id>/snapshot')
     def daily_research_snapshot(run_id):
         return jsonify(service.daily_recommendation_snapshot(run_id))

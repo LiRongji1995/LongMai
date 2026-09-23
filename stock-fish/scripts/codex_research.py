@@ -505,6 +505,58 @@ def submit_or_reuse_job(client, kind, path, body, wait_seconds, run_id=None):
     return result
 
 
+def observation_session(value):
+    """Keep the observation target explicit; never convert a holiday locally."""
+    if not re.fullmatch(r"\d{4}-\d{2}-\d{2}", value):
+        raise argparse.ArgumentTypeError("TARGET_SESSION_REQUIRES_YYYY_MM_DD")
+    try:
+        return date.fromisoformat(value)
+    except ValueError:
+        raise argparse.ArgumentTypeError("INVALID_TARGET_SESSION") from None
+
+
+def daily_observation(args, client):
+    """Read one server projection; optional files are a private local copy only."""
+    if not 1 <= args.days <= 20:
+        raise ResearchError("OBSERVATION_DAYS_MUST_BE_1_TO_20")
+    query = {"days": args.days}
+    if args.target_session is not None:
+        query["target_session"] = args.target_session.isoformat()
+    if args.as_of:
+        try:
+            instant = datetime.fromisoformat(args.as_of)
+        except ValueError:
+            raise ResearchError("INVALID_OBSERVATION_CUTOFF") from None
+        if instant.tzinfo is None or instant.utcoffset() is None:
+            raise ResearchError("OBSERVATION_CUTOFF_REQUIRES_TIMEZONE")
+        query["as_of"] = instant.isoformat()
+    path = "/api/daily-research/observation?" + parse.urlencode(query)
+    report = client.get(path)
+    if (not isinstance(report, dict) or report.get("schema_version") != "DAILY_OBSERVATION_V1"
+            or not isinstance(report.get("current"), dict) or not isinstance(report.get("history"), list)
+            or not isinstance(report.get("markdown"), str)
+            or not {"report_as_of", "target_session", "requested_days", "available_days", "calendar_status"}.issubset(report)):
+        raise ResearchError("INVALID_OBSERVATION_RESPONSE")
+    if args.output is None:
+        return report
+    contents = {"report.json": json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
+                "report.md": report["markdown"].encode("utf-8")}
+    manifest = {"schema_version": report["schema_version"], "api_path": path,
+                "source": query, "report_as_of": report["report_as_of"],
+                "files": {name: {"bytes": len(raw), "sha256": hashlib.sha256(raw).hexdigest()}
+                          for name, raw in contents.items()}}
+    contents["manifest.json"] = json.dumps(manifest, ensure_ascii=False, indent=2).encode("utf-8")
+    directory = Path(args.output)
+    try:
+        directory.mkdir(parents=True, exist_ok=False)
+    except FileExistsError:
+        raise ResearchError("OUTPUT_DIRECTORY_EXISTS_PRESERVED") from None
+    for name, raw in contents.items():
+        with (directory / name).open("xb") as handle:
+            handle.write(raw)
+    return {**report, "report_directory": str(directory.resolve())}
+
+
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     result.add_argument("--base-url", default="http://127.0.0.1:8000")
@@ -544,6 +596,11 @@ def parser():
     target.add_argument("--run-id")
     sub.add_argument("--as-of", help="可选带时区的历史报告截止")
     sub.add_argument("--output", type=Path, help="不存在的私有报告目录；不覆盖旧报告")
+    sub = commands.add_parser("daily-observation", help="只读每日交付状态与最近 20 交易日观察；不触发作业")
+    sub.add_argument("--target-session", type=observation_session, help="YYYY-MM-DD；默认由服务选择今日或最近交易日")
+    sub.add_argument("--days", type=int, default=20, help="交易日数量，1..20；默认 20")
+    sub.add_argument("--as-of", help="可选带时区的历史观察截止")
+    sub.add_argument("--output", type=Path, help="仅显式指定时保存到新的私有目录；不覆盖旧报告")
     sub = commands.add_parser("daily-outcomes", help="读取原推荐 T+1..T+20 价格观察；显式 --update 才提交追加任务")
     sub.add_argument("run_id")
     sub.add_argument("--instrument-id")
@@ -554,6 +611,8 @@ def parser():
 
 
 def execute(args, client):
+    if args.command == "daily-observation":
+        return daily_observation(args, client)
     if args.command == "daily-report":
         query = {"run_id": identifier(args.run_id)} if args.run_id else {"target_session": str(args.target_session)}
         if args.as_of:

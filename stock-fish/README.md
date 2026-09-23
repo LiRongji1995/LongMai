@@ -1,5 +1,9 @@
 # StockFish · R05 主板候选研究操作手册
 
+## Daily Observation Monitor（2026-09-23）
+
+【事实】在 Codex 中说“检查今天有没有正常交付，并查看最近 20 个交易日”，可用 `daily-observation` 读取原状态、快照和跟踪计数，不触发荐股或采集。使用方式与 pending/missing 口径见 [观察工具说明](docs/PHASE1_OBSERVATION_MONITOR.md)。
+
 ## Phase 1 日报入口（2026-09-23）
 
 【事实】本轮源码提供 `/daily-research` 只读日报页；Codex 可调用 `daily-report --target-session YYYY-MM-DD` 或 `daily-report --run-id RUN_ID`，并用 `daily-outcomes RUN_ID` 读取原推荐 T+1..T+20 价格观察。完整四类、原解释与身份保留；失败日显示原因，未知不填零。详见 [Phase 1 每日荐股闭环](docs/PHASE1_DAILY_RESEARCH_LOOP.md)。

@@ -1,3 +1,37 @@
+# StockRecommendation Phase 1：Daily Observation Monitor 实施计划
+
+日期：2026-09-23。当前任务为只读真实运行观察入口；下方保留此前 Phase 1 实施计划作为历史记录。本计划先于本轮代码修改保存。
+
+## 现有模块与复用点
+
+【事实】`DailyResearchMixin.daily_research_delivery` 已依据原计划、attempt、job 和发布完成时间给出 READY / NOT_READY / FAILED / MISSED / PLANNED / RUNNING / QUEUED，并保留原 run 和身份。`daily_recommendation_snapshot` 可以读取新快照，也兼容旧 run 的只读投影；本观察入口必须另外识别已持久化快照，不能把历史投影说成原冻结 snapshot。
+
+【事实】`daily_recommendation_outcomes` 和 `summarize_daily_research_outcomes` 已有交易日成熟判断、版本绑定、后验 revision 选择及缺失分母。现有 report 每次包含全历史分析，不适合为 20 日概览重复展开全库。`candidate_api.py` 与 `scripts/codex_research.py` 是既有 HTTP / CLI 入口；使用同一服务、数据库和交易日历。
+
+## 新增内容
+
+【建议】新增 `daily_observation.py` 只读消费者和一个 GET `/api/daily-research/observation`，接收 `target_session`、`days`（1..20）、可选带时区 `as_of`。复用原 delivery 判断、已持久化 snapshot 和原 outcome 查询，按目标交易日展示；不修改原服务状态机，不扫描并分析全部历史策略 run。
+
+【建议】在既有 CLI 增加 `daily-observation` 命令，默认显示当前/最近交易日以及最近 20 个交易日；显式目标日可查历史或下一目标日。终端提供 JSON，按需输出简单 Markdown 和原 JSON 到新的私有目录。无复杂 UI、无新数据库、无观察任务调度或外部通知。
+
+【建议】当前日展示身份、是否有运行证据、无 run 原因、blocker/error、冻结四类数量，以及 FOCUS/WATCH 的证券代码、setup、原 reason_summary。READY 且 FOCUS/WATCH 为 0 明确为正常合法空结果。不存在快照时数量保留 null/NOT_AVAILABLE，不能填成零。
+
+【建议】历史概览按项目交易所日历选择最近 N 个交易日（不按工作日猜节假日）。原计划/运行不存在时展示 NOT_AVAILABLE，同时保留原 delivery.execution_status 和 reason；真实 MISSED 仍保持。日历越界明确覆盖不足，不补造日期或运行记录。
+
+【建议】后验仅汇总状态：T+1/T+5/T+20 的到期数量、已记录数量与 pending/missing；同时按全部 T+1..T+20 的“推荐×交易日”单位给出计数。成熟表示交易日收盘已到，不代表已采集或收益有效；停牌、不可用、无标签、未成熟分开保存展示，不评价收益、不重算后验。
+
+## 风险与防护
+
+【需要验证】必须覆盖 READY 有推荐、READY 合法空、NOT_READY blocker、FAILED error、历史查询，以及 MISSED/PLANNED/RUNNING/QUEUED、历史无记录、日历越界、未到发布时间、已到期但未采集、异常样本和只读不变性。
+
+【建议】所有 fixture 明确 TEST_FIXTURE，测试使用隔离 DB/state。GET 不调用 POST、不注册计划/epoch、不写 snapshot/outcome；同一次观察使用统一 as_of。旧快照缺失只报告，不补写。策略、setup、阈值、readiness 和 outcome 计算模块不修改。
+
+【建议】先做定向测试与代码复核，再在原管理入口和原环境上核验工具可用；不引入新服务或第二份权威数据。源代码变更按已授权工程流程核对发布检出，只提交本任务文件；真实运行材料和数据库不发布。交付 `phase1_observation_monitor_report.md`，分别记录工程检查、真实读验证及尚未完成的连续 20 日观察。
+
+---
+
+## 历史：此前 Phase 1 闭环实施计划
+
 # StockRecommendation Phase 1 implementation plan
 
 日期：2026-09-23。范围：可信每日研究荐股闭环；先分析、再实现。
