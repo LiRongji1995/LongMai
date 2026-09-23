@@ -1,3 +1,13 @@
+# Phase 1 每日荐股闭环工程增量（2026-09-23）
+
+【事实】本轮新增冻结快照/日报纯投影、T+1..T+20 独立价格后验与分组统计、现有服务/API/CLI 接线，以及晚间有限重试/超时/后台调度。原 `STAGE_AWARE_MOMENTUM_V2`、配置、readiness 和旧 score 口径不由新消费者改变；Go 仍是影子验证。字段、公式、分母和验证边界见 [PHASE1_DAILY_RESEARCH_LOOP.md](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【事实】快照/日报/HTML 定向测试已实际取得 20 passed、退出码 0，页面脚本 `node --check` 退出码 0；本轮其他测试结果由统一交付记录补充，不复用下方历史数字。
+
+【需要验证】本轮未切生产服务、未执行在线 provider 连续验收、未完成真实自然 20 会话与市场优势验证。工程、真实数据和投资结论分别报告。
+
+---
+
 # Daily Primary Fast Decision v1（2026-09-22）
 
 本节优先于下方 critical capture/v1.1/R16 历史记录。Daily Primary normal latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内加入 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1` evidence checkpoint。checkpoint 复用现有 readiness 输出，只判断第一次用户决策是否已有足够证据；v1 可在 GLOBAL REQUIRED blocker 已经可审计且剩余无关 maintenance 不会改变结论时提前返回 `NOT_READY`，例如 comparable coverage 已低于 gate 且 pending adjustment-factor batch 的最大可能补齐仍不足。若 factor/history evidence 仍可能改变 REQUIRED gate，则继续 refresh。

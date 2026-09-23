@@ -1,3 +1,11 @@
+# Phase 1 每日荐股闭环部署边界（2026-09-23）
+
+【事实】源码新增 `/daily-research` 只读页面与 `/api/daily-research/*` 日报/快照/后验入口，继续使用已有 Python 服务、单写入 SQLiteStore 和 state；Go 保持影子验证。新 snapshot 与原 run 同事务，后台 outcome 追加保存。现有 scheduler 增加有限重试、30 分钟协作期限及有界后台工作；口径与命令见 [Phase 1 文档](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【需要验证】本轮没有升级/重启用户现有服务、切换 DB/state 或执行在线采集验收。实际部署需核对原实例并按已有授权流程执行；源码检查不代表每日自动运行已生效，也不代表自然 20 会话或收益验证完成。以下部署记录继续按原日期理解。
+
+---
+
 # Daily Primary Fast Decision v1 部署补充（2026-09-22）
 
 本节优先于下方历史部署记录。生产仍为 Python Daily Primary；服务入口仍是 `/api/daily-primary/run` / `CandidateService.submit_daily_primary_strategy()` 与 active `STAGE_AWARE_MOMENTUM_V2`。normal latest refresh 走 `DAILY_PRIMARY_CRITICAL` capture，并在 critical request queue 进展后评估 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1`。该评估只可能提前结束 first user `NOT_READY`，不会提前运行策略或降低 READY gate。provider identity、receipt、normalization、history artifact、PIT 语义、DB/state 路径和调度入口不变。

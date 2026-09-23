@@ -1,5 +1,13 @@
 # Codex 日常研究操作协议
 
+## Phase 1 增量协议（2026-09-23）
+
+【事实】每日闭环默认复用冻结 V2 run：`daily-report --target-session YYYY-MM-DD` 查交付或失败，`daily-report --run-id RUN_ID` 查原运行，`daily-outcomes RUN_ID` 查 T+1..T+20；均沿用 `scripts/codex_research.py`。只有明确更新后验时添加 `--update --input-id INPUT_ID`。页面 `/daily-research` 与 `/api/daily-research/*` 读取同一权威结果，详见 [Phase 1 说明与完整 API/CLI](PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【事实】解释只来自冻结理由/evidence，四类完整保留；按目标交易日无快照时显示 NOT_READY/FAILED/MISSED 等状态，不能给旧名单换日期。后验原基准不回填，1..20 每会话分母、成熟/缺失、版本/证据类型分开，缺失不计零收益。新闭环不修改 V2 或旧 score。
+
+【需要验证】本轮为源码与隔离工程交付，未切换生产服务、未完成真实连续盘前交付或自然 20 会话验证。使用前核对真实实例；普通查询仍不授权代码修改、部署或 Git 提交。
+
 核对日期：2026-09-10（Asia/Shanghai）。供项目中的 Codex 按需读取；用户直接说研究请求即可。完整背景见 [项目综述](PROJECT_OVERVIEW.md)，页面与部署细节见 [README](../README.md)，R14/R15 日常快路径见 [R14_DAILY_FAST_PATH.md](R14_DAILY_FAST_PATH.md)。
 
 **R15 当前默认：** 普通“下一交易日荐股”“今天 V2 名单”“盘后正式名单”和 20:30 official primary 必须走 `DAILY_PRIMARY_FAST`，即只运行 active `STAGE_AWARE_MOMENTUM_V2`、更新/读取 `DERIVED_FEATURE_STORE_V2`、保存 compact canonical run。`DERIVED_FEATURE_STORE_V1` 作为 legacy ignored/read-only 保留；R14 的 same-input warm 不是 true daily incremental 证据。只有用户明确要求多策略比较、historical replay、DNA/THEME/PV/V2 comparison 或深度研究时，才走 `RESEARCH_FULL`。

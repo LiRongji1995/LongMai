@@ -1,0 +1,149 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>StockFish · 每日研究报告</title>
+  <link rel="stylesheet" href="/candidate.css">
+  <style>
+    .daily-page { max-width: 1120px; margin: 0 auto; padding: 24px; }
+    .daily-controls { display: flex; flex-wrap: wrap; align-items: end; gap: 16px; }
+    .daily-controls label { display: grid; gap: 6px; }
+    .daily-controls [hidden] { display: none !important; }
+    .daily-controls input, .daily-controls select { min-height: 40px; max-width: 100%; }
+    .daily-run-id { width: 420px; }
+    .daily-status { margin: 20px 0; }
+    .daily-report { white-space: pre-wrap; overflow-wrap: anywhere; line-height: 1.65; padding: 20px; border: 1px solid #d5dce5; border-radius: 10px; background: #fff; color: #17212f; }
+    .daily-access { margin: 20px 0; }
+    @media (max-width: 640px) { .daily-page { padding: 16px; } .daily-controls label, .daily-run-id { width: 100%; } }
+  </style>
+</head>
+<body>
+  <header class="masthead">
+    <a class="brand" href="/">StockFish <span>研究工作台</span></a>
+    <nav aria-label="页面导航"><a href="/">返回研究工作台</a></nav>
+  </header>
+  <main class="daily-page">
+    <h1>每日研究报告</h1>
+    <p>按目标交易日或原运行读取报告，查看原始判断、证据缺口，以及后续 T+1 至 T+20 的价格观察。</p>
+    <form id="daily-query" class="daily-controls">
+      <label>查询方式
+        <select id="query-mode" name="query_mode">
+          <option value="target_session">目标交易日</option>
+          <option value="run_id">原运行 run_id</option>
+        </select>
+      </label>
+      <label id="session-label">目标交易日
+        <input id="target-session" type="date" name="target_session" required>
+      </label>
+      <label id="run-label" hidden>原运行 run_id
+        <input id="run-id" class="daily-run-id" name="run_id" placeholder="粘贴已保存的 run_id" autocomplete="off" disabled>
+      </label>
+      <button id="query-button" type="submit">读取报告</button>
+      <button id="download-button" class="secondary" type="button" disabled>下载 Markdown</button>
+    </form>
+    <details class="daily-access">
+      <summary>本机访问设置</summary>
+      <label>API Key（仅在本页内存中使用，服务配置后才需要）
+        <input id="api-key" type="password" autocomplete="off" spellcheck="false">
+      </label>
+    </details>
+    <p id="daily-status" class="daily-status" role="status" aria-live="polite">选择日期或原运行后读取报告。</p>
+    <section aria-labelledby="report-heading">
+      <h2 id="report-heading">系统报告</h2>
+      <pre id="daily-report" class="daily-report" tabindex="0">尚未读取报告。没有记录、资料未就绪与合法空名单将分别显示。</pre>
+    </section>
+    <footer>研究用途 · 初始参数尚未验证 · MARKET_EDGE: NOT_ESTABLISHED</footer>
+  </main>
+  <script>
+    'use strict';
+    (() => {
+      const mode = document.getElementById('query-mode');
+      const dateInput = document.getElementById('target-session');
+      const runInput = document.getElementById('run-id');
+      const status = document.getElementById('daily-status');
+      const output = document.getElementById('daily-report');
+      const queryButton = document.getElementById('query-button');
+      const downloadButton = document.getElementById('download-button');
+      let savedMarkdown = null;
+      let downloadName = 'stockfish-daily-research.md';
+
+      function selectMode() {
+        const byDate = mode.value === 'target_session';
+        document.getElementById('session-label').hidden = !byDate;
+        document.getElementById('run-label').hidden = byDate;
+        dateInput.disabled = !byDate;
+        dateInput.required = byDate;
+        runInput.disabled = byDate;
+        runInput.required = !byDate;
+      }
+
+      mode.addEventListener('change', selectMode);
+      const initial = new URLSearchParams(window.location.search);
+      if (initial.has('run_id') && !initial.has('target_session')) {
+        mode.value = 'run_id';
+        runInput.value = initial.get('run_id');
+      } else if (initial.has('target_session') && !initial.has('run_id')) {
+        dateInput.value = initial.get('target_session');
+      }
+      selectMode();
+
+      document.getElementById('daily-query').addEventListener('submit', async (event) => {
+        event.preventDefault();
+        if (queryButton.disabled) return;
+        const value = (mode.value === 'target_session' ? dateInput.value : runInput.value).trim();
+        if (!value) {
+          status.textContent = '请输入目标交易日或已保存的 run_id。';
+          return;
+        }
+        const params = new URLSearchParams();
+        params.set(mode.value, value);
+        const headers = { 'Accept': 'application/json' };
+        const apiKey = document.getElementById('api-key').value;
+        if (apiKey) headers.Authorization = 'Bearer ' + apiKey;
+        queryButton.disabled = true;
+        downloadButton.disabled = true;
+        savedMarkdown = null;
+        output.textContent = '正在读取保存的系统报告…';
+        status.textContent = '正在读取 ' + value + '…';
+        try {
+          const response = await fetch('/api/daily-research/report?' + params.toString(), {
+            method: 'GET', headers, credentials: 'same-origin', cache: 'no-store'
+          });
+          if (!response.ok) {
+            throw new Error(response.status === 401 || response.status === 403
+              ? '访问未通过，请核对本机 API Key。'
+              : '报告读取失败（HTTP ' + response.status + '），请核对查询条件和服务状态。');
+          }
+          const payload = await response.json();
+          if (typeof payload.markdown !== 'string') throw new Error('响应缺少系统报告，未展示不完整内容。');
+          savedMarkdown = payload.markdown;
+          output.textContent = savedMarkdown;
+          const identity = payload.snapshot && payload.snapshot.identity;
+          const execution = (payload.delivery && payload.delivery.execution_status) || (identity && identity.execution_status) || 'UNKNOWN';
+          status.textContent = '报告已读取；交付状态：' + execution + '；报告截止：' + (payload.report_as_of || 'UNKNOWN') + '。';
+          downloadName = 'stockfish-daily-research-' + value.replace(/[^a-zA-Z0-9._-]/g, '_').slice(0, 100) + '.md';
+          downloadButton.disabled = false;
+        } catch (error) {
+          status.textContent = error instanceof Error ? error.message : '报告读取失败。';
+          output.textContent = '当前查询没有取得报告；这不表示候选数量为零。';
+        } finally {
+          queryButton.disabled = false;
+        }
+      });
+
+      downloadButton.addEventListener('click', () => {
+        if (savedMarkdown === null) return;
+        const url = URL.createObjectURL(new Blob([savedMarkdown], { type: 'text/markdown;charset=utf-8' }));
+        const link = document.createElement('a');
+        link.href = url;
+        link.download = downloadName;
+        document.body.appendChild(link);
+        link.click();
+        link.remove();
+        window.setTimeout(() => URL.revokeObjectURL(url), 1000);
+      });
+    })();
+  </script>
+</body>
+</html>

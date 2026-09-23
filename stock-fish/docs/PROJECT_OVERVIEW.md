@@ -1,3 +1,13 @@
+# Phase 1 每日荐股闭环增量（2026-09-23）
+
+【事实】本轮在既有 Python Daily Primary、不可变 run/detail 与同一 SQLiteStore 上增加冻结 Recommendation Snapshot、轻量 Research Identity、完整 FOCUS/WATCH 日报、失败交付状态和 T+1..T+20 每会话价格后验。策略与配置、原 decision、readiness/evidence 标准及旧 score 保持；Go 仍为影子切片，没有迁移生产。模块、时钟/分母、API/CLI 见 [PHASE1_DAILY_RESEARCH_LOOP.md](PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【事实】晚间 critical capture 的源码调度接入有界重试与协作式期限；后台采集/后验独立，不以未来结果回写原推荐。日报记录 READY/NOT_READY/FAILED/MISSED 等状态，价格观察按原版本/setup/tier/证据类型分组，不自动评选盈利策略。
+
+【需要验证】本轮未部署到既有生产服务、未执行在线 provider 连续验收、未完成自然成熟 20 会话或投资有效性验证。以下 2026-09-22 及更早记录保留原时间语境，不能作为本轮线上验收结论。
+
+---
+
 # Daily Primary Fast Decision v1 当前修订入口（2026-09-22）
 
 本节优先于下方 critical capture/v1.1/R16 历史快照。Daily Primary latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内增加 evidence sufficiency checkpoint：每次关键 RequestQueue 进展后，复用现有 Daily Primary readiness 结果判断是否已经足够给出第一次用户决策。v1 只提前结束可审计的 `NOT_READY`，例如 comparable coverage 已经低于 gate 且剩余 adjustment-factor batch 即使全成功也无法补齐；factor batch 仍可能补齐、core evidence 仍可能改变 gate 时继续 refresh。`READY` 不提前启动策略，仍需 unchanged readiness 通过后再执行 `STAGE_AWARE_MOMENTUM_V2`、持久化、导出和发布。策略语义、eligibility、UNKNOWN、PIT、provenance、comparable basis、Focus/Watch/Rejected/Unknown、score 与 `MARKET_EDGE=NOT_ESTABLISHED` 均不变。说明见 [DAILY_PRIMARY_FAST_DECISION_V1.md](DAILY_PRIMARY_FAST_DECISION_V1.md)。

@@ -1,3 +1,13 @@
+# Phase 1 每日荐股闭环工程补充（2026-09-23）
+
+【事实】新增冻结四类快照、轻量身份与只读日报，FOCUS/WATCH 的 T+1..T+20 每会话价格观察保留原基准、异常与分母；通过现有服务和 scheduler 接入原子保存、有界重试和独立后台工作。主动核心仍为 Python V2，Go 仍是影子，策略/evidence/readiness/旧 score 不降级。详见 [Phase 1 每日荐股闭环](docs/PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【事实】快照/renderer/HTML 定向测试 20 passed、退出码 0，脚本语法检查退出码 0；其他本轮检查由统一交付记录补充。
+
+【需要验证】本次源码交付未切换生产实例、未证明 provider 连续覆盖、盘前交付 SLA 或自然成熟 20 会话表现。下方测试数和运行记录继续保留原日期语境。
+
+---
+
 # Daily Primary Fast Decision v1 当前工程补充（2026-09-22）
 
 Daily Primary normal latest refresh 现在在 `DAILY_PRIMARY_CRITICAL` capture 内加入 `DAILY_PRIMARY_FAST_DECISION_BOUNDARY_V1` evidence checkpoint。checkpoint 只复用现有 readiness 输出，判断已有证据是否足够结束第一次用户等待；当前 v1 只提前返回可审计 `NOT_READY`，不提前运行策略。若 `CURRENT_COMPARABLE_PRICE_COVERAGE` 低于 gate，且 pending adjustment-factor batch 的最大可能补齐仍无法达到 full-market/per-exchange gate，可提前停止长历史/maintenance 等待；若 missing factor batch 仍可能补齐，则继续 refresh。

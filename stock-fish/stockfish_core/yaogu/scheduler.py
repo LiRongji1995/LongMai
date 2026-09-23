@@ -1,16 +1,17 @@
 """In-process Shanghai exchange-day schedule. No fictitious catch-up captures."""
 from __future__ import annotations
 
-from datetime import date, datetime, time
+from datetime import date, datetime, time, timedelta
 import os
 import json
 from pathlib import Path
 import threading
+import time as elapsed_time
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from ..common import utc_now, UnavailableError
-from ..jobs import JobConflict
+from ..jobs import JobConflict, JobCancelled
 from ..storage import ImmutableConflict
 from .contracts import digest
 from .candidate_service import CandidateRequest
@@ -18,12 +19,52 @@ from .candidate_service import CandidateRequest
 SH = ZoneInfo('Asia/Shanghai')
 
 
+class _PrimaryDeadlineExceeded(TimeoutError):
+    """Cooperative deadline; provider calls keep their own finite timeouts."""
+
+
+class _PrimaryContext:
+    def __init__(self, context, scheduler):
+        self.context, self.scheduler = context, scheduler
+        self.started = scheduler.monotonic()
+        self.stage = 'CAPTURE'
+        self.strategy_started = False
+
+    def __getattr__(self, name):
+        return getattr(self.context, name)
+
+    def check_cancelled(self):
+        self.context.check_cancelled()
+        cutoff = self.payload.get('delivery_deadline')
+        if (self.scheduler.monotonic() - self.started >= self.scheduler.PRIMARY_TIMEOUT_SECONDS
+                or (cutoff and self.scheduler.clock() >= datetime.fromisoformat(cutoff))):
+            raise _PrimaryDeadlineExceeded('DAILY_PRIMARY_COOPERATIVE_DEADLINE_EXCEEDED')
+
+    def update(self, *args, **kwargs):
+        self.check_cancelled()
+        return self.context.update(*args, **kwargs)
+
+    def complete(self, result, write_fn):
+        self.stage = 'PERSISTENCE'
+        self.check_cancelled()
+        return self.context.complete(result, write_fn)
+
+
 class CandidateScheduler:
     OBSERVATION_PLAN_VERSION = 'FORWARD_OBSERVATION_PLAN_R03_V3'
     SCHEDULER_STATE_SOURCE = 'ACTUAL_CANDIDATE_SCHEDULER_STATE_R12'
     MAX_OUTCOME_SUBMISSIONS_PER_TICK = 5
-    def __init__(self, service, *, capture=None, clock=utc_now, interval=20):
+    DAILY_LOOP_POLICY = 'DAILY_RESEARCH_LOOP_SCHEDULE_V1'
+    PRIMARY_MAX_ATTEMPTS = 3
+    PRIMARY_RETRY_SECONDS = (300, 900)
+    PRIMARY_TIMEOUT_SECONDS = 1800
+    BACKGROUND_CAPTURE_CLOCK = time(21, 15)
+    BACKGROUND_CAPTURE_BATCHES = 3
+    def __init__(self, service, *, capture=None, clock=utc_now, interval=20,
+                 monotonic=elapsed_time.monotonic):
         self.service, self.clock, self.interval = service, clock, interval
+        self.monotonic = monotonic
+        self._tick_lock = threading.Lock()
         existing_scheduler = getattr(service, 'scheduler', None)
         if existing_scheduler and existing_scheduler.thread and existing_scheduler.thread.is_alive():
             raise RuntimeError('CANDIDATE_SCHEDULER_ALREADY_RUNNING_FOR_SERVICE')
@@ -39,13 +80,16 @@ class CandidateScheduler:
         source = Path(__file__).resolve().parents[1] / 'exchange_calendar_2026.json'
         self.calendar_evidence = json.loads(source.read_text(encoding='utf-8'))
         self.calendar_hash = digest(self.calendar_evidence)
-        self.service.jobs.register('scheduled_candidate_capture', self._capture_job)
+        self.service.jobs.register('scheduled_candidate_capture', self._capture_job,
+                                   on_terminal=self._capture_terminal)
+        self.service.jobs.register('scheduled_background_research_capture', self._background_capture_job)
         self.plan()
 
-    def _capture(self, output_dir, now, ctx=None, *, purpose=None, observation_date=None):
+    def _capture(self, output_dir, now, ctx=None, *, purpose=None, observation_date=None, budget=None):
         from .data_pipeline import MainboardPipeline
         config=self.service.config(ctx.payload['config_hash']) if ctx else self.service.current_config()
-        pipeline = MainboardPipeline(self.service.root / 'provider_cache', service=self.service, config=config)
+        pipeline = MainboardPipeline(self.service.root / 'provider_cache', service=self.service, config=config,
+                                     **({'budget': budget} if budget is not None else {}))
         def progress(value):
             if ctx:
                 ctx.update(.05, '全主板采集：本次请求 %d，缓存 %d，待续采 %d' % (
@@ -104,6 +148,169 @@ class CandidateScheduler:
     def _next_session_after(self, day):
         later = [session for session in self.sessions if session > day]
         return later[0] if later else None
+
+    def _delivery_deadline(self, signal_day):
+        target = self._next_session_after(signal_day)
+        return datetime.combine(target, time(8, 45), SH) if target else None
+
+    def _capture_terminal(self, job):
+        payload = job.get('payload') or {}
+        if payload.get('market_session') != 'EVENING':
+            return
+        event_id = job['job_id'] + '_terminal'
+        if self.service.store.get_document('candidate_schedule_events', event_id) is not None:
+            return
+        result = job.get('result') or {}
+        value = {
+            'event_id': event_id, 'job_id': job['job_id'],
+            'root_job_id': payload.get('root_job_id') or job['job_id'],
+            'market_session': 'DAILY_PRIMARY_TERMINAL', 'status': job['state'],
+            'final_status': result.get('daily_primary_final_status') or result.get('final_status') or job['state'],
+            'observed_at': self.clock().isoformat(), 'finished_at': job.get('finished_at'),
+            'signal_session': payload.get('session'), 'scheduled_at': payload.get('scheduled_at'),
+            'policy_version': self.DAILY_LOOP_POLICY,
+            'reason_codes': (job.get('error') or {}).get('reason_codes') or
+                            ([job['state']] if job['state'] in {'CANCELLED', 'INTERRUPTED'} else []),
+            'snapshot_created': bool(result.get('stage_aware_primary_run_id') or result.get('recommendation_published')),
+        }
+        try:
+            self._event(event_id, value)
+        except ImmutableConflict:
+            # The worker's callback and a concurrent scheduler tick can both
+            # observe the same terminal state. Keep the first immutable stamp.
+            if self.service.store.get_document('candidate_schedule_events', event_id) is None:
+                raise
+
+    def _primary_jobs(self, signal_day):
+        root = self._primary_schedule_for(signal_day)['job_id']
+        ids = [root, *(root + '_retry_' + str(i) for i in range(1, self.PRIMARY_MAX_ATTEMPTS))]
+        jobs = {job['job_id']: job for key in ids if (job := self.service.jobs.get(key)) is not None}
+        # The generic explicit retry endpoint uses a random job ID but keeps
+        # its immutable payload. Count it in the same logical primary family.
+        offset = 0
+        while True:
+            page = self.service.jobs.list(kind='scheduled_candidate_capture', limit=1000, offset=offset)
+            for job in page:
+                if (job.get('payload') or {}).get('root_job_id') == root:
+                    jobs[job['job_id']] = job
+            if len(page) < 1000:
+                break
+            offset += len(page)
+        return root, sorted(jobs.values(), key=lambda job: (
+            job.get('created_at') or (job.get('payload') or {}).get('actual_requested_at') or '', job['job_id']))
+
+    @staticmethod
+    def _primary_published(job):
+        result = job.get('result') or {}
+        return bool(result.get('recommendation_published') or result.get('stage_aware_primary_run_id')
+                    or result.get('daily_primary_final_status') == 'READY')
+
+    def _primary_retryable(self, job):
+        if self._primary_published(job) or job['state'] == 'CANCELLED':
+            return False
+        result = job.get('result') or {}
+        if (result.get('daily_primary_final_status') or result.get('final_status')) == 'NOT_READY':
+            return True
+        error_type = (job.get('error') or {}).get('type')
+        return job['state'] in {'FAILED', 'INTERRUPTED'} and error_type not in {
+            'ValueError', 'ImmutableConflict', 'StorageError'}
+
+    def schedule_primary_retries(self, now=None):
+        now = now or self.clock()
+        today = now.astimezone(SH).date()
+        days = [day for day in self.sessions if day <= today][-2:]
+        results = []
+        for day in days:
+            root, jobs = self._primary_jobs(day)
+            if not jobs or any(self._primary_published(job) for job in jobs):
+                continue
+            if any(job['state'] in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'} for job in jobs):
+                continue
+            latest = jobs[-1]
+            if latest['state'] not in {'SUCCEEDED', 'FAILED', 'INTERRUPTED', 'CANCELLED'}:
+                continue
+            self._capture_terminal(latest)
+            deadline = self._delivery_deadline(day)
+            if not deadline or now >= deadline or len(jobs) >= self.PRIMARY_MAX_ATTEMPTS:
+                continue
+            if not self._primary_retryable(latest):
+                continue
+            terminal = self.service.store.get_document('candidate_schedule_events', latest['job_id'] + '_terminal')
+            completed = datetime.fromisoformat(terminal['observed_at'])
+            delay = self.PRIMARY_RETRY_SECONDS[len(jobs) - 1]
+            if now < completed + timedelta(seconds=delay):
+                continue
+            job_id = root + '_retry_' + str(len(jobs))
+            payload = {**latest['payload'], 'root_job_id': root, 'retry_of': latest['job_id'],
+                       'attempt_number': len(jobs) + 1, 'actual_requested_at': now.isoformat(),
+                       'delivery_deadline': deadline.isoformat(), 'policy_version': self.DAILY_LOOP_POLICY}
+            try:
+                job = self.service.jobs.submit('scheduled_candidate_capture', payload, job_id=job_id)
+            except JobConflict:
+                continue
+            value = {'event_id': job_id, 'job_id': job['job_id'], 'root_job_id': root,
+                     'retry_of': latest['job_id'], 'attempt_number': len(jobs) + 1,
+                     'scheduled_at': payload['scheduled_at'], 'observed_at': now.isoformat(),
+                     'market_session': 'EVENING', 'status': 'SUBMITTED', 'snapshot_created': False,
+                     'signal_session': str(day), 'target_session': str(self._next_session_after(day)),
+                     'validation_epoch_id': payload.get('validation_epoch_id'),
+                     'delivery_deadline': deadline.isoformat(), 'policy_version': self.DAILY_LOOP_POLICY}
+            self._event(job_id, value)
+            results.append(value)
+        return results
+
+    def _primary_blocks_background(self, now):
+        today = now.astimezone(SH).date()
+        for day in [day for day in self.sessions if day <= today][-2:]:
+            plan = self._primary_schedule_for(day)
+            scheduled = datetime.fromisoformat(plan['scheduled_at'])
+            deadline = self._delivery_deadline(day)
+            if not deadline or not scheduled - timedelta(minutes=5) <= now < deadline:
+                continue
+            _, jobs = self._primary_jobs(day)
+            if not jobs:
+                if scheduled < self.started_at:
+                    # A direct observer call can precede tick's durable MISSED
+                    # marker. The offline policy already forbids this capture.
+                    continue
+                missed = self.service.store.get_document('candidate_schedule_events', plan['job_id'])
+                if not missed or missed.get('status') != 'MISSED_SERVICE_OFFLINE':
+                    return True
+                continue
+            if any(self._primary_published(job) for job in jobs):
+                continue
+            latest = jobs[-1]
+            if any(job['state'] in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'} for job in jobs):
+                return True
+            if len(jobs) < self.PRIMARY_MAX_ATTEMPTS and self._primary_retryable(latest):
+                return True
+        return False
+
+    def reconcile_missed_primary_schedules(self, now=None):
+        """Record discovered offline gaps only for already registered plans."""
+        now = now or self.clock()
+        results = []
+        for plan in self.service._all('stage_aware_prospective_validation_schedules'):
+            key, stamp = plan.get('job_id'), plan.get('scheduled_at')
+            if not key or not stamp:
+                continue
+            scheduled = datetime.fromisoformat(stamp)
+            if scheduled >= self.started_at or scheduled > now:
+                continue
+            if (self.service.store.get_document('candidate_schedule_events', key) is not None
+                    or self.service.jobs.get(key) is not None):
+                continue
+            value = {'event_id': key, 'scheduled_at': stamp, 'observed_at': now.isoformat(),
+                     'timestamp': now.isoformat(), 'discovered_at': now.isoformat(),
+                     'market_session': 'EVENING', 'status': 'MISSED_SERVICE_OFFLINE',
+                     'signal_session': plan.get('signal_session'), 'target_session': plan.get('target_session'),
+                     'validation_epoch_id': plan.get('validation_epoch_id'), 'snapshot_created': False,
+                     'reason_codes': ['REGISTERED_PRIMARY_SCHEDULE_MISSED_WHILE_SERVICE_OFFLINE'],
+                     'reason': 'registered primary trigger passed while service was offline; no capture was backdated',
+                     'policy_version': self.DAILY_LOOP_POLICY}
+            self._event(key, value)
+            results.append(value)
+        return results
 
     def _primary_schedule_for(self, signal_day, config=None):
         from .validation_identity import current_validation_identity
@@ -193,10 +400,16 @@ class CandidateScheduler:
         now = now or self.clock()
         plan = self.plan()
         primary = self.ensure_primary_validation_schedule(now)
-        job_id = primary.get('job_id')
+        root_job_id = primary.get('job_id')
+        job_id = root_job_id
         job = self.service.jobs.get(job_id) if job_id else None
-        event = self.service.store.get_document('candidate_schedule_events', job_id) if job_id else None
         signal_day = date.fromisoformat(primary['signal_session']) if primary.get('signal_session') else None
+        if signal_day:
+            _, attempts = self._primary_jobs(signal_day)
+            if attempts:
+                job = attempts[-1]
+                job_id = job['job_id']
+        event = self.service.store.get_document('candidate_schedule_events', job_id) if job_id else None
         primary_run = self._latest_stage_aware_primary(signal_day) if signal_day else None
         cutoff = datetime.fromisoformat(primary['scheduled_at']) if primary.get('scheduled_at') else None
         thread_alive = bool(self.thread and self.thread.is_alive())
@@ -259,6 +472,7 @@ class CandidateScheduler:
             'next_real_primary_capture': primary.get('scheduled_at'),
             'expected_target_session': primary.get('target_session'),
             'scheduler_job_id': job_id,
+            'scheduler_root_job_id': root_job_id,
             'scheduler_job_state': {k: job.get(k) for k in ('job_id','kind','state','progress','created_at','started_at','finished_at','updated_at','result','error')} if job else None,
             'scheduler_event_state': event,
             'prospective_primary_run': primary_run,
@@ -281,17 +495,22 @@ class CandidateScheduler:
         return max(candidates,key=lambda r:(r.decision_cutoff,r.generated_at,r.revision,r.run_id),default=None)
 
     def tick(self, now=None):
+        # Manual status tools and the scheduler thread can tick concurrently.
+        with self._tick_lock:
+            return self._tick(now)
+
+    def _tick(self, now=None):
         now = now or self.clock()
         if now.tzinfo is None:
             raise ValueError('scheduler clock must be timezone-aware')
+        results = self.reconcile_missed_primary_schedules(now)
         day = now.astimezone(SH).date()
         if day not in self.sessions:
-            return []
+            return results + self.schedule_primary_retries(now)
         config = self.service.current_config()
         self.plan()
         self.ensure_primary_validation_schedule(now)
         schedule = config.schedule
-        results = []
         for name, scheduled_clock in [('PRELIMINARY', schedule.preliminary), ('EVENING', schedule.evening), ('AUCTION_REVIEW', schedule.auction_review)]:
             hour, minute = map(int, scheduled_clock.split(':'))
             planned = datetime.combine(day, time(hour, minute), SH)
@@ -303,8 +522,12 @@ class CandidateScheduler:
                 continue
             if planned < self.started_at:
                 value = {'event_id': key, 'scheduled_at': planned.isoformat(), 'observed_at': now.isoformat(),
-                         **({'validation_epoch_id': primary_identity['validation_epoch_id']} if primary_identity else {}),
-                         'status': 'MISSED_SERVICE_OFFLINE', 'market_session': name, 'snapshot_created': False}
+                         **({field: value for field, value in primary_identity.items()
+                             if field not in {'job_id', 'scheduled_at'}} if primary_identity else {}),
+                         'status': 'MISSED_SERVICE_OFFLINE', 'market_session': name, 'snapshot_created': False,
+                         'reason_codes': ['SCHEDULER_STARTED_AFTER_SCHEDULED_TRIGGER'],
+                         'reason': 'service was offline at the scheduled trigger; no prospective snapshot was fabricated',
+                         'timestamp': now.isoformat()}
                 self._event(key, value)
                 results.append(value)
                 continue
@@ -334,7 +557,11 @@ class CandidateScheduler:
             else:
                 job = self.service.jobs.submit('scheduled_candidate_capture', {'scheduled_at': planned.isoformat(),
                      'actual_requested_at': now.isoformat(), 'market_session': name, 'session': day.isoformat(),
-                     **({'validation_epoch_id': primary_identity['validation_epoch_id']} if primary_identity else {}),
+                     **({'validation_epoch_id': primary_identity['validation_epoch_id'], 'root_job_id': key,
+                         'research_identity': primary_identity,
+                         'attempt_number': 1, 'policy_version': self.DAILY_LOOP_POLICY,
+                         'delivery_deadline': self._delivery_deadline(day).isoformat()
+                                              if self._delivery_deadline(day) else None} if primary_identity else {}),
                      'config_hash': config.config_hash}, job_id=key)
             from .validation_identity import current_validation_identity
             value = {'event_id': key, 'scheduled_at': planned.isoformat(), 'observed_at': now.isoformat(),
@@ -344,6 +571,11 @@ class CandidateScheduler:
             results.append(value)
         # Observation jobs form a later independent stage. A capture is already
         # committed (or still running); observer failure cannot undo its success.
+        results.extend(self.schedule_primary_retries(now))
+        if self._primary_blocks_background(now):
+            return results
+        results.extend(self.schedule_background_capture(now))
+        results.extend(self.schedule_daily_recommendation_outcomes(now))
         results.extend(self.schedule_observations(now))
         results.extend(self.schedule_strategy_research(now))
         return results
@@ -359,6 +591,8 @@ class CandidateScheduler:
         now = now or self.clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('observer clock must be timezone-aware')
+        if self._primary_blocks_background(now):
+            return []
         local = now.astimezone(SH)
         day = local.date()
         if day not in self.sessions or local.time().replace(tzinfo=None) < time(15):
@@ -440,6 +674,8 @@ class CandidateScheduler:
         now = now or self.clock()
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('observer clock must be timezone-aware')
+        if self._primary_blocks_background(now):
+            return []
         local = now.astimezone(SH)
         day = local.date()
         if day not in self.sessions or local.time().replace(tzinfo=None) < time(15):
@@ -490,7 +726,165 @@ class CandidateScheduler:
             submitted += 1
         return results
 
+    def schedule_background_capture(self, now=None):
+        """Bounded full captures retain outcome demand outside the primary path."""
+        now = now or self.clock()
+        local = now.astimezone(SH)
+        if (local.date() not in self.sessions or local.time().replace(tzinfo=None) < self.BACKGROUND_CAPTURE_CLOCK
+                or self._primary_blocks_background(now)):
+            return []
+        base = 'background_research_capture_' + str(local.date()) + '_' + self.DAILY_LOOP_POLICY
+        for batch in range(1, self.BACKGROUND_CAPTURE_BATCHES + 1):
+            job_id = base + '_' + str(batch)
+            existing = self.service.jobs.get(job_id)
+            if existing:
+                if existing['state'] in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'}:
+                    return []
+                if existing['state'] == 'CANCELLED':
+                    return []
+                terminal = existing.get('result') or {}
+                if terminal.get('capture_queue_complete') is True:
+                    return []
+                # A finite daily batch budget also bounds failed full captures.
+                continue
+            payload = {'session': str(local.date()), 'config_hash': self.service.current_config().config_hash,
+                       'actual_requested_at': now.isoformat(), 'batch': batch,
+                       'market_session': 'BACKGROUND_RESEARCH', 'policy_version': self.DAILY_LOOP_POLICY}
+            try:
+                job = self.service.jobs.submit('scheduled_background_research_capture', payload, job_id=job_id)
+            except JobConflict:
+                return []
+            value = {'event_id': job_id, 'job_id': job['job_id'], 'observed_at': now.isoformat(),
+                     'evaluation_session': str(local.date()), 'market_session': 'BACKGROUND_RESEARCH',
+                     'status': 'SUBMITTED', 'snapshot_created': False, 'batch': batch,
+                     'max_daily_batches': self.BACKGROUND_CAPTURE_BATCHES, 'policy_version': self.DAILY_LOOP_POLICY}
+            self._event(job_id, value)
+            return [value]
+        return []
+
+    def _background_capture_job(self, ctx):
+        from .data_pipeline import CAPTURE_PURPOSE_BACKGROUND_RESEARCH
+        from .request_queue import RequestBudget
+        now = self.clock()
+        if self._primary_blocks_background(now):
+            # Recheck in the worker: a queued background job must not start a
+            # full capture after a primary retry becomes due.
+            raise UnavailableError('PRIMARY_WORK_PENDING_BACKGROUND_DEFERRED', 'candidate')
+        day = date.fromisoformat(ctx.payload['session'])
+        archive = self.service.root / 'raw_captures' / ctx.job_id
+        bundle = self.capture(archive, now) if self.custom_capture else self._capture(
+            archive, now, ctx, purpose=CAPTURE_PURPOSE_BACKGROUND_RESEARCH, observation_date=day,
+            budget=RequestBudget(max_requests=32, max_seconds=120, timeout_seconds=30))
+        ctx.check_cancelled()
+        if bundle.observation_date != day:
+            raise ValueError('background capture market date does not match requested session')
+        input_id = self.service.register_input(bundle, activate=False)
+        report = getattr(self, 'last_capture_report', {}) or {}
+        pending = (report.get('queue') or {}).get('pending_request_ids')
+        value = {'job_id': ctx.job_id, 'input_id': input_id, 'observation_date': str(day),
+                 'observed_at': self.clock().isoformat(), 'coverage_type': bundle.coverage_type,
+                 'capture_purpose': CAPTURE_PURPOSE_BACKGROUND_RESEARCH, 'status': 'complete',
+                 'capture_queue_complete': pending == [] if pending is not None else False,
+                 'pending_request_count': len(pending) if pending is not None else None,
+                 'recommendation_published': False, 'policy_version': self.DAILY_LOOP_POLICY}
+        return ctx.complete(value, lambda connection: self.service.store._put_document(
+            connection, 'candidate_background_capture_results', ctx.job_id, value))
+
+    def schedule_daily_recommendation_outcomes(self, now=None):
+        now = now or self.clock()
+        local = now.astimezone(SH)
+        if (local.date() not in self.sessions or local.time().replace(tzinfo=None) < time(15)
+                or self._primary_blocks_background(now)):
+            return []
+        pending = getattr(self.service, 'pending_daily_recommendation_outcomes', None)
+        if pending is None:
+            return []
+        rows = pending()
+        if not rows:
+            return []
+        try:
+            input_id, bundle = self.service.strategy_input()
+        except UnavailableError:
+            return []
+        if bundle.observation_date > local.date():
+            return []
+        results = []
+        for row in rows:
+            if date.fromisoformat(str(row['observation_date'])[:10]) > bundle.observation_date:
+                continue
+            base = 'daily_research_outcome_' + digest({'run_id': row['run_id'], 'input_id': input_id,
+                'evaluation_session': str(local.date()), 'policy': self.DAILY_LOOP_POLICY})
+            job_id = base
+            for attempt in range(self.PRIMARY_MAX_ATTEMPTS):
+                job_id = base if attempt == 0 else base + '_retry_' + str(attempt)
+                old = self.service.jobs.get(job_id)
+                if old is None:
+                    break
+                if old['state'] not in {'FAILED', 'INTERRUPTED'}:
+                    break
+                event = self.service.store.get_document('candidate_schedule_events', job_id) or {}
+                requested = datetime.fromisoformat(event.get('observed_at') or now.isoformat())
+                if now < requested + timedelta(seconds=self.PRIMARY_RETRY_SECONDS[min(attempt, 1)]):
+                    break
+            if self.service.jobs.get(job_id) is not None:
+                continue
+            try:
+                job = self.service.submit_daily_recommendation_outcomes(row['run_id'], input_id, job_id=job_id)
+            except JobConflict:
+                return results
+            value = {'event_id': job_id, 'job_id': job['job_id'], 'run_id': row['run_id'], 'input_id': input_id,
+                     'evaluation_session': str(local.date()), 'observed_at': now.isoformat(),
+                     'market_session': 'DAILY_RECOMMENDATION_OUTCOMES', 'status': 'SUBMITTED',
+                     'snapshot_created': False, 'horizons': list(range(1, 21)),
+                     'policy_version': self.DAILY_LOOP_POLICY, 'market_edge': 'NOT_ESTABLISHED'}
+            self._event(job_id, value)
+            results.append(value)
+            if len(results) >= self.MAX_OUTCOME_SUBMISSIONS_PER_TICK:
+                break
+        return results
+
     def _capture_job(self, ctx):
+        if ctx.payload.get('market_session') != 'EVENING':
+            return self._capture_job_inner(ctx)
+        # An explicit retry may have been queued before an automatic attempt
+        # published. The single worker rechecks the immutable family here.
+        signal_day = date.fromisoformat(ctx.payload['session'])
+        current_plan = self._primary_schedule_for(signal_day)
+        family = (self._primary_jobs(signal_day)[1]
+                  if ctx.payload.get('validation_epoch_id') == current_plan['validation_epoch_id'] else [])
+        published = next((job for job in family if job['job_id'] != ctx.job_id
+                          and self._primary_published(job)), None)
+        if published is not None:
+            result = {**published['result'], 'reused_primary_job_id': published['job_id'],
+                      'duplicate_capture_prevented': True}
+            return ctx.complete(result, lambda connection: None)
+        wrapped = _PrimaryContext(ctx, self)
+        try:
+            return self._capture_job_inner(wrapped)
+        except JobCancelled:
+            raise
+        except Exception as exc:
+            # Never store arbitrary exception strings (provider errors may
+            # contain credentials); publication and failure are atomic.
+            now = self.clock()
+            error = {'code': 'DAILY_PRIMARY_TIMEOUT' if isinstance(exc, _PrimaryDeadlineExceeded)
+                            else 'SCHEDULED_DAILY_PRIMARY_FAILED',
+                     'type': type(exc).__name__, 'component': 'candidate',
+                     'message': 'scheduled daily primary failed; no recommendation published'}
+            attempt = self.service._daily_primary_attempt(
+                job_id=ctx.job_id, input_id=getattr(wrapped, 'input_id', None), cutoff=now,
+                final_status='FAILED', readiness=getattr(wrapped, 'daily_primary_readiness', None),
+                error={**error, 'stage': wrapped.stage},
+                strategy_started=wrapped.strategy_started, request_started_at=datetime.fromisoformat(
+                    ctx.payload.get('actual_requested_at') or ctx.payload['scheduled_at']),
+                expected_observation_session=ctx.payload['session'], daily_primary_mode='SCHEDULED_EVENING')
+            attempt.update(stage=wrapped.stage, timestamp=now.isoformat(),
+                           observation_date=ctx.payload['session'], policy_version=self.DAILY_LOOP_POLICY,
+                           root_job_id=ctx.payload.get('root_job_id') or ctx.job_id,
+                           attempt_number=ctx.payload.get('attempt_number', 1))
+            return ctx.fail(attempt, error, lambda connection: self.service._write_daily_primary_attempt(connection, attempt))
+
+    def _capture_job_inner(self, ctx):
         payload = ctx.payload
         now = self.clock()
         from .validation_identity import current_validation_identity
@@ -499,12 +893,17 @@ class CandidateScheduler:
             raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_BEFORE_CAPTURE')
         ctx.update(.05, '按真实接收时间采集已允许的公开数据；不回填旧时点')
         archive = self.service.root / 'raw_captures' / ctx.job_id
-        bundle = self.capture(archive, now) if self.custom_capture else self._capture(archive, now, ctx)
+        capture_kwargs = ({'purpose': 'DAILY_PRIMARY_CRITICAL', 'observation_date': date.fromisoformat(payload['session'])}
+                          if payload.get('market_session') == 'EVENING' else {})
+        bundle = self.capture(archive, now) if self.custom_capture else self._capture(archive, now, ctx, **capture_kwargs)
         capture_completed_at = self.clock()
         ctx.check_cancelled()
         if bundle.observation_date.isoformat() != payload['session']:
             raise ValueError('captured market date does not match scheduled session')
         input_id = self.service.register_input(bundle, activate=False)
+        if isinstance(ctx, _PrimaryContext):
+            ctx.input_id = input_id
+            ctx.stage = 'READINESS_AND_STRATEGY'
         actual_cutoff = self.clock()
         if expected_epoch and expected_epoch != current_validation_identity()['validation_epoch_id']:
             raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_CAPTURE')

@@ -538,10 +538,52 @@ def parser():
     sub.add_argument("--wait-seconds", type=float, default=30)
     sub = commands.add_parser("job", help="读取已有作业，不重试或重提")
     sub.add_argument("job_id")
+    sub = commands.add_parser("daily-report", help="只读 Phase 1 日报；包含失败日状态与 T+1..T+20 统计")
+    target = sub.add_mutually_exclusive_group(required=True)
+    target.add_argument("--target-session", type=date.fromisoformat)
+    target.add_argument("--run-id")
+    sub.add_argument("--as-of", help="可选带时区的历史报告截止")
+    sub.add_argument("--output", type=Path, help="不存在的私有报告目录；不覆盖旧报告")
+    sub = commands.add_parser("daily-outcomes", help="读取原推荐 T+1..T+20 价格观察；显式 --update 才提交追加任务")
+    sub.add_argument("run_id")
+    sub.add_argument("--instrument-id")
+    sub.add_argument("--update", action="store_true")
+    sub.add_argument("--input-id")
+    sub.add_argument("--wait-seconds", type=float, default=30)
     return result
 
 
 def execute(args, client):
+    if args.command == "daily-report":
+        query = {"run_id": identifier(args.run_id)} if args.run_id else {"target_session": str(args.target_session)}
+        if args.as_of:
+            instant = datetime.fromisoformat(args.as_of)
+            if instant.tzinfo is None or instant.utcoffset() is None:
+                raise ResearchError("REPORT_CUTOFF_REQUIRES_TIMEZONE")
+            query["as_of"] = instant.isoformat()
+        report = client.get("/api/daily-research/report?" + parse.urlencode(query))
+        directory = args.output or ROOT / "reports" / "codex" / "daily-loop" / datetime.now(SH).strftime("%Y%m%dT%H%M%S%f")
+        directory.mkdir(parents=True, exist_ok=False)
+        contents = {"report.json": json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
+                    "report.md": report["markdown"].encode("utf-8")}
+        for name, raw in contents.items():
+            (directory / name).write_bytes(raw)
+        (directory / "manifest.json").write_text(json.dumps({"source": query,
+            "report_as_of": report["report_as_of"],
+            "files": {name: hashlib.sha256(raw).hexdigest() for name, raw in contents.items()}},
+            ensure_ascii=False, indent=2), encoding="utf-8")
+        return {"report_directory": str(directory.resolve()), "delivery": report.get("delivery"),
+                "identity": (report.get("snapshot") or {}).get("identity"), "report_as_of": report["report_as_of"]}
+    if args.command == "daily-outcomes":
+        path = "/api/daily-research/runs/" + identifier(args.run_id) + "/outcomes"
+        if args.update:
+            if not 0 <= args.wait_seconds <= 60:
+                raise ResearchError("WAIT_SECONDS_OUT_OF_RANGE")
+            body = {"input_id": identifier(args.input_id)} if args.input_id else {}
+            return await_job(client, client.get(path, body), args.wait_seconds)
+        if args.instrument_id:
+            path += "?" + parse.urlencode({"instrument_id": identifier(args.instrument_id)})
+        return client.get(path)
     if args.command == "status":
         coverage = client.get("/api/universe/coverage")
         pipeline = client.get("/api/candidate-data-pipeline")

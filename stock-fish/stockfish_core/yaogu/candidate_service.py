@@ -21,6 +21,7 @@ from .contracts import Frozen, MarketInput, MarketEmotionSnapshot, SourceReceipt
 from .config import StrategyConfig, load_config
 from .auction import AuctionSnapshot, evaluate_auction, freeze_theses
 from .outcomes import evaluate_outcomes
+from .daily_research_service import DailyResearchMixin
 
 
 class CandidateRequest(Frozen):
@@ -51,7 +52,7 @@ def _diff(old, new, prefix=''):
     return result
 
 
-class CandidateService:
+class CandidateService(DailyResearchMixin):
     def __init__(self, store: SQLiteStore, jobs, root: Path, *, allow_test_fixture=False):
         self.store, self.jobs, self.root = store, jobs, Path(root)
         self.allow_test_fixture = allow_test_fixture
@@ -85,6 +86,7 @@ class CandidateService:
         # One-time append-only projection migration keeps existing saved history usable.
         self._ensure_strategy_observation_indexes()
         self.rebuild_strategy_projections()
+        self._init_daily_research()
 
     def _ensure_strategy_observation_indexes(self):
         # SQLite maintains this derived lookup automatically for every new revision.
@@ -308,6 +310,7 @@ class CandidateService:
     def _candidate_job(self, ctx, payload=None, activation=None):
         from .engine import run, business_semantic_hash
         payload = payload or ctx.payload
+        ctx.stage = 'LEGACY_CANDIDATE_CONTEXT'
         _, bundle = self.input(payload['input_id'])
         config = self.config(payload['config_hash'])
         if config.feature_definition_version != 'YAOGU_FEATURES_V1_R03':
@@ -353,11 +356,13 @@ class CandidateService:
         strategy_primary_result = None
         strategy_primary_attempt = None
         if payload.get('market_session') == 'EVENING':
+            ctx.stage = 'READINESS'
             ctx.update(.88, '检查 Daily Primary 必需输入是否足以发布正式 Stage Aware primary')
             expected_session = date.fromisoformat(payload['expected_observation_session']) if payload.get('expected_observation_session') else bundle.observation_date
             readiness = self._daily_primary_readiness(payload['input_id'], bundle, cutoff, config,
                 enforce_latest=True, expected_observation_session=expected_session,
                 daily_primary_mode='SCHEDULED_EVENING')
+            ctx.daily_primary_readiness = readiness
             if not readiness['global_required_ready']:
                 strategy_primary_attempt = self._daily_primary_attempt(job_id=ctx.job_id,
                     input_id=payload['input_id'], cutoff=cutoff, final_status='NOT_READY',
@@ -371,6 +376,8 @@ class CandidateService:
                 terminal['stage_aware_primary_not_ready_reasons'] = [
                     row['code'] for row in readiness.get('blocking_requirements') or ()]
             else:
+                ctx.stage = 'STRATEGY'
+                ctx.strategy_started = True
                 ctx.update(.9, '生成 STAGE_AWARE_MOMENTUM_V2 daily fast primary；保留实际资料截止')
                 strategy_primary_result = self._build_daily_primary_strategy_result(
                     payload['input_id'], bundle, cutoff, config,
@@ -380,6 +387,7 @@ class CandidateService:
                     scheduler_job_id=ctx.job_id,
                     capture_timing=payload.get('capture_timing'),
                 )
+                ctx.stage = 'EXPORT'
                 export_validation = self._daily_primary_export_validation(strategy_primary_result)
                 stage = strategy_primary_result['results']['STAGE_AWARE_MOMENTUM_V2']
                 strategy_primary_attempt = self._daily_primary_attempt(job_id=ctx.job_id,
@@ -417,6 +425,7 @@ class CandidateService:
                 self._write_strategy_result(connection, strategy_primary_result, created_at=payload['decision_cutoff'])
             if strategy_primary_attempt is not None:
                 self._write_daily_primary_attempt(connection, strategy_primary_attempt)
+        ctx.stage = 'PERSISTENCE'
         return ctx.complete(terminal, publish)
 
     def _publication_authority(self, run_id):
@@ -597,7 +606,7 @@ class CandidateService:
                                  'snapshot_id': bundle.universe.snapshot_id,
                                  'history_artifact_hash': bundle.history_artifact_hash}
                     except UnavailableError:
-                        if getattr(self, 'scheduler', None) is None:
+                        if explicit_input:
                             raise
                         resolved, bundle = None, None
                         index = {'observation_date': observation_date.isoformat() if observation_date else None,
@@ -634,7 +643,16 @@ class CandidateService:
             trace.mark('HISTORY_ARTIFACT_UPDATE', 'SKIPPED', 'IMMUTABLE_SAVED_HISTORY_LOADED',
                        history_artifact_hash=index.get('history_artifact_hash'))
             with trace.stage('JOB_SUBMISSION'):
-                job = self.jobs.submit('daily_primary_strategy', {'input_id': resolved,
+                from .validation_identity import current_validation_identity
+                request_identity = current_validation_identity()
+                request_key = digest({'input_id': resolved,
+                    'requested_input_id': input_id,
+                    'requested_observation_date': str(observation_date) if observation_date else None,
+                    'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
+                    'mode': 'EXPLICIT' if explicit_input else 'LATEST',
+                    'config_hash': self.current_config().config_hash,
+                    'epoch': request_identity['validation_epoch_id']})
+                submission = {'input_id': resolved,
                     'requested_input_id': input_id,
                     'requested_observation_date': observation_date.isoformat() if observation_date else None,
                     'refresh_allowed': not explicit_input,
@@ -644,11 +662,19 @@ class CandidateService:
                     'expected_observation_session': str(expected_observation_session) if expected_observation_session else None,
                     'daily_primary_mode': 'EXPLICIT_SAVED_OR_HISTORICAL' if explicit_input else 'NORMAL_LATEST',
                     'execution_profile': 'DAILY_PRIMARY_FAST',
-                    'trace_id': trace.trace_id}, job_id=job_id)
+                    'research_identity': request_identity,
+                    'daily_request_key': request_key,
+                    'trace_id': trace.trace_id}
+                with self._coverage_lock:
+                    existing = self._reusable_daily_request(request_key, resolved) if job_id is None else None
+                    job = existing or self.jobs.submit('daily_primary_strategy', submission, job_id=job_id)
+                    if existing:
+                        trace.update(reused_job_id=existing['job_id'], reuse_policy='SAME_INPUT_IDENTITY_AND_VISIBLE_EVIDENCE')
             self.daily_traces.for_job(job)
             return job
 
     def _daily_primary_trace_terminal(self, job):
+        self._record_daily_research_terminal(job)
         trace = self.daily_traces.for_job(job)
         if trace.trace['end'] is not None:
             return
@@ -792,6 +818,24 @@ class CandidateService:
             'error': error,
             'market_edge': 'NOT_ESTABLISHED',
         }
+        observation = expected_observation_session or (readiness or {}).get('expected_observation_session') or value['observation_date']
+        saved_job = self.jobs.get(job_id) or {}
+        frozen_identity = (saved_job.get('payload') or {}).get('research_identity') or {}
+        if not frozen_identity:
+            frozen_identity = self.store.get_document('candidate_schedule_events', job_id) or {}
+        recorded_at = utc_now().isoformat()
+        value.update(
+            timestamp=recorded_at,
+            generated_at=recorded_at,
+            strategy_version=frozen_identity.get('signal_implementation_version'),
+            config_version=frozen_identity.get('signal_config_hash'),
+            validation_epoch_id=frozen_identity.get('validation_epoch_id'),
+            data_cutoff=cutoff.isoformat(),
+            execution_status=final_status,
+            target_session=self._daily_target_after(observation),
+            missing_evidence=list(value['blocking_requirements']),
+            stage='COMPLETE' if final_status == 'READY' else 'READINESS' if final_status == 'NOT_READY' else 'EXECUTION',
+        )
         self._daily_primary_terminal_invariants(value)
         return value
 
@@ -969,6 +1013,7 @@ class CandidateService:
             error={'type': type(exc).__name__, 'code': error['code']},
             readiness_evaluations=readiness_evaluations, request_started_at=request_started_at,
             expected_observation_session=expected_observation_session, daily_primary_mode=daily_primary_mode)
+        attempt['stage'] = getattr(ctx, 'stage', 'EXECUTION')
         def write(connection):
             self._write_daily_primary_attempt(connection, attempt)
         with trace.stage('PERSISTENCE', metadata={'final_status': 'FAILED',
@@ -1292,6 +1337,7 @@ class CandidateService:
         prospective['official_validation_signal_countable'] = official_signal_countable(result)
         prospective['official_primary_signal_countable'] = prospective['official_validation_signal_countable']
         result['signal_data_quality'] = signal_data_quality(result)
+        full_daily_items = list(((result.get('results') or {}).get('STAGE_AWARE_MOMENTUM_V2') or {}).get('items') or [])
         detail_documents = []
         if result.get('execution_profile') == 'DAILY_PRIMARY_FAST':
             result, detail_documents = self._compact_daily_primary_result(result)
@@ -1306,6 +1352,7 @@ class CandidateService:
             self.store._put_document(connection, 'strategy_experiment_item_details', document_id, document)
         self.store._put_document(connection,'strategy_experiment_runs',result['run_id'],result)
         self._write_strategy_projection(connection, result)
+        self._write_daily_research_snapshot(connection, result, full_daily_items)
         selection_policy_id = self._primary_focus_selection(result)[0] or 'PV_FOCUS_PREVIEW_V0.1'
         self.store._put_document(connection, 'strategy_research_pending', result['run_id'],
             {'run_id': result['run_id'], 'observation_date': result['observation_date'], 'horizons': [1,2,3,4,5,10,20],
@@ -1420,6 +1467,7 @@ class CandidateService:
 
     def _daily_primary_strategy_job(self, ctx):
         payload = ctx.payload
+        ctx.stage = 'INPUT'
         trace = self.daily_traces.for_job(self.jobs.get(ctx.job_id))
         with trace.activate():
             refresh_actions = []
@@ -1450,6 +1498,7 @@ class CandidateService:
                          expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
                          config_hash=config.config_hash, daily_primary_mode=daily_primary_mode)
             with trace.stage('STRATEGY_INPUT_READINESS', metadata={'evaluation': 'BEFORE_REFRESH'}) as span:
+                ctx.stage = 'READINESS'
                 if bundle is None:
                     readiness = self._daily_primary_missing_input_readiness(
                         cutoff=cutoff, config=config,
@@ -1476,6 +1525,7 @@ class CandidateService:
                                                str(expected_observation_session) if expected_observation_session
                                                else payload.get('requested_observation_date') or readiness.get('observation_date'))}) as span:
                     try:
+                        ctx.stage = 'CRITICAL_CAPTURE'
                         action = self._daily_primary_incremental_refresh(
                             target_observation_date=(
                                 str(expected_observation_session) if expected_observation_session
@@ -1512,6 +1562,7 @@ class CandidateService:
                     expected_observation_session=str(expected_observation_session) if expected_observation_session else None,
                     daily_primary_mode=daily_primary_mode)
             try:
+                ctx.stage = 'STRATEGY'
                 ctx.update(.2, '运行 Daily Primary Fast Path：仅执行 active STAGE_AWARE_MOMENTUM_V2')
                 strategy_started = True
                 result = self._build_daily_primary_strategy_result(
@@ -1520,6 +1571,7 @@ class CandidateService:
                     validation_role=payload.get('validation_role', 'DAILY_PRIMARY_ON_DEMAND'),
                     primary_signal_cutoff=payload.get('primary_signal_cutoff'),
                     scheduler_job_id=payload.get('scheduler_job_id'))
+                ctx.stage = 'EXPORT'
                 export_validation = self._daily_primary_export_validation(result)
                 stage = result['results']['STAGE_AWARE_MOMENTUM_V2']
                 counts = stage.get('counts') or {}
@@ -1542,6 +1594,7 @@ class CandidateService:
                          'input_id': input_id, 'result_hash': result['content_hash']})
                 with trace.stage('PERSISTENCE', run_id=result['run_id'], metadata={'includes_transaction_commit': True,
                                                                                    'final_status': 'READY'}):
+                    ctx.stage = 'PERSISTENCE'
                     outcome = ctx.complete(terminal, write)
                 self.daily_traces.bind_run(trace, result['run_id'])
                 trace.update(status='READY_FOR_EXPORT', result_hash=result['content_hash'], business_job_state='SUCCEEDED',
@@ -2181,6 +2234,7 @@ class CandidateService:
                 demand.append({'run_id': episode['run_id'], 'episode_id': episode['episode_id'], 'instrument_id':iid,
                                'observation_date':start, 'horizons':horizons, 'pending_fields':{str(h):['EPISODE_OR_EXIT_SHADOW_PENDING'] for h in horizons},
                                'start_date':start, 'end_date':str(observation_date), 'selection_reason':'R05_PERSISTED_EPISODE_OR_ACTUAL_EXIT_SHADOW'})
+        demand.extend(self.daily_recommendation_outcome_demand(observation_date, sessions))
         return demand
 
     def archive_strategy_episode(self, episode_id, reason):

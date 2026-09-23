@@ -1,5 +1,11 @@
 # StockFish · R05 主板候选研究操作手册
 
+## Phase 1 日报入口（2026-09-23）
+
+【事实】本轮源码提供 `/daily-research` 只读日报页；Codex 可调用 `daily-report --target-session YYYY-MM-DD` 或 `daily-report --run-id RUN_ID`，并用 `daily-outcomes RUN_ID` 读取原推荐 T+1..T+20 价格观察。完整四类、原解释与身份保留；失败日显示原因，未知不填零。详见 [Phase 1 每日荐股闭环](docs/PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【需要验证】本轮未切换现有服务、未完成在线连续交付与自然 20 会话验证。当前主动核心仍为 Python `STAGE_AWARE_MOMENTUM_V2`；下方 PV/R05 数据与测试数属于历史记录。
+
 ![StockFish](document/label.png)
 
 这是沪深主板强势股候选研究工具。在当前项目的 **Codex 对话中直接提出研究请求**，Codex 读取已保存结果、调用现有产品 API 并保存报告；网页是可选入口。完整名单、焦点和持续跟踪分别保留，候选数量由正式条件决定。当前使用 PV 观察链路作为日常研究语境，但它仍是 R05 实验，不替代正式 DAILY 配置。

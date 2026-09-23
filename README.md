@@ -1,5 +1,11 @@
 # StockFish + Qlib Quant System
 
+## Phase 1 每日荐股闭环（2026-09-23）
+
+【事实】本轮源码增加同一原 run 的四类冻结快照、版本身份、证据解释、T+1..T+20 价格观察与日报出口。使用 `/daily-research` 页面或 Codex 的 `daily-report` / `daily-outcomes` 入口；主动策略仍为 Python `STAGE_AWARE_MOMENTUM_V2`，Go 仍是影子验证。完整口径见 [Phase 1 每日荐股闭环](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。
+
+【需要验证】源码交付不代表已切换生产服务或完成真实 20 会话验证；不强制荐股数量、不修改策略或自动交易，`MARKET_EDGE=NOT_ESTABLISHED`。以下旧版本与验收内容按各自日期保留。
+
 ## 直接在 Codex 里使用
 
 在本项目的 Codex 对话中说“给我下一交易日完整研究名单”“读取昨天名单并继续跟踪”或“写一份限定数据范围的短线报告”。Codex 使用现有保存记录与产品 API；用户无需手动运行命令，网页仍是可选入口。

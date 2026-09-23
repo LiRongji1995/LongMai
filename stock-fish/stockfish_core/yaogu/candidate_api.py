@@ -1,5 +1,5 @@
 """Candidate-only HTTP routes. Trust and file ingestion remain local-admin operations."""
-from flask import jsonify, request, Response
+from flask import jsonify, request, Response, send_from_directory
 from datetime import datetime
 from zoneinfo import ZoneInfo
 from ..common import utc_now, UnavailableError
@@ -18,6 +18,50 @@ def register_candidate_routes(app, service):
 
     def accepted(job):
         return jsonify(job_id=job['job_id'], task_id=job['job_id'], state=job['state'], status='pending'), 202
+
+    @app.get('/daily-research')
+    def daily_research_page():
+        from pathlib import Path
+        return send_from_directory(Path(__file__).resolve().parents[2] / 'templates', 'daily_research.html')
+
+    @app.get('/api/daily-research/report')
+    def daily_research_report():
+        if set(request.args) - {'target_session', 'run_id', 'as_of', 'format'}:
+            raise ValueError('unknown daily report parameter')
+        report = service.daily_recommendation_report(
+            target_session=request.args.get('target_session'), run_id=request.args.get('run_id'),
+            as_of=request.args.get('as_of'))
+        format_name = request.args.get('format', 'json')
+        if format_name == 'markdown':
+            return Response(report['markdown'], content_type='text/markdown; charset=utf-8')
+        if format_name != 'json':
+            raise ValueError('daily report format must be json or markdown')
+        return jsonify(report)
+
+    @app.get('/api/daily-research/runs/<run_id>/snapshot')
+    def daily_research_snapshot(run_id):
+        return jsonify(service.daily_recommendation_snapshot(run_id))
+
+    @app.get('/api/daily-research/runs/<run_id>/outcomes')
+    def daily_research_outcomes(run_id):
+        if set(request.args) - {'as_of', 'instrument_id'}:
+            raise ValueError('unknown daily outcome parameter')
+        return jsonify(service.daily_recommendation_outcomes(run_id, as_of=request.args.get('as_of'),
+                                                            instrument_id=request.args.get('instrument_id')))
+
+    @app.post('/api/daily-research/runs/<run_id>/outcomes')
+    def capture_daily_research_outcomes(run_id):
+        value = body()
+        if set(value) - {'input_id'}:
+            raise ValueError('only registered input_id is accepted; outcomes are computed by the server')
+        return accepted(service.submit_daily_recommendation_outcomes(run_id, value.get('input_id')))
+
+    @app.get('/api/daily-research/analysis')
+    def daily_research_analysis():
+        if set(request.args) - {'as_of', 'strategy_version', 'run_id'}:
+            raise ValueError('unknown daily analysis parameter')
+        return jsonify(service.daily_recommendation_analysis(as_of=request.args.get('as_of'),
+            strategy_version=request.args.get('strategy_version'), run_id=request.args.get('run_id')))
 
     @app.get('/api/strategy-configs/current')
     def current_strategy_config():
