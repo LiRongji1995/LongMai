@@ -571,3 +571,7 @@ Codex 正式导出核验按策略语义检查：V2 的 `selection=all` 保留四
 现有 MainboardPipeline 可从 `STOCKFISH_CAPTURE_TIMEOUT_SECONDS`、`STOCKFISH_CAPTURE_MAX_SECONDS`、`STOCKFISH_CAPTURE_MAX_REQUESTS` 读取有界传输预算；详见根 DEPLOYMENT.md。默认值保持 40 秒 / 600 秒 / 128 次。Mac 实测全目录和全市场单日日线超过 40 秒，需要显式配置更长超时并复用不可变回执续采；这不改变 V2、资格门槛、来源和 PIT 语义，也不代表市场优势已经建立。
 
 Codex 本地 HTTP 客户端一般响应仍限 64 MiB；仅只读保存运行导出 `/api/strategy-experiments/<run_id>/export` 和日报 `/api/daily-research/report` 限 256 MiB，以容纳全市场 V2 的完整证据行。超过上限仍显式失败，POST 不扩大限制、不自动重试；本机真实 3,040 股的内部校验载荷约 89 MB，完整 JSON 导出实测 160,180,956 字节。只读导出独立超时默认 180 秒（可下调），普通请求仍不超过 60 秒。
+
+## 2026-10-01：手动 R1 研究增量
+
+新增默认关闭的 `STAGE_AWARE_RESEARCH_R1`，规格与12组消融见 [R1规格](STAGE_AWARE_RESEARCH_R1.md)，当前交付/测试及阻塞见 [R1主结果](R1_IMPLEMENTATION_RESULT.md)。仅显式 `scripts/codex_research.py research-r1` 读取冻结导出；可选指定只读历史库，结果保存私有目录。V2默认、调度、快照、评分和生产数据库路径未改。R1的CORE_PASS不写入原FOCUS/official score；执行及组合为独立研究合同，真实执行适配与独立市场证据尚未就绪，不能将fixture或新增候选数视为市场改进。

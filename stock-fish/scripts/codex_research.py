@@ -586,6 +586,14 @@ def parser():
     result.add_argument("--env-file", type=Path, help="可选私有配置；只读取 STOCKFISH_API_KEY")
     result.add_argument("--timeout", type=float, default=30)
     commands = result.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser("research-r1", help="显式离线R1研究；只读取自包含导出输入，不连接生产库")
+    sub.add_argument("--input", type=Path, action="append", required=True, help="导出JSON：input/cutoff/publication/可选execution_tape")
+    sub.add_argument("--history-db", type=Path, help="显式只读历史证据库；最多10万分片行，不迁移")
+    sub.add_argument("--group", action="append", help="默认全部12组；R1_FULL / V2_CONTROL 或消融组名")
+    sub.add_argument("--manifest", type=Path, help="核验冻结manifest身份后执行")
+    sub.add_argument("--start", type=date.fromisoformat)
+    sub.add_argument("--end", type=date.fromisoformat)
+    sub.add_argument("--output", type=Path, required=True, help="不存在的私有目录")
     for name in ("status", "rules"):
         commands.add_parser(name)
     sub = commands.add_parser("list")
@@ -730,8 +738,12 @@ def main(argv=None):
     args = parser().parse_args(argv)
     key = ""
     try:
-        key = api_key(args.env_file)
-        result = execute(args, Client(args.base_url, key, args.timeout))
+        if args.command == "research-r1":
+            from stockfish_core.yaogu.research_r1_io import run_local
+            result = run_local(args.input, args.output, groups=args.group, frozen_manifest=args.manifest, start=args.start, end=args.end, history_db=args.history_db)
+        else:
+            key = api_key(args.env_file)
+            result = execute(args, Client(args.base_url, key, args.timeout))
         rendered = json.dumps(result, ensure_ascii=False, indent=2)
         print(rendered.replace(key, "[REDACTED]") if key else rendered)
         return 0

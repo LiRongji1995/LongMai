@@ -1,0 +1,21 @@
+{
+  "fixture": "tests.r05_product.test_stage_aware_momentum_v1._with_high_level_repair_target",
+  "baseline_head": "d8091a4e9f76a6ff783c132f9519cdc520068e24",
+  "v2_complete_result_digest": "2646bfec9f23fd1d8603de23d93c6b51d43c3b568489ce0461d6da18045bbd51",
+  "validation_identity": {
+    "parent_config_hash": "68f25d419d3e50b06aad753e24749dabdd4928a0372eac869f10a813e37efe54",
+    "parent_implementation_version": "R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY",
+    "parent_source_hash": "9744e31c1d04bce06bfd53e01357c0c690e306bac0d9f2dd16494ba949f51400",
+    "parent_spec_hash": "e17feb230e87f2bf6845f62b4a849ef71638ac330380b7e83d68236e41e14cd3",
+    "primary_cutoff_policy_id": "SCHEDULED_2030_ACTUAL_COMPLETION",
+    "score_spec_identity": "f09940a6725dcc52b1e28bdad9d3f4f5b5cf004d809d4445d4f96bc3fea8d4c8",
+    "signal_config_hash": "508e3fc6110ff887aadf9e6d7bcf5adb7a05bd0733cd09c36b79f65414bb7965",
+    "signal_implementation_version": "R12_STAGE_AWARE_MOMENTUM_V2_INTEGRITY_HISTORY",
+    "signal_source_hash": "314450211be415a619e32636803024b612fe95a9873a16d2cc8d6a60789dcae4",
+    "signal_spec_revision": "R12_INTEGRITY_HISTORY",
+    "strategy_id": "STAGE_AWARE_MOMENTUM_V2",
+    "validation_epoch_id": "validation_epoch_942357756fcb5dc0cdcc5a105c776095111d779f1c02ab90b2234b0187857c14",
+    "validation_protocol_hash": "925a1a53f1b7cae9e856565d4de85d518ab7a98e8d5506853547f308b7ef1a4d"
+  },
+  "allowed_leaf_differences": []
+}
