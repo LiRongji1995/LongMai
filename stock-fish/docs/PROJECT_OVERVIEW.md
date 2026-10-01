@@ -1,3 +1,7 @@
+## 2026-10-01 本地瘦身工程交付入口
+
+本轮依赖分组、日报镜像资源白名单、请求内一致读和缺失投影恢复见 [瘦身主报告](SLIMMING_REVIEW_AND_RESULT.md)。日常最小安装入口为 `requirements-daily.txt`；旧 `requirements-core.txt` 与 Windows 锁文件仍保留完整核心/Qlib 兼容范围。主动 V2、策略参数与历史冻结结果不变；源码交付不代表已部署。工程测量与真实业务/投资验证分别记录，`MARKET_EDGE=NOT_ESTABLISHED`。
+
 # Daily Observation Monitor 增量（2026-09-23）
 
 【事实】新增现有服务的只读 observation API 和 `daily-observation` CLI，按原 Daily Research delivery 状态、真实持久化 snapshot、单 run outcome summary 展示最多 20 个交易日。新模块是状态消费者，无新数据库、调度器或推荐逻辑，不改 V2、readiness 或后验计算。详见 [观察工具说明](PHASE1_OBSERVATION_MONITOR.md)。

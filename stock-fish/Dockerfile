@@ -18,7 +18,7 @@ RUN apt-get update && apt-get install -y --no-install-recommends \
     && groupadd --gid 10001 stockfish \
     && useradd --uid 10001 --gid 10001 --no-create-home stockfish
 
-COPY requirements-core.txt requirements-docker.txt ./
+COPY requirements-core.txt requirements-rules.txt requirements-qlib.txt requirements-daily.txt requirements-docker.txt ./
 RUN pip install --no-cache-dir -r requirements-core.txt -r requirements-docker.txt && pip check
 
 # Explicit source allowlist prevents copying .env variants, private portfolios,
@@ -27,6 +27,7 @@ COPY app.py config.py wsgi.py ./
 COPY stockfish_core/ ./stockfish_core/
 COPY config/ ./config/
 COPY static/ ./static/
+COPY templates/ ./templates/
 COPY qlib-zh/data_runner.py ./qlib-zh/data_runner.py
 COPY scripts/backup_restore_state.py ./scripts/backup_restore_state.py
 RUN mkdir -p /app/data/core /app/qlib-data /home/stockfish \

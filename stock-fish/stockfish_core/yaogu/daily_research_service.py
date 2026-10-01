@@ -161,17 +161,20 @@ class DailyResearchMixin:
     def _daily_publication_time(self, snapshot):
         """Known durable completion bounds, without editing the frozen snapshot."""
         job_ids = {(snapshot.get('prospective_validation') or {}).get('scheduler_job_id')}
-        with self.store.transaction(write=False) as connection:
-            attempts = connection.execute(
-                "SELECT * FROM documents WHERE namespace=? AND json_extract(payload,'$.run_id')=?",
-                ('daily_primary_attempts', snapshot['identity']['run_id']))
-            job_ids.update(checked_payload(row).get('job_id') for row in attempts)
+        job_ids.update(self._daily_publication_job_ids(snapshot['identity']['run_id']))
         clocks = []
         for job_id in job_ids - {None}:
             job = self.jobs.get(job_id) or {}
             if job.get('finished_at'):
                 clocks.append(_instant(job['finished_at']))
         return max(clocks) if clocks else None
+
+    def _daily_publication_job_ids(self, run_id):
+        with self.store.transaction(write=False) as connection:
+            attempts = connection.execute(
+                "SELECT * FROM documents WHERE namespace=? AND json_extract(payload,'$.run_id')=?",
+                ('daily_primary_attempts', run_id))
+            return {checked_payload(row).get('job_id') for row in attempts}
 
     def pending_daily_recommendation_outcomes(self):
         from .daily_research_outcomes import select_daily_outcome_revisions

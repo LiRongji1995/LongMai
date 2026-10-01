@@ -310,6 +310,8 @@ def test_fast_decision_waits_for_structure_history_before_comparable_not_ready(t
             cutoff,
             observation_date=low_comparable.observation_date,
             purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
+            # This boundary fixture must not inherit an operator-disabled mode.
+            fast_decision=True,
         )
         report = pipeline.last_report
         decision = report["daily_primary_fast_decision"]

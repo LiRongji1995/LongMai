@@ -93,7 +93,14 @@ def test_docker_defaults_are_scoped_without_running_docker():
 def test_core_container_direct_pins_match_verified_runtime_metadata():
     root = Path(__file__).resolve().parents[2]
     pins = {}
-    for line in (root/"requirements-core.txt").read_text(encoding="utf-8").splitlines():
+    def requirement_lines(path):
+        for line in path.read_text(encoding="utf-8").splitlines():
+            if line.startswith("-r "):
+                yield from requirement_lines(path.parent / line[3:].strip())
+            else:
+                yield line
+
+    for line in requirement_lines(root / "requirements-core.txt"):
         if line and not line.startswith("#"):
             name, pin = line.split("==")
             pins[name.lower()] = pin

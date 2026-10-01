@@ -1,5 +1,7 @@
 # StockFish + Qlib Quant System
 
+本地工程瘦身的当前结果、依赖安装和已知限制见 [瘦身主报告](stock-fish/docs/SLIMMING_REVIEW_AND_RESULT.md)；下列历史验收数字不代表本轮结果。
+
 ## Daily Observation Monitor（2026-09-23）
 
 【事实】用 `daily-observation` 查看当前交付、原冻结推荐、后验状态和最近 20 个交易日；只读现有数据，无记录显示 NOT_AVAILABLE，正常空推荐仍是 READY。入口及计数口径见 [观察工具说明](stock-fish/docs/PHASE1_OBSERVATION_MONITOR.md)。

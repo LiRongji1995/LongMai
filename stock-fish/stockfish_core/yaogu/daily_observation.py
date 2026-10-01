@@ -130,6 +130,12 @@ def _day(service, target, now):
 
 
 def observation_report(service, *, target_session=None, days=20, as_of=None):
+    from .daily_read_context import observation_read_context
+    with observation_read_context(service) as view:
+        return _observation_report(view, target_session=target_session, days=days, as_of=as_of)
+
+
+def _observation_report(service, *, target_session=None, days=20, as_of=None):
     """Bounded projection; every day uses the same visibility cutoff."""
     if isinstance(days, bool) or not isinstance(days, int) or not 1 <= days <= 20:
         raise ValueError('observation days must be 1..20')

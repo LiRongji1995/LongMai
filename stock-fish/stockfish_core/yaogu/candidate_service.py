@@ -1067,61 +1067,12 @@ class CandidateService(DailyResearchMixin):
             'rank_semantics':'INSTRUMENT_ID_ORDER_NOT_SELECTION_RANK', 'items':baseline_items,
             'cohort_rule':'FROZEN_DATED_ELIGIBLE_UNIVERSE_WITH_SIGNAL_COMPARABLE_CLOSE',
             'input_id':input_id, 'decision_cutoff':cutoff.isoformat()}}
-        stage_aware = result.get('results', {}).get('STAGE_AWARE_MOMENTUM_V2') or {}
-        counts = stage_aware.get('counts') or {}
-        official_primary = (
-            validation_role == 'PROSPECTIVE_PRIMARY'
-            and market_session == 'EVENING'
-            and bundle.coverage_type == 'PROSPECTIVE_CAPTURED'
-        )
-        result['prospective_validation'] = {
-            'protocol_id': 'SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
-            'primary_cutoff_policy_id': 'SCHEDULED_2030_ACTUAL_COMPLETION',
-            'validation_role': validation_role,
-            'official_primary_capture': official_primary,
-            'official_primary_signal_countable': False,
-            'official_validation_signal_countable': False,
-            # Every caller already loaded this ID through input(), which checks
-            # immutable stored bytes. Authorized emotion enrichment is separate.
-            'input_integrity_valid': True,
-            'signal_run_persisted': False,
-            **(capture_timing or {}),
-            'actual_decision_cutoff': cutoff.isoformat(),
-            'preliminary_not_counted': validation_role == 'PROSPECTIVE_PRELIMINARY',
-            'market_session': market_session,
-            'primary_signal_cutoff': primary_signal_cutoff,
-            'scheduler_job_id': scheduler_job_id,
-            'signal_observation_date': str(bundle.observation_date),
-            'target_session': str(self._stage_aware_target_session(bundle)) if self._stage_aware_target_session(bundle) else None,
-            'coverage_type': bundle.coverage_type,
-            'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
-            'stage_aware_counts': {
-                'focus': counts.get('focus', 0),
-                'watch': counts.get('watch', 0),
-                'rejected': counts.get('rejected', 0),
-                'unknown': counts.get('unknown', 0),
-                'eligible': counts.get('eligible', 0),
-            },
-            'historical_vs_prospective_separation': 'RECONSTRUCTED_HISTORICAL_NEVER_COUNTS_AS_PROSPECTIVE_PRIMARY',
-            'market_edge': 'NOT_ESTABLISHED',
-        }
-        from .validation_identity import validation_identity_for_run, signal_data_quality
-        identity = validation_identity_for_run(result)
-        scheduled_epoch = (capture_timing or {}).get('scheduled_validation_epoch_id')
-        if scheduled_epoch and identity['validation_epoch_id'] != scheduled_epoch:
-            raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_SIGNAL_EVALUATION')
-        result.update(identity)
-        result['prospective_validation'].update(identity)
-        # Different capture roles/protocols cannot collide with a manual run.
-        result['run_id'] = 'strategy_experiment_' + digest({
-            'signal_id': result['run_id'], 'validation_epoch_id': identity['validation_epoch_id'],
-            'validation_role': validation_role, 'market_session': market_session,
-            'scheduler_job_id': scheduler_job_id,
-        })
-        result['signal_data_quality'] = signal_data_quality(result)
-        from .history_artifacts import digest_json_stream
-        result['content_hash']=digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
-        return result
+        return self._finalize_strategy_result(
+            result, observation_date=bundle.observation_date, coverage_type=bundle.coverage_type,
+            target_session=self._stage_aware_target_session(bundle), cutoff=cutoff,
+            validation_role=validation_role, market_session=market_session,
+            primary_signal_cutoff=primary_signal_cutoff, scheduler_job_id=scheduler_job_id,
+            capture_timing=capture_timing, run_identity_fields={})
 
     def _build_daily_primary_strategy_result(self, input_id, bundle, cutoff, config, **kwargs):
         from .e2e_tracing import DailyPrimaryTrace, current_trace
@@ -1156,12 +1107,29 @@ class CandidateService(DailyResearchMixin):
         latest = self._latest_input_publication(input_id)
         if latest is not None:
             result['market_state'] = latest.emotion.model_dump(mode='json')
+        return self._finalize_strategy_result(
+            result, observation_date=bundle.observation_date, coverage_type=bundle.coverage_type,
+            target_session=self._stage_aware_target_session(bundle), cutoff=cutoff,
+            validation_role=validation_role, market_session=market_session,
+            primary_signal_cutoff=primary_signal_cutoff, scheduler_job_id=scheduler_job_id,
+            capture_timing=capture_timing, run_identity_fields={'execution_profile': result.get('execution_profile')})
+
+    @staticmethod
+    def _finalize_strategy_result(result, *, observation_date, coverage_type, target_session,
+                                  cutoff, validation_role, market_session, primary_signal_cutoff,
+                                  scheduler_job_id, capture_timing, run_identity_fields):
+        """Pure common metadata assembly; preserve each caller's run ID inputs.
+
+        Kept in candidate_service.py so the existing validation protocol source
+        hash continues to cover every line of this identity-affecting helper.
+        """
+        result = dict(result)
         stage_aware = result.get('results', {}).get('STAGE_AWARE_MOMENTUM_V2') or {}
         counts = stage_aware.get('counts') or {}
         official_primary = (
             validation_role == 'PROSPECTIVE_PRIMARY'
             and market_session == 'EVENING'
-            and bundle.coverage_type == 'PROSPECTIVE_CAPTURED'
+            and coverage_type == 'PROSPECTIVE_CAPTURED'
         )
         result['prospective_validation'] = {
             'protocol_id': 'SCHEDULED_TRIGGER_20_30_ACTUAL_DECISION_CUTOFF',
@@ -1170,6 +1138,8 @@ class CandidateService(DailyResearchMixin):
             'official_primary_capture': official_primary,
             'official_primary_signal_countable': False,
             'official_validation_signal_countable': False,
+            # Every caller already loaded this ID through input(), which checks
+            # immutable stored bytes. Authorized emotion enrichment is separate.
             'input_integrity_valid': True,
             'signal_run_persisted': False,
             **(capture_timing or {}),
@@ -1178,9 +1148,9 @@ class CandidateService(DailyResearchMixin):
             'market_session': market_session,
             'primary_signal_cutoff': primary_signal_cutoff,
             'scheduler_job_id': scheduler_job_id,
-            'signal_observation_date': str(bundle.observation_date),
-            'target_session': str(self._stage_aware_target_session(bundle)) if self._stage_aware_target_session(bundle) else None,
-            'coverage_type': bundle.coverage_type,
+            'signal_observation_date': str(observation_date),
+            'target_session': str(target_session) if target_session else None,
+            'coverage_type': coverage_type,
             'stage_aware_strategy_id': 'STAGE_AWARE_MOMENTUM_V2',
             'stage_aware_counts': {
                 'focus': counts.get('focus', 0),
@@ -1199,14 +1169,15 @@ class CandidateService(DailyResearchMixin):
             raise ValueError('SCHEDULED_VALIDATION_EPOCH_CHANGED_DURING_SIGNAL_EVALUATION')
         result.update(identity)
         result['prospective_validation'].update(identity)
+        # Different capture roles/protocols cannot collide with a manual run.
         result['run_id'] = 'strategy_experiment_' + digest({
             'signal_id': result['run_id'], 'validation_epoch_id': identity['validation_epoch_id'],
             'validation_role': validation_role, 'market_session': market_session,
-            'scheduler_job_id': scheduler_job_id, 'execution_profile': result.get('execution_profile'),
+            'scheduler_job_id': scheduler_job_id, **run_identity_fields,
         })
         result['signal_data_quality'] = signal_data_quality(result)
         from .history_artifacts import digest_json_stream
-        result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
+        result['content_hash']=digest_json_stream({k:v for k,v in result.items() if k!='content_hash'})
         return result
 
     @staticmethod
@@ -1647,30 +1618,35 @@ class CandidateService(DailyResearchMixin):
         self.store._put_document(connection, 'strategy_experiment_summaries', run['run_id'], header)
 
     def rebuild_strategy_projections(self):
-        """Explicit local migration; normal list/summary never loads full rankings."""
-        total, offset = 0, 0
-        while True:
-            rows = self.store.list_document_metadata('strategy_experiment_runs', limit=1000, offset=offset)
-            for row in rows:
-                if self.store.get_document('strategy_experiment_summaries', row['document_id']) is None:
-                    run = self.strategy_experiment(row['document_id'])
+        """Idempotent missing-header repair; existing payloads are not expanded.
+
+        Every projection commits atomically. An interrupted batch simply leaves
+        missing relationships for the next startup/explicit repair invocation.
+        SQLite still probes the namespace index; this is not O(1) database work.
+        """
+        total = 0
+        for source, projection in (
+            ('strategy_experiment_runs', 'strategy_experiment_summaries'),
+            ('strategy_research_reviews', 'strategy_research_review_indexes'),
+        ):
+            while True:
+                ids = self.store.missing_document_ids(source, projection)
+                if not ids:
+                    break
+                for document_id in ids:
                     with self.store.transaction() as connection:
-                        self._write_strategy_projection(connection, run)
-                    total += 1
-            if len(rows) < 1000:
-                break
-            offset += len(rows)
-        offset = 0
-        while True:
-            rows = self.store.list_document_metadata('strategy_research_reviews',limit=1000,offset=offset)
-            for row in rows:
-                if self.store.get_document('strategy_research_review_indexes',row['document_id']) is None:
-                    value = self.store.get_document('strategy_research_reviews',row['document_id'])
-                    with self.store.transaction() as connection:
-                        self._write_research_review(connection,value)
-            if len(rows)<1000:
-                break
-            offset += len(rows)
+                        # Recheck under the existing write coordinator's DB lock.
+                        exists = connection.execute(
+                            'SELECT 1 FROM documents WHERE namespace=? AND document_id=?',
+                            (projection, document_id)).fetchone()
+                        if exists:
+                            continue
+                        value = self.store.get_document(source, document_id)
+                        if source == 'strategy_experiment_runs':
+                            self._write_strategy_projection(connection, value)
+                            total += 1
+                        else:
+                            self._write_research_review(connection, value)
         return {'rebuilt': total}
 
     def list_strategy_experiments(self, limit=20, offset=0):

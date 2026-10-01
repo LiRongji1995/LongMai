@@ -14,7 +14,7 @@ from stockfish_core.observed_data import exchange_calendar_2026
 from stockfish_core.yaogu.daily_observation import observation_report
 from stockfish_core.yaogu.daily_research_outcomes import evaluate_daily_research_outcomes
 from tests.r05_product.test_daily_primary_reliability_v1 import TZ, _MutableClock, _core
-from tests.r05_product.test_daily_research_delivery_boundaries import (
+from tests.support.daily_delivery import (
     FixtureDelivery, FixtureJobs, add_attempt, add_job, add_ready, identity, stamp,
 )
 from tests.r05_product.test_daily_research_outcomes import case, edit_bar, security_interval
@@ -382,3 +382,28 @@ def test_tracking_registry_must_match_saved_identity_and_recommendation_scope(co
     assert outcome['registered_recommendations'] == registered
     assert outcome['eligible_recommendations'] == 2
     assert outcome['totals']['signals'] == 40
+
+
+def test_real_sqlite_jobs_match_single_day_delivery_and_outcomes(consumer, monkeypatch):
+    """Exercise batched job lookup against the durable table, not FixtureJobs."""
+    import time as wall_time
+    from stockfish_core.yaogu.daily_observation import _observation_report
+    core, snapshot, bundle, clock = consumer()
+    fixture_job = core.candidates.jobs.rows['TEST_FIXTURE_PUBLISHED_PRIMARY']
+    generated = datetime.fromisoformat(fixture_job['finished_at'])
+    monkeypatch.setattr('stockfish_core.jobs.utc_now', lambda: generated)
+    core.jobs.register('scheduled_candidate_capture', lambda ctx: {'kind': 'TEST_FIXTURE'})
+    job = core.jobs.submit('scheduled_candidate_capture', fixture_job['payload'],
+                           job_id=fixture_job['job_id'])
+    deadline = wall_time.monotonic() + 5
+    while core.jobs.get(job['job_id'])['state'] not in {'SUCCEEDED', 'FAILED'}:
+        assert wall_time.monotonic() < deadline
+        wall_time.sleep(.01)
+    monkeypatch.setattr(core.candidates, 'jobs', core.jobs)
+    arguments = dict(target_session=snapshot['identity']['target_session'], days=1, as_of=clock())
+    before = fingerprint(core)
+    result = observation_report(core.candidates, **arguments)
+    assert result == _observation_report(core.candidates, **arguments)
+    assert result['current']['execution_status'] == 'READY'
+    assert result['current']['snapshot_hash'] == snapshot['snapshot_hash']
+    assert fingerprint(core) == before

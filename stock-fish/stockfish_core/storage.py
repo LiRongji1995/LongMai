@@ -264,6 +264,41 @@ class SQLiteStore:
                 (namespace, limit, offset)).fetchall()
             return [dict(row) for row in rows]
 
+    def missing_document_ids(self, namespace: str, projection_namespace: str, *, limit=1000):
+        """Find missing projections; retain fail-closed existing-header integrity.
+
+        No timestamp cursor: late inserts, equal timestamps and deleted headers
+        remain discoverable. Completion is the durable projection itself. On
+        completion, stream existing header bytes once without JSON expansion;
+        this intentionally remains O(total header bytes), not constant I/O.
+        """
+        _validate_page(limit, 0)
+        with self.transaction(write=False) as connection:
+            missing = [row['document_id'] for row in connection.execute(
+                'SELECT source.document_id FROM documents AS source '
+                'WHERE source.namespace=? AND NOT EXISTS ('
+                'SELECT 1 FROM documents AS projection WHERE projection.namespace=? '
+                'AND projection.document_id=source.document_id) '
+                'ORDER BY source.created_at, source.document_id LIMIT ?',
+                (namespace, projection_namespace, limit))]
+            if not missing:
+                # Preserve the previous startup rejection of tampered headers.
+                # The DB already enforces json_valid; checked_payload's remaining
+                # checks are the byte checksum and the top-level object type.
+                rows = connection.execute(
+                    'SELECT projection.payload, projection.content_hash, '
+                    'json_type(projection.payload) AS payload_type FROM documents AS projection '
+                    'WHERE projection.namespace=? AND EXISTS ('
+                    'SELECT 1 FROM documents AS source WHERE source.namespace=? '
+                    'AND source.document_id=projection.document_id)',
+                    (projection_namespace, namespace))
+                for row in rows:
+                    if _hash_text(row['payload']) != row['content_hash']:
+                        raise IntegrityError('persisted document hash mismatch')
+                    if row['payload_type'] != 'object':
+                        raise IntegrityError('persisted document is not an object')
+            return missing
+
     @staticmethod
     def _blob_hash(connection, table, rowid):
         checksum = hashlib.sha256()

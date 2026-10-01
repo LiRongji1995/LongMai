@@ -1,18 +1,4 @@
-# Direct dependencies pinned to the verified local Python 3.12 environment.
-# Linux container build/runtime remains unverified; transitive dependencies are
-# not a hash-locked environment. Legacy integrations are deliberately excluded.
-flask==3.1.3
-python-dotenv==1.2.3
-pydantic==2.13.5
-pydantic-settings==2.15.0
-requests==2.34.2
-numpy==2.5.2
-pandas==3.0.5
-loguru==0.7.3
-PyYAML==6.0.3
-baostock==0.9.3
-pyqlib==0.9.7
-lightgbm==4.7.0
-scikit-learn==1.9.0
-scipy==1.18.1
-joblib==1.6.0
+# Compatibility entry: preserves the original full core dependency set.
+# New minimal daily installations use requirements-daily.txt.
+-r requirements-rules.txt
+-r requirements-qlib.txt

@@ -1,0 +1,4 @@
+# Daily rules plus existing market adapters and app.py server, Python 3.12.
+-r requirements-rules.txt
+akshare==1.18.94
+waitress==3.0.2
