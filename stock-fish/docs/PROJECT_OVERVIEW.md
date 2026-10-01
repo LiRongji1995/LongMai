@@ -575,3 +575,11 @@ Codex 本地 HTTP 客户端一般响应仍限 64 MiB；仅只读保存运行导�
 ## 2026-10-01：手动 R1 研究增量
 
 新增默认关闭的 `STAGE_AWARE_RESEARCH_R1`，规格与12组消融见 [R1规格](STAGE_AWARE_RESEARCH_R1.md)，当前交付/测试及阻塞见 [R1主结果](R1_IMPLEMENTATION_RESULT.md)。仅显式 `scripts/codex_research.py research-r1` 读取冻结导出；可选指定只读历史库，结果保存私有目录。V2默认、调度、快照、评分和生产数据库路径未改。R1的CORE_PASS不写入原FOCUS/official score；执行及组合为独立研究合同，真实执行适配与独立市场证据尚未就绪，不能将fixture或新增候选数视为市场改进。
+
+## R1 研究合同修复 V2（手动、默认关闭）
+
+本轮只修改显式 `research-r1` 入口。独立事实/选择可判定性、公共及形态漏斗、覆盖与执行完整性、冻结执行参数统一接线，规格见 [R1_REPAIR_SPEC_V2.md](R1_REPAIR_SPEC_V2.md)，实际验收与限制见 [R1_REPAIR_RESULT.md](R1_REPAIR_RESULT.md)。V2 默认路径、原 R1 阈值及12组定义不变，旧报告只读保留。
+
+入口支持 `--mode diagnose` 生成已有冻结输入的覆盖诊断，默认 `--mode run` 运行对照，`--mode summarize --saved-result` 校验并汇总保存结果。引用历史的输入必须显式给出真正只读的 `--history-db`；共享明细通过内容哈希分片重建。执行适配只支持有完整来源与明确无企业行动区间的原始开盘情景；缺证据不产生真实收益，真实佣金只采用明确的假设场景。
+
+统计消费者已在实际命令中调用，分开父组比较、主比较、账户与条件信号；无信号不补零、缺日不重编号，固定预登记族校正。不以工程运行成功或合成统计代替独立市场验证。MARKET_EDGE=NOT_ESTABLISHED，未部署、未启用调度、未自动晋升R1。

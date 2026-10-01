@@ -10,10 +10,11 @@ from pathlib import Path
 
 from . import stage_aware_momentum as v2
 from .contracts import digest
+from .research_r1_contracts import coverage
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / 'config/stage_aware_research_r1.json'
-SPEC_PATH = ROOT / 'docs/STAGE_AWARE_RESEARCH_R1.md'
+SPEC_PATH = ROOT / 'docs/R1_REPAIR_SPEC_V2.md'
 
 
 def config():
@@ -36,9 +37,9 @@ def group_options(name):
 
 
 def identity():
-    paths = [CONFIG_PATH, SPEC_PATH, Path(__file__),
+    paths = [CONFIG_PATH, SPEC_PATH, ROOT / 'docs/STAGE_AWARE_RESEARCH_R1.md', Path(__file__),
              Path(__file__).with_name('execution_research_r1.py'),
-             Path(__file__).with_name('research_r1_io.py'), Path(__file__).parents[1] / 'storage.py']
+             Path(__file__).with_name('research_r1_io.py'), *sorted(Path(__file__).parent.glob('research_r1_*.py')), Path(__file__).parents[1] / 'storage.py']
     hashes = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest() for p in paths}
     hashes.update(v2.stage_aware_source_identity()['stage_aware_source_file_hashes'])
     hashes['scripts/codex_research.py'] = hashlib.sha256((ROOT / 'scripts/codex_research.py').read_bytes()).hexdigest()
@@ -103,7 +104,7 @@ def theme_gate(setup, row, funds_rows, *, theme_hard, funds_hard):
 def adapt_row(row, facts, name, *, display_order=None):
     options = group_options(name)
     if name == 'V2_CONTROL':
-        return deepcopy(row)
+        return row
     stages = deepcopy(row['conditions']['setup_identification'])
     if options['acceleration']:
         stages['stage_candidates']['ACCELERATION'] = facts['acceleration']
@@ -168,11 +169,12 @@ def adapt_row(row, facts, name, *, display_order=None):
         setup_rank_features={setup: v2._setup_rank_features(dict(row, primary_stage=setup)) for setup in v2.STAGE_IDS}, evidence_basis='DAILY_OHLC_ONLY')
 
 
-def run_research(bundle, *, cutoff, groups=None, display_order=None):
+def run_research(bundle, *, cutoff, groups=None, display_order=None, include_diagnostics=False):
     names = list(groups or config()['groups'])
     for name in names:
         group_options(name)
-    ctx, control = v2._evaluate_rows(bundle, cutoff=cutoff)
+    from .research_r1_storage import bounded_context
+    ctx, control = v2._evaluate_rows(bundle, cutoff=cutoff, _context=bounded_context(bundle,cutoff) if bundle.history_artifact_ref else None)
     index = v2._session_index(ctx)
     visible_themes, rejected = v2._visible_stage_themes(ctx)
     results = {name: [] for name in names}
@@ -198,11 +200,14 @@ def run_research(bundle, *, cutoff, groups=None, display_order=None):
         if name == 'V2_ACCEL_ONLY':
             v2._rank_rows(rows)
         selected = sorted(r['instrument_id'] for r in rows if r.get('candidate_status') == 'CORE_PASS' or r.get('decision_status') == 'FOCUS')
+        dimensions = coverage(rows, ctx.qualification, ctx.universe_complete)
         counts = Counter(r.get('candidate_status', r.get('decision_status')) for r in rows)
-        assembled[name] = dict(items=rows, selected_ids=selected, counts=dict(counts),
+        assembled[name] = dict(coverage=dimensions, items=rows, selected_ids=selected, counts=dict(counts),
             status='CANDIDATES' if selected else 'INSUFFICIENT_EVIDENCE' if counts['CORE_UNKNOWN'] or counts['UNKNOWN'] or counts['WATCH'] else 'INSUFFICIENT_EVIDENCE' if not ctx.universe_complete else 'EMPTY',
             options=group_options(name), group_config_hash=digest(group_options(name)))
-    return v2._public(dict(**identity(), input_hash=digest(bundle.model_dump(mode='json')),
+    from .research_r1_diagnostics import diagnose
+    diagnostics=diagnose(ctx) if include_diagnostics else None
+    return v2._public(dict(coverage_diagnostics=diagnostics, **identity(), input_hash=digest(bundle.model_dump(mode='json')),
         observation_date=str(ctx.observation_date), decision_cutoff=ctx.cutoff.isoformat(),
         coverage_type=str(bundle.coverage_type), product_role='RESEARCH_ONLY',
         parameter_status=config()['parameter_status'], market_edge='NOT_ESTABLISHED', production_promotion='DISABLED',

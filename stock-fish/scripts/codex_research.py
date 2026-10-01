@@ -587,8 +587,11 @@ def parser():
     result.add_argument("--timeout", type=float, default=30)
     commands = result.add_subparsers(dest="command", required=True)
     sub = commands.add_parser("research-r1", help="显式离线R1研究；只读取自包含导出输入，不连接生产库")
-    sub.add_argument("--input", type=Path, action="append", required=True, help="导出JSON：input/cutoff/publication/可选execution_tape")
-    sub.add_argument("--history-db", type=Path, help="显式只读历史证据库；最多10万分片行，不迁移")
+    sub.add_argument("--input", type=Path, action="append", help="导出JSON：input/cutoff/publication/可选execution_tape")
+    sub.add_argument("--mode", choices=("run", "diagnose", "summarize"), default="run")
+    sub.add_argument("--saved-result", type=Path)
+    sub.add_argument("--execution-spec", type=Path, help="冻结执行/统计参数覆盖JSON；不接受选股规则修改")
+    sub.add_argument("--history-db", type=Path, help="显式只读历史证据库；按依赖窗口读取，不迁移")
     sub.add_argument("--group", action="append", help="默认全部12组；R1_FULL / V2_CONTROL 或消融组名")
     sub.add_argument("--manifest", type=Path, help="核验冻结manifest身份后执行")
     sub.add_argument("--start", type=date.fromisoformat)
@@ -739,8 +742,13 @@ def main(argv=None):
     key = ""
     try:
         if args.command == "research-r1":
-            from stockfish_core.yaogu.research_r1_io import run_local
-            result = run_local(args.input, args.output, groups=args.group, frozen_manifest=args.manifest, start=args.start, end=args.end, history_db=args.history_db)
+            from stockfish_core.yaogu.research_r1_io import run_local, summarize_saved
+            if args.mode == "summarize":
+                if not args.saved_result: raise ValueError("SAVED_RESULT_REQUIRED")
+                result = summarize_saved(args.saved_result, args.output)
+            else:
+                if not args.input: raise ValueError("INPUT_REQUIRED")
+                result = run_local(args.input, args.output, groups=args.group, frozen_manifest=args.manifest, start=args.start, end=args.end, history_db=args.history_db, mode=args.mode, execution_spec=args.execution_spec)
         else:
             key = api_key(args.env_file)
             result = execute(args, Client(args.base_url, key, args.timeout))
@@ -750,7 +758,10 @@ def main(argv=None):
     except ResearchError as exc:
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
-    except (OSError, KeyError, TypeError, ValueError, RuntimeError):
+    except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
+        if args.command == "research-r1" and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
+            print(json.dumps({"status":"BLOCKED", "reason":str(exc).split(":")[0]}))
+            return 2
         # No tracebacks or raw provider payloads that could contain credentials.
         print('{"status":"BLOCKED","reason":"LOCAL_DEPENDENCY_OR_RESPONSE_SCHEMA_ERROR"}')
         return 2

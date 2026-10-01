@@ -51,13 +51,16 @@ def fees(notional, side, scenario):
         D(scenario['transfer_rate']) + (D(scenario['sell_tax_rate']) if side == 'SELL' else D(0)))
 
 
-def allocate(candidates, nav, cash, holdings):
+def allocate(candidates, nav, cash, holdings, *, spec=None):
     """Simultaneous proportional reduction; every known theme receives exposure."""
+    from .research_r1 import config
+    from .research_r1_contracts import effective_spec
+    spec = spec or effective_spec(config())
     candidates = {c['instrument_id']: c for c in candidates if c['instrument_id'] not in holdings}
     ids = sorted(candidates)
     if not ids or nav <= 0 or cash <= 0:
         return {}, 'COMPLETE'
-    before = min(cash / len(ids), nav * D('.2'))
+    before = min(cash / len(ids), nav * D(spec['single_name_cap']))
     existing = Counter()
     coverage = 'COMPLETE'
     for position in holdings.values():
@@ -71,7 +74,7 @@ def allocate(candidates, nav, cash, holdings):
             coverage = 'THEME_COVERAGE_INCOMPLETE'
         for theme in set(c.get('themes') or []):
             requested[theme] += before
-    scale = min([D(1), cash / (before * len(ids))] + [max(D(0), nav * D('.4') - D(existing[t])) / total for t, total in requested.items()])
+    scale = min([D(1), cash / (before * len(ids))] + [max(D(0), nav * D(spec['theme_cap']) - D(existing[t])) / total for t, total in requested.items()])
     return {iid: dict(before=before, after=before * scale, scale=scale) for iid in ids}, coverage
 
 
@@ -117,15 +120,19 @@ def fill(bar, side, rule, session, as_of, slippage, *, limit=None):
     return 'ASSUMED_OPEN_FILL', price
 
 
-def simulate(signals, tape, *, slippage_bps=10):
+def simulate(signals, tape, *, slippage_bps=10, spec=None):
     """One account per group/scenario; preserve every signal, blocked entry and exit.
 
     Required tape records use explicit timestamps/source references. At present
     only TEST_FIXTURE can exercise the account adapter; genuine inputs fail closed.
     """
-    if slippage_bps not in (0, 10, 30):
+    from .research_r1 import config
+    from .research_r1_contracts import effective_spec
+    spec = effective_spec(spec or config(), tape.get('cost_scenario'))
+    if slippage_bps not in spec['slippage_bps_per_side']:
         raise ValueError('UNREGISTERED_SLIPPAGE')
-    if tape.get('coverage_type') != 'TEST_FIXTURE':
+    from .research_r1_adapter import ResolvedTape
+    if tape.get('coverage_type') != 'TEST_FIXTURE' and not (isinstance(tape, ResolvedTape) and tape.intact()):
         return dict(contract='EXECUTION_RESEARCH_R1', status='UNAVAILABLE',
                     reason='REAL_DATED_RULE_CORPORATE_ACTION_TAPE_ADAPTER_NOT_VERIFIED',
                     signal_count=len(signals), records=[dict(s, status='UNAVAILABLE') for s in signals])
@@ -135,8 +142,9 @@ def simulate(signals, tape, *, slippage_bps=10):
     as_of = stamp(tape['as_of'])
     cost = tape['cost_scenario']
     fees(D(1), 'BUY', cost)
-    cash = D(1000000)
+    cash = D(spec['initial_nav_cny'])
     holdings, records, curve = {}, [], []
+    reserved_uncertain = D(0)
     indexed = {}
     for signal in signals:
         record = dict(signal, status='UNAVAILABLE', entry_session=None, planned_exit_session=None)
@@ -145,10 +153,10 @@ def simulate(signals, tape, *, slippage_bps=10):
             record['reason'] = 'SIGNAL_CALENDAR_MISSING'
             continue
         i = sessions.index(signal['signal_session'])
-        if i+6 >= len(sessions):
+        if i+spec['exit_offset'] >= len(sessions):
             record['reason'] = 'TARGET_SESSION_CALENDAR_MISSING'
             continue
-        entry, planned = sessions[i+1], sessions[i+6]
+        entry, planned = sessions[i+spec['entry_offset']], sessions[i+spec['exit_offset']]
         record.update(entry_session=entry, planned_exit_session=planned)
         cutoff = deadline(entry)
         try:
@@ -165,12 +173,12 @@ def simulate(signals, tape, *, slippage_bps=10):
         if datetime.combine(datetime.fromisoformat(session).date(), time(9, 30), SH) > as_of:
             break
         cutoff = deadline(session)
-        start_cash = cash
-        valuation_ok = True
+        start_cash = max(D(0),cash-reserved_uncertain)
+        valuation_ok = reserved_uncertain == 0
         values = {}
         for iid, pos in holdings.items():
             quote = tape.get('valuations', {}).get(session, {}).get(iid)
-            if not quote or not visible(quote, cutoff) or quote.get('session') != sessions[sessions.index(session)-1] or quote.get('basis') != pos['basis']:
+            if not quote or (pos['basis']=='RAW_CNY' and quote.get('no_corporate_action_since_signal') is not True) or not visible(quote, cutoff) or quote.get('session') != sessions[sessions.index(session)-1] or quote.get('basis') != pos['basis']:
                 valuation_ok = False
             else:
                 values[iid] = dict(value=pos['quantity'] * D(quote['price']), themes=pos['themes'])
@@ -183,7 +191,7 @@ def simulate(signals, tape, *, slippage_bps=10):
                 rec['status'] = 'ALREADY_HELD_OR_DUPLICATE_NO_EXTENSION'
             else:
                 unique[iid] = rec
-        budgets, coverage = allocate(list(unique.values()), nav, start_cash, values) if nav is not None else ({}, 'VALUATION_UNAVAILABLE')
+        budgets, coverage = allocate(list(unique.values()), nav, start_cash, values, spec=spec) if nav is not None else ({}, 'VALUATION_UNAVAILABLE')
         # Orders/budgets committed before exits: same-open proceeds cannot fund buys.
         prepared = []
         for iid, rec in unique.items():
@@ -198,8 +206,9 @@ def simulate(signals, tape, *, slippage_bps=10):
             if not visible(order, cutoff) or not dated_rule(rule, session, cutoff) or not dated_rule(cost, session, cutoff):
                 rec.update(status='UNAVAILABLE', reason='ORDER_RULE_OR_COST_NOT_AVAILABLE_AT_CUTOFF')
                 continue
+            if rule.get('settlement')!='T_PLUS_1':raise ValueError('UNSUPPORTED_SETTLEMENT_RULE')
             qty = quantity(budget['after'], order, rule, cost)
-            rec.update(quantity=qty, submitted_limit=order['limit_price'])
+            rec.update(quantity=qty, submitted_limit=order['limit_price'], capital_commitment_cny=str(budget['after']))
             if not qty:
                 rec['status'] = 'NO_WHOLE_LOT_BUDGET'
                 continue
@@ -235,6 +244,9 @@ def simulate(signals, tape, *, slippage_bps=10):
             rec['entry_evidence'] = state
             if price is None:
                 rec['status'] = 'ENTRY_NOT_FILLED' if state in ('BUY_OPEN_LIMIT_UP', 'SUSPENDED', 'PRICE_OUTSIDE_ORDER_OR_LIMIT') else 'ENTRY_UNCERTAIN'
+                if rec['status']=='ENTRY_UNCERTAIN':
+                    reserved_uncertain+=budget
+                    rec.update(uncertain_capital_reservation_cny=str(budget),reservation_policy='MAX_COMMITMENT_NOT_CONFIRMED_FILL')
                 continue
             buy_fees = fees(price * qty, 'BUY', cost)
             debit = price * qty + buy_fees
@@ -254,27 +266,27 @@ def simulate(signals, tape, *, slippage_bps=10):
                 marks = None
                 break
             marks.append(pos['quantity'] * D(bar['close']))
-        curve.append(dict(session=session, cash=str(cash), nav=str(cash+sum(marks, D(0))) if marks is not None else None,
-                          open_positions=len(holdings), theme_coverage=coverage))
+        curve.append(dict(session=session, cash=str(cash), nav=str(cash+sum(marks, D(0))) if marks is not None and reserved_uncertain==0 else None,
+                          open_positions=len(holdings), reserved_uncertain_cny=str(reserved_uncertain), theme_coverage=coverage))
     for pos in holdings.values():
-        pos['record'].update(censored=True, capital_occupied_cny=str(pos['entry_cost']))
+        pos['record'].update(censored=True, capital_occupied_cny=str(pos['entry_cost']),pending_exit_delay_sessions=max(0,sessions.index(curve[-1]['session'])-sessions.index(pos['record']['planned_exit_session'])) if curve else 0)
     closed = [r['net_return'] for r in records if r['status'] == 'CLOSED']
     complete = all(rec['status'] in ('CLOSED', 'ENTRY_NOT_FILLED', 'NO_WHOLE_LOT_BUDGET', 'ALREADY_HELD_OR_DUPLICATE_NO_EXTENSION') for rec in records)
     all_returns = len(closed) == len(records)
     navs = [D(point['nav']) for point in curve if point['nav'] is not None]
     full_nav = len(navs) == len(curve)
-    peak = D(1000000)
+    peak = D(spec['initial_nav_cny'])
     drawdown = D(0)
     for nav_value in navs:
         peak = max(peak, nav_value)
         drawdown = min(drawdown, nav_value / peak - 1)
 
     return dict(contract='EXECUTION_RESEARCH_R1', status='COMPLETE' if complete else 'INCOMPLETE',
-        coverage_type='TEST_FIXTURE', account_type='HYPOTHETICAL', initial_nav_cny=1000000,
-        spec_hash=digest(dict(cost=cost, slippage_bps=slippage_bps, entry=1, exit=6, single_cap='.2', theme_cap='.4')),
+        coverage_type=tape['coverage_type'], account_type='HYPOTHETICAL', initial_nav_cny=spec['initial_nav_cny'],
+        effective_spec=spec, spec_hash=digest(spec), slippage_bps_per_side=slippage_bps, scenario_hash=digest(dict(spec=spec,slippage_bps=slippage_bps)),
         tape_hash=digest(tape), signal_count=len(records), records=records, account_curve=curve,
         status_counts=dict(Counter(r['status'] for r in records)), open_positions=len(holdings),
-        account_return=float(navs[-1]/D(1000000)-1) if navs and full_nav and complete else None,
+        account_return=float(navs[-1]/D(spec['initial_nav_cny'])-1) if navs and full_nav and complete else None,
         max_drawdown=float(drawdown) if navs and full_nav and complete else None,
         mean_net_return=sum(closed)/len(closed) if closed and all_returns else None,
         median_net_return=median(closed) if closed and all_returns else None,
