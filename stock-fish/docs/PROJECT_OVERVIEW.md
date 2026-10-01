@@ -556,3 +556,14 @@ Codex是当前日常Agent入口，负责解析委托、按权限调用现有程�
 可复制的新对话启动说明：
 
 > 我在使用StockRecommendation，一个面向沪深主板A股的候选发现、解释、风险提示、持续跟踪和复盘系统，日常由Codex调用现有程序。请先读发布仓库最新的`stock-fish/docs/PROJECT_OVERVIEW.md`；它于2026-09-07依据R05冻结规则、实际工作文件及保存结果核对，开发脏工作区/发布版本/运行实例和历史重建限制已分别说明。先按正文理解真实规则与未实现功能，不把综述当作你已独立审计源码，不把研究排序分当上涨概率或交易胜率，不擅自提出已经实施的策略变更。需要验证实现时请明确索取最小对应源码或脱敏证据。当前准备讨论的问题由我补充：____。
+# Mac 首次运行补充（2026-10-01）
+
+Codex 正式导出核验按策略语义检查：V2 的 `selection=all` 保留四类股票，`filtered_total` 是全部行数，`ranked_total` 是 FOCUS 数；非 FOCUS 的空 rank 不填零。JSON、CSV、全部摘要页的证券顺序和决策分类必须一致，PV 的原计数语义保留。
+
+冷启动可配置 `STOCKFISH_CAPTURE_FAST_DECISION=false`，省去采集中反复全量标准化的提前判定；最终数据就绪门槛和正式发布校验保持必需。默认开启，报告记录是否启用。
+
+可选 `STOCKFISH_CAPTURE_HISTORY_MODE=PER_SECURITY_RAW` 使用已有 Baostock 原始单股历史接口，按完整当前主板目录每批 10 只补齐 V2 所需长窗；正式计算仍走 Daily Primary。当前日全市场日线、资格和复权证据仍须通过原门槛。该模式不运行历史全市场回放，默认逐日全市场及完整研究路径保持不变；实际采集计划记录传输模式、股票池和窗口。隔离等价测试与 3 只真实股票字段核对不是完整真实交付验收或市场优势证明。
+
+现有 MainboardPipeline 可从 `STOCKFISH_CAPTURE_TIMEOUT_SECONDS`、`STOCKFISH_CAPTURE_MAX_SECONDS`、`STOCKFISH_CAPTURE_MAX_REQUESTS` 读取有界传输预算；详见根 DEPLOYMENT.md。默认值保持 40 秒 / 600 秒 / 128 次。Mac 实测全目录和全市场单日日线超过 40 秒，需要显式配置更长超时并复用不可变回执续采；这不改变 V2、资格门槛、来源和 PIT 语义，也不代表市场优势已经建立。
+
+Codex 本地 HTTP 客户端一般响应仍限 64 MiB；仅只读保存运行导出 `/api/strategy-experiments/<run_id>/export` 和日报 `/api/daily-research/report` 限 256 MiB，以容纳全市场 V2 的完整证据行。超过上限仍显式失败，POST 不扩大限制、不自动重试；本机真实 3,040 股的内部校验载荷约 89 MB，完整 JSON 导出实测 160,180,956 字节。只读导出独立超时默认 180 秒（可下调），普通请求仍不超过 60 秒。

@@ -4,6 +4,7 @@ from copy import deepcopy
 from datetime import date
 import json
 import time
+import pytest
 from pathlib import Path
 
 from stockfish_core.api import create_app
@@ -91,6 +92,11 @@ def _provider_source(bundle, calls):
                 for bar in bundle.bars
                 if str(bar.session) == params["date"]
             ]
+        elif endpoint == "history":
+            wanted = set(params['codes'])
+            rows = [bar.model_dump(mode='json') for bar in bundle.bars
+                    if bar.instrument_id in wanted
+                    and params['start_date'] <= str(bar.session) <= params['end_date']]
         elif endpoint == "master_all":
             rows = [
                 {"code": security.instrument_id, "code_name": security.name, "tradeStatus": "1"}
@@ -128,7 +134,7 @@ def _normalizer(base):
     def normalize(results, **_kwargs):
         rows = {}
         for result in results:
-            if result.get("endpoint") == "market_daily":
+            if result.get("endpoint") in {"market_daily", "history"}:
                 for row in result["rows"]:
                     rows[(row["instrument_id"], row["session"])] = row
         value = base.model_dump(mode="json")
@@ -433,3 +439,72 @@ def test_real_critical_dependency_missing_is_not_ready_with_typed_reason(tmp_pat
             assert typed_reason in typed
         finally:
             core.close()
+
+
+def test_per_security_bootstrap_preserves_full_pool_and_window(tmp_path):
+    bundle, cutoff = _market_fixture(12, session_count=260)
+    captured = []
+    for mode in ('ALL_MARKET_DAILY', 'PER_SECURITY_RAW'):
+        calls = []
+        pipeline = MainboardPipeline(tmp_path / mode / 'cache', history_mode=mode,
+            executor=_provider_source(bundle, calls), normalizer=_normalizer(bundle),
+            budget=RequestBudget(max_requests=1000, max_seconds=60, minimum_interval_seconds=0))
+        value = pipeline.capture(tmp_path / mode / 'capture', cutoff,
+            observation_date=bundle.observation_date, purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL)
+        captured.append(value)
+        if mode == 'PER_SECURITY_RAW':
+            histories = [params for ep, params in calls if ep == 'history']
+            wanted = {s.instrument_id for s in bundle.universe.securities if s.exchange == 'SSE'}
+            assert {code for params in histories for code in params['codes']} == wanted
+            assert all(len(params['codes']) <= 10 for params in histories)
+            assert all(params['start_date'] == str(bundle.sessions[0]) for params in histories)
+            assert all(params['end_date'] == str(bundle.observation_date) for params in histories)
+            assert not any(ep == 'stock_basic_all' for ep, _ in calls)
+            assert all(params['date'] == str(bundle.observation_date)
+                       for ep, params in calls if ep == 'market_daily')
+            assert pipeline.last_report['daily_primary_readiness']['global_required_ready']
+    def bars(value):
+        return {(b.instrument_id, b.session): b.model_dump(mode='json') for b in value.bars}
+    assert bars(captured[0]) == bars(captured[1])
+
+
+@pytest.mark.parametrize("ready", [True, False])
+def test_disabled_early_decision_preserves_final_readiness(tmp_path, monkeypatch, ready):
+    bundle, cutoff = _market_fixture(12, session_count=260)
+    if not ready:
+        bundle = _low_current_comparable(bundle, pass_count=4)
+    monkeypatch.setenv("STOCKFISH_CAPTURE_FAST_DECISION", "false")
+    early_calls = []
+    def unexpected_early_evaluation(*args, **kwargs):
+        early_calls.append(True)
+        raise AssertionError("early decision must not run")
+    monkeypatch.setattr("stockfish_core.yaogu.data_pipeline.evaluate_fast_decision_sufficiency", unexpected_early_evaluation)
+    core = _service(tmp_path / "app", monkeypatch, now=cutoff)
+    try:
+        pipeline = MainboardPipeline(tmp_path / "cache", service=core.candidates,
+            executor=_provider_source(bundle, []), normalizer=_normalizer(bundle),
+            budget=RequestBudget(max_requests=1000, max_seconds=60, minimum_interval_seconds=0))
+        captured = pipeline.capture(tmp_path / "output", cutoff,
+            observation_date=bundle.observation_date, purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL)
+        report = pipeline.last_report
+        assert not early_calls
+        assert report["fast_decision_enabled"] is False
+        assert report["daily_primary_fast_decision"]["reason"] == "FINAL_CRITICAL_CAPTURE_EVALUATION"
+        assert report["daily_primary_readiness"]["global_required_ready"] is ready
+        input_id = core.candidates.register_input(captured, activate=False)
+        job, attempt = _run_daily_primary(core, input_id)
+        assert job["state"] == "SUCCEEDED"
+        assert attempt["final_status"] == ("READY" if ready else "NOT_READY")
+        assert attempt["recommendation_published"] is ready
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize("value", ["0", "invalid", ""])
+def test_early_decision_invalid_configuration_rejected(tmp_path, monkeypatch, value):
+    from datetime import datetime, timezone
+    monkeypatch.setenv("STOCKFISH_CAPTURE_FAST_DECISION", value)
+    pipeline = MainboardPipeline(tmp_path / "cache")
+    with pytest.raises(ValueError, match="INVALID_CAPTURE_FAST_DECISION"):
+        pipeline.capture(tmp_path / "output", datetime.now(timezone.utc))
+    assert not (tmp_path / "output").exists()

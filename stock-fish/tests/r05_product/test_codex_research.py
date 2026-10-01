@@ -406,3 +406,124 @@ def test_changed_review_or_corrupt_local_copy_is_never_claimed_reusable(saved_ht
     manifest = json.loads((Path(second["saved_directory"]) / "manifest.json").read_text(encoding="utf-8"))
     manifest["files"]["review.json"]["sha256"] = "0" * 64
     assert entry.reusable_local_bundle(old_directory.parent, manifest) is None
+
+
+def _stage_export_fixture(saved_http, with_focus=True):
+    saved, summary, _ = deepcopy(saved_http)
+    rows = [{"instrument_id": f"60000{index}.SH", "rank": 1 if status == "FOCUS" else None,
+             "decision_status": status} for index, status in enumerate(
+                 ("FOCUS" if with_focus else "WATCH", "WATCH", "REJECTED", "UNKNOWN"), 1)]
+    saved["results"] = {entry.STAGE_AWARE: {"items": rows}}
+    saved["export_view"].update(strategy_id=entry.STAGE_AWARE, filtered_total=4, ranked_total=int(with_focus))
+    summary.update(items=deepcopy(rows), filtered_total=4)
+    stream = io.StringIO(newline="")
+    fields = ["run_id", "observation_date", "strategy_id", "instrument_id", "rank", "decision_status"]
+    writer = csv.DictWriter(stream, fieldnames=fields)
+    writer.writeheader()
+    writer.writerows({"run_id": saved["run_id"], "observation_date": saved["observation_date"],
+                     "strategy_id": entry.STAGE_AWARE, **row} for row in rows)
+    return saved, summary, stream.getvalue().encode()
+
+
+@pytest.mark.parametrize("with_focus", [True, False])
+def test_v2_export_verifies_all_four_groups_and_nullable_rank(saved_http, with_focus):
+    fixture = _stage_export_fixture(saved_http, with_focus)
+    client = FakeClient(fixture)
+    saved, raw_json, raw_csv, summary = entry.official_exports(client, client.run["run_id"], entry.STAGE_AWARE)
+    assert len(saved["results"][entry.STAGE_AWARE]["items"]) == 4
+    assert raw_csv == fixture[2]
+    assert [r["decision_status"] for r in summary["items"]][-2:] == ["REJECTED", "UNKNOWN"]
+
+
+@pytest.mark.parametrize("corruption", ["csv_decision", "summary_decision", "focus_count", "order", "null_rank"])
+def test_v2_export_rejects_decision_rank_and_count_corruption(saved_http, corruption):
+    client = FakeClient(_stage_export_fixture(saved_http))
+    if corruption == "csv_decision":
+        client.csv = client.csv.replace(b"WATCH", b"FOCUS")
+    elif corruption == "summary_decision":
+        client.summary["items"][1]["decision_status"] = "FOCUS"
+    elif corruption == "focus_count":
+        client.run["export_view"]["ranked_total"] = 4
+    elif corruption == "order":
+        client.summary["items"].reverse()
+    else:
+        client.csv = client.csv.replace(b",,WATCH", b",0,WATCH")
+    with pytest.raises(entry.ResearchError, match="MISMATCH"):
+        entry.official_exports(client, client.run["run_id"], entry.STAGE_AWARE)
+
+
+def test_v2_exports_from_actual_saved_daily_primary_api(tmp_path, monkeypatch):
+    from tests.r05_product.test_daily_primary_critical_capture_boundary_v1 import _market_fixture, _service, _run_daily_primary
+    from stockfish_core.api import create_app
+    bundle, cutoff = _market_fixture(12, session_count=260)
+    core = _service(tmp_path, monkeypatch, now=cutoff)
+    try:
+        input_id = core.candidates.register_input(bundle, activate=False)
+        job, attempt = _run_daily_primary(core, input_id)
+        assert job["state"] == "SUCCEEDED" and attempt["final_status"] == "READY"
+        api = create_app(core).test_client()
+        class SavedApiClient:
+            def raw(self, path):
+                response = api.get(path)
+                assert response.status_code == 200, response.text
+                return response.data
+            def get(self, path):
+                return json.loads(self.raw(path))
+        saved, _, _, summary = entry.official_exports(SavedApiClient(), attempt["run_id"], entry.STAGE_AWARE)
+        rows = saved["results"][entry.STAGE_AWARE]["items"]
+        assert len(rows) == 12 == summary["filtered_total"]
+        assert saved["export_view"]["ranked_total"] == sum(row["decision_status"] == "FOCUS" for row in rows)
+    finally:
+        core.close()
+
+
+@pytest.mark.parametrize('path,payload,size,allowed', [
+    ('/api/strategy-experiments/saved/export?format=json', None, 16, True),
+    ('/api/strategy-experiments/saved/export?format=json', None, 17, False),
+    ('/api/daily-research/report?target_session=2026-10-08', None, 16, True),
+    ('/api/daily-research/report', None, 17, False),
+    ('/api/daily-research/report', {}, 9, False),
+    ('/api/daily-research/report-extra', None, 9, False),
+    ('/api/jobs/job_test', None, 9, False),
+    ('/api/jobs/job_test', None, 8, True),
+    ('/api/strategy-experiments/saved/export', {}, 9, False),
+    ('/api/strategy-experiments/saved/export-extra', None, 9, False),
+])
+def test_bounded_larger_response_only_for_readonly_saved_export(monkeypatch, path, payload, size, allowed):
+    monkeypatch.setattr(entry, 'RESPONSE_MAX_BYTES', 8)
+    monkeypatch.setattr(entry, 'SAVED_REPORT_MAX_BYTES', 16)
+    class Response(io.BytesIO):
+        def read(self, amount):
+            assert amount in (9, 17)
+            return super().read(amount)
+    class Opener:
+        calls = 0
+        def open(self, *args, **kwargs):
+            self.calls += 1
+            return Response(b'x' * size)
+    client = entry.Client()
+    client.opener = Opener()
+    if allowed:
+        assert client.raw(path, payload) == b'x' * size
+    else:
+        with pytest.raises(entry.ResearchError, match='RESPONSE_SIZE_LIMIT_EXCEEDED'):
+            client.raw(path, payload)
+    assert client.opener.calls == 1
+
+
+def test_export_timeout_is_bounded_and_does_not_change_post_or_job_timeout():
+    class Opener:
+        timeouts = []
+        def open(self, req, *, timeout):
+            self.timeouts.append(timeout)
+            return io.BytesIO(b'{}')
+    client = entry.Client(timeout=20, export_timeout=150)
+    client.opener = Opener()
+    client.raw('/api/strategy-experiments/saved/export?format=json')
+    client.raw('/api/strategy-experiments/saved/export', {})
+    client.raw('/api/jobs/job_test')
+    client.raw('/api/daily-research/report?run_id=saved')
+    assert client.opener.timeouts == [150, 20, 20, 150]
+    for invalid in (0, -1, 181, float('nan'), float('inf')):
+        with pytest.raises(entry.ResearchError, match='EXPORT_TIMEOUT_MUST_BE_0_TO_180_SECONDS'):
+            entry.Client(export_timeout=invalid)

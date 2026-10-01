@@ -81,6 +81,24 @@ class RequestBudget:
     max_attempts: int = 2
     minimum_interval_seconds: float = .25
 
+    @classmethod
+    def from_environment(cls):
+        """Operator transport budgets; never alter source or strategy identity."""
+        import os
+        fields = {
+            'STOCKFISH_CAPTURE_MAX_REQUESTS': ('max_requests', int),
+            'STOCKFISH_CAPTURE_MAX_SECONDS': ('max_seconds', float),
+            'STOCKFISH_CAPTURE_TIMEOUT_SECONDS': ('timeout_seconds', float),
+        }
+        values = {}
+        for name, (field, parse) in fields.items():
+            if name in os.environ:
+                try:
+                    values[field] = parse(os.environ[name])
+                except ValueError:
+                    raise ValueError('INVALID_CAPTURE_BUDGET_CONFIGURATION') from None
+        return cls(**values)
+
     def __post_init__(self):
         from math import isfinite
         if any(isinstance(x, bool) or not isinstance(x, (int, float)) or not isfinite(x)
@@ -90,7 +108,7 @@ class RequestBudget:
             raise ValueError('REQUEST_BUDGET_OUT_OF_RANGE')
         if not isinstance(self.max_attempts, int) or not 1 <= self.max_attempts <= 3:
             raise ValueError('RETRY_BUDGET_OUT_OF_RANGE')
-        if not 0 < self.max_seconds <= 7200 or not 0 < self.timeout_seconds <= 60:
+        if not 0 < self.max_seconds <= 7200 or not 0 < self.timeout_seconds <= 90:
             raise ValueError('TIME_BUDGET_OUT_OF_RANGE')
         if not 0 <= self.minimum_interval_seconds <= 10:
             raise ValueError('RATE_INTERVAL_OUT_OF_RANGE')

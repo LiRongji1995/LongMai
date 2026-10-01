@@ -14,6 +14,24 @@ def add(q, code='a', version='TEST_FIXTURE_V1'):
     return q.enqueue('fixture.history', {'codes':[code]}, stage='StructureHistoryCapture', definition_version=version)
 
 
+def test_operator_timeout_remains_bounded_by_remaining_batch_time(tmp_path, monkeypatch):
+    monkeypatch.setenv('STOCKFISH_CAPTURE_TIMEOUT_SECONDS', '90')
+    monkeypatch.setenv('STOCKFISH_CAPTURE_MAX_SECONDS', '12')
+    budget = RequestBudget.from_environment()
+    received = []
+    with RequestQueue(tmp_path, budget=budget) as q:
+        add(q)
+        q.drain(lambda *a, **kw: (received.append(kw['timeout']) or result()))
+    assert len(received) == 1 and 0 < received[0] <= 12
+
+
+@pytest.mark.parametrize('value', ['91', 'nan', '0', 'invalid'])
+def test_operator_timeout_rejects_invalid_values(monkeypatch, value):
+    monkeypatch.setenv('STOCKFISH_CAPTURE_TIMEOUT_SECONDS', value)
+    with pytest.raises(ValueError):
+        RequestBudget.from_environment()
+
+
 def test_budget_resume_dedup_and_verified_cache(tmp_path):
     calls=[]
     def execute(ep, params, root, timeout):

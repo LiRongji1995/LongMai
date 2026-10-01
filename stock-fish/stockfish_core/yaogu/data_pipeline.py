@@ -226,11 +226,15 @@ def tushare_request_plan(day, sessions):
 
 class MainboardPipeline:
     def __init__(self, root, *, service=None, config=None, executor=execute_request, normalizer=None, budget=None,
-                 history_store=None):
+                 history_store=None, history_mode=None):
         self.root, self.service, self.executor = Path(root), service, executor
         self.normalizer = normalizer
+        import os
+        self.history_mode = history_mode or os.environ.get('STOCKFISH_CAPTURE_HISTORY_MODE', 'ALL_MARKET_DAILY')
+        if self.history_mode not in {'ALL_MARKET_DAILY', 'PER_SECURITY_RAW'}:
+            raise ValueError('UNREGISTERED_HISTORY_CAPTURE_MODE')
         self.config = config if config is not None else service.current_config() if service else None
-        self.budget = budget or RequestBudget()
+        self.budget = budget if budget is not None else RequestBudget.from_environment()
         self.history_store = history_store
         if self.history_store is None and service is not None and hasattr(service, 'store'):
             from .history_artifacts import HistoryArtifactStore
@@ -266,12 +270,26 @@ class MainboardPipeline:
         return {**selected, **proof}
 
     def capture(self, output_dir, now, *, observation_date=None, purpose=CAPTURE_PURPOSE_BACKGROUND_RESEARCH,
-                checkpoint=lambda: None, progress=lambda _: None, fast_decision=True):
+                checkpoint=lambda: None, progress=lambda _: None, fast_decision=None):
         if now.tzinfo is None or now.utcoffset() is None:
             raise ValueError('REAL_AWARE_CAPTURE_CLOCK_REQUIRED')
         if purpose not in {CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL, CAPTURE_PURPOSE_BACKGROUND_RESEARCH}:
             raise ValueError('UNREGISTERED_CAPTURE_PURPOSE')
+        if fast_decision is None:
+            import os
+            configured = os.environ.get('STOCKFISH_CAPTURE_FAST_DECISION', 'true').lower()
+            if configured not in {'true', 'false'}:
+                raise ValueError('INVALID_CAPTURE_FAST_DECISION')
+            fast_decision = configured == 'true'
+        if not isinstance(fast_decision, bool):
+            raise ValueError('INVALID_CAPTURE_FAST_DECISION')
         critical_only = purpose == CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
+        per_security_history = critical_only and self.history_mode == 'PER_SECURITY_RAW'
+        history_endpoint = 'history' if per_security_history else 'market_daily'
+        history_granularity = ('TEN_CURRENT_DIRECTORY_SECURITIES_PER_REQUEST_FULL_REQUIRED_WINDOW'
+                               if per_security_history else 'ONE_REQUEST_PER_EXCHANGE_SESSION_ALL_MARKET_ROWS')
+        history_policy = ('ALL_CURRENT_DIRECTORY_RAW_HISTORY_PLUS_ADJUSTMENT_FACTORS_V1'
+                          if per_security_history else 'ALL_MARKET_DAILY_BY_EXCHANGE_SESSION_PLUS_ALL_DIRECTORY_ADJUSTMENT_FACTORS')
         from ..observed_data import exchange_calendar_2026
         local = now.astimezone(SH)
         registered = tuple(sorted(exchange_calendar_2026().sessions))
@@ -350,13 +368,14 @@ class MainboardPipeline:
                     'v2_long_history_start': str(v2_long_history_start),
                     'scoring_history_basis': 'STAGE_AWARE_V2_MA250_PLUS_SLOPE_WARMUP_PLUS_60_SIGNAL_REPLAY_SESSIONS',
                     'v2_long_history_universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
-                    'v2_long_history_data_policy': 'ALL_MARKET_DAILY_BY_EXCHANGE_SESSION_PLUS_ALL_DIRECTORY_ADJUSTMENT_FACTORS',
+                    'v2_long_history_data_policy': history_policy,
+                    'history_capture_mode': 'PER_SECURITY_RAW' if per_security_history else 'ALL_MARKET_DAILY',
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
                     'history_append_base': history_base,
                     'initial_estimate': {'full_pool_structure_members': len(ids),
-                        'full_pool_raw_daily_requests': sum(v2_long_history_start <= s <= day for s in sessions),
-                        'historical_security_master_requests': sum(v2_long_history_start <= s <= day for s in sessions),
-                        'historical_security_basic_all_requests': 1,
+                        'full_pool_raw_daily_requests': (len(ids)+9)//10 if per_security_history else sum(v2_long_history_start <= s <= day for s in sessions),
+                        'historical_security_master_requests': 0 if per_security_history else sum(v2_long_history_start <= s <= day for s in sessions),
+                        'historical_security_basic_all_requests': 0 if per_security_history else 1,
                         'current_direct_limit_batches': (len(ids)+19)//20,
                         'full_pool_adjustment_factor_batches': (len(ids)+99)//100,
                         'basic_directory_batches': (len(missing_listing)+99)//100, 'published_outcome_objects': len(demand),
@@ -364,6 +383,7 @@ class MainboardPipeline:
                         'theme_member_requests': 'DETERMINED_BY_REGISTERED_PROVIDER_THEME_DIRECTORY'},
                     'budget': vars(self.budget), 'published_outcome_demand': demand,
                     'capture_purpose': purpose,
+                    'fast_decision_enabled': fast_decision,
                     'task_classification': {
                         'classification_version': 'DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1',
                         'critical_purpose': CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
@@ -436,11 +456,17 @@ class MainboardPipeline:
             # The installed public SDK exposes all-A daily history. One complete
             # date response supplies every directory member's RAW row, with
             # identity joins and missing-day checks left to the consumer.
-            structures = [add('market_daily', {'date':str(s)}, 'StructureHistoryCapture', current=s==day)
-                          for s in sessions if v2_long_history_start <= s <= day]
-            structures += [add('master_all', {'date':str(s)}, 'HistoricalSecurityReplayCapture', current=s==day)
-                           for s in sessions if v2_long_history_start <= s <= day]
-            structures.append(add('stock_basic_all', {}, 'HistoricalSecurityReplayCapture', current=True))
+            if per_security_history:
+                # Same registered RAW adapter and full current directory/window.
+                # This prospective bootstrap does not claim a historical universe replay.
+                structures = history_batch(ids, v2_long_history_start, day,
+                                           'StructureHistoryCapture', 'history', batch_size=10)
+            else:
+                structures = [add('market_daily', {'date':str(s)}, 'StructureHistoryCapture', current=s==day)
+                              for s in sessions if v2_long_history_start <= s <= day]
+                structures += [add('master_all', {'date':str(s)}, 'HistoricalSecurityReplayCapture', current=s==day)
+                               for s in sessions if v2_long_history_start <= s <= day]
+                structures.append(add('stock_basic_all', {}, 'HistoricalSecurityReplayCapture', current=True))
             # The installed provider publishes cumulative back-adjustment
             # factors. The adapter's versioned formula is independently checked
             # against HFQ samples; it rejects conflicting historical factors.
@@ -506,6 +532,7 @@ class MainboardPipeline:
                     'frozen_config_hash': config.config_hash if config is not None else None,
                     'scope': 'DAILY_PRIMARY_CRITICAL_CAPTURE_ONLY_REUSING_MAINBOARD_DAG',
                     'capture_purpose': purpose,
+                    'fast_decision_enabled': fast_decision,
                     'task_classification': {
                         'classification_version': 'DAILY_PRIMARY_CRITICAL_CAPTURE_BOUNDARY_V1',
                         'critical_purpose': CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
@@ -542,10 +569,10 @@ class MainboardPipeline:
                         'requested_end': str(day),
                         'requested_sessions': sum(v2_long_history_start <= s <= day for s in sessions),
                         'universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
-                        'raw_daily_endpoint': 'market_daily',
-                        'raw_daily_request_granularity': 'ONE_REQUEST_PER_EXCHANGE_SESSION_ALL_MARKET_ROWS',
+                        'raw_daily_endpoint': history_endpoint,
+                        'raw_daily_request_granularity': history_granularity,
                         'adjustment_factor_policy': 'ALL_DIRECTORY_IDS_BATCHED_INDEPENDENTLY_OF_DAILY_CANDIDATE_IDS',
-                        'historical_security_policy': 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE',
+                        'historical_security_policy': ('CURRENT_ROSTER_WITH_DATED_RAW_STATUS_NOT_HISTORICAL_UNIVERSE_REPLAY' if per_security_history else 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE'),
                     },
                     'history_append_base': history_base,
                     'published_outcome_demand': [],
@@ -726,10 +753,10 @@ class MainboardPipeline:
                     'requested_end': str(day),
                     'requested_sessions': sum(v2_long_history_start <= s <= day for s in sessions),
                     'universe_policy': 'FULL_CURRENT_MAINBOARD_DIRECTORY_BEFORE_DAILY_PREVIEW_OR_STAGE_SCORING',
-                    'raw_daily_endpoint': 'market_daily',
-                    'raw_daily_request_granularity': 'ONE_REQUEST_PER_EXCHANGE_SESSION_ALL_MARKET_ROWS',
+                    'raw_daily_endpoint': history_endpoint,
+                    'raw_daily_request_granularity': history_granularity,
                     'adjustment_factor_policy': 'ALL_DIRECTORY_IDS_BATCHED_INDEPENDENTLY_OF_DAILY_CANDIDATE_IDS',
-                    'historical_security_policy': 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE',
+                    'historical_security_policy': ('CURRENT_ROSTER_WITH_DATED_RAW_STATUS_NOT_HISTORICAL_UNIVERSE_REPLAY' if per_security_history else 'DATED_MASTER_ALL_AND_STOCK_BASIC_ALL_FOR_RECONSTRUCTED_HISTORICAL_REPLAY_SCOPE'),
                 },
                 'history_append_base': history_base,
                 'published_outcome_demand': demand, 'stages': stages, 'queue': queue_summary,

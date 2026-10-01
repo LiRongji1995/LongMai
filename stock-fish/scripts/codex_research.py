@@ -38,6 +38,8 @@ READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
 }
 REAL_COVERAGE = {"PROSPECTIVE_CAPTURED", "RECONSTRUCTED_HISTORICAL"}
 TERMINAL = {"SUCCEEDED", "FAILED", "CANCELLED", "INTERRUPTED"}
+RESPONSE_MAX_BYTES = 64 * 1024 * 1024
+SAVED_REPORT_MAX_BYTES = 256 * 1024 * 1024
 
 
 class ResearchError(Exception):
@@ -79,7 +81,7 @@ class NoRedirect(request.HTTPRedirectHandler):
 
 
 class Client:
-    def __init__(self, base_url="http://127.0.0.1:8000", key="", timeout=30):
+    def __init__(self, base_url="http://127.0.0.1:8000", key="", timeout=30, export_timeout=180):
         parts = parse.urlsplit(base_url)
         try:
             valid_port = parts.port is None or 1 <= parts.port <= 65535
@@ -91,7 +93,10 @@ class Client:
             raise ResearchError("LOCAL_LOOPBACK_HTTP_URL_REQUIRED")
         if not 0 < timeout <= 60:
             raise ResearchError("HTTP_TIMEOUT_MUST_BE_0_TO_60_SECONDS")
+        if not 0 < export_timeout <= 180:
+            raise ResearchError("EXPORT_TIMEOUT_MUST_BE_0_TO_180_SECONDS")
         self.base_url, self.key, self.timeout = base_url.rstrip("/"), key, timeout
+        self.export_timeout = export_timeout
         self.opener = request.build_opener(request.ProxyHandler({}), NoRedirect())
 
     def raw(self, path, payload=None):
@@ -102,16 +107,21 @@ class Client:
             headers["Authorization"] = "Bearer " + self.key
         data = None if payload is None else json.dumps(payload).encode("utf-8")
         req = request.Request(self.base_url + path, data=data, headers=headers)
+        # Full-market V2 includes every diagnostic row and its evidence. Keep a
+        # bounded larger read only for saved exports / daily reports, never POSTs.
+        is_export = payload is None and (parse.urlsplit(path).path == "/api/daily-research/report" or re.fullmatch(
+            r"/api/strategy-experiments/[A-Za-z0-9_.-]{1,160}/export", parse.urlsplit(path).path))
+        limit = SAVED_REPORT_MAX_BYTES if is_export else RESPONSE_MAX_BYTES
         try:
-            with self.opener.open(req, timeout=self.timeout) as response:
+            with self.opener.open(req, timeout=self.export_timeout if is_export else self.timeout) as response:
                 # No automatic retry: a timed-out POST may already have succeeded.
-                content = response.read(64 * 1024 * 1024 + 1)
+                content = response.read(limit + 1)
         except error.HTTPError as exc:
             raise ResearchError("HTTP_" + str(exc.code)) from None
         except (error.URLError, TimeoutError, OSError):
             raise ResearchError("NETWORK_FAILED_POST_STATE_UNKNOWN" if payload is not None
                                 else "LOCAL_SERVICE_UNREACHABLE") from None
-        if len(content) > 64 * 1024 * 1024:
+        if len(content) > limit:
             raise ResearchError("RESPONSE_SIZE_LIMIT_EXCEEDED")
         return content
 
@@ -256,7 +266,10 @@ def official_exports(client, run_id, strategy_id=PV):
         view = saved["export_view"]
         if saved["run_id"] != run_id or view["strategy_id"] != strategy_id or view["selection"] != "all":
             raise ResearchError("EXPORT_IDENTITY_MISMATCH")
-        expected = [(str(row["instrument_id"]), str(row["rank"])) for row in rows]
+        def saved_identity(row):
+            rank = row.get("rank") if strategy_id == STAGE_AWARE else row["rank"]
+            return str(row["instrument_id"]), "" if rank is None else str(rank)
+        expected = [saved_identity(row) for row in rows]
         actual = [(row["instrument_id"], row["rank"]) for row in csv_rows]
         if actual != expected or len(set(iid for iid, _ in expected)) != len(expected):
             raise ResearchError("CSV_JSON_SAVED_ORDER_MISMATCH")
@@ -273,9 +286,19 @@ def official_exports(client, run_id, strategy_id=PV):
             if page["source_run_hash"] != first["source_run_hash"]:
                 raise ResearchError("SUMMARY_VERSION_CHANGED")
             shown.extend(page["items"])
-        if [(str(row["instrument_id"]), str(row["rank"])) for row in shown] != expected:
+        if [saved_identity(row) for row in shown] != expected:
             raise ResearchError("SUMMARY_EXPORT_SAVED_ORDER_MISMATCH")
-        if view["filtered_total"] != len(rows) or view["ranked_total"] != len(rows):
+        ranked_total = len(rows)
+        if strategy_id == STAGE_AWARE:
+            decisions = [row["decision_status"] for row in rows]
+            if any(value not in {"FOCUS", "WATCH", "REJECTED", "UNKNOWN"} for value in decisions):
+                raise ResearchError("EXPORT_DECISION_STATUS_MISMATCH")
+            if [row["decision_status"] for row in csv_rows] != decisions:
+                raise ResearchError("CSV_JSON_SAVED_DECISION_MISMATCH")
+            if [row["decision_status"] for row in shown] != decisions:
+                raise ResearchError("SUMMARY_EXPORT_SAVED_DECISION_MISMATCH")
+            ranked_total = decisions.count("FOCUS")
+        if view["filtered_total"] != len(rows) or view["ranked_total"] != ranked_total:
             raise ResearchError("EXPORT_COUNT_MISMATCH")
     except (KeyError, TypeError, ValueError, UnicodeError):
         raise ResearchError("INVALID_SAVED_EXPORT_SCHEMA") from None

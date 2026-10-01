@@ -1,3 +1,13 @@
+# Mac 首次采集预算（2026-10-01）
+冷启动可设置 `STOCKFISH_CAPTURE_FAST_DECISION=false`，跳过采集过程中的提前 NOT_READY 判定，避免在大量历史数据补齐前重复构造全量内存输入。默认 `true`；仅接受 true/false，显式 capture 参数优先。此设置不跳过采集结束后的完整 readiness 或正式荐股发布校验，报告记录 `fast_decision_enabled`。
+
+
+MainboardPipeline 支持可选环境变量 `STOCKFISH_CAPTURE_TIMEOUT_SECONDS`（0–90 秒，默认 40）、`STOCKFISH_CAPTURE_MAX_SECONDS`（0–7200 秒，默认 600）、`STOCKFISH_CAPTURE_MAX_REQUESTS`（0–10000 次，默认 128）。时间下界均不含 0。显式传入 RequestBudget 时优先使用调用方预算。预算不修改策略、证券资格、来源身份或数据就绪门槛；实际请求超时仍受本轮剩余时间约束。
+
+本机真实 Baostock 探针：2026-09-30 全证券目录约 46 秒、全 A 日线约 66 秒，均超过原 40 秒默认值。冷启动可显式使用 90 秒单请求预算，并复用既有缓存续采。失败重试使用 RequestQueue.retry_blocked 记录操作原因，不删除旧回执。采集成功不等于 READY，必须继续查询 Daily Primary 的正式终态。
+
+可选 `STOCKFISH_CAPTURE_HISTORY_MODE=PER_SECURITY_RAW` 仅改变 Daily Primary 的首次历史传输计划：复用已登记的 Baostock `history` RAW adapter，完整当前主板目录每批 10 只，窗口仍由 V2 决定；当前日全市场日线、资格、复权因子和 READY 门槛不变。计划及报告记录实际 endpoint、窗口、粒度和输入身份，不把当前目录历史称为当时全市场回放。默认 `ALL_MARKET_DAILY` 和完整研究路径保持原计划。真实 3 只股票当前日 11 字段交叉核对一致、隔离采集窗口/股票池等价测试通过，仅是工程与传输证据，不代表完整真实 READY 或市场优势。
+
 # Daily Observation Monitor 部署增量（2026-09-23）
 
 【事实】新增只读 GET `/api/daily-research/observation` 与现有 CLI `daily-observation`，复用原实例、DB/state、日历和交付/后验服务；没有 schema migration、第二数据库或新后台任务。源码更新后需由原管理脚本重新加载实例才能提供新路由；Start 会复用健康旧进程，不能把源码落盘视为路由已经生效。按实际授权核对原 PID/环境/路径、作业空闲和备份后执行既有启停流程。使用和验收口径见 [观察工具说明](stock-fish/docs/PHASE1_OBSERVATION_MONITOR.md)。
