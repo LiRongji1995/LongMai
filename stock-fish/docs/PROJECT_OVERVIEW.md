@@ -1,3 +1,13 @@
+# 2026-10-02：Go 主架构与 SQLite V2 隔离重建
+
+在既有 `stock-fish-go/` 上新增统一 Go 应用入口、独立 R1/V2 策略、严格证据合同、新 SQLite V2 权威模型及隔离切换/恢复。V2 默认身份、R1 RESEARCH_ONLY、冻结参数和原 run 均保留。实现边界、历史模块和 API 兼容范围见 [Go 说明](../../stock-fish-go/README.md)、[策略矩阵](../../stock-fish-go/STRATEGY_PARITY.md) 与 [HTTP 合同](../../stock-fish-go/HTTP_COMPATIBILITY.md)；本轮实际迁移、独立运行、差分、资源和未验证范围见 [验收记录](../../stock-fish-go/VALIDATION.md)。
+
+这是明确授权的工程交付。真实迁移在新私有目录执行，原生产库与 Python 服务不切换；源码推送不等于生产激活。日常正式入口在另行授权切换前仍遵循原协议，DAILY_V1 就绪与新 Go 研究运行成功分别报告。下一交易日采用有限、版本化的官方 SH/SZ 日历和真实上海时钟，保存观察日/cutoff，不把国庆休市期间的旧观察资料改称今日行情。
+
+本轮真实记录搬迁已完成，但完整校验达到累计7200s预算上限而中止，目标仍未发布；整体验收 `BLOCKED_MIGRATION_BUDGET`。新库独立研究、全池差分和真实切换/回退尚未验收，不能因源码推送改称已完成或启用。
+
+---
+
 ## 2026-10-01 本地瘦身工程交付入口
 
 本轮依赖分组、日报镜像资源白名单、请求内一致读和缺失投影恢复见 [瘦身主报告](SLIMMING_REVIEW_AND_RESULT.md)。日常最小安装入口为 `requirements-daily.txt`；旧 `requirements-core.txt` 与 Windows 锁文件仍保留完整核心/Qlib 兼容范围。主动 V2、策略参数与历史冻结结果不变；源码交付不代表已部署。工程测量与真实业务/投资验证分别记录，`MARKET_EDGE=NOT_ESTABLISHED`。

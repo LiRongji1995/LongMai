@@ -25,6 +25,6 @@ StockFish 在原快照基础上增加 Windows 原生 CSI300 推理入口、可�
 
 模型和行情的下载、使用或再分发应遵循其发布源对应条款；本文件不为第三方资产另行授予权利。
 
-## 独立 Go R1 迁移模块
+## StockFish Go 模块化主系统
 
-`stock-fish-go/` 保留既有 StockFish 规则的迁移来源追踪，不改变上述组件的版权或许可。新增依赖固定为 `modernc.org/sqlite v1.36.3`（BSD-3-Clause）及其锁定传递依赖；版本、官方许可来源和随附许可副本见 [Go 依赖许可清单](stock-fish-go/LICENSES.md)。Go 工具链和本机研究二进制不随源码分发。该模块目前仅提供未完成验收的迁移诊断，不代表生产切换。
+`stock-fish-go/` 保留既有 StockFish 规则的迁移来源追踪，不改变上述组件的版权或许可。新增依赖固定为 `modernc.org/sqlite v1.60.1`（BSD-3-Clause）及其锁定传递依赖；版本、官方许可来源和随附许可副本见 [Go 依赖许可清单](stock-fish-go/LICENSES.md)。Go 工具链和本机研究二进制不随源码分发。该模块新增原生 R1/V2、SQLite V2 迁移及隔离应用入口；旧 stockfish-r1 命令保留诊断兼容身份。源码交付不代表生产切换。

@@ -1,0 +1,129 @@
+{
+  "cutoff": "2026-01-05T20:00:00+08:00",
+  "data_class": "TEST_FIXTURE",
+  "input": {
+    "bars": [
+      {
+        "amount_cny": "1e2",
+        "close": "+0010.00",
+        "event_time": "2026-01-05T15:00:00.100+08:00",
+        "first_seen_at": "2026-01-05T15:00:00.100+08:00",
+        "ingested_at": "2026-01-05T15:00:00.100+08:00",
+        "instrument_id": "TEST_FIXTURE.SZ",
+        "session": "2026-01-05",
+        "source_published_at": "2026-01-05T15:00:00.100+08:00",
+        "turnover_fraction": 0.07,
+        "volume_shares": "0.0000000"
+      }
+    ],
+    "coverage_type": "TEST_FIXTURE",
+    "observation_date": "2026-01-05",
+    "sessions": [
+      "2026-01-05"
+    ],
+    "universe": {
+      "event_time": "2026-01-05T15:00:00.100+08:00",
+      "first_seen_at": "2026-01-05T15:00:00.100+08:00",
+      "ingested_at": "2026-01-05T15:00:00.100+08:00",
+      "securities": [
+        {
+          "board": "MAIN",
+          "effective_from": "2020-01-01",
+          "event_time": "2026-01-05T15:00:00.100+08:00",
+          "exchange": "SZSE",
+          "first_seen_at": "2026-01-05T15:00:00.100+08:00",
+          "ingested_at": "2026-01-05T15:00:00.100+08:00",
+          "instrument_id": "TEST_FIXTURE.SZ",
+          "listed_on": "2020-01-01",
+          "security_type": "A_COMMON",
+          "source_published_at": "2026-01-05T15:00:00.100+08:00",
+          "st": null,
+          "suspended": false
+        }
+      ],
+      "snapshot_id": "TEST_FIXTURE",
+      "source_published_at": "2026-01-05T15:00:00.100+08:00"
+    }
+  },
+  "python_model_hash": "335abfa13e3708b0315a3d8ea1f0edec3abc48c6be3ae676cb6607869742df67",
+  "python_projection": {
+    "bars": [
+      {
+        "amount_cny": "1E+2",
+        "close": "10.00",
+        "comparable_basis": null,
+        "comparable_close": null,
+        "comparable_high": null,
+        "comparable_low": null,
+        "comparable_open": null,
+        "event_time": "2026-01-05T15:00:00.100000+08:00",
+        "first_seen_at": "2026-01-05T15:00:00.100000+08:00",
+        "float_shares": null,
+        "float_shares_as_of": null,
+        "high": null,
+        "ingested_at": "2026-01-05T15:00:00.100000+08:00",
+        "instrument_id": "TEST_FIXTURE.SZ",
+        "limit_applicable": null,
+        "limit_down": null,
+        "limit_up": null,
+        "limit_verified": false,
+        "low": null,
+        "open": null,
+        "quality": "VALID",
+        "reference_prev_close": null,
+        "rule_id": null,
+        "session": "2026-01-05",
+        "source_published_at": "2026-01-05T15:00:00.100000+08:00",
+        "source_refs": [],
+        "tick_size": "0.01",
+        "turnover_basis": null,
+        "turnover_fraction": 0.07,
+        "volume_shares": "0E-7"
+      }
+    ],
+    "coverage_type": "TEST_FIXTURE",
+    "funds": [],
+    "history_artifact_hash": null,
+    "history_artifact_ref": null,
+    "observation_date": "2026-01-05",
+    "previous_emotions": [],
+    "receipts": [],
+    "sessions": [
+      "2026-01-05"
+    ],
+    "themes": [],
+    "universe": {
+      "complete": false,
+      "event_time": "2026-01-05T15:00:00.100000+08:00",
+      "expected_count": null,
+      "first_seen_at": "2026-01-05T15:00:00.100000+08:00",
+      "ingested_at": "2026-01-05T15:00:00.100000+08:00",
+      "securities": [
+        {
+          "board": "MAIN",
+          "delisted_on": null,
+          "delisting_period": false,
+          "effective_from": "2020-01-01",
+          "effective_to": null,
+          "event_time": "2026-01-05T15:00:00.100000+08:00",
+          "exchange": "SZSE",
+          "first_seen_at": "2026-01-05T15:00:00.100000+08:00",
+          "ingested_at": "2026-01-05T15:00:00.100000+08:00",
+          "instrument_id": "TEST_FIXTURE.SZ",
+          "listed_on": "2020-01-01",
+          "name": "",
+          "risk_flags": [],
+          "security_type": "A_COMMON",
+          "source_published_at": "2026-01-05T15:00:00.100000+08:00",
+          "source_refs": [],
+          "st": null,
+          "suspended": false
+        }
+      ],
+      "snapshot_id": "TEST_FIXTURE",
+      "source_published_at": "2026-01-05T15:00:00.100000+08:00",
+      "source_refs": []
+    }
+  },
+  "source_contract": "stockfish_core.yaogu.contracts.MarketInput"
+}

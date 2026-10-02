@@ -95,6 +95,11 @@ func run() int {
 		return failure(er)
 	}
 	m := core.Manifest{Contract: "GO_R1_DIAGNOSTIC_MANIFEST_V1", Baseline: "2e256883f1103eecb0014161c3de54b181890124", SourceHash: sourceHash, BinaryHash: core.Hash(raw), ConfigHashes: hashes, InputHash: d.InputBytesHash, HistoryHash: d.HistoryHash, Observation: d.Observation, Cutoff: d.Cutoff, BudgetSeconds: *seconds, ProductRole: "RESEARCH_ONLY", Promotion: "DISABLED", MarketEdge: "NOT_ESTABLISHED"}
+	// Preserve the historical command's explicitly diagnostic output contract.
+	// Formal native results are published by the unified stockfish application.
+	d.RunStatus = "INCOMPLETE_IMPLEMENTATION"
+	d.CandidateAvailability = "UNAVAILABLE"
+	d.Blockers = append(d.Blockers, "LEGACY_DIAGNOSTIC_ENTRYPOINT_USE_STOCKFISH_RESEARCH")
 	if e = core.SaveDiagnostic(*output, d, m, b); e != nil {
 		return failure(e)
 	}

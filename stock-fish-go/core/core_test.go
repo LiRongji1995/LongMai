@@ -258,7 +258,7 @@ func TestRSSAvailable(t *testing.T) {
 func TestOutputCancelledNoCompletion(t *testing.T) {
 	root := t.TempDir()
 	b, _ := NewBudget(context.Background(), time.Second, nil)
-	b.cancel()
+	b.Cancel()
 	defer b.Close()
 	if e := SaveDiagnostic(root, Diagnostic{}, Manifest{}, b); e == nil {
 		t.Fatal("cancel ignored")

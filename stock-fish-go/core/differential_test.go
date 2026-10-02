@@ -13,10 +13,13 @@ import (
 func TestPythonRawEvidenceDifferential(t *testing.T) {
 	root := os.Getenv("STOCKFISH_R1_ORACLE")
 	if root == "" {
+		if os.Getenv("STOCKFISH_FORMAL_ACCEPTANCE") == "1" {
+			t.Fatal("FORMAL_ACCEPTANCE_BLOCKED_ORACLE_REQUIRED")
+		}
 		t.Skip("explicit generated TEST_FIXTURE oracle required; run tools/oracle.py")
 	}
 	paths, e := filepath.Glob(filepath.Join(root, "*.expected.json"))
-	if e != nil || len(paths) != 5 {
+	if e != nil || len(paths) < 5 {
 		t.Fatal("expected all five oracle cases", paths, e)
 	}
 	for _, path := range paths {
@@ -50,7 +53,9 @@ func TestPythonRawEvidenceDifferential(t *testing.T) {
 				t.Fatal("not fixture")
 			}
 			input := path[:len(path)-len(".expected.json")] + ".json"
-			b, _ := NewBudget(context.Background(), 30*time.Second, nil)
+			// Race instrumentation is materially slower; keep the complete oracle
+			// and assertions under a bounded test-only five-minute deadline.
+			b, _ := NewBudget(context.Background(), 300*time.Second, nil)
 			defer b.Close()
 			d, e := Analyze(input, "", b)
 			if e != nil {

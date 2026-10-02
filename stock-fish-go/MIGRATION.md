@@ -1,40 +1,52 @@
-# 语义迁移与未解决事项
+# SQLite V2 与原生 Go 迁移状态
 
-基线：`2e256883f1103eecb0014161c3de54b181890124`，起始分支 review，起始 dirty 为空；远端 main 经只读 ls-remote 核验相同。实现与验证完成后，用户另行明确授权提交推送源码；本次不部署，不修改旧 Python 行为。旧 go-core 影子模块保持不动。
+本轮在现有工作区实现模块化 Go 主系统及真实数据库迁移，不改写旧 Python 策略/配置/研究身份，不修改旧数据库，不切换生产服务。旧 `go-core` 影子模块保留。总验收为 **BLOCKED_MIGRATION_BUDGET**：真实搬迁已完成，累计7199.963s达到7200s上限，完整验证未结束且目标未发布；真实全池差分、冷暖性能及独立运行/切换仍未完成。命令退出码由 [VALIDATION](VALIDATION.md) 汇总，不能由本表的“已实现”推导为真实验收通过。
 
-| 原规则/事实 | 原源码/配置（stock-fish/ 下） | Go实现 | 检查/状态 |
-|---|---|---|---|
-| Fraction/Decimal、阈值、显示舍入后再次判断 | yaogu/strategy_experiments.py `_number`；research_r1.py `compare` | core/number.go | exact/half-even 单测；任意极端50位Decimal中间精度尚未全等价 |
-| 完整/未知/失败/短路 | research_r1.py `all_of/any_of/adapt_row` | core/state.go | 四形态、多命中、顺序、短路单测；NOT_IMPLEMENTED 独立 |
-| 四时钟、父来源、重建、范围 | yaogu/visibility.py `EvidenceResolver`；contracts.py | core/evidence.go | 范围/父来源/PARTIAL/重建/冲突测试；完整模型校验未完成 |
-| 历史快照、manifest、分区及payload | yaogu/history_artifacts.py；storage.py | core/history.go | 只读事务、原字节哈希、索引完整性、损坏拒绝、关闭后可写fixture |
-| 唯一日期化主板资格、60会话 | yaogu/strategy_experiments.py `_qualification/_prepare_context`；config/r05_strategy_experiments.yaml | core/research.go | fixture资格/未知ST、同原始输入差分 |
-| 可比收益、MA、金额换手窗口 | yaogu/theme_capital_trend.py；stage_aware_momentum.py | core/facts.go | 无零填补；缺会话/基准错配；同输入精确收益和MA差分 |
-| 完整资格池市场基准、等长3+3动量 | stage_aware_momentum.py `_market_return_at/_strength_momentum` | core/facts.go/research.go | 未成交额预筛基准；same raw fixture差分 |
-| 题材RS用于HLR/回踩 | stage_aware_momentum.py `_sector_window_stats/_sector_rs_exact` | core/sector.go | 同题材、排自身、资格交集、完整性；不是完整sector背景 |
-| START及旧三形态 | stage_aware_momentum.py `_stage_start/_stage_high_level_repair/_stage_trend_pullback`；config/stage_aware_momentum_v2.yaml | core/rules.go | 每种PASS/FAIL/UNKNOWN；5种原始fixture逐股状态差分 |
-| R1加速替换、MA20简化、非跌停 | research_r1.py `acceleration/ma20_trend/adapt_row` | core/rules.go/state.go | 加速使用精确RS，旧形态使用原舍入RS；公共未知跌停保留 |
-| 原始限价/行为/反证 | events.py；stage_aware_momentum.py `_daily_path/_behavioral_confirmation/_critical_counterevidence` | core/facts.go/rules.go/state.go | tick/价格范围/跌停三态、HLR行为、回踩长趋势 |
-| 完整市场情境、sector标签、资金链、供应压力 | stage_aware_momentum.py 829–1788、2170–2223 | **尚未完成** | 运行整体为INCOMPLETE_IMPLEMENTATION，不能用常量UNKNOWN声称迁移 |
-| coverage/evaluability与正式结果DAG | research_r1_contracts.py；research_r1_storage.py | **仅诊断版结果** core/report.go | 候选UNAVAILABLE，只有diagnostic-completion，不冒用旧source_hash |
-| 总预算/取消/RSS | research_r1_storage.py `BudgetHistory`；用户本轮约束 | core/budget.go/rss_* | SQL实际取消、纯MA计算取消、字节/输出上限；标准库JSON整值编码的取消粒度仍有限 |
+统一入口是 [README](README.md) 的 `stockfish`。模块职责见 [ARCHITECTURE_V2](ARCHITECTURE_V2.md)，证据和输入边界见 [EVIDENCE_CONTRACT](EVIDENCE_CONTRACT.md)，策略逐条件与fixture范围见 [STRATEGY_PARITY](STRATEGY_PARITY.md)，隔离实例生命周期见 [ISOLATED_LIFECYCLE](ISOLATED_LIFECYCLE.md)。
 
-原路径 `yaogu/` 表示 `stockfish_core/yaogu/`。函数参考与上述基线绑定，配置原字节漂移会被CLI拒绝。
+## 能力映射
 
-## 最小剩余项（按优先级）
+| 原权威资料/业务能力 | Go V2 实现 | 实现与验收边界 |
+| --- | --- | --- |
+| Fraction/Decimal、Python canonical hash、三态条件 | `domain/contracts` | 精确值与half-even，跨语言向量；原字节hash与model/canonical hash分别保存，不以重编码替代原字节 |
+| 输入模型、资格、四时钟、父来源、范围、修订 | `evidence` | 严格解码、显式null/缺字段区别、日期与字段约束、父链与PARTIAL策略；拒绝未知不代表通过降级为假 |
+| 收益/均线/市场/sector/funds/压力事实 | `facts` | 原生完整计算；共享排序/聚合、证据验证之后的事实缓存；数据UNKNOWN与实现验收状态分开 |
+| R1_FULL 与 V2_CONTROL | `strategies/r1`, `strategies/v2`, `strategies/shared` | 两套独立决策；R1非默认、research only；V2不先运行R1；保留全setup/reason/rank与覆盖 |
+| documents 全 namespace 与其他旧表 | `infrastructure/sqlitev2` | 全键盘点、原字节归档、稳定旧外部ID映射；识别但未支持的有效结构使迁移失败，不静默跳过 |
+| history_evidence_rows / partition_members | 新库证据对象、TEXT精确投影、内部键与分区关系 | 全量raw hash、投影重建、成员集合/分区hash、缺失LEFT JOIN检查；数据库内可独立读取历史 |
+| 旧结果/输入/任务历史 | 旧ID映射与只读归档查询 | 原历史任务不自动恢复执行；`legacy` 原内容查询，`import-legacy-input` 保留原cutoff与parent身份 |
+| Python R1 result/manifest/index/shards 外部文件包 | `sqlitev2/bundle.go` | Go验证并保留所有文件原字节、canonical hash及引用闭合；原run_id不重算；分shard有界导入，最后publish |
+| 新研究结果与查询 | `application`, `sqlitev2` 结果头/逐股payload/摘要投影 | 来源与参数可追溯、市场共享引用、结果追加只读；摘要/详情/导出同源；发布前完整校验 |
+| 新任务与事件 | `application` 持久状态机 | 幂等提交、取消、崩溃标记INTERRUPTED、显式新尝试，事件追溯；不靠重跑查询 |
+| 派生缓存 | `sqlitev2` FactsCache | disposable、有容量上限；版本、输入、history、cutoff、日期、证券、窗口及selected evidence入key；原始完整性不跳过 |
+| CLI / HTTP | `interfaces/cli`, `interfaces/httpapi` | 同服务/DTO，默认V2、R1显式；loopback默认、写入认证、路径边界、持久任务及可分页查询 |
+| 预算、取消与进度 | `ports`, `infrastructure/runtime` | SQL与纯计算context、逐记录/分块预算；RSS与heap分开；无法获得指标明示不可用 |
+| 隔离切换/回退/恢复 | `infrastructure/lifecycle` | 带标记私有实例、单写者、备份与变更账本；不可表示的Go-only结果阻塞旧格式回退，保留数据 |
 
-1. 补齐完整背景计算与同题材资金链输出，及正式coverage/逐条reason/evidence引用合同；保持原R1硬条件不变。
-2. 补齐Python输入模型默认值、类型约束、UTC日期规范化和数值canonical跨语言向量。目前原字节payload哈希已验证，不冒称Go重编码就是旧模型哈希。
-3. 扩大差分至全部背景、全部关键原因、全部选用来源（当前检查资格、收益/RS/MA、公共/四形态状态、全部命中集合及fixture逐股选用原始证据哈希）。不能把当前状态相等称为完整等价。
-4. JSON解析/编码进一步按记录流式处理并支持中途取消；正式研究completion验证（诊断逐股有界压缩NDJSON及引用验证已实现）；Windows原生RSS/取消/发布测试。
-5. 上述全部完成后，冻结新代码身份并在剩余授权次数内完成同输入完整运行；诊断时间不作整流程提速依据。
+## 迁移顺序与恢复
 
-未设置持久缓存，不存在跨cutoff缓存复用或磁盘淘汰语义。当前仅存本次输入内的公共事实；未来加缓存必须补身份/容量/损坏/淘汰测试。
+从仓库根目录运行，所有路径由调用者提供。迁移目标和输出必须与旧源分离，先核对当前实例/源身份及可用空间。`snapshot` 使用 SQLite 原生一致性 backup，不复制正在变化的主文件假装快照。
 
-## 本轮自审补充
+```sh
+work/stockfish database inventory --source /path/to/legacy.sqlite
+work/stockfish database snapshot --source /path/to/legacy.sqlite --target /path/to/private/frozen-source.sqlite
+work/stockfish database migrate --source /path/to/private/frozen-source.sqlite --target /path/to/private/v2.sqlite --batch-size 250 --budget-seconds 7200
+work/stockfish database verify --source /path/to/private/frozen-source.sqlite --target /path/to/private/v2.sqlite --budget-seconds 7200
+work/stockfish database publish --target /path/to/private/v2.sqlite
+```
 
-- 真实第一次运行发现历史范围偏差后已取消；最终代码恢复315会话，对无history artifact的输入保留全部已有会话，并将fixture选用bar哈希加入差分，不靠删字段忽略该问题。
-- 当前HLR百分位查询仍逐股遍历总体（O(N²)），并未宣称所有算法热点已优化；全池阶段计时应指导后续局部改进。
-- 标准库JSON单个值的解析/编码内部不能被context中途抢占；已按股票拆分有界明细并在记录/读写块间检查，但完整输入大值仍是取消粒度限制。
-- failure目前保存源码身份、预算、阶段与指标；未保证在所有早期失败场景都有完整输入/历史身份，强杀更不保证写出failure。
-- RSS与Go heap分开采样；外部内存分项未独立测得，属于UNAVAILABLE，不能把RSS减Go heap当作精确外部内存。
+主 schema 之外，`SQLITE_BATCH_EVIDENCE_PROJECTION_V1` 以独立版本/checksum 管理题材成员、资金及回执类型化列，精确值为 TEXT，并保留字段缺失/null/非法状态、原字节引用与转换哈希。`publish` 在主验证通过后回填、全量核对该扩展再开放目标；`database project-batches --target ...` 可按 owner 事务恢复，`database verify-batches --target ...` 深度核验。输入写入与对应投影同一事务，readiness 检查已发布投影 inventory。实际迁移库的这一步尚未执行。
+
+每个批次与检查点同事务；重复 migrate 只允许接续同一冻结源。相同旧键必须逐内容核对；同键异内容失败。迁移取消/中断后已提交批次保留，但未经完整verify/publish的目标不能成为活动权威库。命令单次预算不能重置本轮累计迁移7200s预算，外层账本仍必须汇总；研究6次/10800s额度独立且按策略逐次计。
+
+增量使用显式 `database incremental --source ... --target ...`；先前未处理的源变更不能通过切换自动吞掉。外部R1包用 `bundle-import --input OLD_RUN_DIRECTORY` 导入，然后 `bundle-verify` 和向新目录 `bundle-export`；无需旧数据库或Python即可验证和恢复原文件内容。
+
+## 已有定向证据与未完成边界
+
+14例隔离原始输入已对照原Python R1与V2的资格/事实、setup整棵条件树、背景、coverage和排序，正式缺oracle失败；具体字段与限制在 [STRATEGY_PARITY](STRATEGY_PARITY.md)。额外证据合同、DB损坏、幂等/取消/恢复、bundle round-trip、隔离生命周期测试使用独立fixture，不能替代真实全库验收。
+
+真实旧 `run-optimized` 已确认保存 R1_FULL 和 V2_CONTROL；新Go run需固定同原始输入/历史/cutoff比较。`compare_saved.py` 只读验证原共享DAG，并校验新库每项gzip原字节和成员身份；公开字段精度按原规则还原，不使用epsilon。旧保存结果未公开的每条历史bar原字节绑定必须通过独立原始证据/投影到原字节绑定与跨存储检查补充，不能声称整份异构JSON字节一致。
+
+全池旧适配/新冷/新暖计时必须使用同语义、同母池、完整保存及验证边界。合成算法约229倍中点秩、44倍sector共享求和提升仅是局部基准，不代表生产研究整体提速。清缓存、重启、迁移中断恢复、查询/导出与不可表达回退结果均以实际记录为准。
+
+Windows交叉编译不等于Windows原生运行；JSON单值编码/解码内部不能被context逐token抢占，记录边界及读写分块负责取消；强杀/断电不能保证failure文件写出。这些边界保留，不通过降coverage、扩大skip或覆写旧结果取得通过。

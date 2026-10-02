@@ -1,3 +1,15 @@
+# StockFish Go / SQLite V2 工程增量（2026-10-02）
+
+本轮基线 `1ceb256e5331ec24ca9a5bb4185c52ebbdba4245`，原工作区干净；用户明确授权检查后中文提交并推送 main，不授权部署切换。Go 主架构及依赖测试、新 schema/证据投影、原生 R1/V2、CLI/HTTP 应用服务和恢复协议见 [架构](stock-fish-go/ARCHITECTURE_V2.md) 与 [验收记录](stock-fish-go/VALIDATION.md)。
+
+新模块锁定 Go >=1.26（本机私有官方工具链1.27.1）、modernc.org/sqlite1.60.1，实际引擎3.53.4；未升级旧生产 Python SQLite。正式 oracle gate 使用 `STOCKFISH_FORMAL_ACCEPTANCE=1`，缺 oracle 必须失败。TEST_FIXTURE、真实迁移、真实全池研究与投资验证分别报告；未知数据不能当合法空集。原规则/配置未调参，MARKET_EDGE=NOT_ESTABLISHED。
+
+真实数据库、快照、恢复副本、供应商资料和完整运行输出不提交。相邻 `go-core/` 旧影子调用链保留；新主系统位于 `stock-fish-go/`，`core/` 仅兼容别名与旧诊断入口。
+
+本轮整体验收为 `BLOCKED_MIGRATION_BUDGET`。真实搬迁已完成，最后全量验证在累计7199.963/7200s处超时，目标未发布；真实独立业务、全池差分和切换恢复不能用合成测试代替。恢复状态已保留，未经新增预算授权不继续真实迁移操作。
+
+---
+
 # Phase 1 每日荐股闭环工程增量（2026-09-23）
 
 【事实】本轮新增冻结快照/日报纯投影、T+1..T+20 独立价格后验与分组统计、现有服务/API/CLI 接线，以及晚间有限重试/超时/后台调度。原 `STAGE_AWARE_MOMENTUM_V2`、配置、readiness 和旧 score 口径不由新消费者改变；Go 仍是影子验证。字段、公式、分母和验证边界见 [PHASE1_DAILY_RESEARCH_LOOP.md](stock-fish/docs/PHASE1_DAILY_RESEARCH_LOOP.md)。

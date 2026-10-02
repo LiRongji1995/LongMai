@@ -1,42 +1,74 @@
-# 验证记录
+# StockFish Go V2 本轮验收
 
-本记录只描述本轮实际检查；不是完整 R1 迁移等价或投资验证。
+基线为 `1ceb256e5331ec24ca9a5bb4185c52ebbdba4245`，检出分支 `review`，开始时工作区干净，实际 origin 为 `LiRongji1995/stockfish-qlib-quant-system`。用户后续授权检查后提交并推送 main，不授权生产切换。先前仅诊断实现的记录保留于 Git 历史。
 
-## 基线与源码边界
+当前整体验收 **BLOCKED_MIGRATION_BUDGET**，本次工程尚未全部完成。真实数据及逐股结果只保存在被忽略的 `reports/codex/stockfish-v2-rebuild/`，不随源码发布。测试 fixture 使用独立 DB/state/artifact，不写入真实历史。
 
-- 起始本地 HEAD 与只读核验远端 main：`2e256883f1103eecb0014161c3de54b181890124`；分支 `review`，起始无 dirty。
-- 新增 `stock-fish-go/`；仅在项目综述补充隔离实现状态、根第三方通知补充依赖许可索引。原 Python 策略、数据库 schema/内容、服务、发布目录均未修改。
-- 默认冻结配置的原字节 SHA256 固定在 cmd/stockfish-r1/config_identity.go；构建时对全部 Go 文件、go.mod、go.sum 计算独立源码身份，运行再记录二进制 SHA256。
+## 工程命令与证据
 
-## 实际命令与检查范围
+`GO` 为私有 `work/r1-go-tools/go/bin/go`（Go 1.27.1），`ORACLE` 为 `reports/codex/stockfish-v2-rebuild/TEST_FIXTURE-oracle-full-v3`。Python 仍使用原 pyqlib 0.9.7 wheel。
 
-下表 `GO` 指本轮私有工具链 `work/r1-go-tools/go/bin/go`，`ORACLE` 指被忽略目录 `reports/codex/go-r1-migration/TEST_FIXTURE-oracle-v2`。完整日志保存在 `reports/codex/go-r1-migration/`。
+| 实际命令 | 结果及范围 |
+| --- | --- |
+| `STOCKFISH_R1_ORACLE=$ORACLE STOCKFISH_FORMAL_ACCEPTANCE=1 GO -C stock-fish-go test ./... -count=1` | 退出0；core 123.719s、CLI 20.061s、sqlitev2 10.798s、lifecycle 8.666s；后续恢复边界补修另有定向回归。`go-full-tests.log`。 |
+| `GO -C stock-fish-go vet ./...` | 退出0，`go-vet.log`。 |
+| `STOCKFISH_FORMAL_ACCEPTANCE=1 env -u STOCKFISH_R1_ORACLE GO -C stock-fish-go test ./core -run TestFullPythonSemanticDifferential -count=1` | 预期退出1，`FORMAL_ACCEPTANCE_BLOCKED_ORACLE_REQUIRED`；正式验收无 oracle 不能跳过。 |
+| `STOCKFISH_R1_ORACLE=$ORACLE STOCKFISH_FORMAL_ACCEPTANCE=1 GO -C stock-fish-go test -race -p 1 ./... -count=1` | 首轮退出1：race 下每例原30s超时，core达默认10m总超时；并行新增文件导致后续编译文件集不一致。保留 `go-race-tests.log`。仅测试单例预算改为300s，样本/断言/生产预算未变；稳定源码重跑另录。 |
+| `python -m pytest -q stock-fish/tests/r05_product/test_research_r1.py -k 'amount_boundary or ma20_boundaries or accel_or or accel_required_conditions or accel_known_fail_beats_missing or independent_setup_background_turnover_and_order or close_limit_safety'` | 退出0，23 passed、31 deselected，4.01s；冻结R1定向回归。 |
+| `GO -C stock-fish-go test ./infrastructure/sqlitev2 -run '^$' -bench BenchmarkControlledIndexEvidence -benchtime=1x` | 退出0，37.682s；独立TEST_FIXTURE同结果hash对比，见 INDEX_BENCHMARK。 |
+| `GOMAXPROCS=2 STOCKFISH_R1_ORACLE=$ORACLE STOCKFISH_FORMAL_ACCEPTANCE=1 GO -C stock-fish-go test -p 1 ./... -count=1 -timeout 30m` | 最终全套退出0，13个有测试包通过：core52.098s、sqlitev2 8.823s、CLI5.987s、HTTP1.335s。日志`go-final-gated-tests.log`。随后资源初始化失败返回终态的补修及就绪门禁4项定向测试退出0，0.734s。 |
+| `GOMAXPROCS=2 STOCKFISH_R1_ORACLE=$ORACLE STOCKFISH_FORMAL_ACCEPTANCE=1 GO -C stock-fish-go test -race -p 1 ./... -count=1 -timeout 30m` | 最终稳定源码全套退出0，13个有测试包均通过：core580.651s、lifecycle51.690s、sqlitev2 124.255s、CLI60.071s、HTTP21.728s；无race报告。日志`go-final-gated-race-tests.log`。 |
+| `GOMAXPROCS=2 GO -C stock-fish-go vet ./...`；全部Go文件`gofmt -l` | 最终均退出0，未格式化文件0；`go-final-gated-vet.log`、`gofmt-final.json`。 |
+| `python -m unittest discover -s stock-fish-go/tools -p 'test_*.py'` | 退出0，4项保存结果读取/篡改测试，0.082s。 |
+| `python stock-fish-go/tools/build.py --go GO --command stockfish --output PRIVATE_BINARY`（另构建stockfish-migrate；Windows设置`GOOS=windows GOARCH=amd64 CGO_ENABLED=0`） | 三次均退出0；统一源码hash `3f18e26cf8ef99ca9a2933525abc1c5fbbf411fc033bee593c7fecf301bdafbe`。Windows仅交叉编译，无原生运行。 |
 
-|命令|结果|范围|
-|---|---|---|
-|`work/r1-go-tools/go/bin/gofmt -w stock-fish-go`|退出0|Go格式化|
-|`go vet ./...`（模块内）|退出0|静态检查|
-|`STOCKFISH_R1_ORACLE=$ORACLE go test -v ./...`|退出0|15个顶层测试，其中1项包含5组原始fixture差分|
-|`STOCKFISH_R1_ORACLE=$ORACLE go test -race ./...`|退出0|同范围race；不代表Windows原生或全市场race|
-|`python tools/build.py --go … --output …`|退出0|构建、固定源码身份|
-|`GOOS=windows GOARCH=amd64 CGO_ENABLED=0 go build …`|退出0|仅交叉编译，未原生运行|
-|`python -m pytest -q stock-fish/tests/r05_product/test_research_r1.py -k 'amount_boundary or ma20_boundaries or accel_or or accel_required_conditions or accel_known_fail_beats_missing or independent_setup_background_turnover_and_order or close_limit_safety'`|退出0，23 passed、31 deselected|有意选取R1定向回归，不是全仓测试|
-|Go CLI fixture `run` / `verify`|run预期退出3；verify退出0|仅迁移诊断，正式研究未完成|
+14组原始fixture对照Python R1/V2的资格、选用模型行身份、事实、全部setup/条件树、理由、背景、覆盖及排序。使用精确数值及原显示舍入规则，不用epsilon。Python保存结果未暴露的所有历史bar原字节绑定，另由证据测试及旧/新存储逐项比较覆盖，不冒称异构DAG字节相等。详见 STRATEGY_PARITY。
 
-Python oracle生成5组真实源码构造的TEST_FIXTURE：repair、weakening、pullback、low_amount、missing_price；每组8只，共40个逐股案例。Go从相同原始输入独立验证来源、选修订并计算，比较资格池/完整性、精确收益、精确市场RS、当前与T-5 MA20、收盘跌停、公共及四形态状态、全部命中、CORE集合，以及每股选中的原始bar哈希。未删除差异样本、未用浮点容差。
+恢复测试中断2601项结果的第51个已提交批次，保留2550项未发布数据。显式封存后旧结果不能查询/再发布，新作业可以完成；原字节、摘要和头信息篡改均拒绝。封存使用不可变账本，不删除旧证据。APFS测试实际调用clonefile，验证独立写入不改源、WAL已提交数据保存、租约/WAL条件失败；跨平台fallback保留空间门槛。
 
-独立工程测试包括：小数精确阈值/半偶舍入、三态、未实现独立状态、未来资料、缺父来源、PARTIAL、允许/不允许历史重建证明、修订冲突、重复JSON键、缺会话、SQL递归长查询实际取消、纯MA计算取消、source/output字节超限、原库只读、payload/索引损坏、释放事务、取消无成功标记、篡改输出拒绝。
+最终审阅补修：统一CLI/迁移命令与生命周期租约，规范现有文件及新文件父路径别名；锁后读取实例配置；排队执行和结果发布事务重新核对迁移/扩展就绪；进度SQL取消保留先发生的资源超限原因。HTTP旧fixture因未建立新增批次投影而失败3例，已改为在临时空源上实际Snapshot/Migrate/Verify/Backfill/Publish，保留原业务断言。故障注入确认已提交item之后撤销权威时保留PREPARING和原字节，不能发布。
 
-## 未执行或尚未满足
+未通过的中间检查也保留：`go-final-integrated-tests.log`为主动SIGINT中断，以释放本机2核/8GiB资源供有累计deadline的真实验证；不计通过。`go-final-stable-tests.log`为上述3例HTTP fixture缺扩展门禁失败。修复后采用稳定源码完整重跑，不删除失败记录或扩大skip。
 
-完整市场/题材/资金/供应背景、全部理由与来源差分、完整Python模型输入合同、所有数值/默认值canonical向量、完整JSON阶段细粒度取消、Windows原生资源保护与发布未完成。无持久/磁盘窗口缓存，因此没有缓存淘汰验收。未跑Qlib、执行回测、十二组消融或全仓测试。工程测试通过不能把这些未完成项变成PASS。
+## 真实迁移与独立运行
 
-## 真实运行及性能
+旧权威库只读，通过SQLite online backup冻结，源SHA-256为 `f48ea2aa217173c34b20eda59be0f2a6409fd3b6858681a703390d202c4a1f4e`，7,752,036,352字节。快照/迁移/验证/恢复累计预算7200s；研究最多6次、单次1800s、累计10800s；新持久文件不超过50GiB、可用空间至少10GiB。每步实际时长保存在私有账本。
 
-授权额度最多2次/3600s；每次1800s，未新增Python全池参考运行。复用的Python保存run为 `r1_c8b5bcad861cb2b4deba15f161c91b3c6346306e44237dbc2c2b0ec0dab64918`，本轮已用原验证器核验manifest、completion及全部共享引用/哈希。
+新schema将原字节证据、精确TEXT投影、内部成员、归档映射、结果/逐股摘要、任务/事件、缓存分开。旧派生缓存明确丢弃重建，不计为原始资料迁移。实际驱动 modernc.org/sqlite v1.60.1、SQLite 3.53.4；DDL、外键、不可变触发器、schema checksum均参与验证。
 
-第一次Go全池诊断在318.59s协作取消（1532只已处理），原因是自审发现历史读取260会话与旧315会话合同不一致；保存failure，候选UNAVAILABLE。随后恢复原315会话范围，新增fixture全部选用证据哈希差分。该次不能作为最终代码验收或性能基准。
+迁移实际SIGTERM后从同一冻结源checkpoint恢复，最终搬迁3358份documents（19个namespace）、2,155,121条历史证据、4,219,074条历史成员、8个任务、31个事件及1条旧schema记录；237,120条派生缓存明确丢弃重建。目标为私有 `reports/codex/stockfish-v2-rebuild/private/stockfish-v2.sqlite3`，未发布，不能研究。
 
-最终运行数据与差异清单见私有 `reports/codex/go-r1-migration/`。完整研发状态必须继续标为PARTIAL；即使诊断全池算完且检查字段一致，也不能宣称正式R1研究完成。尚无同范围、同环境、受控的完整新旧性能基准，不能把历史1390.64s与本轮诊断耗时相除计算加速。
+最后完整验证命令为私有 `stockfish-migrate verify --source frozen-source.sqlite3 --target stockfish-v2.sqlite3 --seconds 1079`，进程退出1，`context deadline exceeded`。累计账本 **7199.963326802012s / 7200s**，包括此前失败和中断；没有重置预算。已完整核对：3358份document双向身份集合、全部历史身份与元数据、全部成员集合、1263份分区内容hash、61,039份独立evidence对象原字节、全部2,155,121条目标历史原字节与类型化投影。最终源payload hash仅核对251,132 / 2,158,479条；余下源原字节、关系投影/旧结果内层压缩引用、外键、integrity_check、最终VERIFIED标记均未完成。输出中默认的`foreign_keys=0`不是通过证据。
 
-最终同输入全池诊断：3040只，615.57s，采样峰值RSS 600.625MiB，退出3。独立verify退出0。与已保存Python结果检查资格/公共/四形态/命中/CORE的3040只逐股对照，0处差异；未检查字段仍保留阻塞。诊断分区6 PASS、2993 FAIL、41 UNKNOWN，不发布有效候选。合计真实额度934.16s、2次，次数已用完。最终源码hash `1beb2844dc2b099ad51dbc87a99c9069105454ef00e64f10df234618606df95c`。完整性能边界见私有交付报告。
+真实新库的批次投影扩展、外部R1包迁入、隔离增量、独立完整业务、切换后新写入及备份/回退/恢复尚未执行。真实全池预算使用0 / 6次，不能用尚余研究预算绕过迁移发布门禁。恢复需同一冻结源重新完整验证；当前实现不支持把中途验证计数拼接成完整证明。追加预算请求未得到确认前，停止所有真实迁移/验证/恢复操作。
+
+最后验证的1053次外部采样峰值RSS695,775,232字节（663.54MiB），最小可用空间16,970,547,200字节（15.80GiB）；采样自monitor启动起，不能当作整个任务的保证峰值。实际资源/状态见私有`migration-ledger.json`、`storage-acceptance-status.json`、`verify.json`与`real-recovery-drill.json`。macOS sandbox已实际拒绝旧stock-fish路径、冻结旧库、Python执行并移除PATH；业务运行仍须单独验收，不能以隔离配置或拒绝探针代替成功。
+
+## 性能口径
+
+阶段指标包含输入SQL、历史分区/raw/投影校验、JSON解码、来源/修订、事实、策略及输出压缩/保存复核。逻辑payload、唯一/重复证据、缓存字节是应用层计数，不是物理磁盘IO。
+
+持久run的`summary.metrics`在保存前取快照，不能充当端到端耗时；输出压缩、保存和最终复核指标出现在资源scope结束时的完整日志。真实性能报告必须保留该日志，并用外层计时涵盖研究、重新验证与名单查询，不能只引用策略计算时间。当前真实链路未运行，未给出整体提速结论。
+
+中点秩预排序/sector共享和的fixture基准约229倍/44倍；当前索引fixture窗口/横截面/摘要约41.30/25.85/6.88倍。这些仅证明局部优化。真实全链路须比较同输入/源码旧新存储冷暖运行，不能与旧615.57s诊断直接相除。
+
+## 完成矩阵
+
+| 项目 | 当前判定 | 证据及边界 |
+| --- | --- | --- |
+| GO_ARCHITECTURE | IMPLEMENTED_TESTED | 域/证据/事实/独立策略/应用/端口/基础设施/CLI HTTP；依赖测试，core仅兼容。 |
+| R1_PARITY | FIXTURE_PASS_REAL_PENDING | 完整规则/背景，14例差分；显式RESEARCH_ONLY。 |
+| V2_COMPATIBILITY | FIXTURE_PASS_REAL_PENDING | V2默认身份及独立状态/排序；路由范围见HTTP_COMPATIBILITY。 |
+| INPUT_EVIDENCE_CONTRACT | TESTED | 原字节先验、投影另记、四时钟/父源/修订/PARTIAL/重建用途、bar身份绑定。 |
+| DATABASE_SCHEMA | IMPLEMENTED_TESTED_REAL_PARTIAL | 主/应用/bundle/批次证据投影版本约束、完整校验实现及查询计划；真实扩展回填尚未运行。 |
+| REAL_DATA_MIGRATION | BLOCKED_MIGRATION_BUDGET | 真实全量搬迁完成；verify超时，未publish。 |
+| NEW_DB_INDEPENDENT_OPERATION | BLOCKED_UNPUBLISHED_DB | 隔离拒绝旧库/Python已证明，业务闭环未运行。 |
+| INCREMENTAL_AND_RECOVERY | FIXTURE_PASS_REAL_PARTIAL | 晚到修订/可变任务fixture通过；真实SIGTERM和checkpoint恢复搬迁通过，真实增量未执行。 |
+| ISOLATED_CUTOVER_ROLLBACK | FIXTURE_PASS_REAL_BLOCKED | 单写者、备份、变更导出fixture；真实演练因迁移预算未执行。 |
+| DIFFERENTIAL_TESTS | FIXTURE_PASS_REAL_BLOCKED | 跨语言/存储/缓存/binding fixture；真实全池未运行。 |
+| REAL_SCALE_RUN | BLOCKED_UNPUBLISHED_DB | 0 / 6次；不把旧diagnostic或已有Python结果改名为新Go正式结果。 |
+| PERFORMANCE | PARTIAL | 局部算法/索引有实测，全链路冷暖待运行。 |
+| CROSS_PLATFORM | MACOS_TESTED_WINDOWS_CROSS_COMPILED | 最终源码Windows amd64交叉编译通过；Windows原生运行未验证。 |
+| PRODUCTION_ACTIVATION | NOT_ACTIVATED_EXPECTED | 不切换生产服务、路径、默认策略或外部调度。 |
+
+未执行Qlib训练、全仓Python测试、全历史回测或投资有效性验证。旧执行/训练与SDK保留Python路径；R1/V2规则、新库读写、公共事实不依赖Python子进程。参数尚未验证，`MARKET_EDGE=NOT_ESTABLISHED`。

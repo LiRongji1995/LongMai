@@ -1,3 +1,13 @@
+# StockFish Go / SQLite V2 隔离交付（2026-10-02）
+
+本轮在既有 `stock-fish-go/` 重建模块化单体，统一入口 `stockfish`；原生 R1 与当前主动 V2 独立消费公共事实。V2 仍为默认，R1 显式选择且保持 RESEARCH_ONLY。SQLite V2 是隔离目标库，真实搬迁已完成但完整验证耗尽7200s预算，尚未发布或承载正式研究。生产 Python 服务、旧数据库路径、调度、Qlib wheel 和模型均未切换。
+
+构建、只读旧适配、新输入导入、研究、任务/取消、保存结果查询及完整性验证见 [Go 运行说明](stock-fish-go/README.md)；数据库映射见 [迁移说明](stock-fish-go/MIGRATION.md)，可执行隔离 preflight/cutover/export/rollback/restore 见 [恢复说明](stock-fish-go/ISOLATED_LIFECYCLE.md)。真实迁移与独立运行的实测证据、预算和未验证范围统一登记在 [验收记录](stock-fish-go/VALIDATION.md)。
+
+正式服务激活仍需另行授权。本轮源码推送不修改生产进程或默认数据路径；不能运行旧管理脚本来假设切换已完成。APFS 恢复克隆仅适用于本任务的隔离路径和单写者租约，原生产数据快照仍使用 SQLite online backup。
+
+---
+
 # Mac 首次采集预算（2026-10-01）
 冷启动可设置 `STOCKFISH_CAPTURE_FAST_DECISION=false`，跳过采集过程中的提前 NOT_READY 判定，避免在大量历史数据补齐前重复构造全量内存输入。默认 `true`；仅接受 true/false，显式 capture 参数优先。此设置不跳过采集结束后的完整 readiness 或正式荐股发布校验，报告记录 `fast_decision_enabled`。
 
