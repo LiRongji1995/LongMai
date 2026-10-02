@@ -4,7 +4,7 @@ from copy import deepcopy
 from decimal import Decimal
 import math
 
-CONTRACT = 'R1_FACT_SELECTION_COVERAGE_V2'
+CONTRACT = 'R1_FACT_SELECTION_COVERAGE_V3'
 
 
 def conjunction(states):
@@ -36,15 +36,26 @@ def evaluability(row):
         policy=conjunction(conditions.get(k,{}).get('status','UNKNOWN') for k in (*keys,'market_compatibility','same_theme_context','critical_counterevidence'))
         background={k:conditions.get(k,{}) for k in ('sector_context','capital_linkage')}
     missing=[];background_details=[]
-    def scan(value,path):
+    def gap(path,kind,value):
+        missing.append(path);background_details.append(dict(field=path,gap_type=kind,reason_codes=value.get('reason_codes',[])))
+    def scan(value,path,inherited_source=False):
         if isinstance(value,dict):
-            if value.get('status')=='UNKNOWN' or value.get('ecosystem_state')=='UNKNOWN':
-                missing.append(path);background_details.append(dict(field=path,reason_codes=value.get('reason_codes',[])))
+            if value.get('applicable') is False or value.get('status') in ('NOT_APPLICABLE','N/A'):return
+            source=inherited_source or bool(value.get('source_refs')) or bool(value.get('evidence_refs'))
+            state=value.get('status',value.get('ecosystem_state'))
+            if state in ('UNKNOWN','UNAVAILABLE','NOT_QUERIED','INCOMPLETE','MISSING'):
+                gap(path,str(state),value)
+            elif value.get('query_complete') is False:gap(path,'QUERY_INCOMPLETE',value)
+            elif value.get('source_resolved') is False or (value.get('source_required') is True and not source):gap(path,'SOURCE_UNRESOLVED',value)
             for key,child in value.items():
-                if isinstance(child,(dict,list)):scan(child,path+':'+key)
+                if key in ('reason_codes','warnings','counterevidence','source_refs','evidence_refs'):continue
+                if key in ('records','sector_candidates','funds_candidates') and child==[]:
+                    if not (value.get('query_complete') is True and source):gap(path+':'+key,'EMPTY_WITHOUT_COMPLETE_QUERY_EVIDENCE',value)
+                elif isinstance(child,(dict,list)):scan(child,path+':'+key,source)
         elif isinstance(value,list):
-            if not value:missing.append(path);background_details.append(dict(field=path,reason_codes=['NO_BACKGROUND_RECORD']))
-            for index,child in enumerate(value):scan(child,path+':'+str(index))
+            for index,child in enumerate(value):scan(child,path+':'+str(index),inherited_source)
+    for field,value in background.items():
+        if value is None or value=={}:gap('background:'+field,'DATA_NOT_OBTAINED',{})
     scan(background,'background')
     return dict(contract=CONTRACT,core_facts_evaluable=core!='UNKNOWN',core_truth=core,
         selection_decidable=policy!='UNKNOWN',selection_truth=policy,
@@ -127,3 +138,45 @@ def effective_spec(protocol, cost=None):
         spec['cost_scenario']=deepcopy(cost)
     spec.update(contract='R1_EFFECTIVE_EXECUTION_SPEC_V2',theme_unknown_policy='DISCLOSED_KNOWN_THEME_ONLY_CAP',order_construction='PREDECLARED_MAX_LEGAL_BUY_PRICE_WHOLE_LOT',same_open_sale_reuse=False,leverage=False)
     return spec
+
+
+def validated_quote(record, purpose, *, instrument_id=None, session=None, basis=None):
+    """R1_QUOTE_EVALUATION_V3. Validate the exact fields consumed, no repair.
+
+    PARTIAL/undeclared quality proves only the requested field, never a full bar.
+    All provided OHLC fields must nevertheless be internally consistent.
+    """
+    if not isinstance(record,dict):raise ValueError('QUOTE_MISSING')
+    if record.get('quality') not in (None,'VALID','PARTIAL'):raise ValueError('QUOTE_QUALITY_INVALID')
+    for key,expected in (('instrument_id',instrument_id),('session',session),('basis',basis)):
+        if expected is not None and record.get(key,expected)!=expected:raise ValueError('QUOTE_'+key.upper()+'_CONFLICT')
+    if record.get('basis') not in (None,'RAW_CNY','TEST_FIXTURE_NO_ACTION'):raise ValueError('QUOTE_BASIS_UNSUPPORTED')
+    if record.get('price_unit','CNY')!='CNY':raise ValueError('QUOTE_PRICE_UNIT_UNSUPPORTED')
+    out=deepcopy(record)
+    for key in ('open','high','low','close','price','limit_up','limit_down','volume_shares','amount_cny','tick_size','comparable_open','comparable_high','comparable_low','comparable_close'):
+        value=record.get(key)
+        if value is None:continue
+        if isinstance(value,bool) or not isinstance(value,(str,int,float,Decimal)):raise ValueError('QUOTE_NUMERIC_TYPE:'+key)
+        try:number=Decimal(str(value))
+        except Exception as exc:raise ValueError('QUOTE_NUMERIC_TYPE:'+key) from exc
+        if not number.is_finite() or (number<0 if key in ('volume_shares','amount_cny') else number<=0):raise ValueError('QUOTE_NUMERIC_RANGE:'+key)
+        out[key]=str(number)
+    if any(record.get('comparable_'+k) is not None for k in ('open','high','low','close')) and not record.get('comparable_basis'):raise ValueError('QUOTE_COMPARABLE_BASIS_MISSING')
+    for prefix in ('','comparable_'):
+        low=out.get(prefix+'low'); high=out.get(prefix+'high')
+        if low is not None and high is not None and Decimal(low)>Decimal(high):raise ValueError('QUOTE_OHLC_CONTRADICTION')
+        for key in ('open','close'):
+            value=out.get(prefix+key)
+            if value is not None and ((low is not None and Decimal(value)<Decimal(low)) or (high is not None and Decimal(value)>Decimal(high))):raise ValueError('QUOTE_OHLC_CONTRADICTION')
+    required={'PROVIDED':(),'OPEN':('open','limit_up','limit_down'),'CLOSE':('close',),'BUDGET':('price',),'DAILY':('open','high','low','close')}[purpose]
+    if any(out.get(k) is None for k in required):raise ValueError('QUOTE_REQUIRED_FIELD_MISSING:'+purpose)
+    if out.get('price') is not None and out.get('close') is not None and Decimal(out['price'])!=Decimal(out['close']):raise ValueError('QUOTE_MARK_CONFLICT')
+    if out.get('limit_down') is not None and out.get('limit_up') is not None and Decimal(out['limit_down'])>Decimal(out['limit_up']):raise ValueError('QUOTE_LIMIT_CONFLICT')
+    out['field_evidence_level']='VALIDATED_'+purpose+'_ONLY' if purpose!='DAILY' else 'VALIDATED_DAILY'
+    out['quality_declaration']=record.get('quality') or 'UNDECLARED'
+    return out
+
+
+def quote_usable(record,purpose,**scope):
+    try:return validated_quote(record,purpose,**scope)
+    except ValueError:return None

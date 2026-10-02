@@ -12,6 +12,7 @@ from pathlib import Path
 from urllib.parse import urlparse
 from .contracts import DailyBar, SecurityRecord, SourceReceipt, digest
 from .visibility import EvidenceResolver
+from .research_r1_contracts import validated_quote
 from .execution_research_r1 import deadline, stamp
 
 
@@ -88,15 +89,24 @@ def adapt_execution(spec, *, base):
                     if limit and limit.get('rule_id')==rule.get('rule_id') and limit.get('limit_up') is not None:
                         tape['orders'][session][iid]=dict(limit,limit_price=limit['limit_up'],order_type='PREDECLARED_SIMULATION_ORDER')
                 if bar:
-                    parsed=DailyBar.model_validate(bar)
+                    try:
+                        checked=validated_quote(bar,'PROVIDED',instrument_id=iid,session=session,basis='RAW_CNY')
+                        parsed=DailyBar.model_validate({k:v for k,v in checked.items() if k in DailyBar.model_fields})
+                        bar=dict(checked,**{k:v for k,v in parsed.model_dump(mode='json').items() if k in checked})
+                    except ValueError as exc:
+                        diagnostics.append(dict(kind='BAR',instrument_id=iid,session=session,reasons=[str(exc)]))
+                        bar=dict(bar,quality='INVALID')
+                        parsed=None
                     action_complete=bool(action and action.get('from_session','9999')<=sessions[0] and action.get('through_session','0000')>=session and action.get('complete') is True and isinstance(action.get('events'),list))
                     no_action=(action.get('events')==[]) if action_complete else None
                     tape['bars'][session][iid]=dict(bar,basis='RAW_CNY',suspended=security.get('suspended') if security else None,
                         corporate_actions_complete=action_complete,no_corporate_action_since_signal=no_action)
                     if not no_action:diagnostics.append(dict(kind='ACTION_COVERAGE',instrument_id=iid,session=session,reasons=['UNSUPPORTED_CORPORATE_ACTION' if action_complete else 'COMPLETE_NO_ACTION_EVIDENCE_MISSING']))
-                    if parsed.limit_verified and (parsed.limit_applicable is not True or not rule or parsed.rule_id!=rule.get('rule_id')):tape['bars'][session][iid]['limit_verified']=False
+                    if parsed and parsed.limit_verified and (parsed.limit_applicable is not True or not rule or parsed.rule_id!=rule.get('rule_id')):tape['bars'][session][iid]['limit_verified']=False
                 if index:
                     previous=sessions[index-1];mark=resolve('BAR',deadline(session),iid=iid,session=previous)
+                    try:mark=validated_quote(mark,'CLOSE',instrument_id=iid,session=previous,basis='RAW_CNY')
+                    except ValueError:mark=None
                     if mark and mark.get('close') is not None:
                         prior_action=resolve('ACTION_COVERAGE',deadline(session),iid=iid,session=previous)
                         prior_complete=bool(prior_action and prior_action.get('complete') is True and isinstance(prior_action.get('events'),list) and prior_action.get('from_session','9999')<=sessions[0] and prior_action.get('through_session','0000')>=previous)

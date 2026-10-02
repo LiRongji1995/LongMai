@@ -14,7 +14,7 @@ from .research_r1_contracts import coverage
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / 'config/stage_aware_research_r1.json'
-SPEC_PATH = ROOT / 'docs/R1_REPAIR_SPEC_V2.md'
+SPEC_PATH = ROOT / 'docs/R1_REPAIR_SPEC_V3.md'
 
 
 def config():

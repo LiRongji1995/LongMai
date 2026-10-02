@@ -42,8 +42,12 @@ def load_input(path, *, history_db=None):
         store = ReadOnlySQLiteStore(history_db)
         from .research_r1_storage import BudgetHistory
         owner = BudgetHistory(store)
-        manifest = owner.manifest(bundle.history_artifact_ref, bundle.history_artifact_hash)
-        bind_history(bundle, owner)
+        try:
+            owner.manifest(bundle.history_artifact_ref, bundle.history_artifact_hash)
+            bind_history(bundle, owner)
+        except BaseException:
+            owner.close()
+            raise
     return payload, bundle
 
 
@@ -52,12 +56,16 @@ def freeze_manifest(payloads, groups, overrides=None):
     from .research_r1_contracts import effective_spec
     effective = effective_spec(spec)
     if overrides:
-        if set(overrides)-{'initial_nav_cny','single_name_cap','theme_cap','entry_offset','exit_offset','holding_session_intervals','slippage_bps_per_side','primary_slippage_bps','order_cutoff','seed','block_length_sessions','bootstrap_repetitions'}:
+        if set(overrides)-{'account_evaluation_end','initial_nav_cny','single_name_cap','theme_cap','entry_offset','exit_offset','holding_session_intervals','slippage_bps_per_side','primary_slippage_bps','order_cutoff','seed','block_length_sessions','bootstrap_repetitions'}:
             raise ValueError('UNSUPPORTED_EXECUTION_OVERRIDE')
-        spec.update(overrides)
+        spec.update({k:v for k,v in overrides.items() if k!='account_evaluation_end'})
         effective=effective_spec(spec)
-    from .research_r1_statistics import preregistered_family
-    return dict(comparison_family=preregistered_family(spec),contract='R1_EXPERIMENT_MANIFEST_V2', effective_spec=effective, effective_spec_hash=digest(effective), created_at=datetime.now(timezone.utc).isoformat(),
+    from .research_r1_statistics import preregistered_family, freeze_windows
+    tapes=[p.get('_window_tape',p.get('execution_tape')) for p in payloads]
+    tape=tapes[0] if tapes and all(t==tapes[0] for t in tapes) else None
+    windows=freeze_windows([p['input']['observation_date'] for p in payloads],tape,effective['exit_offset'],registered_end=(overrides or {}).get('account_evaluation_end'))
+    windows.pop('contract')
+    return dict(**windows,contract='R1_EXPERIMENT_MANIFEST_V3',comparison_family=preregistered_family(spec),evaluation_contract='R1_EVALUATION_V3', effective_spec=effective, effective_spec_hash=digest(effective), created_at=datetime.now(timezone.utc).isoformat(),
         **r1.identity(), protocol=spec, effective_execution_specs={digest(effective_spec(spec,p['_cost_scenario'])):effective_spec(spec,p['_cost_scenario']) for p in payloads if p.get('_cost_scenario') is not None}, groups={g: dict(definition=spec['groups'][g], options=r1.group_options(g),
             hash=digest(r1.group_options(g))) for g in groups},
         inputs=[dict(hash=p.get('_input_hash') or digest(p['input']), cutoff=p['cutoff'], observation_date=p['input']['observation_date'],
@@ -149,7 +157,7 @@ def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=N
         if resolved_tape and resolved_tape.get('coverage_type')!=bundle.coverage_type:raise ValueError('MIXED_EXECUTION_AND_SIGNAL_EVIDENCE_TYPES')
         if (start is None or day>=str(start)) and (end is None or day<=str(end)):
             descriptors.append(dict(path=str(path),input={'observation_date':day},cutoff=payload['cutoff'],
-                _coverage_type=bundle.coverage_type,_input_hash=digest(payload['input']),_envelope_hash=digest(payload),_cost_scenario=resolved_tape.get('cost_scenario') if resolved_tape else None,
+                _window_tape={k:resolved_tape[k] for k in ('sessions','as_of')} if resolved_tape else None,_coverage_type=bundle.coverage_type,_input_hash=digest(payload['input']),_envelope_hash=digest(payload),_cost_scenario=resolved_tape.get('cost_scenario') if resolved_tape else None,
                 _execution_hash=digest({'tape':payload.get('execution_tape'),'evidence':payload.get('execution_evidence')}),publication=payload.get('publication')))
         if bundle._history_store is not None:bundle._history_store.close()
         del payload,bundle
@@ -211,15 +219,17 @@ def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=N
     for group,signals in execution_signals.items():
         execution[group]={};signal_execution[group]={}
         for bps in scenarios:
-            value=simulate(signals,tape,slippage_bps=bps,spec=manifest['effective_spec']) if tape and mode!='diagnose' else dict(status='UNAVAILABLE',reason='EXECUTION_NOT_REQUESTED_OR_SHARED_EVIDENCE_UNAVAILABLE',signal_count=len(signals),records=[dict(s,status='UNAVAILABLE') for s in signals])
+            value=simulate(signals,tape,slippage_bps=bps,spec=manifest['effective_spec'],evaluation_window=manifest['account_evaluation_window']) if tape and mode!='diagnose' else dict(status='UNAVAILABLE',reason='EXECUTION_NOT_REQUESTED_OR_SHARED_EVIDENCE_UNAVAILABLE',signal_count=len(signals),records=[dict(s,status='UNAVAILABLE') for s in signals])
             execution[group][str(bps)]=value
-            records=[simulate([signal],tape,slippage_bps=bps,spec=manifest['effective_spec'])['records'][0] for signal in signals] if tape and mode!='diagnose' else [dict(s,status='UNAVAILABLE') for s in signals]
+            records=[simulate([signal],tape,slippage_bps=bps,spec=manifest['effective_spec'],evaluation_window=manifest['account_evaluation_window'])['records'][0] for signal in signals] if tape and mode!='diagnose' else [dict(s,status='UNAVAILABLE') for s in signals]
             values=[rec['net_return'] for rec in records if rec.get('status')=='CLOSED']
             signal_execution[group][str(bps)]=dict(records=records,denominator=len(records),complete=len(values)==len(records),
                 mean_net_return=sum(values)/len(values) if values and len(values)==len(records) else None,
                 policy='CONDITIONAL_SELECTED_SIGNALS_INDEPENDENT_HYPOTHETICAL_BUDGET; ZERO_SIGNALS_NA')
             base_group=group.split('__')[0]
-            unknown_dates=[r['observation_date'] for r in results if r['groups'][base_group]['coverage']['selection_evaluation_status']!='EVALUABLE' or ('__' in group and r['groups'][base_group]['reference_coverage'][group.split('__')[1]]['status']!='COMPLETE')]
+            signal_start,signal_end=manifest['signal_window']
+            missing_dates=[d for d in (tape or {}).get('sessions',[]) if signal_start<=d<=signal_end and d not in {r['observation_date'] for r in results}]
+            unknown_dates=missing_dates+[r['observation_date'] for r in results if r['groups'][base_group]['coverage']['selection_evaluation_status']!='EVALUABLE' or ('__' in group and r['groups'][base_group]['reference_coverage'][group.split('__')[1]]['status']!='COMPLETE')]
             value['execution_completion']=value['status']
             value['strategy_evaluation_status']='EVALUABLE' if not unknown_dates and value['status']=='COMPLETE' and value.get('account_return') is not None else 'NOT_EVALUABLE_AS_COMPLETE_STRATEGY'
             signal_execution[group][str(bps)]['selection_evaluation_status']='EVALUABLE' if not unknown_dates else 'OBSERVED_SUBSET_ONLY'
@@ -228,7 +238,7 @@ def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=N
                 value.update(status='INCOMPLETE_SIGNAL_COVERAGE',unevaluable_dates=unknown_dates,account_performance_status='NOT_EVALUABLE_AS_COMPLETE_STRATEGY',account_return=None,max_drawdown=None,mean_net_return=None,median_net_return=None,worst_net_return=None)
     storage=writer.finish()
     statistics=assemble(results,execution,signal_execution,manifest,tape,paired_block_comparisons)
-    report=dict(contract='R1_SHARED_RESULT_V2',signal_execution=signal_execution,manifest_hash=digest(manifest),results=results,selection_comparisons=comparisons,execution=execution,
+    report=dict(contract='R1_SHARED_RESULT_V3',windows={k:manifest[k] for k in ('signal_window','planned_completion_end','account_evaluation_window','evidence_as_of','tail_policy')},signal_execution=signal_execution,manifest_hash=digest(manifest),results=results,selection_comparisons=comparisons,execution=execution,
         execution_adapter=adapter_reports,engineering_status='SEE_R1_REPAIR_RESULT',market_validation_status='INCONCLUSIVE',statistics=statistics,
         storage=dict(**storage,policy='ONE_DATE_CONTEXT_PLUS_COMPACT_SERIES; HASH_VERIFIED_SHARED_DAG'),
         scope_limitations=['No independent holdout registered','No automatic production promotion','V2 retains full-pool dependency-window context; not constant memory'])
@@ -240,7 +250,10 @@ def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=N
     for result in results:
         for group,data in result['groups'].items():
             cov=data['coverage'];lines.append(f"|{result['observation_date']}|{group}|{len(data['selected_ids'])}|{cov['universe_coverage']}|{cov['selection_decidability']}|")
-    lines+=['',f"统计状态：{statistics['status']}；区分账户、共同可判定范围与条件信号。",'完整证据按 detail 引用重建；未知、未成交、未退出保留，合法零候选信号均值为 N/A。']
+    for name,description in statistics['descriptions'].items():
+        if description.get('window'):
+            lines+=['', name+'：'+json.dumps(description['window'],ensure_ascii=False)]
+    lines+=['', '冻结窗口：'+json.dumps(report['windows'],ensure_ascii=False),f"统计状态：{statistics['status']}；区分账户、共同可判定范围与条件信号。",'完整证据按 detail 引用重建；未知、未成交、未退出保留，合法零候选信号均值为 N/A。']
     with (output/'report.md').open('x') as f:f.write('\n'.join(lines)+'\n')
     return dict(run_id=report['run_id'],output=str(output),manifest_hash=digest(manifest),status='SUCCEEDED',statistics_status=statistics['status'],market_validation_status='INCONCLUSIVE')
 
@@ -249,7 +262,7 @@ def summarize_saved(source, output):
     """Read-only saved-result consumer; preserve historical identities."""
     source=Path(source);report=json.loads((source/'result.json').read_text());manifest=json.loads((source/'manifest.json').read_text())
     if report['manifest_hash']!=digest(manifest):raise ValueError('SAVED_MANIFEST_CONFLICT')
-    if report.get('contract')=='R1_SHARED_RESULT_V2':
+    if report.get('contract') in ('R1_SHARED_RESULT_V2','R1_SHARED_RESULT_V3'):
         completion=json.loads((source/'completion.json').read_text())
         if completion!=dict(result_hash=digest(report),manifest_hash=digest(manifest)):raise ValueError('INCOMPLETE_OR_CHANGED_RESULT')
         from .research_r1_storage import verify_shared_report
@@ -257,7 +270,7 @@ def summarize_saved(source, output):
     output=Path(output).resolve();repo=r1.ROOT.parent
     if output.is_relative_to(repo) and subprocess.run(['git','check-ignore','-q',str(output)],cwd=repo,capture_output=True).returncode:raise ValueError('PRIVATE_IGNORED_OUTPUT_REQUIRED')
     output.mkdir(parents=True,exist_ok=False)
-    summary=dict(contract='R1_SAVED_COMPARISON_SUMMARY_V2',run_id=report['run_id'],manifest_hash=report['manifest_hash'],statistics=report['statistics'],selection_comparisons=report['selection_comparisons'],market_validation_status='INCONCLUSIVE')
+    summary=dict(contract='R1_SAVED_COMPARISON_SUMMARY_V2',run_id=report['run_id'],manifest_hash=report['manifest_hash'],windows=report.get('windows'),statistics=report['statistics'],selection_comparisons=report['selection_comparisons'],market_validation_status='INCONCLUSIVE')
     write_new(output/'summary.json',summary)
     return dict(status='SUCCEEDED',output=str(output),run_id=report['run_id'])
 
@@ -274,7 +287,7 @@ def paired_block_comparisons(series, *, seed=20261001, block_length=20, repetiti
     import math
     effects = {}
     for name, pairs in sorted(series.items()):
-        if len(pairs) < 2*block_length or any(x.get('difference') is None or x.get('exit_delay', 0) >= block_length for x in pairs):
+        if len(pairs) < 2*block_length or any(x.get('inference_eligible') is False or x.get('difference') is None or x.get('exit_delay', 0) >= block_length for x in pairs):
             effects[name] = dict(status='UNAVAILABLE', reason='INSUFFICIENT_BLOCKS_MISSING_OUTCOMES_OR_LONG_EXIT_DELAY', n=len(pairs))
             continue
         if any(type(x.get('session_index')) is not int or not math.isfinite(float(x['difference'])) for x in pairs):

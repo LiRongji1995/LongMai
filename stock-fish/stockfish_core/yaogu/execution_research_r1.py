@@ -12,6 +12,7 @@ from statistics import median
 from zoneinfo import ZoneInfo
 
 from .contracts import digest
+from .research_r1_contracts import quote_usable
 
 D = lambda x: Decimal(str(x))
 SH = ZoneInfo('Asia/Shanghai')
@@ -94,6 +95,8 @@ def quantity(budget, order, rule, cost):
 def fill(bar, side, rule, session, as_of, slippage, *, limit=None):
     if not bar or not visible(bar, as_of):
         return 'UNAVAILABLE', None
+    bar=quote_usable(bar,'OPEN',session=session)
+    if bar is None:return 'INVALID_OPEN_EVIDENCE', None
     if not dated_rule(rule, session, deadline(session)):
         return 'RULE_UNAVAILABLE', None
     if bar.get('suspended') is True:
@@ -120,7 +123,7 @@ def fill(bar, side, rule, session, as_of, slippage, *, limit=None):
     return 'ASSUMED_OPEN_FILL', price
 
 
-def simulate(signals, tape, *, slippage_bps=10, spec=None):
+def simulate(signals, tape, *, slippage_bps=10, spec=None, evaluation_window=None):
     """One account per group/scenario; preserve every signal, blocked entry and exit.
 
     Required tape records use explicit timestamps/source references. At present
@@ -147,7 +150,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
     reserved_uncertain = D(0)
     indexed = {}
     for signal in signals:
-        record = dict(signal, status='UNAVAILABLE', entry_session=None, planned_exit_session=None)
+        record = dict(signal, trade_id=digest(signal), status='UNAVAILABLE', entry_session=None, planned_exit_session=None)
         records.append(record)
         if signal['signal_session'] not in sessions:
             record['reason'] = 'SIGNAL_CALENDAR_MISSING'
@@ -170,6 +173,9 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
         indexed.setdefault(entry, []).append(record)
     slip = D(slippage_bps) / D(10000)
     for session in sessions:
+        if evaluation_window:
+            if session<evaluation_window[0]:continue
+            if evaluation_window[1] is None or session>evaluation_window[1]:break
         if datetime.combine(datetime.fromisoformat(session).date(), time(9, 30), SH) > as_of:
             break
         cutoff = deadline(session)
@@ -177,7 +183,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
         valuation_ok = reserved_uncertain == 0
         values = {}
         for iid, pos in holdings.items():
-            quote = tape.get('valuations', {}).get(session, {}).get(iid)
+            quote = quote_usable(tape.get('valuations', {}).get(session, {}).get(iid),'BUDGET',instrument_id=iid,basis=pos['basis'])
             if not quote or (pos['basis']=='RAW_CNY' and quote.get('no_corporate_action_since_signal') is not True) or not visible(quote, cutoff) or quote.get('session') != sessions[sessions.index(session)-1] or quote.get('basis') != pos['basis']:
                 valuation_ok = False
             else:
@@ -218,6 +224,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
             if session < rec['planned_exit_session']:
                 continue
             bar = tape.get('bars', {}).get(session, {}).get(iid)
+            bar = quote_usable(bar,'OPEN',instrument_id=iid,session=session)
             rule = tape.get('rules', {}).get(session, {}).get(iid, {})
             state, price = fill(bar, 'SELL', rule, session, as_of, slip)
             if not dated_rule(cost, session, cutoff):
@@ -238,6 +245,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
             del holdings[iid]
         for iid, rec, qty, order, rule, budget in prepared:
             bar = tape.get('bars', {}).get(session, {}).get(iid)
+            bar = quote_usable(bar,'OPEN',instrument_id=iid,session=session)
             state, price = fill(bar, 'BUY', rule, session, as_of, slip, limit=D(order['limit_price']))
             if price is not None and (bar.get('basis') is None or bar.get('corporate_actions_complete') is not True or bar.get('no_corporate_action_since_signal') is not True):
                 state, price = 'CORPORATE_ACTION_RETURN_UNAVAILABLE', None
@@ -260,7 +268,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
         # Only verified, current-session closing marks; unavailable NAV is never imputed.
         marks = []
         for iid, pos in holdings.items():
-            bar = tape.get('bars', {}).get(session, {}).get(iid)
+            bar = quote_usable(tape.get('bars', {}).get(session, {}).get(iid),'CLOSE',instrument_id=iid,session=session,basis=pos['basis'])
             if (not bar or not visible(bar, as_of) or bar.get('close') is None or bar.get('basis') != pos['basis']
                     or bar.get('no_corporate_action_since_signal') is not True):
                 marks = None
@@ -274,7 +282,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
     complete = all(rec['status'] in ('CLOSED', 'ENTRY_NOT_FILLED', 'NO_WHOLE_LOT_BUDGET', 'ALREADY_HELD_OR_DUPLICATE_NO_EXTENSION') for rec in records)
     all_returns = len(closed) == len(records)
     navs = [D(point['nav']) for point in curve if point['nav'] is not None]
-    full_nav = len(navs) == len(curve)
+    full_nav = bool(curve) and len(navs) == len(curve) and (not evaluation_window or curve[-1]['session']==evaluation_window[1])
     peak = D(spec['initial_nav_cny'])
     drawdown = D(0)
     for nav_value in navs:
@@ -284,7 +292,7 @@ def simulate(signals, tape, *, slippage_bps=10, spec=None):
     return dict(contract='EXECUTION_RESEARCH_R1', status='COMPLETE' if complete else 'INCOMPLETE',
         coverage_type=tape['coverage_type'], account_type='HYPOTHETICAL', initial_nav_cny=spec['initial_nav_cny'],
         effective_spec=spec, spec_hash=digest(spec), slippage_bps_per_side=slippage_bps, scenario_hash=digest(dict(spec=spec,slippage_bps=slippage_bps)),
-        tape_hash=digest(tape), signal_count=len(records), records=records, account_curve=curve,
+        account_start_session=curve[0]['session'] if curve else None,evaluation_window=evaluation_window, evidence_as_of=tape['as_of'],tape_hash=digest(tape), signal_count=len(records), records=records, account_curve=curve,
         status_counts=dict(Counter(r['status'] for r in records)), open_positions=len(holdings),
         account_return=float(navs[-1]/D(spec['initial_nav_cny'])-1) if navs and full_nav and complete else None,
         max_drawdown=float(drawdown) if navs and full_nav and complete else None,

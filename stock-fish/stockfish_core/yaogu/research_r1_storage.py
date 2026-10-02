@@ -7,6 +7,29 @@ from .contracts import digest
 from .history_artifacts import HistoryArtifactStore
 
 
+def sample_memory():
+    """Process RSS in bytes; unavailable sampling is never reported as zero."""
+    import sys
+    base=dict(unit='bytes',scope='PROCESS',status='AVAILABLE')
+    try:
+        if sys.platform=='win32':
+            import ctypes
+            from ctypes import wintypes
+            class Counters(ctypes.Structure):
+                _fields_=[('cb',wintypes.DWORD),('PageFaultCount',wintypes.DWORD)]+[(key,ctypes.c_size_t) for key in ('PeakWorkingSetSize','WorkingSetSize','QuotaPeakPagedPoolUsage','QuotaPagedPoolUsage','QuotaPeakNonPagedPoolUsage','QuotaNonPagedPoolUsage','PagefileUsage','PeakPagefileUsage')]
+            counters=Counters();counters.cb=ctypes.sizeof(counters)
+            kernel=ctypes.WinDLL('kernel32',use_last_error=True);psapi=ctypes.WinDLL('psapi',use_last_error=True)
+            kernel.GetCurrentProcess.restype=wintypes.HANDLE
+            psapi.GetProcessMemoryInfo.argtypes=[wintypes.HANDLE,ctypes.POINTER(Counters),wintypes.DWORD]
+            if not psapi.GetProcessMemoryInfo(kernel.GetCurrentProcess(),ctypes.byref(counters),counters.cb):raise OSError('GetProcessMemoryInfo failed')
+            return dict(base,method='WINDOWS_GET_PROCESS_MEMORY_INFO',current=counters.WorkingSetSize,peak=counters.PeakWorkingSetSize)
+        import resource
+        peak=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024)
+        return dict(base,method='UNIX_GETRUSAGE',current=None,peak=peak)
+    except (ImportError,OSError,AttributeError):
+        return dict(base,status='MEMORY_MEASUREMENT_UNAVAILABLE',method='UNAVAILABLE',current=None,peak=None)
+
+
 class BudgetHistory(HistoryArtifactStore):
     """Bound requested window, not total immutable archive size.
 
@@ -15,6 +38,7 @@ class BudgetHistory(HistoryArtifactStore):
     """
     def __init__(self, store, *, seconds=300, byte_budget=2*1024**3):
         self.metrics=dict(payload_rows_read=0,payload_bytes_read=0,partition_members_verified=0,verification='PARTITION_INDEX_AND_EACH_CONSUMED_PAYLOAD')
+        self.metrics.update(memory_measurement=sample_memory(),memory_budget_bytes=1024**3,memory_policy='ENFORCE_WHEN_AVAILABLE_ELSE_BYTE_TIME_BUDGETS')
         self.started=time.monotonic();self.seconds=seconds;self.byte_budget=byte_budget
         self._read_context=store.transaction(write=False)
         self._read_connection=self._read_context.__enter__()
@@ -23,18 +47,23 @@ class BudgetHistory(HistoryArtifactStore):
         class Cursor:
             def __init__(self,cursor):self.cursor=cursor
             def __iter__(self):
-                for row in self.cursor:
-                    if time.monotonic()-owner.started>owner.seconds:raise ValueError('RECOVERABLE_HISTORY_TIME_BUDGET_EXCEEDED')
-                    if 'payload' in row.keys() and row['payload'] is not None:
-                        owner.metrics['payload_rows_read']+=1
-                        if owner.metrics['payload_rows_read'] % 1024 == 0:
-                            import resource,sys
-                            rss=resource.getrusage(resource.RUSAGE_SELF).ru_maxrss*(1 if sys.platform=='darwin' else 1024)
-                            owner.metrics['process_peak_rss_bytes']=rss
-                            if rss>1024**3:raise ValueError('RECOVERABLE_RESEARCH_RSS_BUDGET_EXCEEDED')
-                        owner.metrics['payload_bytes_read']+=len(row['payload'].encode())
-                        if owner.metrics['payload_bytes_read']>owner.byte_budget:raise ValueError('RECOVERABLE_HISTORY_BYTE_BUDGET_EXCEEDED')
-                    yield row
+                try:
+                    for row in self.cursor:
+                        if time.monotonic()-owner.started>owner.seconds:raise ValueError('RECOVERABLE_HISTORY_TIME_BUDGET_EXCEEDED')
+                        if 'payload' in row.keys() and row['payload'] is not None:
+                            owner.metrics['payload_rows_read']+=1
+                            if owner.metrics['payload_rows_read'] % 1024 == 0:
+                                measurement=sample_memory();owner.metrics['memory_measurement']=measurement
+                                rss=measurement['peak']
+                                if rss is not None:
+                                    owner.metrics['process_peak_rss_bytes']=rss
+                                    if rss>owner.metrics['memory_budget_bytes']:raise ValueError('RECOVERABLE_RESEARCH_RSS_BUDGET_EXCEEDED')
+                            owner.metrics['payload_bytes_read']+=len(row['payload'].encode())
+                            if owner.metrics['payload_bytes_read']>owner.byte_budget:raise ValueError('RECOVERABLE_HISTORY_BYTE_BUDGET_EXCEEDED')
+                        yield row
+                except Exception:
+                    owner.close()
+                    raise
             def __getattr__(self,key):return getattr(self.cursor,key)
         class Connection:
             def __init__(self,con):self.con=con
@@ -53,7 +82,10 @@ class BudgetHistory(HistoryArtifactStore):
                     if owner._closed:raise ValueError('HISTORY_SNAPSHOT_CLOSED')
                     yield Connection(owner._read_connection)
                 return transaction()
-        super().__init__(Store())
+        try:super().__init__(Store())
+        except BaseException:
+            self.close()
+            raise
 
     def close(self):
         if not self._closed:
