@@ -24,3 +24,7 @@ StockFish 在原快照基础上增加 Windows 原生 CSI300 推理入口、可�
 - Python 及其他依赖各自适用其许可证。`requirements-windows.lock.txt` 是已安装版本快照，不替代依赖项目的版权和许可文本。
 
 模型和行情的下载、使用或再分发应遵循其发布源对应条款；本文件不为第三方资产另行授予权利。
+
+## 独立 Go R1 迁移模块
+
+`stock-fish-go/` 保留既有 StockFish 规则的迁移来源追踪，不改变上述组件的版权或许可。新增依赖固定为 `modernc.org/sqlite v1.36.3`（BSD-3-Clause）及其锁定传递依赖；版本、官方许可来源和随附许可副本见 [Go 依赖许可清单](stock-fish-go/LICENSES.md)。Go 工具链和本机研究二进制不随源码分发。该模块目前仅提供未完成验收的迁移诊断，不代表生产切换。
