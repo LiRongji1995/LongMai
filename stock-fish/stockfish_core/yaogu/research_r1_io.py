@@ -28,12 +28,19 @@ def write_new(path, payload):
         Path(temporary).unlink(missing_ok=True)
 
 
-def load_input(path, *, history_db=None):
+def _read_input(path):
     path = Path(path)
     if path.stat().st_size > 64 * 1024 * 1024:
         raise ValueError('BOUNDED_EXPORTED_INPUT_REQUIRED_MAX_64MB')
     payload = json.loads(path.read_text())
     bundle = MarketInput.model_validate(payload['input'])
+    return payload, bundle
+
+
+def load_input(path, *, history_db=None, history_seconds=300):
+    from .research_r1_storage import validate_history_seconds
+    validate_history_seconds(history_seconds)
+    payload, bundle = _read_input(path)
     if bundle.history_artifact_ref:
         if history_db is None:
             raise ValueError('EXPLICIT_READ_ONLY_HISTORY_DB_REQUIRED')
@@ -41,7 +48,7 @@ def load_input(path, *, history_db=None):
         from .history_artifacts import HistoryArtifactStore, bind_history
         store = ReadOnlySQLiteStore(history_db)
         from .research_r1_storage import BudgetHistory
-        owner = BudgetHistory(store)
+        owner = BudgetHistory(store, seconds=history_seconds)
         try:
             owner.manifest(bundle.history_artifact_ref, bundle.history_artifact_hash)
             bind_history(bundle, owner)
@@ -139,16 +146,18 @@ def persist_isolated(store, result):
     return run_id
 
 
-def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=None, end=None, history_db=None, mode='run', execution_spec=None):
+def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=None, end=None, history_db=None, mode='run', execution_spec=None, history_seconds=300):
     from .research_r1_contracts import effective_spec
     from .research_r1_storage import SharedWriter
     from .research_r1_statistics import assemble
+    from .research_r1_storage import validate_history_seconds
+    validate_history_seconds(history_seconds)
     groups=list(groups or r1.config()['groups'])
     for group in groups:r1.group_options(group)
     # Retain descriptors only. No all-date Pydantic inputs or twelve full results.
     descriptors=[]
     for path in input_paths:
-        payload,bundle=load_input(path,history_db=history_db)
+        payload,bundle=_read_input(path)
         day=str(bundle.observation_date)
         resolved_tape=payload.get('execution_tape')
         if payload.get('execution_evidence'):
@@ -177,7 +186,7 @@ def run_local(input_paths, output, *, groups=None, frozen_manifest=None, start=N
     writer=SharedWriter(output,write_new)
     results=[];comparisons=[];execution_signals={};tape=None; tape_identity=None; tape_consistent=True;adapter_reports=[]
     for descriptor in sorted(descriptors,key=lambda x:x['input']['observation_date']):
-        payload,bundle=load_input(descriptor['path'],history_db=history_db)
+        payload,bundle=load_input(descriptor['path'],history_db=history_db,history_seconds=history_seconds)
         if digest(payload)!=descriptor['_envelope_hash']:raise ValueError('INPUT_CHANGED_DURING_RESEARCH')
         result=r1.run_research(bundle,cutoff=payload['cutoff'],groups=groups,include_diagnostics=True)
         result.update(signal_evidence_type='TEST_FIXTURE' if bundle.coverage_type=='TEST_FIXTURE' else 'RECONSTRUCTED_HISTORICAL',

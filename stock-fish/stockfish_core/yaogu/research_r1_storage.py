@@ -30,6 +30,13 @@ def sample_memory():
         return dict(base,status='MEMORY_MEASUREMENT_UNAVAILABLE',method='UNAVAILABLE',current=None,peak=None)
 
 
+def validate_history_seconds(seconds):
+    """Explicit offline runtime allowance; never disable byte/RSS/integrity gates."""
+    import math
+    if isinstance(seconds, bool) or not isinstance(seconds, (int, float)) or not math.isfinite(seconds) or not 0 < seconds <= 7200:
+        raise ValueError('INVALID_RESEARCH_HISTORY_TIME_BUDGET')
+
+
 class BudgetHistory(HistoryArtifactStore):
     """Bound requested window, not total immutable archive size.
 
@@ -37,12 +44,17 @@ class BudgetHistory(HistoryArtifactStore):
     not RSS. Direct preload reads are audited by the read-only connection proxy.
     """
     def __init__(self, store, *, seconds=300, byte_budget=2*1024**3):
-        self.metrics=dict(payload_rows_read=0,payload_bytes_read=0,partition_members_verified=0,verification='PARTITION_INDEX_AND_EACH_CONSUMED_PAYLOAD')
+        validate_history_seconds(seconds)
+        self.metrics=dict(time_budget_seconds=seconds,payload_rows_read=0,payload_bytes_read=0,partition_members_verified=0,verification='PARTITION_INDEX_AND_EACH_CONSUMED_PAYLOAD')
         self.metrics.update(memory_measurement=sample_memory(),memory_budget_bytes=1024**3,memory_policy='ENFORCE_WHEN_AVAILABLE_ELSE_BYTE_TIME_BUDGETS')
         self.started=time.monotonic();self.seconds=seconds;self.byte_budget=byte_budget
+        self._scratch_cleanups=[]
         self._read_context=store.transaction(write=False)
         self._read_connection=self._read_context.__enter__()
         self._closed=False
+        # Connection-local cache only; does not alter the database or its schema.
+        self._read_connection.execute('PRAGMA cache_size=-65536')
+        self.metrics['sqlite_page_cache_budget_bytes']=64*1024**2
         owner=self
         class Cursor:
             def __init__(self,cursor):self.cursor=cursor
@@ -90,6 +102,8 @@ class BudgetHistory(HistoryArtifactStore):
     def close(self):
         if not self._closed:
             self._read_context.__exit__(None,None,None);self._closed=True
+            for cleanup in self._scratch_cleanups:cleanup()
+            self._scratch_cleanups.clear()
 
     def __del__(self):
         if hasattr(self,'_closed'):self.close()
@@ -162,6 +176,55 @@ def expand(root,value):
     return restore(value)
 
 
+class VerifiedWindowCache:
+    """Private, bounded L3 for rows already resolved by InstrumentBars.
+
+    A full-pool sweep larger than the 64 MiB L2 must not re-read and re-resolve
+    every immutable window on each benchmark horizon. This disposable cache
+    belongs to one input/cutoff/read transaction, never to a later research run.
+    """
+    def __init__(self, source, owner, *, max_bytes=256*1024**2):
+        import tempfile
+        self.source=source;self.owner=owner;self.max_bytes=max_bytes
+        self.temporary=tempfile.TemporaryDirectory(prefix='stockfish-r1-verified-windows-')
+        self.root=Path(self.temporary.name);self.entries={};self.bytes=0
+        owner._scratch_cleanups.append(self.temporary.cleanup)
+        owner.metrics.update(verified_window_disk_hits=0,verified_window_disk_bytes=0,
+                             verified_window_disk_budget_bytes=max_bytes)
+
+    def __getattr__(self, name):
+        return getattr(self.source,name)
+
+    def bar(self, session, iid):
+        import pickle
+        import zlib
+        if self.owner._closed:raise ValueError('HISTORY_SNAPSHOT_CLOSED')
+        source=self.source
+        if str(session)[:10]==str(source.bundle.observation_date) and iid in source.current_rows:
+            return source.bar(session,iid)
+        if iid not in source.cache and iid not in source.compressed and iid in self.entries:
+            key,size=self.entries[iid];path=self.root/key
+            if path.stat().st_size!=size:raise ValueError('VERIFIED_WINDOW_CACHE_CORRUPT')
+            encoded=path.read_bytes()
+            if hashlib.sha256(encoded).hexdigest()!=key:raise ValueError('VERIFIED_WINDOW_CACHE_CORRUPT')
+            # Bytes are accepted only if they match what this object just wrote.
+            # Never deserialize an external artifact or provider payload.
+            source.cache[iid]=pickle.loads(zlib.decompress(encoded))
+            if len(source.cache)>source.cache_size:source.cache.popitem(last=False)
+            self.owner.metrics['verified_window_disk_hits']+=1
+        value=source.bar(session,iid)
+        if iid not in self.entries and iid in source.cache:
+            encoded=zlib.compress(pickle.dumps(source.cache[iid],protocol=5),level=1)
+            if self.bytes+len(encoded)>self.max_bytes:raise ValueError('RECOVERABLE_VERIFIED_WINDOW_DISK_BUDGET_EXCEEDED')
+            key=hashlib.sha256(encoded).hexdigest();path=self.root/key
+            if not path.exists():
+                with path.open('xb') as stream:stream.write(encoded)
+            self.entries[iid]=(key,len(encoded));self.bytes+=len(encoded)
+            self.owner.metrics['verified_window_disk_bytes']=self.bytes
+            self.owner.metrics['verified_window_count']=len(self.entries)
+        return value
+
+
 def bounded_context(bundle, cutoff):
     """Use existing V2 InstrumentBars LRU/L2 instead of duplicating its window.
 
@@ -177,7 +240,9 @@ def bounded_context(bundle, cutoff):
     class NoWindowPreload(dict):
         def __contains__(self,key):
             return (isinstance(key,tuple) and key and key[0]=='BAR_PRELOAD') or super().__contains__(key)
-    return replace(ctx,scalar_cache=NoWindowPreload(ctx.scalar_cache))
+    bars=VerifiedWindowCache(ctx.bars_by_session,bundle._history_store) if isinstance(bundle._history_store,BudgetHistory) else ctx.bars_by_session
+    return replace(ctx,bars_by_session=bars,
+                   scalar_cache=NoWindowPreload(ctx.scalar_cache))
 
 
 def verify_shared_report(root, report):

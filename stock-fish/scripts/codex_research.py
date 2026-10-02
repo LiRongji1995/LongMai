@@ -591,6 +591,7 @@ def parser():
     sub.add_argument("--mode", choices=("run", "diagnose", "summarize"), default="run")
     sub.add_argument("--saved-result", type=Path)
     sub.add_argument("--execution-spec", type=Path, help="冻结执行/统计参数覆盖JSON；不接受选股规则修改")
+    sub.add_argument("--history-seconds", type=float, default=300, help="离线历史读取时间预算：0 < 秒数 <= 7200；默认300，不改变字节/RSS及证据校验")
     sub.add_argument("--history-db", type=Path, help="显式只读历史证据库；按依赖窗口读取，不迁移")
     sub.add_argument("--group", action="append", help="默认全部12组；R1_FULL / V2_CONTROL 或消融组名")
     sub.add_argument("--manifest", type=Path, help="核验冻结manifest身份后执行")
@@ -748,7 +749,7 @@ def main(argv=None):
                 result = summarize_saved(args.saved_result, args.output)
             else:
                 if not args.input: raise ValueError("INPUT_REQUIRED")
-                result = run_local(args.input, args.output, groups=args.group, frozen_manifest=args.manifest, start=args.start, end=args.end, history_db=args.history_db, mode=args.mode, execution_spec=args.execution_spec)
+                result = run_local(args.input, args.output, groups=args.group, frozen_manifest=args.manifest, start=args.start, end=args.end, history_db=args.history_db, mode=args.mode, execution_spec=args.execution_spec, history_seconds=args.history_seconds)
         else:
             key = api_key(args.env_file)
             result = execute(args, Client(args.base_url, key, args.timeout))
