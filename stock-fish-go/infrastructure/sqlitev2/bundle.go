@@ -588,6 +588,9 @@ func walkBundle(ctx context.Context, doc *bundleDocument, read func(string) ([]b
 	return nil
 }
 func (s *Store) ImportBundle(ctx context.Context, root string) (string, error) {
+	if e := InitApplicationSchema(ctx, s.db); e != nil {
+		return "", e
+	}
 	if e := s.InitBundleSchema(ctx); e != nil {
 		return "", e
 	}
@@ -635,7 +638,14 @@ func (s *Store) ImportBundle(ctx context.Context, root string) (string, error) {
 		return id, e
 	}
 	if status == "PUBLISHED" {
-		return id, s.VerifyBundle(ctx, id)
+		if e = s.VerifyBundle(ctx, id); e != nil {
+			return id, e
+		}
+		var hash string
+		if e = s.db.QueryRowContext(ctx, "SELECT content_hash FROM app_change_ledger WHERE kind=? AND entity_id=?", BundleChangeKind, id).Scan(&hash); e != nil {
+			return id, errors.New("UNRECONCILED_BUNDLE_LEDGER")
+		}
+		return id, VerifyBundleChange(ctx, s.db, id, hash)
 	}
 	for _, file := range inventory {
 		raw, e := read(file.Path)
@@ -701,10 +711,20 @@ func (s *Store) ImportBundle(ctx context.Context, root string) (string, error) {
 			return id, e
 		}
 	}
-	if e = s.verifyBundle(ctx, id, false); e != nil {
+	tx, e = s.db.BeginTx(ctx, nil)
+	if e != nil {
 		return id, e
 	}
-	result, e := s.db.ExecContext(ctx, "UPDATE legacy_bundles SET status='PUBLISHED',published_at=? WHERE bundle_id=? AND status='IMPORTING'", time.Now().UTC().Format(time.RFC3339Nano), id)
+	defer tx.Rollback()
+	reader := bundleReader{tx}
+	if e = reader.verifyBundle(ctx, id, false); e != nil {
+		return id, e
+	}
+	h, e := reader.bundleHeader(ctx, id)
+	if e != nil {
+		return id, e
+	}
+	result, e := tx.ExecContext(ctx, "UPDATE legacy_bundles SET status='PUBLISHED',published_at=? WHERE bundle_id=? AND status='IMPORTING'", time.Now().UTC().Format(time.RFC3339Nano), id)
 	if e != nil {
 		return id, e
 	}
@@ -712,9 +732,13 @@ func (s *Store) ImportBundle(ctx context.Context, root string) (string, error) {
 	if e != nil || n != 1 {
 		return id, errors.New("BUNDLE_PUBLICATION_CONFLICT")
 	}
-	return id, nil
+	if e = appLedger(ctx, tx, BundleChangeKind, id, bundleChangeHash(h)); e != nil {
+		return id, e
+	}
+	return id, tx.Commit()
 }
-func (s *Store) bundleHeader(ctx context.Context, id string) (bundleHeader, error) {
+
+func (s bundleReader) bundleHeader(ctx context.Context, id string) (bundleHeader, error) {
 	h := bundleHeader{ID: id}
 	var raw []byte
 	e := s.db.QueryRowContext(ctx, "SELECT legacy_run_id,raw_identity_hash,manifest_hash,result_hash,inventory,status FROM legacy_bundles WHERE bundle_id=?", id).Scan(&h.Run, &h.Identity, &h.Manifest, &h.Result, &raw, &h.Status)
@@ -727,7 +751,7 @@ func (s *Store) bundleHeader(ctx context.Context, id string) (bundleHeader, erro
 	e = json.Unmarshal(raw, &h.Inventory)
 	return h, e
 }
-func (s *Store) bundleFile(ctx context.Context, id, path string) ([]byte, error) {
+func (s bundleReader) bundleFile(ctx context.Context, id, path string) ([]byte, error) {
 	if !validBundlePath(path) {
 		return nil, errors.New("INVALID_BUNDLE_PATH")
 	}
@@ -759,9 +783,9 @@ func (s *Store) bundleFile(ctx context.Context, id, path string) ([]byte, error)
 	return raw, nil
 }
 func (s *Store) VerifyBundle(ctx context.Context, id string) error {
-	return s.verifyBundle(ctx, id, true)
+	return (bundleReader{s.db}).verifyBundle(ctx, id, true)
 }
-func (s *Store) verifyBundle(ctx context.Context, id string, published bool) error {
+func (s bundleReader) verifyBundle(ctx context.Context, id string, published bool) error {
 	h, e := s.bundleHeader(ctx, id)
 	if e != nil {
 		return e
@@ -887,4 +911,79 @@ func (s *Store) ExportBundle(ctx context.Context, id, newRoot string) error {
 		return errors.New("BUNDLE_COMPLETION_MISSING")
 	}
 	return write(completion)
+}
+
+// BundleChangeKind is a versioned authoritative change, never a replayable input.
+const BundleChangeKind = "BUNDLE_V1"
+
+type bundleQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+	QueryContext(context.Context, string, ...any) (*sql.Rows, error)
+}
+type bundleReader struct{ db bundleQuery }
+
+func (s *Store) bundleHeader(ctx context.Context, id string) (bundleHeader, error) {
+	return (bundleReader{s.db}).bundleHeader(ctx, id)
+}
+func (s *Store) bundleFile(ctx context.Context, id, path string) ([]byte, error) {
+	return (bundleReader{s.db}).bundleFile(ctx, id, path)
+}
+func bundleChangeHash(h bundleHeader) string {
+	raw, _ := json.Marshal([]string{BundleChangeKind, h.ID, h.Run, h.Identity, h.Manifest, h.Result})
+	return digest(raw)
+}
+func VerifyBundleChange(ctx context.Context, db *sql.DB, id, hash string) error {
+	r := bundleReader{db}
+	h, e := r.bundleHeader(ctx, id)
+	if e != nil {
+		return e
+	}
+	if bundleChangeHash(h) != hash {
+		return errors.New("BUNDLE_LEDGER_IDENTITY_MISMATCH")
+	}
+	return r.verifyBundle(ctx, id, true)
+}
+
+// Unledgered legacy bundles are quarantined by the lifecycle gate. Never infer
+// a past cutover time or silently backfill an earlier ledger sequence.
+func VerifyBundleLedger(ctx context.Context, db *sql.DB) error {
+	var exists int
+	if e := db.QueryRowContext(ctx, "SELECT count(*) FROM sqlite_master WHERE type='table' AND name='legacy_bundles'").Scan(&exists); e != nil {
+		return e
+	}
+	if exists == 0 {
+		return nil
+	}
+	rows, e := db.QueryContext(ctx, "SELECT bundle_id,status FROM legacy_bundles ORDER BY bundle_id")
+	if e != nil {
+		return e
+	}
+	var ids []string
+	for rows.Next() {
+		var id, status string
+		if e = rows.Scan(&id, &status); e != nil {
+			rows.Close()
+			return e
+		}
+		if status != "PUBLISHED" {
+			rows.Close()
+			return errors.New("UNFINISHED_BUNDLE_REQUIRES_EXPLICIT_RECOVERY")
+		}
+		ids = append(ids, id)
+	}
+	e = rows.Err()
+	rows.Close()
+	if e != nil {
+		return e
+	}
+	for _, id := range ids {
+		var hash string
+		if e = db.QueryRowContext(ctx, "SELECT content_hash FROM app_change_ledger WHERE kind=? AND entity_id=?", BundleChangeKind, id).Scan(&hash); e != nil {
+			return fmt.Errorf("UNRECONCILED_BUNDLE_LEDGER: %s: %w", id, e)
+		}
+		if e = VerifyBundleChange(ctx, db, id, hash); e != nil {
+			return e
+		}
+	}
+	return nil
 }

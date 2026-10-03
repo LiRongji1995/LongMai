@@ -122,6 +122,17 @@ func isolatedSnapshot(ctx context.Context, root, source, target string, mutable 
 	if _, e = os.Lstat(target); !errors.Is(e, os.ErrNotExist) {
 		return out, errors.New("SNAPSHOT_TARGET_MUST_NOT_EXIST")
 	}
+	if !mutable {
+		frozen, e := sqlitev2.OpenFrozen(ctx, source)
+		if e != nil {
+			return out, e
+		}
+		defer frozen.Close()
+		if e = reserveClone(ctx, root, source); e != nil {
+			return out, e
+		}
+		return frozen.CopySnapshot(ctx, target)
+	}
 	possible, e := cloneAvailable(source, filepath.Dir(target))
 	if e != nil {
 		return out, e
@@ -141,7 +152,21 @@ func isolatedSnapshot(ctx context.Context, root, source, target string, mutable 
 		if e = checkpointIsolated(ctx, source); e != nil {
 			return out, e
 		}
-		mode = "isolated V2 writer lease; wal_checkpoint(TRUNCATE); connection closed; WAL empty"
+		// SQLite itself excludes normal concurrent writers through the whole clone.
+		guard, e := sql.Open("sqlite", sqlitev2.URI(source, false))
+		if e != nil {
+			return out, e
+		}
+		guard.SetMaxOpenConns(1)
+		if _, e = guard.ExecContext(ctx, "BEGIN IMMEDIATE"); e != nil {
+			guard.Close()
+			return out, e
+		}
+		defer func() { guard.ExecContext(context.Background(), "ROLLBACK"); guard.Close() }()
+		if e = emptyWAL(source); e != nil {
+			return out, e
+		}
+		mode = "isolated V2 writer lease; wal_checkpoint(TRUNCATE); checkpoint connection closed; SQLite BEGIN IMMEDIATE held; WAL empty"
 	} else {
 		if _, e = sqlitev2.SnapshotCheck(ctx, source); e != nil {
 			return out, e

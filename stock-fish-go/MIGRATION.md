@@ -1,5 +1,17 @@
 # SQLite V2 与原生 Go 迁移状态
 
+## 2026-10-03 一致性修复：隔离发布成功，整体验收未通过
+
+本轮基线为 `19dab9a0f4de35808ca487a30ab1e1ba6a82ade0`、分支 `review`，用户后续已明确授权将本轮代码、测试和维护文档提交推送到远端 main；私有数据与验收产物不随源码发布。当前私有证据入口为 `reports/codex/stockfish-v2-rebuild/consistency-20261003/REPORT.md`、`acceptance.json` 与 `budget.json`。原冻结源已完成新版全量验证，批次投影深验、正式隔离发布与新进程 readiness 通过；旧轮次未发布状态不再代表当前目标。最终 Go 源码身份为 `ecc990c6926b277a9ff9f597fca364185bd0d3228d25b5971180d54c4a48cf44`。
+
+冻结源通过经过字节核验的私有独立视图消费；目标验证持 SQLite 写保留锁，已验证的迁入范围禁止追加。研究包闭合验证、发布及 `BUNDLE_V1` 账本同事务。真实输入回放式回退、bundle-only 恢复，以及新增原生结果/任务后的有损回退阻止和新文件恢复均已通过。隔离调度 PAUSED，生产未激活。
+
+R1/V2 新库原生运行、Python 保存语义投影差分、Go 新旧存储精确差分及 R1 冷暖差分通过。六次全池额度包含一次保留的 RSS 失败，修复后五次成功。观察日 2026-09-30，cutoff 2026-10-02T20:10:00.478775+08:00。R1 为 6 CORE_PASS、41 CORE_UNKNOWN；V2 为 0 FOCUS、5 WATCH、1 UNKNOWN。两者必要资料、背景与选择可判定性仍 INCOMPLETE，均为 NOT_EVALUABLE_AS_COMPLETE_STRATEGY；不能将零 FOCUS 当作完整资料下的合法空集。
+
+完整规模真实增量未执行：保留现有源、目标、备份和结果后，受核验源视图与耐久副本的峰值超过 50 GiB 准入上限，详见 `incremental-admission.json`；合成增量测试不替代该项。新增迁移预算 14400 秒与旧 7199.963 秒分开，未挪用策略预算。Windows 仅交叉编译，原生未验证；缓存字节指标的上下文缺失另列限制。R1 仍为 RESEARCH_ONLY，MARKET_EDGE=NOT_ESTABLISHED。本轮源码提交推送按后续明确授权执行，生产不切换。
+
+## 2026-10-02 历史记录（旧验收状态与授权，不代表本轮）
+
 本轮在现有工作区实现模块化 Go 主系统及真实数据库迁移，不改写旧 Python 策略/配置/研究身份，不修改旧数据库，不切换生产服务。旧 `go-core` 影子模块保留。总验收为 **BLOCKED_MIGRATION_BUDGET**：真实搬迁已完成，累计7199.963s达到7200s上限，完整验证未结束且目标未发布；真实全池差分、冷暖性能及独立运行/切换仍未完成。命令退出码由 [VALIDATION](VALIDATION.md) 汇总，不能由本表的“已实现”推导为真实验收通过。
 
 统一入口是 [README](README.md) 的 `stockfish`。模块职责见 [ARCHITECTURE_V2](ARCHITECTURE_V2.md)，证据和输入边界见 [EVIDENCE_CONTRACT](EVIDENCE_CONTRACT.md)，策略逐条件与fixture范围见 [STRATEGY_PARITY](STRATEGY_PARITY.md)，隔离实例生命周期见 [ISOLATED_LIFECYCLE](ISOLATED_LIFECYCLE.md)。
@@ -35,9 +47,9 @@ work/stockfish database verify --source /path/to/private/frozen-source.sqlite --
 work/stockfish database publish --target /path/to/private/v2.sqlite
 ```
 
-主 schema 之外，`SQLITE_BATCH_EVIDENCE_PROJECTION_V1` 以独立版本/checksum 管理题材成员、资金及回执类型化列，精确值为 TEXT，并保留字段缺失/null/非法状态、原字节引用与转换哈希。`publish` 在主验证通过后回填、全量核对该扩展再开放目标；`database project-batches --target ...` 可按 owner 事务恢复，`database verify-batches --target ...` 深度核验。输入写入与对应投影同一事务，readiness 检查已发布投影 inventory。实际迁移库的这一步尚未执行。
+主 schema 之外，`SQLITE_BATCH_EVIDENCE_PROJECTION_V1` 以独立版本/checksum 管理题材成员、资金及回执类型化列，精确值为 TEXT，并保留字段缺失/null/非法状态、原字节引用与转换哈希。`publish` 在主验证通过后回填、全量核对该扩展再开放目标；`database project-batches --target ...` 可按 owner 事务恢复，`database verify-batches --target ...` 深度核验。输入写入与对应投影同一事务，readiness 检查已发布投影 inventory。2026-10-03 已通过真实 publish 入口完成此步，证据为 publish-real.stdout；不由此推导策略资料完整。
 
-每个批次与检查点同事务；重复 migrate 只允许接续同一冻结源。相同旧键必须逐内容核对；同键异内容失败。迁移取消/中断后已提交批次保留，但未经完整verify/publish的目标不能成为活动权威库。命令单次预算不能重置本轮累计迁移7200s预算，外层账本仍必须汇总；研究6次/10800s额度独立且按策略逐次计。
+每个批次与检查点同事务；重复 migrate 只允许接续同一冻结源。相同旧键必须逐内容核对；同键异内容失败。迁移取消/中断后已提交批次保留，但未经完整verify/publish的目标不能成为活动权威库。命令单次参数不能重置任务累计预算；2026-10-03 新增 14400s 与旧 7199.963s 分开汇总，研究最多 6 次/10800s 独立且按策略逐次计。
 
 增量使用显式 `database incremental --source ... --target ...`；先前未处理的源变更不能通过切换自动吞掉。外部R1包用 `bundle-import --input OLD_RUN_DIRECTORY` 导入，然后 `bundle-verify` 和向新目录 `bundle-export`；无需旧数据库或Python即可验证和恢复原文件内容。
 

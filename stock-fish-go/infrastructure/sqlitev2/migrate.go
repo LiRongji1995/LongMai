@@ -69,10 +69,12 @@ type MigrationReport struct {
 func Migrate(ctx context.Context, source, target string, opt Options) (out MigrationReport, err error) {
 	started := time.Now()
 	defer func() { out.DurationSeconds = time.Since(started).Seconds() }()
-	ident, e := SnapshotCheck(ctx, source)
+	frozen, releaseFrozen, e := acquireFrozen(ctx, source)
 	if e != nil {
 		return out, e
 	}
+	defer releaseFrozen()
+	ident := frozen.Identity
 	s, e := Open(ctx, target, true)
 	if e != nil {
 		return out, e
@@ -95,12 +97,7 @@ func Migrate(ctx context.Context, source, target string, opt Options) (out Migra
 		out.Status = status
 		return out, nil
 	}
-	db, e := sql.Open("sqlite", URI(source, true))
-	if e != nil {
-		return out, e
-	}
-	defer db.Close()
-	db.SetMaxOpenConns(1)
+	db := frozen.DB
 	if opt.BatchSize <= 0 {
 		opt.BatchSize = 1000
 	}

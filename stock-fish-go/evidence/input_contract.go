@@ -572,12 +572,24 @@ func ValidateEvidenceRow(ctx context.Context, kind string, r contracts.Row) (con
 // DecodeEvidenceRow is the strict, cancellable raw-record boundary used by
 // history and import adapters after authenticating the storage byte hash.
 func DecodeEvidenceRow(ctx context.Context, kind string, raw []byte) (contracts.Row, error) {
+	return DecodeEvidenceRowWithProjection(ctx, kind, raw, nil)
+}
+
+// DecodeEvidenceRowWithProjection reuses the decoded raw fields for storage
+// projection checks before validation inserts defaults or normalizes values.
+// check must not mutate the row; errors prevent the evidence from being consumed.
+func DecodeEvidenceRowWithProjection(ctx context.Context, kind string, raw []byte, check func(contracts.Row) error) (contracts.Row, error) {
 	if _, e := contracts.CanonicalContext(ctx, raw); e != nil {
 		return nil, e
 	}
 	r, e := decodeObject(raw, kind)
 	if e != nil {
 		return nil, e
+	}
+	if check != nil {
+		if e = check(r); e != nil {
+			return nil, e
+		}
 	}
 	schema, ok := contractSchemas[kind]
 	if !ok {

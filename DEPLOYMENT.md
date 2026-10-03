@@ -1,5 +1,17 @@
 # StockFish Go / SQLite V2 隔离交付（2026-10-02）
 
+## 2026-10-03 一致性修复：隔离发布成功，整体验收未通过
+
+本轮基线为 `19dab9a0f4de35808ca487a30ab1e1ba6a82ade0`、分支 `review`，用户后续已明确授权将本轮代码、测试和维护文档提交推送到远端 main；私有数据与验收产物不随源码发布。当前私有证据入口为 `reports/codex/stockfish-v2-rebuild/consistency-20261003/REPORT.md`、`acceptance.json` 与 `budget.json`。原冻结源已完成新版全量验证，批次投影深验、正式隔离发布与新进程 readiness 通过；旧轮次未发布状态不再代表当前目标。最终 Go 源码身份为 `ecc990c6926b277a9ff9f597fca364185bd0d3228d25b5971180d54c4a48cf44`。
+
+冻结源通过经过字节核验的私有独立视图消费；目标验证持 SQLite 写保留锁，已验证的迁入范围禁止追加。研究包闭合验证、发布及 `BUNDLE_V1` 账本同事务。真实输入回放式回退、bundle-only 恢复，以及新增原生结果/任务后的有损回退阻止和新文件恢复均已通过。隔离调度 PAUSED，生产未激活。
+
+R1/V2 新库原生运行、Python 保存语义投影差分、Go 新旧存储精确差分及 R1 冷暖差分通过。六次全池额度包含一次保留的 RSS 失败，修复后五次成功。观察日 2026-09-30，cutoff 2026-10-02T20:10:00.478775+08:00。R1 为 6 CORE_PASS、41 CORE_UNKNOWN；V2 为 0 FOCUS、5 WATCH、1 UNKNOWN。两者必要资料、背景与选择可判定性仍 INCOMPLETE，均为 NOT_EVALUABLE_AS_COMPLETE_STRATEGY；不能将零 FOCUS 当作完整资料下的合法空集。
+
+完整规模真实增量未执行：保留现有源、目标、备份和结果后，受核验源视图与耐久副本的峰值超过 50 GiB 准入上限，详见 `incremental-admission.json`；合成增量测试不替代该项。新增迁移预算 14400 秒与旧 7199.963 秒分开，未挪用策略预算。Windows 仅交叉编译，原生未验证；缓存字节指标的上下文缺失另列限制。R1 仍为 RESEARCH_ONLY，MARKET_EDGE=NOT_ESTABLISHED。本轮源码提交推送按后续明确授权执行，生产不切换。
+
+## 2026-10-02 历史记录（旧验收状态与授权，不代表本轮）
+
 本轮在既有 `stock-fish-go/` 重建模块化单体，统一入口 `stockfish`；原生 R1 与当前主动 V2 独立消费公共事实。V2 仍为默认，R1 显式选择且保持 RESEARCH_ONLY。SQLite V2 是隔离目标库，真实搬迁已完成但完整验证耗尽7200s预算，尚未发布或承载正式研究。生产 Python 服务、旧数据库路径、调度、Qlib wheel 和模型均未切换。
 
 构建、只读旧适配、新输入导入、研究、任务/取消、保存结果查询及完整性验证见 [Go 运行说明](stock-fish-go/README.md)；数据库映射见 [迁移说明](stock-fish-go/MIGRATION.md)，可执行隔离 preflight/cutover/export/rollback/restore 见 [恢复说明](stock-fish-go/ISOLATED_LIFECYCLE.md)。真实迁移与独立运行的实测证据、预算和未验证范围统一登记在 [验收记录](stock-fish-go/VALIDATION.md)。

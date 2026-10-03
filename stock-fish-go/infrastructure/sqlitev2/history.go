@@ -224,19 +224,19 @@ func (h *History) BarsWithIdentity(iid, start, end string, consume func(c.Row, c
 		if e != nil {
 			return e
 		}
-		projectionStart := time.Now()
-		o, e := object(raw)
-		if e != nil {
-			return e
-		}
-		want, wh := projection(o, kind, inst, sess)
-		projectionTime += time.Since(projectionStart)
-		if wh != ph || !equalProjection(p, want) {
-			return errors.New("TYPED_PROJECTION_TAMPERED")
-		}
 		decodeStart := time.Now()
-		r, e := ev.DecodeEvidenceRow(h.b.Ctx(), kind, raw)
-		decodeTime += time.Since(decodeStart)
+		var thisProjection time.Duration
+		r, e := ev.DecodeEvidenceRowWithProjection(h.b.Ctx(), kind, raw, func(rawFields c.Row) error {
+			projectionStart := time.Now()
+			want, wh := projection(rawFields, kind, inst, sess)
+			thisProjection = time.Since(projectionStart)
+			if wh != ph || !equalProjection(p, want) {
+				return errors.New("TYPED_PROJECTION_TAMPERED")
+			}
+			return nil
+		})
+		projectionTime += thisProjection
+		decodeTime += time.Since(decodeStart) - thisProjection
 		if e != nil {
 			return e
 		}

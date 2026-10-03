@@ -28,7 +28,7 @@ func newBatchFixture(t *testing.T, snapshots int) *Store {
 	if e = s.InitBatchProjectionSchema(ctx); e != nil {
 		t.Fatal(e)
 	}
-	if _, e = s.db.ExecContext(ctx, "INSERT INTO migration_state VALUES(1,'TEST_FIXTURE','VERIFIED','{}','TEST_FIXTURE')"); e != nil {
+	if _, e = s.db.ExecContext(ctx, "INSERT INTO migration_state VALUES(1,'TEST_FIXTURE','MIGRATING','{}','TEST_FIXTURE')"); e != nil {
 		t.Fatal(e)
 	}
 	for i := 0; i < snapshots; i++ {
@@ -45,6 +45,10 @@ func newBatchFixture(t *testing.T, snapshots int) *Store {
 		if e = tx.Commit(); e != nil {
 			t.Fatal(e)
 		}
+	}
+	// Projection-only fixture: construct authority before sealing its test baseline.
+	if _, e = s.db.Exec("UPDATE migration_state SET status='VERIFIED' WHERE id=1"); e != nil {
+		t.Fatal(e)
 	}
 	return s
 }
@@ -208,6 +212,10 @@ func TestBatchProjectionTamperingAndCoverage(t *testing.T) {
 		ctx := context.Background()
 		s := newBatchFixture(t, 1)
 		if _, e := s.BackfillBatchProjections(ctx, BatchProjectionOptions{}); e != nil {
+			t.Fatal(e)
+		}
+		// Explicit test migration opens the authority before adding an owner.
+		if _, e := s.db.Exec("UPDATE migration_state SET status='MIGRATING' WHERE id=1"); e != nil {
 			t.Fatal(e)
 		}
 		tx, _ := s.db.BeginTx(ctx, nil)

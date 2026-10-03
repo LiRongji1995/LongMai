@@ -12,10 +12,13 @@ import (
 // Publication is gated for the entire reconciliation. Mutable jobs retain every
 // immutable historical revision and remain non-executable.
 func Incremental(ctx context.Context, source, target string, opt Options) (MigrationReport, error) {
-	ident, e := SnapshotCheck(ctx, source)
+	frozen, releaseFrozen, e := acquireFrozen(ctx, source)
 	if e != nil {
 		return MigrationReport{}, e
 	}
+	defer releaseFrozen()
+	ctx = context.WithValue(ctx, frozenContextKey{}, frozen)
+	ident := frozen.Identity
 	s, e := Open(ctx, target, false)
 	if e != nil {
 		return MigrationReport{}, e
@@ -37,7 +40,7 @@ func Incremental(ctx context.Context, source, target string, opt Options) (Migra
 			return MigrationReport{}, errors.New("INCREMENTAL_BASE_NOT_PUBLISHED")
 		}
 		// Immutable disappearance or replacement must be reported before changing state.
-		if _, e = s.db.ExecContext(ctx, "ATTACH DATABASE ? AS incoming", URI(source, true)); e != nil {
+		if _, e = s.db.ExecContext(ctx, "ATTACH DATABASE ? AS incoming", frozen.URI()); e != nil {
 			s.Close()
 			return MigrationReport{}, e
 		}

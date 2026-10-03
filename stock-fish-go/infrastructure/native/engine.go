@@ -13,6 +13,7 @@ import (
 	v2 "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/strategies/v2"
 	"io"
 	"runtime"
+	"runtime/debug"
 	"strings"
 	"time"
 )
@@ -100,6 +101,12 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	if err != nil {
 		return out, err
 	}
+	// The frozen input is no longer needed once facts and decisions are obtained.
+	// Return unused pages before the fact graph is converted to saved JSON.
+	f = c.Frozen{}
+	in.Raw = nil
+	debug.FreeOSMemory()
+	b.Stage("result_encoding")
 	out.ImplementationStatus = d.ImplementationAcceptance
 	out.CandidateAvailability = d.CandidateAvailability
 	v2 := map[string]v2.V2Decision{}
@@ -108,6 +115,7 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	}
 	d.V2 = nil
 	out.Items = make([]c.Item, 0, len(d.Facts))
+	encodedSinceReclaim := 0
 	for i, fact := range d.Facts {
 		if err = b.Check(); err != nil {
 			return out, err
@@ -143,6 +151,14 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 			d.Decisions[i] = research.Decision{}
 		} else {
 			delete(v2, fact.ID)
+		}
+		delete(d.Coverage.Support, fact.ID)
+		encodedSinceReclaim += len(raw)
+		if encodedSinceReclaim >= 16<<20 {
+			// Reclaim released fact graphs at bounded output intervals, avoiding
+			// a transient RSS high-water mark while retaining exact JSON bytes.
+			debug.FreeOSMemory()
+			encodedSinceReclaim = 0
 		}
 	}
 	d.DetailCount = len(out.Items)

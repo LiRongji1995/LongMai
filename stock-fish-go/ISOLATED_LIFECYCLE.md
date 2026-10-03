@@ -38,3 +38,14 @@ PREPARING结果只有在不可变变更账本中有`ABANDONED_RUN`并逐个通�
 新增TEST_FIXTURE覆盖：真实CLI loopback临时serve与lifecycle双向竞争、第二租约失败无root泄漏、内部owned preflight、`--instance-root`不重复加锁；另使第51条保存明细失败，保留已提交50条prefix，验证未封存阻断、封存后预检、Go-only回退阻断、备份恢复50条且不可公开读取、修改封存header后拒绝。完整lifecycle普通测试及vet退出0（4.398秒）；最终统一race由集成报告记录。
 
 普通CLI命令在打开既有数据库前先取绝对路径并解析全部符号链接；租约名使用该规范路径，`--db`符号链接别名不会获得另一把锁。跨入口回归包含alias启动CLI writer、lifecycle持锁时alias写入拒绝。SQLite数据库不支持通过不同硬链接路径并行访问；本轮未以inode注册表实现硬链接别名合并，部署约束必须禁止给同一库创建/使用多个硬链接入口。该限制不放宽符号链接路径保护。
+
+
+## 2026-10-03 一致性修订
+
+生命周期导出和恢复使用 `OpenFrozen` 私有视图核验备份，不再先 hash 再随意重新打开原备份路径。恢复输出必须仍匹配已经核验的 export backup hash。可变 V2 的 APFS clone 除应用写者租约外，还持有 SQLite `BEGIN IMMEDIATE`，并要求 WAL 在克隆前为空，避免普通 SQLite 写者在复制期间追加提交。
+
+切换、导出及恢复验证会核对权威对象与变更账本的双向覆盖，遍历全部账本种类；缺失的输入、发布结果、任务事件和研究包账本，以及未知种类都拒绝。新任务初始 QUEUED 事件现在同事务记录 JOB_EVENT。旧事件或旧包缺少账本不得自动推断为切换前数据；这类库存先阻断，需有证据的显式核对。
+
+`BUNDLE_V1` 属于旧系统不可完整表达的变化：回退输出 `BLOCKED_UNREPRESENTABLE`，保留 Go 库和已经核验的完整恢复备份。包的文件、inventory、共享引用全部保存在库内；验证/导出/恢复不需要原外部目录。IMPORTING 必须同源恢复导入，不能因为未发布就从门禁中忽略。上述是实现合同，真实大库演练结果以当前私有 acceptance.json 为准。
+
+`LEGACY_REPLAYED` 检查点使用配置中已登记的完整文件 SHA，通过同一个私有冻结视图边界检查（`OpenFrozenAtHash`），拒绝未纳入身份的 WAL/journal；不再只读取主文件 hash 后宣布可切回。该视图只证明已绑定的回放检查点，不能生成新的捕获元信息，不能替代对之后新写入的增量接收。恢复元数据还要求当前 `VerificationVersion`，不能接受仅有成功计数但版本不受支持的旧证明。

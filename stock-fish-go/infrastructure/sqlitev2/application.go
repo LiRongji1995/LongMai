@@ -649,6 +649,10 @@ func (r *AppRepository) Submit(ctx context.Context, j c.Job) (c.Job, bool, error
 	if _, e = tx.ExecContext(ctx, "INSERT INTO app_job_events(job_id,revision,state,reason,event_at) VALUES(?,?,?,?,?)", j.ID, 0, "QUEUED", "EXPLICIT_SUBMISSION", j.CreatedAt); e != nil {
 		return j, false, e
 	}
+	event, _ := json.Marshal(map[string]any{"job_id": j.ID, "revision": 0, "state": "QUEUED", "reason": "EXPLICIT_SUBMISSION", "event_at": j.CreatedAt})
+	if e = appLedger(ctx, tx, "JOB_EVENT", fmt.Sprintf("%s:0", j.ID), appHash(event)); e != nil {
+		return j, false, e
+	}
 	if e = appLedger(ctx, tx, "JOB", j.ID, h); e != nil {
 		return j, false, e
 	}

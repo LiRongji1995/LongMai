@@ -2,7 +2,7 @@
 
 Go 主系统采用共享领域合同、证据校验、公共事实、独立 R1/V2 策略、应用服务与 SQLite V2 存储。统一入口是 `stockfish`；`stockfish-r1` 仅保留历史诊断兼容命令。默认策略为 `STAGE_AWARE_MOMENTUM_V2`，R1 必须显式选择 `STAGE_AWARE_RESEARCH_R1`，仍为 `RESEARCH_ONLY`、`production_promotion=DISABLED`。参数“尚未验证”，`MARKET_EDGE=NOT_ESTABLISHED`。
 
-当前代码已实现；整体验收为 **BLOCKED_MIGRATION_BUDGET**。真实记录搬迁已完成，但累计迁移/验证已用7199.963s，达到本轮7200s上限，完整校验未通过、目标未发布。真实新库业务闭环、同输入全池差分、冷暖性能与隔离切换仍未完成。不能凭 fixture、`SUCCEEDED` 或 health 正常宣称全部验收完成。证据见 [VALIDATION](VALIDATION.md)。本轮不切换生产服务，不提交真实数据库、缓存、报告或凭据。
+2026-10-03 已完成一致性修复、真实完整验证、隔离发布、R1/V2 独立运行与保存结果差分、输入回放和新增结果备份恢复。整体验收仍未通过：完整规模真实增量被 50 GiB 容量门禁阻止，不能用 fixture 替代。R1/V2 数据覆盖均不足以作为完整策略可判定结论。失败尝试、预算、覆盖和 Windows 限制见 [VALIDATION](VALIDATION.md)。本轮源码按后续明确授权提交推送，不切换生产，不发布真实数据库或私有产物。
 
 设计与合同：[架构](ARCHITECTURE_V2.md)、[迁移矩阵](MIGRATION.md)、[策略语义与14例差分](STRATEGY_PARITY.md)、[证据合同](EVIDENCE_CONTRACT.md)、[隔离切换/回退](ISOLATED_LIFECYCLE.md)、[依赖许可](LICENSES.md)。
 
@@ -63,7 +63,7 @@ HTTP 与 CLI 使用同一应用服务。写 API 通过环境变量 `STOCKFISH_V2
 
 CLI打开库可能初始化版本化扩展，因此查询命令与维护命令也共用数据库租约；`serve`占用该租约时，通过其HTTP查询，不另开CLI修改/初始化同库。实例配置在取得根租约后读取，并锁住该配置对应的目标，避免恢复切换与旧路径读取竞争。排队请求执行前、结果发布事务内分别复核就绪状态。
 
-研究默认总预算 300s，最高1800s；消费历史原始 payload 2GiB、RSS 1GiB、Go软目标768MiB。RSS与Go heap分别报告；不可用指标不能当零。预算覆盖载入、验证、事实、所选策略、保存和校验，进度持续输出；取消沿context传播。迁移按全库大小分批处理，不套研究2GiB上限；本轮迁移操作累计7200s、新增文件50GiB、始终保留10GiB空间。全池策略次数/累计时间另由任务账本统筹。
+研究默认总预算 300s，最高1800s；消费历史原始 payload 2GiB、RSS 1GiB、主入口 Go 堆软目标512MiB。RSS与Go heap分别报告；不可用指标不能当零。预算覆盖载入、验证、事实、所选策略、保存和校验，进度持续输出；取消沿context传播。迁移按全库大小分批处理，不套研究2GiB上限；本轮新增迁移/生命周期累计14400s（旧7199.963s另记）、重建产物合计50GiB、始终保留10GiB空间。全池策略次数/累计时间另由任务账本统筹。
 
 ## 检查与验收
 

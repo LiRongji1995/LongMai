@@ -52,3 +52,16 @@ work/stockfish database verify-batches --target /path/to/private/v2.sqlite --bud
 ```
 
 基础迁移必须先 VERIFIED。`database publish` 会回填并深度验证该扩展，再开放整个库的 PUBLISHED 门禁；旧的仅基础库完成标记不能绕过扩展 readiness。剩余累计迁移预算仍由本次任务账本约束，命令参数不代表新增授权。
+
+
+## 冻结源与验证边界修订（2026-10-03）
+
+`OpenFrozen` 管理受核验私有主文件视图及释放函数。先检查元信息版本、规范路径、文件类型/尺寸和 sidecar，再复制到相邻随机 0700 目录，校验**复制后实际消费的字节**与登记 SHA256 相符，复核元信息及文件身份。macOS 优先独立 APFS clone，其他情况有界流式复制。非空 WAL、非空 rollback journal 和异常 sidecar 类型保守拒绝；空 WAL 配合普通 SHM 可以接受。相对元信息路径按创建时使用的工作目录解析，命令应从原仓库根执行；不会改写旧身份以迁就不同 cwd。
+
+SQL 的 `immutable=1` 仅作用于已独立复制并核验的私有文件，不用于可变化的源文件。正常 SQLite 写者可继续改变原文件，但查询始终消费已证明的原视图；恢复时重新核验原路径，变化或新增 WAL 不能沿用旧检查点。平台假设是不防御能任意修改该进程私有目录的恶意同权限管理员。`Close` 和所有打开失败路径清理本次私有副本；异常杀进程遗留的私有目录须先核对活跃进程及任务账本再作为本次临时副本清理。
+
+Migrate、Verify、Incremental 共享该边界；一次 Incremental 内的迁移与校验复用同一视图。Verify 关闭旧发布状态后，对目标持有 SQLite `BEGIN IMMEDIATE` 写预留直到完成。独立的 `verification_guard_versions=1` 扩展绑定新增插入门禁的 checksum 和实际 DDL，不修改旧 schema checksum；已验证/发布的迁移资料不能再插入。旧验证被显式关闭，数据与检查点保留，需通过 `V2_FULL_VERIFICATION_2_PRIVATE_SOURCE_LOCKED_TARGET` 完整验证再发布。原有 update/delete 不可变约束保留。
+
+研究包的权威变更种类为 `BUNDLE_V1`。其摘要绑定包 ID、旧 run ID、原始 inventory 身份、manifest 和 result 身份。包闭合验证、IMPORTING→PUBLISHED 和账本追加在同一事务完成；重复导入不重复追加，同 ID 异内容拒绝。已有 PUBLISHED 但无账本的包报 `UNRECONCILED_BUNDLE_LEDGER`，不会猜测历史归属或补签过去时间；需保留包并依据明确基线另行核对。未完成 IMPORTING 阻断切换/导出门禁，可以从原 inventory 的同一包恢复导入。
+
+历史窗口的原字节解压/hash 校验之后，`DecodeEvidenceRowWithProjection` 只构建一次 raw-field map，先以未补默认值的字段核对持久化投影，再执行原严格 contract。canonical、字段类型、来源和引用校验未移除；空值/缺字段不合并。此整理不改变投影或事实语义，已有转换版本保持不变。性能证据须比较相同证券/窗口和实际消费行数；小窗口剖析不能推断全池加速比例。事实缓存仍在必要读取/验证之后使用，不能描述为免读历史。

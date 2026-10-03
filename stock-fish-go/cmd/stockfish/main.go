@@ -13,7 +13,9 @@ import (
 var sourceHash = "UNRECORDED_DEVELOPMENT_BUILD"
 
 func main() {
-	debug.SetMemoryLimit(768 << 20)
+	// Leave RSS headroom for SQLite, stacks and result encoding; this soft
+	// heap target does not replace the independent 1 GiB RSS guard.
+	debug.SetMemoryLimit(512 << 20)
 	ctx, cancel := signal.NotifyContext(context.Background(), os.Interrupt, syscall.SIGTERM)
 	defer cancel()
 	if e := cli.Run(ctx, os.Args[1:], os.Stdout, os.Stderr, sourceHash); e != nil {

@@ -256,7 +256,7 @@ func metadata(ctx context.Context, db *sql.DB) (string, string, string, error) {
 	if e := json.Unmarshal([]byte(verification), &v); e != nil {
 		return "", "", "", e
 	}
-	if v.SourceSHA256 != source || v.Integrity != "ok" || v.ForeignKeys != 0 || len(v.Errors) > 0 || v.CompletedAt == "" {
+	if v.Version != sqlitev2.VerificationVersion || v.SourceSHA256 != source || v.Integrity != "ok" || v.ForeignKeys != 0 || len(v.Errors) > 0 || v.CompletedAt == "" {
 		return "", "", "", errors.New("MIGRATION_VERIFICATION_INVALID")
 	}
 	if e := db.QueryRowContext(ctx, "SELECT checksum FROM schema_versions WHERE version=?", sqlitev2.SchemaVersion).Scan(&checksum); e != nil {
@@ -368,14 +368,15 @@ func preflight(ctx context.Context, root string, owned bool) (PreflightReport, e
 		return out, errors.New("FROZEN_SOURCE_CHANGED")
 	}
 	if conf.Mode == "LEGACY_REPLAYED" {
-		hash, e := sqlitev2.FileHash(ctx, conf.ActiveDatabase)
+		replay, e := sqlitev2.OpenFrozenAtHash(ctx, conf.ActiveDatabase, conf.LegacyReplayHash)
 		if e != nil {
+			return out, fmt.Errorf("UNHANDLED_LEGACY_INCREMENTAL_CHANGES: %w", e)
+		}
+		if e = replay.Close(); e != nil {
 			return out, e
 		}
-		if conf.LegacyReplayHash == "" || hash != conf.LegacyReplayHash {
-			return out, errors.New("UNHANDLED_LEGACY_INCREMENTAL_CHANGES")
-		}
 	}
+
 	db, e := readDB(ctx, conf.Target)
 	if e != nil {
 		return out, e
@@ -414,6 +415,9 @@ func preflight(ctx context.Context, root string, owned bool) (PreflightReport, e
 	}
 	if out.UnfinishedJobs > 0 || out.UnpublishedRuns > 0 {
 		return out, errors.New("UNFINISHED_WORK_REQUIRES_EXPLICIT_RECOVERY")
+	}
+	if e = verifyAuthorityLedger(ctx, db); e != nil {
+		return out, e
 	}
 	if e = db.QueryRowContext(ctx, "SELECT coalesce(max(sequence),0) FROM app_change_ledger").Scan(&out.LedgerSequence); e != nil {
 		return out, e
@@ -511,6 +515,8 @@ func verifyChange(ctx context.Context, db *sql.DB, ch Change) error {
 	var raw []byte
 	var h string
 	switch ch.Kind {
+	case sqlitev2.BundleChangeKind:
+		return sqlitev2.VerifyBundleChange(ctx, db, ch.ID, ch.Hash)
 	case "INPUT":
 		if e := db.QueryRowContext(ctx, "SELECT raw_hash,payload FROM app_inputs WHERE input_id=?", ch.ID).Scan(&h, &raw); e != nil {
 			return e
@@ -578,11 +584,12 @@ func exportChanges(ctx context.Context, root string, conf *Config) (ExportManife
 	if e != nil {
 		return manifest, e
 	}
-	db, e := readDB(ctx, backup)
+	frozen, e := sqlitev2.OpenFrozen(ctx, backup)
 	if e != nil {
 		return manifest, e
 	}
-	defer db.Close()
+	defer frozen.Close()
+	db := frozen.DB
 	source, checksum, verification, e := metadata(ctx, db)
 	if e != nil {
 		return manifest, e
@@ -608,6 +615,9 @@ func exportChanges(ctx context.Context, root string, conf *Config) (ExportManife
 		}
 	}
 
+	if e = verifyAuthorityLedger(ctx, db); e != nil {
+		return manifest, e
+	}
 	ledger := filepath.Join(dir, "changes.jsonl")
 	f, e := os.OpenFile(ledger, os.O_CREATE|os.O_EXCL|os.O_WRONLY, 0600)
 	if e != nil {
@@ -695,10 +705,12 @@ func VerifyExport(ctx context.Context, root, path string) (ExportManifest, error
 	if _, e = inside(root, out.Ledger); e != nil {
 		return out, e
 	}
-	identity, e := sqlitev2.SnapshotCheck(ctx, out.Backup)
+	frozen, e := sqlitev2.OpenFrozen(ctx, out.Backup)
 	if e != nil {
 		return out, e
 	}
+	defer frozen.Close()
+	identity := frozen.Identity
 	if identity.SHA256 != out.BackupHash || identity.Bytes != out.BackupBytes {
 		return out, errors.New("EXPORT_BACKUP_HASH_MISMATCH")
 	}
@@ -709,11 +721,10 @@ func VerifyExport(ctx context.Context, root, path string) (ExportManifest, error
 	if hash != out.LedgerHash {
 		return out, errors.New("EXPORT_LEDGER_HASH_MISMATCH")
 	}
-	db, e := readDB(ctx, out.Backup)
-	if e != nil {
+	db := frozen.DB
+	if e = verifyAuthorityLedger(ctx, db); e != nil {
 		return out, e
 	}
-	defer db.Close()
 	var max int64
 	if e = db.QueryRowContext(ctx, "SELECT coalesce(max(sequence),0) FROM app_change_ledger").Scan(&max); e != nil {
 		return out, e
@@ -801,11 +812,15 @@ func replayInputs(ctx context.Context, root string, conf Config, export ExportMa
 		return "", mappings, e
 	}
 	defer old.Close()
-	fresh, e := readDB(ctx, export.Backup)
+	view, e := sqlitev2.OpenFrozen(ctx, export.Backup)
 	if e != nil {
 		return "", mappings, e
 	}
-	defer fresh.Close()
+	defer view.Close()
+	if view.Identity.SHA256 != export.BackupHash {
+		return "", mappings, errors.New("EXPORT_BACKUP_HASH_MISMATCH")
+	}
+	fresh := view.DB
 	after := export.From
 	for {
 		page, e := changesPage(ctx, fresh, after)
@@ -954,8 +969,12 @@ func Restore(ctx context.Context, root, exportPath string) (Config, error) {
 		return conf, e
 	}
 	defer releaseTarget()
-	if _, e = isolatedSnapshot(ctx, root, manifest.Backup, target, false); e != nil {
+	copied, e := isolatedSnapshot(ctx, root, manifest.Backup, target, false)
+	if e != nil {
 		return conf, e
+	}
+	if copied.SHA256 != manifest.BackupHash {
+		return conf, errors.New("RESTORE_BACKUP_IDENTITY_CHANGED")
 	}
 	if e = os.Rename(target+".snapshot.json", target+".seed-snapshot.json"); e != nil {
 		return conf, e
@@ -984,4 +1003,43 @@ func Restore(ctx context.Context, root, exportPath string) (Config, error) {
 		return conf, e
 	}
 	return conf, nil
+}
+
+// Check coverage in both directions, including pre-cutover data. Missing
+// historical ledger entries require explicit reconciliation, never guessed dates.
+func verifyAuthorityLedger(ctx context.Context, db *sql.DB) error {
+	if e := sqlitev2.VerifyBundleLedger(ctx, db); e != nil {
+		return e
+	}
+	for _, q := range []string{
+		"SELECT count(*) FROM app_inputs a WHERE NOT EXISTS(SELECT 1 FROM app_change_ledger l WHERE l.kind='INPUT' AND l.entity_id=a.input_id AND l.content_hash=a.raw_hash)",
+		"SELECT count(*) FROM app_runs a WHERE a.state='PUBLISHED' AND NOT EXISTS(SELECT 1 FROM app_change_ledger l WHERE l.kind='RUN' AND l.entity_id=a.run_id AND l.content_hash=a.members_hash)",
+		"SELECT count(*) FROM app_jobs a WHERE NOT EXISTS(SELECT 1 FROM app_change_ledger l WHERE l.kind='JOB' AND l.entity_id=a.job_id AND l.content_hash=a.request_hash)",
+		"SELECT count(*) FROM app_job_events a WHERE NOT EXISTS(SELECT 1 FROM app_change_ledger l WHERE l.kind='JOB_EVENT' AND l.entity_id=a.job_id||':'||a.revision)",
+	} {
+		var n int
+		if e := db.QueryRowContext(ctx, q).Scan(&n); e != nil {
+			return e
+		}
+		if n != 0 {
+			return errors.New("UNRECONCILED_AUTHORITY_LEDGER")
+		}
+	}
+	var after int64
+	for {
+		page, e := changesPage(ctx, db, after)
+		if e != nil {
+			return e
+		}
+		if len(page) == 0 {
+			break
+		}
+		for _, ch := range page {
+			if e = verifyChange(ctx, db, ch); e != nil {
+				return e
+			}
+			after = ch.Sequence
+		}
+	}
+	return nil
 }

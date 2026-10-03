@@ -7,7 +7,6 @@ import (
 	"encoding/hex"
 	"encoding/json"
 	"errors"
-	"fmt"
 	"io"
 	sqlite "modernc.org/sqlite"
 	"os"
@@ -132,22 +131,12 @@ func Snapshot(ctx context.Context, source, target string) (out SnapshotIdentity,
 	return out, nil
 }
 func SnapshotCheck(ctx context.Context, path string) (SnapshotIdentity, error) {
-	var out SnapshotIdentity
-	b, e := os.ReadFile(path + ".snapshot.json")
+	f, e := OpenFrozen(ctx, path)
 	if e != nil {
-		return out, e
+		return SnapshotIdentity{}, e
 	}
-	if e = json.Unmarshal(b, &out); e != nil {
-		return out, e
-	}
-	h, e := FileHash(ctx, path)
-	if e != nil {
-		return out, e
-	}
-	if h != out.SHA256 {
-		return out, fmt.Errorf("FROZEN_SOURCE_CHANGED: got %s", h)
-	}
-	return out, nil
+	ident := f.Identity
+	return ident, f.Close()
 }
 
 type InventoryTable struct {

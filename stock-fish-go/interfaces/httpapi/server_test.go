@@ -81,7 +81,7 @@ func (f fixture) put(t *testing.T, ns, id string, value any) {
 		t.Fatal(e)
 	}
 	h := c.Hash(raw)
-	_, e = f.store.DB().Exec("INSERT OR IGNORE INTO evidence_objects(raw_sha256,raw_size,codec,payload)VALUES(?,?,'raw',?)", h, len(raw), raw)
+	_ = fixtureInsert(t, f.store.DB(), "INSERT OR IGNORE INTO evidence_objects(raw_sha256,raw_size,codec,payload)VALUES(?,?,'raw',?)", h, len(raw), raw)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -90,7 +90,7 @@ func (f fixture) put(t *testing.T, ns, id string, value any) {
 	if e != nil {
 		t.Fatal(e)
 	}
-	_, e = f.store.DB().Exec("INSERT INTO legacy_records VALUES(?,?,?,?,?)", ns, id, h, eid, id)
+	_ = fixtureInsert(t, f.store.DB(), "INSERT INTO legacy_records VALUES(?,?,?,?,?)", ns, id, h, eid, id)
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -283,9 +283,7 @@ func TestLegacyDetailIndexCannotReplaceExplicitReference(t *testing.T) {
 	original := makeDetail("TEST_DETAIL_OLD", "SAVED_ORIGINAL")
 	makeDetail("TEST_DETAIL_NEW", "DIFFERENT_REVISION")
 	f.put(t, "strategy_experiment_runs", "TEST_REF_RUN", map[string]any{"run_id": "TEST_REF_RUN", "results": map[string]any{c.V2: map[string]any{"items": []any{map[string]any{"instrument_id": "TEST_A", "detail_ref": "TEST_DETAIL_OLD", "detail_hash": original}}}}})
-	if _, e := f.store.DB().Exec("INSERT INTO legacy_result_items VALUES('TEST_REF_RUN','TEST_A',?,'TEST_DETAIL_OLD')", c.V2); e != nil {
-		t.Fatal(e)
-	}
+	fixtureInsert(t, f.store.DB(), "INSERT INTO legacy_result_items VALUES('TEST_REF_RUN','TEST_A',?,'TEST_DETAIL_OLD')", c.V2)
 	m := object(t, f.get("/api/strategy-experiments/TEST_REF_RUN/items/TEST_A"))
 	if !bytes.Contains(m["strategy_results"], []byte("SAVED_ORIGINAL")) {
 		t.Fatal(m)
@@ -397,4 +395,41 @@ func TestObservationDateCheckUsesMetadataOnly(t *testing.T) {
 	if _, e = f.repo.InputObservation(ctx, "TEST_META_INPUT"); e == nil {
 		t.Fatal("metadata bypassed publication gate")
 	}
+}
+
+// fixtureInsert opens only TEST_FIXTURE insertion guards while constructing
+// transport-specific synthetic records. Every original DDL is restored in the
+// same transaction, before any API is invoked. Migration tests never use this.
+func fixtureInsert(t *testing.T, db *sql.DB, q string, args ...any) sql.Result {
+	t.Helper()
+	tx, e := db.Begin()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	var ddls []string
+	for _, table := range []string{"evidence_objects", "legacy_records", "legacy_result_items"} {
+		var ddl string
+		name := table + "_verification_insert"
+		if e = tx.QueryRow("SELECT sql FROM sqlite_master WHERE name=?", name).Scan(&ddl); e != nil {
+			t.Fatal(e)
+		}
+		ddls = append(ddls, ddl)
+		if _, e = tx.Exec("DROP TRIGGER " + name); e != nil {
+			t.Fatal(e)
+		}
+	}
+	result, e := tx.Exec(q, args...)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, ddl := range ddls {
+		if _, e = tx.Exec(ddl); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	return result
 }

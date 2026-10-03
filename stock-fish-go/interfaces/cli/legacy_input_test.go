@@ -3,6 +3,7 @@ package cli_test
 import (
 	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"os"
 	"testing"
@@ -25,7 +26,7 @@ func TestImportLegacyInputStrictMetadataAndIndependentNewDatabase(t *testing.T) 
 	}
 	raw := fixture["input"]
 	hash := c.Hash(raw)
-	result, e := store.DB().Exec("INSERT INTO evidence_objects(raw_sha256,raw_size,codec,payload) VALUES(?,?,'raw',?)", hash, len(raw), []byte(raw))
+	result := fixtureInsert(t, store.DB(), "INSERT INTO evidence_objects(raw_sha256,raw_size,codec,payload) VALUES(?,?,'raw',?)", hash, len(raw), []byte(raw))
 	if e != nil {
 		t.Fatal(e)
 	}
@@ -33,9 +34,7 @@ func TestImportLegacyInputStrictMetadataAndIndependentNewDatabase(t *testing.T) 
 	if e != nil {
 		t.Fatal(e)
 	}
-	if _, e = store.DB().Exec("INSERT INTO legacy_records VALUES('candidate_inputs','TEST_FIXTURE_OLD_INPUT',?,?,'TEST_FIXTURE')", hash, evidenceID); e != nil {
-		t.Fatal(e)
-	}
+	fixtureInsert(t, store.DB(), "INSERT INTO legacy_records VALUES('candidate_inputs','TEST_FIXTURE_OLD_INPUT',?,?,'TEST_FIXTURE')", hash, evidenceID)
 	var output, log bytes.Buffer
 	if e = cli.Run(ctx, []string{"import-legacy-input", "--db", store.Path, "--id", "TEST_FIXTURE_OLD_INPUT", "--cutoff", "2026-01-05T20:00:00+08:00"}, &output, &log, "TEST_FIXTURE_METADATA_BUILD"); e != nil {
 		t.Fatal(e, log.String())
@@ -79,4 +78,41 @@ func TestImportLegacyInputStrictMetadataAndIndependentNewDatabase(t *testing.T) 
 	if len(envelope.Input) == 0 || saved.Cutoff != "2026-01-05T20:00:00+08:00" {
 		t.Fatal("frozen input/cutoff not retained")
 	}
+}
+
+// fixtureInsert opens only TEST_FIXTURE insertion guards while constructing
+// transport-specific synthetic records. Every original DDL is restored in the
+// same transaction, before any API is invoked. Migration tests never use this.
+func fixtureInsert(t *testing.T, db *sql.DB, q string, args ...any) sql.Result {
+	t.Helper()
+	tx, e := db.Begin()
+	if e != nil {
+		t.Fatal(e)
+	}
+	defer tx.Rollback()
+	var ddls []string
+	for _, table := range []string{"evidence_objects", "legacy_records", "legacy_result_items"} {
+		var ddl string
+		name := table + "_verification_insert"
+		if e = tx.QueryRow("SELECT sql FROM sqlite_master WHERE name=?", name).Scan(&ddl); e != nil {
+			t.Fatal(e)
+		}
+		ddls = append(ddls, ddl)
+		if _, e = tx.Exec("DROP TRIGGER " + name); e != nil {
+			t.Fatal(e)
+		}
+	}
+	result, e := tx.Exec(q, args...)
+	if e != nil {
+		t.Fatal(e)
+	}
+	for _, ddl := range ddls {
+		if _, e = tx.Exec(ddl); e != nil {
+			t.Fatal(e)
+		}
+	}
+	if e = tx.Commit(); e != nil {
+		t.Fatal(e)
+	}
+	return result
 }

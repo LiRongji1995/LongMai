@@ -27,6 +27,11 @@ func VerifySchemaDB(ctx context.Context, db *sql.DB) error {
 			}
 		}
 	}
+	for _, table := range guardedTables {
+		if _, e = expected.ExecContext(ctx, guardDDL(table)); e != nil {
+			return e
+		}
+	}
 	rows, e := expected.QueryContext(ctx, "SELECT name,type,sql FROM sqlite_master WHERE sql IS NOT NULL ORDER BY name")
 	if e != nil {
 		return e

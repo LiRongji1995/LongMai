@@ -78,7 +78,13 @@ def funds(iid,path,got,want):
    if k in wm:cmp(iid,path+'.metrics.'+k,gm.get(k),wm[k])
   for k in ('dedup_buy_amount_cny','dedup_sell_amount_cny','dedup_net_amount_cny'):
    if k in wm:num(iid,path+'.metrics.'+k,gm.get(k),wm[k],2)
-cmp(None,'qualification.eligible_ids',summary['qualification']['eligible_ids'],qualification['eligible_ids']);cmp(None,'qualification.identity_absent',summary['qualification']['identity_absent'],qualification['identity_absent'])
+for key in ('eligible_ids','identity_absent'):
+ cmp(None,'qualification.'+key,summary['qualification'][key],qualification[key])
+for key, records_key in (('known_excluded','known_excluded_records'),('eligibility_unknown','eligibility_unknown_records')):
+ expected_records={x['instrument_id']:x['reason'] for x in qualification[records_key]}
+ assert len(expected_records)==len(qualification[records_key]),'DUPLICATE_QUALIFICATION_RECORD'
+ cmp(None,'qualification.'+key,summary['qualification'][key],expected_records)
+ cmp(None,'qualification.'+key+'.count',len(summary['qualification'][key])+(summary['qualification']['identity_absent'] if key=='eligibility_unknown' else 0),qualification[key])
 for key in ('candidate_availability','universe_coverage','selection_decidability','required_data_coverage','background_coverage','selection_evaluation_status'):
  cmp(None,'coverage.'+key,summary['coverage'][key],expected_coverage[key])
 for row in records():

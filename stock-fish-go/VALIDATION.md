@@ -1,10 +1,24 @@
 # StockFish Go V2 本轮验收
 
+## 2026-10-03 一致性修复：隔离发布成功，整体验收未通过
+
+本轮基线为 `19dab9a0f4de35808ca487a30ab1e1ba6a82ade0`、分支 `review`，用户后续已明确授权将本轮代码、测试和维护文档提交推送到远端 main；私有数据与验收产物不随源码发布。当前私有证据入口为 `reports/codex/stockfish-v2-rebuild/consistency-20261003/REPORT.md`、`acceptance.json` 与 `budget.json`。原冻结源已完成新版全量验证，批次投影深验、正式隔离发布与新进程 readiness 通过；旧轮次未发布状态不再代表当前目标。最终 Go 源码身份为 `ecc990c6926b277a9ff9f597fca364185bd0d3228d25b5971180d54c4a48cf44`。
+
+冻结源通过经过字节核验的私有独立视图消费；目标验证持 SQLite 写保留锁，已验证的迁入范围禁止追加。研究包闭合验证、发布及 `BUNDLE_V1` 账本同事务。真实输入回放式回退、bundle-only 恢复，以及新增原生结果/任务后的有损回退阻止和新文件恢复均已通过。隔离调度 PAUSED，生产未激活。
+
+R1/V2 新库原生运行、Python 保存语义投影差分、Go 新旧存储精确差分及 R1 冷暖差分通过。六次全池额度包含一次保留的 RSS 失败，修复后五次成功。观察日 2026-09-30，cutoff 2026-10-02T20:10:00.478775+08:00。R1 为 6 CORE_PASS、41 CORE_UNKNOWN；V2 为 0 FOCUS、5 WATCH、1 UNKNOWN。两者必要资料、背景与选择可判定性仍 INCOMPLETE，均为 NOT_EVALUABLE_AS_COMPLETE_STRATEGY；不能将零 FOCUS 当作完整资料下的合法空集。
+
+完整规模真实增量未执行：保留现有源、目标、备份和结果后，受核验源视图与耐久副本的峰值超过 50 GiB 准入上限，详见 `incremental-admission.json`；合成增量测试不替代该项。新增迁移预算 14400 秒与旧 7199.963 秒分开，未挪用策略预算。Windows 仅交叉编译，原生未验证；缓存字节指标的上下文缺失另列限制。R1 仍为 RESEARCH_ONLY，MARKET_EDGE=NOT_ESTABLISHED。本轮源码提交推送按后续明确授权执行，生产不切换。
+
+本轮最终源码全套 Go 正式验收测试、适用 race、gofmt/vet、原生构建及 Windows 交叉编译通过；4 项 Python 工具单测通过。最终全套日志为 `memory-full-tests`，末次内存改动 race 为 `memory-native-race`；此前一致性/生命周期与解码末次 race 为 `final-lifecycle-race`、`decode-race`。逐项命令、退出码和失败保留在当前 `budget.json`。Windows 原生运行未验证。
+
+## 2026-10-02 历史记录（旧验收状态与授权，不代表本轮）
+
 基线为 `1ceb256e5331ec24ca9a5bb4185c52ebbdba4245`，检出分支 `review`，开始时工作区干净，实际 origin 为 `LiRongji1995/stockfish-qlib-quant-system`。用户后续授权检查后提交并推送 main，不授权生产切换。先前仅诊断实现的记录保留于 Git 历史。
 
-当前整体验收 **BLOCKED_MIGRATION_BUDGET**，本次工程尚未全部完成。真实数据及逐股结果只保存在被忽略的 `reports/codex/stockfish-v2-rebuild/`，不随源码发布。测试 fixture 使用独立 DB/state/artifact，不写入真实历史。
+该轮结束时整体验收 **BLOCKED_MIGRATION_BUDGET**，本次工程尚未全部完成。真实数据及逐股结果只保存在被忽略的 `reports/codex/stockfish-v2-rebuild/`，不随源码发布。测试 fixture 使用独立 DB/state/artifact，不写入真实历史。
 
-## 工程命令与证据
+### 2026-10-02 历史工程命令与证据
 
 `GO` 为私有 `work/r1-go-tools/go/bin/go`（Go 1.27.1），`ORACLE` 为 `reports/codex/stockfish-v2-rebuild/TEST_FIXTURE-oracle-full-v3`。Python 仍使用原 pyqlib 0.9.7 wheel。
 
@@ -30,7 +44,7 @@
 
 未通过的中间检查也保留：`go-final-integrated-tests.log`为主动SIGINT中断，以释放本机2核/8GiB资源供有累计deadline的真实验证；不计通过。`go-final-stable-tests.log`为上述3例HTTP fixture缺扩展门禁失败。修复后采用稳定源码完整重跑，不删除失败记录或扩大skip。
 
-## 真实迁移与独立运行
+### 2026-10-02 历史迁移与独立运行
 
 旧权威库只读，通过SQLite online backup冻结，源SHA-256为 `f48ea2aa217173c34b20eda59be0f2a6409fd3b6858681a703390d202c4a1f4e`，7,752,036,352字节。快照/迁移/验证/恢复累计预算7200s；研究最多6次、单次1800s、累计10800s；新持久文件不超过50GiB、可用空间至少10GiB。每步实际时长保存在私有账本。
 
@@ -44,15 +58,15 @@
 
 最后验证的1053次外部采样峰值RSS695,775,232字节（663.54MiB），最小可用空间16,970,547,200字节（15.80GiB）；采样自monitor启动起，不能当作整个任务的保证峰值。实际资源/状态见私有`migration-ledger.json`、`storage-acceptance-status.json`、`verify.json`与`real-recovery-drill.json`。macOS sandbox已实际拒绝旧stock-fish路径、冻结旧库、Python执行并移除PATH；业务运行仍须单独验收，不能以隔离配置或拒绝探针代替成功。
 
-## 性能口径
+### 2026-10-02 性能记录
 
 阶段指标包含输入SQL、历史分区/raw/投影校验、JSON解码、来源/修订、事实、策略及输出压缩/保存复核。逻辑payload、唯一/重复证据、缓存字节是应用层计数，不是物理磁盘IO。
 
-持久run的`summary.metrics`在保存前取快照，不能充当端到端耗时；输出压缩、保存和最终复核指标出现在资源scope结束时的完整日志。真实性能报告必须保留该日志，并用外层计时涵盖研究、重新验证与名单查询，不能只引用策略计算时间。当前真实链路未运行，未给出整体提速结论。
+持久run的`summary.metrics`在保存前取快照，不能充当端到端耗时；输出压缩、保存和最终复核指标出现在资源scope结束时的完整日志。真实性能报告必须保留该日志，并用外层计时涵盖研究、重新验证与名单查询，不能只引用策略计算时间。截至 2026-10-02，该轮真实链路未运行；2026-10-03 的真实测量见当前私有 real-performance.json，仍不推断因果提速。
 
 中点秩预排序/sector共享和的fixture基准约229倍/44倍；当前索引fixture窗口/横截面/摘要约41.30/25.85/6.88倍。这些仅证明局部优化。真实全链路须比较同输入/源码旧新存储冷暖运行，不能与旧615.57s诊断直接相除。
 
-## 完成矩阵
+### 2026-10-02 历史完成矩阵
 
 | 项目 | 当前判定 | 证据及边界 |
 | --- | --- | --- |
@@ -72,3 +86,7 @@
 | PRODUCTION_ACTIVATION | NOT_ACTIVATED_EXPECTED | 不切换生产服务、路径、默认策略或外部调度。 |
 
 未执行Qlib训练、全仓Python测试、全历史回测或投资有效性验证。旧执行/训练与SDK保留Python路径；R1/V2规则、新库读写、公共事实不依赖Python子进程。参数尚未验证，`MARKET_EDGE=NOT_ESTABLISHED`。
+
+## 本轮真实 R1 资源失败及修复边界
+
+`consistency-20261003/r1-new-cold.*` 保留第一次真实运行的失败证据：3040 只事实已经计算，但结果编码至约 48 MB 时外层 RSS 达 1,077,608,448 字节，超过 1 GiB，任务记录为 FAILED，未发布 run；该次仍计入六次全池上限。随后主 CLI 的 Go 堆软目标由 768 MiB 降至 512 MiB，原生引擎在事实转结果前释放输入引用，在每 16 MiB 编码后回收已经释放的对象，逐股释放 coverage support。编码字段、原始字节/投影检查、策略公式及资源硬门禁保持原语义。新 `result_encoding` 阶段单列编码时间；真实修复效果以最终预算账本、RSS 和保存结果差分为准，不由堆软目标推定。

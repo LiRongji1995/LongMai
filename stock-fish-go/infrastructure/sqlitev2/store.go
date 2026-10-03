@@ -140,6 +140,9 @@ func Open(ctx context.Context, path string, create bool) (*Store, error) {
 	if e = store.InitBatchProjectionSchema(ctx); e != nil {
 		return fail(e)
 	}
+	if e = initVerificationGuard(ctx, db); e != nil {
+		return fail(e)
+	}
 	return store, nil
 }
 

@@ -24,13 +24,15 @@ type Verification struct {
 
 func Verify(ctx context.Context, source, target string, opt Options) (out Verification, err error) {
 	start := time.Now()
-	out = Verification{Version: "V2_FULL_VERIFICATION_1", Checked: map[string]int64{}}
+	out = Verification{Version: VerificationVersion, Checked: map[string]int64{}}
 	defer func() { out.Duration = time.Since(start).Seconds() }()
-	ident, e := SnapshotCheck(ctx, source)
+	frozen, releaseFrozen, e := acquireFrozen(ctx, source)
 	if e != nil {
 		return out, e
 	}
-	out.SourceSHA256 = ident.SHA256
+	out.SourceSHA256 = frozen.Identity.SHA256
+	defer releaseFrozen()
+	ident := frozen.Identity
 	s, e := Open(ctx, target, false)
 	if e != nil {
 		return out, e
@@ -48,10 +50,16 @@ func Verify(ctx context.Context, source, target string, opt Options) (out Verifi
 	if _, e = s.db.ExecContext(ctx, "UPDATE migration_state SET status='MIGRATING',verification=NULL WHERE id=1 AND source_sha256=?", ident.SHA256); e != nil {
 		return out, e
 	}
+	// Hold SQLite's write reservation for the entire target proof. The shared
+	// CLI lease alone cannot exclude ordinary external SQLite writers.
+	if _, e = s.db.ExecContext(ctx, "BEGIN IMMEDIATE"); e != nil {
+		return out, e
+	}
+	defer s.db.ExecContext(context.Background(), "ROLLBACK")
 	if e = s.VerifySchema(ctx); e != nil {
 		return out, e
 	}
-	if _, e = s.db.ExecContext(ctx, "ATTACH DATABASE ? AS frozen", URI(source, true)); e != nil {
+	if _, e = s.db.ExecContext(ctx, "ATTACH DATABASE ? AS frozen", frozen.URI()); e != nil {
 		return out, e
 	}
 	defer s.db.ExecContext(context.Background(), "DETACH DATABASE frozen")
@@ -234,6 +242,9 @@ func Verify(ctx context.Context, source, target string, opt Options) (out Verifi
 	out.Duration = time.Since(start).Seconds()
 	raw, _ := json.Marshal(out)
 	_, e = s.db.ExecContext(ctx, "UPDATE migration_state SET status='VERIFIED',verification=? WHERE id=1 AND source_sha256=?", string(raw), ident.SHA256)
+	if e == nil {
+		_, e = s.db.ExecContext(ctx, "COMMIT")
+	}
 	return out, e
 }
 func Publish(ctx context.Context, target string) error {
@@ -255,7 +266,7 @@ func Publish(ctx context.Context, target string) error {
 		return errors.New("UNVERIFIED_MIGRATION_CANNOT_PUBLISH")
 	}
 	var v Verification
-	if e = json.Unmarshal([]byte(raw.String), &v); e != nil || v.Version != "V2_FULL_VERIFICATION_1" || v.SourceSHA256 != source || v.CompletedAt == "" || v.Integrity != "ok" || v.ForeignKeys != 0 || len(v.Errors) != 0 {
+	if e = json.Unmarshal([]byte(raw.String), &v); e != nil || v.Version != VerificationVersion || v.SourceSHA256 != source || v.CompletedAt == "" || v.Integrity != "ok" || v.ForeignKeys != 0 || len(v.Errors) != 0 {
 		return errors.New("INVALID_VERIFICATION_CANNOT_PUBLISH")
 	}
 	if _, e = s.BackfillBatchProjections(ctx, BatchProjectionOptions{ResourceCheck: func() error { return CheckResources(filepath.Dir(target)) }}); e != nil {

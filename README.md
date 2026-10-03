@@ -2,6 +2,10 @@
 
 本地工程瘦身的当前结果、依赖安装和已知限制见 [瘦身主报告](stock-fish/docs/SLIMMING_REVIEW_AND_RESULT.md)；下列历史验收数字不代表本轮结果。
 
+## Go / SQLite V2 隔离验收（2026-10-03）
+
+隔离新库已发布，R1/V2 独立运行与差分、备份恢复通过；完整规模真实增量受资源门禁阻止，整体验收尚未通过。数据覆盖不足以评价完整策略，生产入口未切换，源码按后续明确授权提交推送。当前边界见 [Go 验收记录](stock-fish-go/VALIDATION.md)。
+
 ## Daily Observation Monitor（2026-09-23）
 
 【事实】用 `daily-observation` 查看当前交付、原冻结推荐、后验状态和最近 20 个交易日；只读现有数据，无记录显示 NOT_AVAILABLE，正常空推荐仍是 READY。入口及计数口径见 [观察工具说明](stock-fish/docs/PHASE1_OBSERVATION_MONITOR.md)。
