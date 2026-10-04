@@ -6,7 +6,10 @@ import (
 	"encoding/json"
 	"errors"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	"os"
+	"sort"
+	"time"
 )
 
 // ReadOnly exposes no mutation operation. There is no lease, schema initializer,
@@ -17,6 +20,10 @@ type ReadOnly struct {
 }
 
 func OpenReadOnly(ctx context.Context, path string) (*ReadOnly, error) {
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "readonly_open_schema_identity", time.Since(started).Seconds())
+	}()
 	if _, e := os.Stat(path); e != nil {
 		return nil, e
 	}
@@ -48,13 +55,21 @@ func (r *ReadOnly) Identity() map[string]string {
 	return out
 }
 func (r *ReadOnly) Ready(ctx context.Context) (c.Readiness, error) {
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "readonly_readiness", time.Since(started).Seconds())
+	}()
 	return NewReadOnlyAppRepository(r.db).Ready(ctx)
 }
 func (r *ReadOnly) Runs(ctx context.Context, limit, offset int) ([]c.Run, error) {
 	return NewReadOnlyAppRepository(r.db).Runs(ctx, limit, offset)
 }
 func (r *ReadOnly) Inputs(ctx context.Context, observation string) ([]c.InputRecord, error) {
-	rows, e := r.db.QueryContext(ctx, "SELECT input_id,raw_hash,observation,cutoff,coverage FROM app_inputs WHERE observation=? ORDER BY cutoff DESC,input_id", observation)
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "planner_input_query", time.Since(started).Seconds())
+	}()
+	rows, e := r.db.QueryContext(ctx, "SELECT input_id,raw_hash,observation,cutoff,coverage FROM app_inputs WHERE observation=? ORDER BY input_id,raw_hash", observation)
 	if e != nil {
 		return nil, e
 	}
@@ -67,12 +82,61 @@ func (r *ReadOnly) Inputs(ctx context.Context, observation string) ([]c.InputRec
 		}
 		out = append(out, in)
 	}
+	if e = rows.Err(); e != nil {
+		return nil, e
+	}
+	// Raw cutoff text remains unchanged. Invalid timestamps sort after all valid
+	// timestamps; eligibility (future/intraday/session) is the planner's concern.
+	sort.SliceStable(out, func(i, j int) bool {
+		a, ea := time.Parse(time.RFC3339Nano, out[i].Cutoff)
+		b, eb := time.Parse(time.RFC3339Nano, out[j].Cutoff)
+		if (ea == nil) != (eb == nil) {
+			return ea == nil
+		}
+		if ea == nil && !a.Equal(b) {
+			return a.After(b)
+		}
+		if out[i].ID != out[j].ID {
+			return out[i].ID < out[j].ID
+		}
+		return out[i].RawHash < out[j].RawHash
+	})
+	return out, nil
+}
+
+// MatchingRuns filters at the database boundary instead of scanning unrelated
+// historical pages. Publication header identities are verified by appScanRun.
+func (r *ReadOnly) MatchingRuns(ctx context.Context, input, strategy string, limit, offset int) ([]c.Run, error) {
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "planner_matching_runs", time.Since(started).Seconds())
+	}()
+	if limit < 1 || limit > 200 || offset < 0 {
+		return nil, errors.New("INVALID_RUN_PAGE")
+	}
+	rows, e := r.db.QueryContext(ctx, "SELECT "+appRunColumns+" FROM app_runs WHERE state='PUBLISHED' AND input_id=? AND strategy_id=? ORDER BY created_at DESC,run_id LIMIT ? OFFSET ?", input, strategy, limit, offset)
+	if e != nil {
+		return nil, e
+	}
+	defer rows.Close()
+	out := []c.Run{}
+	for rows.Next() {
+		run, e := appScanRun(rows)
+		if e != nil {
+			return nil, e
+		}
+		out = append(out, run)
+	}
 	return out, rows.Err()
 }
 
 // Saved verifies every detail and derived summary, then selects the requested
 // projection from the same consistent transaction. Pagination is internal.
 func (r *ReadOnly) Saved(ctx context.Context, id, instrument string, all bool) (c.Run, error) {
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "saved_projection_total", time.Since(started).Seconds())
+	}()
 	tx, e := r.db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if e != nil {
 		return c.Run{}, e
@@ -89,48 +153,42 @@ func (r *ReadOnly) Saved(ctx context.Context, id, instrument string, all bool) (
 		return c.Run{}, e
 	}
 	repo := NewReadOnlyAppRepository(r.db)
-	if e = repo.verifyPublishedTx(ctx, tx, id); e != nil {
-		return c.Run{}, e
-	}
 	run, e := appScanRun(tx.QueryRowContext(ctx, "SELECT "+appRunColumns+" FROM app_runs WHERE run_id=?", id))
 	if e != nil {
 		return run, e
 	}
-	rows, e := tx.QueryContext(ctx, "SELECT i.instrument_id,i.payload,i.raw_hash,i.raw_size,s.decision_status FROM app_items i JOIN app_item_summaries s USING(run_id,instrument_id) WHERE i.run_id=? ORDER BY s.display_rank,i.ordinal", id)
-	if e != nil {
-		return run, e
+	type selected struct {
+		item          c.Item
+		ordinal, rank int
 	}
-	defer rows.Close()
-	run.Items = []c.Item{}
+	items := []selected{}
 	expanded := int64(0)
-	for rows.Next() {
-		var iid, hash, status string
-		var packed []byte
-		var n int64
-		if e = rows.Scan(&iid, &packed, &hash, &n, &status); e != nil {
-			return run, e
-		}
-		if instrument != "" && iid != instrument {
-			continue
+	e = repo.verifyPublishedCollectTx(ctx, tx, id, func(item c.Item, ordinal, rank int, status string) error {
+		if instrument != "" && item.ID != instrument {
+			return nil
 		}
 		if instrument == "" && !all && status != "CORE_PASS" && status != "FOCUS" && status != "WATCH" {
-			continue
+			return nil
 		}
-		expanded += n
+		expanded += int64(len(item.Payload))
 		if expanded > 128<<20 {
-			return run, errors.New("DETAIL_OUTPUT_LIMIT")
+			return errors.New("DETAIL_OUTPUT_LIMIT")
 		}
-		raw, e := appUnpack(packed, n)
-		if e != nil {
-			return run, e
-		}
-		if appHash(raw) != hash {
-			return run, errors.New("RESULT_DETAIL_CORRUPT")
-		}
-		run.Items = append(run.Items, c.Item{ID: iid, Payload: json.RawMessage(raw)})
+		items = append(items, selected{item, ordinal, rank})
+		return nil
+	})
+	if e != nil {
+		return c.Run{}, e
 	}
-	if e = rows.Err(); e != nil {
-		return run, e
+	sort.Slice(items, func(i, j int) bool {
+		if items[i].rank != items[j].rank {
+			return items[i].rank < items[j].rank
+		}
+		return items[i].ordinal < items[j].ordinal
+	})
+	run.Items = []c.Item{}
+	for _, item := range items {
+		run.Items = append(run.Items, item.item)
 	}
 	if instrument != "" && len(run.Items) == 0 {
 		var raw []byte

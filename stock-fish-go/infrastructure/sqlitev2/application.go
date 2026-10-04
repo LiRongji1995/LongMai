@@ -440,6 +440,12 @@ func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
 }
 
 func (r *AppRepository) verifyPublishedTx(ctx context.Context, tx *sql.Tx, id string) error {
+	return r.verifyPublishedCollectTx(ctx, tx, id, nil)
+}
+
+// collect receives only details whose bytes and typed summary have just been
+// verified. It is private and used within the same read snapshot, never cached.
+func (r *AppRepository) verifyPublishedCollectTx(ctx context.Context, tx *sql.Tx, id string, collect func(c.Item, int, int, string) error) error {
 	started := time.Now()
 	defer func() {
 		ports.Observe(ports.BudgetFromContext(ctx), "result_closure_verification", time.Since(started).Seconds())
@@ -484,6 +490,11 @@ func (r *AppRepository) verifyPublishedTx(ctx context.Context, tx *sql.Tx, id st
 		}
 		if !so.Valid || int(so.Int64) != ordinal || !srank.Valid || int(srank.Int64) != expectedRank || status.String != expectedStatus || projectionVersion.String != "GO_RESULT_SUMMARY_V1" || sourceHash.String != h || summaryHash.String != appHash(summary) || !bytes.Equal(summary, expectedSummary) {
 			return errors.New("RESULT_SUMMARY_PROJECTION_CORRUPT")
+		}
+		if collect != nil {
+			if err := collect(c.Item{ID: iid, Payload: json.RawMessage(raw)}, ordinal, expectedRank, expectedStatus); err != nil {
+				return err
+			}
 		}
 		fmt.Fprintf(members, "%d\x00%s\x00%s\n", n, iid, h)
 		n++

@@ -41,6 +41,9 @@ func canonicalDatabasePath(path string) (string, error) {
 }
 
 func Run(ctx context.Context, args []string, out, log io.Writer, sourceHash string) (result error) {
+	if len(args) > 0 && (args[0] == "review" || args[0] == "research-lab") {
+		return reviewLab(ctx, args, out, log, sourceHash)
+	}
 	if len(args) == 0 || daily.IsCommand(args[0]) {
 		return daily.Run(ctx, args, out, log, sourceHash, ConfigHashes)
 	}

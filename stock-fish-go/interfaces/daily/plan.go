@@ -3,10 +3,9 @@ package daily
 import (
 	"context"
 	"encoding/json"
-	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
+	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/calendar"
-	"reflect"
-	"strings"
 	"time"
 )
 
@@ -24,6 +23,31 @@ type Plan struct {
 	Research    bool           `json:"would_research"`
 	Capture     bool           `json:"would_capture"`
 	Refresh     bool           `json:"refresh_requested"`
+	RefreshCold bool           `json:"cold_history_capture_authorized"`
+	InputChoice string         `json:"input_choice,omitempty"`
+}
+
+// Equal instants have no temporal ordering. Input ID, byte hash, then original
+// cutoff text provide a stable choice without claiming one input is newer.
+func latestEligibleInput(inputs []c.InputRecord, observation string, now time.Time) (c.InputRecord, bool) {
+	closed, err := time.Parse(time.RFC3339, observation+"T15:00:00+08:00")
+	if err != nil {
+		return c.InputRecord{}, false
+	}
+	var selected c.InputRecord
+	var selectedTime time.Time
+	found := false
+	for _, in := range inputs {
+		cutoff, err := time.Parse(time.RFC3339Nano, in.Cutoff)
+		if err != nil || in.ID == "" || in.Observation != observation || cutoff.After(now) || cutoff.Before(closed) {
+			continue
+		}
+		tieBefore := in.ID < selected.ID || (in.ID == selected.ID && (in.RawHash < selected.RawHash || (in.RawHash == selected.RawHash && in.Cutoff < selected.Cutoff)))
+		if !found || cutoff.After(selectedTime) || (cutoff.Equal(selectedTime) && tieBefore) {
+			selected, selectedTime, found = in, cutoff, true
+		}
+	}
+	return selected, found
 }
 
 func makePlan(ctx context.Context, b backend, conf Config, s, source string, hashes map[string]string, cal map[string]any, now time.Time) (Plan, error) {
@@ -36,25 +60,25 @@ func makePlan(ctx context.Context, b backend, conf Config, s, source string, has
 	if e != nil {
 		return p, e
 	}
-	for _, in := range inputs {
-		cut, e := time.Parse(time.RFC3339Nano, in.Cutoff)
-		if e != nil || cut.After(now) {
-			continue
-		}
-		closed, e := time.Parse(time.RFC3339, in.Observation+"T15:00:00+08:00")
-		if e != nil || cut.Before(closed) {
-			continue
-		}
-		p.InputID = in.ID
-		p.Cutoff = in.Cutoff
-		break
+	inputHash := ""
+	if in, ok := latestEligibleInput(inputs, p.Observation, now); ok {
+		p.InputID, p.Cutoff = in.ID, in.Cutoff
+		inputHash = in.RawHash
+		p.InputChoice = "PARSED_INSTANT_DESC_ID_HASH_TEXT_ASC_ON_TIES"
 	}
 	if p.InputID == "" {
 		p.Blockers = append(p.Blockers, "LOCAL_FROZEN_INPUT_UNAVAILABLE")
 		return p, nil
 	}
 	for offset := 0; ; offset += 200 {
-		runs, e := b.Runs(ctx, 200, offset)
+		var runs []c.Run
+		if matching, ok := b.(interface {
+			MatchingRuns(context.Context, string, string, int, int) ([]c.Run, error)
+		}); ok {
+			runs, e = matching.MatchingRuns(ctx, p.InputID, s, 200, offset)
+		} else {
+			runs, e = b.Runs(ctx, 200, offset)
+		}
 		if e != nil {
 			return p, e
 		}
@@ -63,28 +87,18 @@ func makePlan(ctx context.Context, b backend, conf Config, s, source string, has
 				continue
 			}
 			var m struct {
-				InputHash   string            `json:"input_bytes_hash"`
-				Observation string            `json:"observation_date"`
-				Cutoff      string            `json:"cutoff"`
-				Config      map[string]string `json:"config_hashes"`
-				Source      string            `json:"go_source_hash"`
-				Target      string            `json:"target_session"`
-				Conversion  string            `json:"conversion_version"`
+				InputHash   string `json:"input_bytes_hash"`
+				Observation string `json:"observation_date"`
+				Cutoff      string `json:"cutoff"`
+				Target      string `json:"target_session"`
 			}
 			if json.Unmarshal(r.Manifest, &m) != nil {
 				continue
 			}
-			if m.Observation != p.Observation || m.Cutoff != p.Cutoff || !reflect.DeepEqual(m.Config, hashes) || m.Source == "" || strings.HasPrefix(m.Source, "UNRECORDED") || m.Conversion != evidence.InputContractVersion {
+			if m.Observation != p.Observation || m.Cutoff != p.Cutoff || !buildidentity.Matches(r.Manifest, source, hashes) {
 				continue
 			}
-			inputHash := ""
-			for _, in := range inputs {
-				if in.ID == p.InputID {
-					inputHash = in.RawHash
-					break
-				}
-			}
-			if m.InputHash != inputHash {
+			if inputHash == "" || m.InputHash != inputHash {
 				continue
 			}
 			target := m.Target
@@ -110,7 +124,7 @@ func makePlan(ctx context.Context, b backend, conf Config, s, source string, has
 		}
 	}
 	p.Research = true
-	if source == "" || strings.HasPrefix(source, "UNRECORDED") {
+	if !buildidentity.Recorded(source) || !buildidentity.Recorded(buildidentity.Current()) {
 		p.Blockers = append(p.Blockers, "RECORDED_BUILD_REQUIRED")
 	}
 	return p, nil

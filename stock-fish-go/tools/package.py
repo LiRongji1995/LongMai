@@ -44,6 +44,11 @@ meta = {'protocol':'STOCKFISH_DAILY_V1','go_source_hash':identity,
         'host_os':platform.system(),'process_architecture':platform.machine(),
         'go_build':subprocess.check_output([a.go,'version'],text=True).strip(),
         'production_activation':'NOT_AUTHORIZED','manual_acceptance':'NOT_RUN_BY_USER'}
+source_manifest=json.loads((out/'stockfish.identity.json').read_text())
+meta['business_implementation_id']=source_manifest['business']['sha256']
+meta['facts_implementation_id']=source_manifest['facts']['sha256']
+meta['binary_sha256']=hashlib.sha256((out/'stockfish').read_bytes()).hexdigest()
+meta['dependencies']=subprocess.check_output([a.go,'version','-m',str(out/'stockfish')],text=True)
 (out/'BUILD.json').write_text(json.dumps(meta,indent=2)+'\n')
 for script in (out/'install.sh', worker/'setup-worker.sh'):
     script.chmod(0o755)

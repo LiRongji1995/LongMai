@@ -1,3 +1,5 @@
+> 2026-10-04 四阶段新任务：用户后续明确要求同步本轮源码、测试和说明到远端 main，生产切换仍未授权。新增真实 cutoff 排序、业务源码兼容身份、共享 job 等待边界、SDK 真导入、深验读取去重复、中文解释与 diff、追加复盘及候选实验源码；详见 [四阶段交接](../../stock-fish-go/delivery/FOUR_STAGE_REPORT.md)。项目当前约 54.1 GiB 超过本轮 50 GiB 总量上限，资源限制未调整，构建、测试、真实性能和新包均未运行，不沿用下方旧验收结论。仅同观察日单证券算术复用；跨日递推、Go/Python 历史桥和影子稳定性准入尚未实现。策略、配置、生产和旧 run 保持。
+
 > 2026-10-04 Go 日常终端增量：现有 `stockfish` 提供保存结果只读查询/解释/导出和一次本地冻结输入研究，见 [说明](../../stock-fish-go/delivery/USER_GUIDE.md)。它是隔离候选包，不切换下方 Python 日常生产入口；在线 refresh、完整规模增量、人工验收和生产激活单列状态。验收后用户已明确授权提交推送本轮源码、测试和说明，生产仍未授权切换。策略、配置和旧 run 不覆写。
 
 > 本轮最终本地验收：源码 e31cf806；普通/race/正式 oracle/vet 与包外实际进程检查通过。当前版本同输入历史 R1 完成 3040 证券（832.179 秒），全部明细与旧 run 一致，manifest 源码身份/新增覆盖标记差异保留；6 CORE_PASS 仍是资料不完整的研究子集。实际 refresh 在网络前因既有 pydantic 编译扩展缺失失败，HTTP 0、回执保留，未联网验收。完整旧库增量 BLOCKED、人工 NOT_RUN_BY_USER、生产 NOT_AUTHORIZED，见 [本轮自测报告](../../stock-fish-go/delivery/SELFTEST_REPORT.md)。

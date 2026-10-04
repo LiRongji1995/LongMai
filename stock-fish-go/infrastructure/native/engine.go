@@ -8,6 +8,7 @@ import (
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
 	evidence "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
 	facts "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/calendar"
 	resources "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/runtime"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
@@ -94,6 +95,9 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	}
 	historyHash := f.Input.HistoryHash
 	manifest := map[string]any{"contract": "STOCKFISH_GO_RUN_V2", "input_id": in.ID, "input_bytes_hash": in.RawHash, "history_hash": f.Input.HistoryHash, "history_ref": f.Input.HistoryRef, "strategy_id": r.Strategy, "go_source_hash": e.SourceHash, "config_hashes": e.ConfigHashes, "schema_version": 2, "history_storage_backend": e.StorageBackend, "conversion_version": evidence.InputContractVersion, "observation_date": f.Input.Observation, "cutoff": f.Cutoff, "budget_seconds": r.BudgetSeconds, "source_bytes_limit": resources.MaxSourceBytes, "rss_bytes_limit": resources.MaxRSS, "product_role": "RESEARCH_ONLY", "production_promotion": "DISABLED", "market_edge": "NOT_ESTABLISHED", "parameter_validation": "尚未验证"}
+	manifest["business_implementation_id"] = buildidentity.Current()
+	manifest["facts_implementation_id"] = buildidentity.Facts()
+	manifest["daily_evidence_policy"] = buildidentity.Policy
 	if r.TargetSession != "" {
 		manifest["target_session"] = r.TargetSession
 		manifest["daily_evidence_policy"] = r.EvidencePolicy

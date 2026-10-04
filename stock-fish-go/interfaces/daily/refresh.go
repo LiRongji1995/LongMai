@@ -50,6 +50,10 @@ func (b *boundedBuffer) Write(p []byte) (int, error) {
 	return b.Buffer.Write(p)
 }
 func capture(ctx context.Context, conf Config, day string, log io.Writer) ([]byte, error) {
+	return captureWithCold(ctx, conf, day, log, false)
+}
+
+func captureWithCold(ctx context.Context, conf Config, day string, log io.Writer, allowCold bool) ([]byte, error) {
 	if refreshReady(conf) != "CONFIGURED_NOT_ONLINE_VERIFIED" {
 		return nil, errors.New(refreshReady(conf))
 	}
@@ -65,7 +69,12 @@ func capture(ctx context.Context, conf Config, day string, log io.Writer) ([]byt
 		return nil, e
 	}
 	defer b.Close()
-	request, _ := json.Marshal(map[string]string{"contract": conf.Provider, "observation_date": day, "output": dir})
+	historyStatus := captureHistoryStatus(b.Ctx(), conf)
+	requestFields := map[string]any{"contract": conf.Provider, "observation_date": day, "output": dir, "allow_cold_capture": allowCold, "history_status": historyStatus}
+	if historyStatus["history_present"] != false {
+		requestFields["history_reuse"] = historyStatus
+	}
+	request, _ := json.Marshal(requestFields)
 	cmd := exec.CommandContext(b.Ctx(), conf.Python, conf.Worker)
 	resources.ConfigureCommand(cmd)
 	cmd.Stdin = bytes.NewReader(request)
@@ -78,7 +87,7 @@ func capture(ctx context.Context, conf Config, day string, log io.Writer) ([]byt
 	clockErr := b.Check()
 	var report map[string]any
 	decodeErr := json.Unmarshal(stdout.Bytes(), &report)
-	receipt := map[string]any{"contract": conf.Provider, "started_at": start.Format(time.RFC3339Nano), "completed_at": time.Now().UTC().Format(time.RFC3339Nano), "worker_sha256": conf.WorkerHash, "exit_success": e == nil, "worker_report": report, "metrics": b.Snapshot(), "status": "FAILED"}
+	receipt := map[string]any{"contract": conf.Provider, "started_at": start.Format(time.RFC3339Nano), "completed_at": time.Now().UTC().Format(time.RFC3339Nano), "worker_sha256": conf.WorkerHash, "exit_success": e == nil, "worker_report": report, "metrics": b.Snapshot(), "history_status": historyStatus, "cold_capture_explicitly_requested": allowCold, "status": "FAILED"}
 	if e == nil && decodeErr == nil && clockErr == nil && (report["status"] == "COMPLETE" || report["status"] == "PARTIAL") {
 		receipt["status"] = report["status"]
 	}
@@ -107,11 +116,15 @@ func capture(ctx context.Context, conf Config, day string, log io.Writer) ([]byt
 }
 
 func dependencyCheck(ctx context.Context, conf Config) map[string]any {
+	return dependencyCheckTimeout(ctx, conf, 30*time.Second)
+}
+
+func dependencyCheckTimeout(ctx context.Context, conf Config, timeout time.Duration) map[string]any {
 	status := refreshReady(conf)
 	if status != "CONFIGURED_NOT_ONLINE_VERIFIED" {
 		return map[string]any{"status": status, "network_probe": false}
 	}
-	check, cancel := context.WithTimeout(ctx, 5*time.Second)
+	check, cancel := context.WithTimeout(ctx, timeout)
 	defer cancel()
 	cmd := exec.CommandContext(check, conf.Python, conf.Worker, "--check")
 	resources.ConfigureCommand(cmd)
@@ -119,14 +132,43 @@ func dependencyCheck(ctx context.Context, conf Config) map[string]any {
 	cmd.Stdout = &stdout
 	cmd.Stderr = io.Discard
 	e := cmd.Run()
+	if check.Err() != nil {
+		status := "BLOCKED_DEPENDENCY_CHECK_TIMEOUT"
+		if errors.Is(check.Err(), context.Canceled) {
+			status = "BLOCKED_DEPENDENCY_CHECK_CANCELED"
+		}
+		return map[string]any{"status": status, "network_probe": false, "check_timeout_seconds": timeout.Seconds()}
+	}
 	var v map[string]any
 	if json.Unmarshal(stdout.Bytes(), &v) != nil {
-		return map[string]any{"status": "BLOCKED_DEPENDENCY_PROBE", "network_probe": false}
+		return map[string]any{"status": "BLOCKED_DEPENDENCY_CHECK_PROTOCOL", "network_probe": false}
 	}
-	if e != nil {
-		v["status"] = "BLOCKED_DEPENDENCY_MISSING"
+	if v["check_contract"] != "OFFLINE_ACTUAL_IMPORT_AND_LOCAL_CALL_V1" || v["network_probe"] != false || v["network_calls_forbidden"] != true {
+		return map[string]any{"status": "BLOCKED_DEPENDENCY_CHECK_PROTOCOL", "network_probe": false}
+	}
+	if e != nil || v["status"] != "INSTALLED_NOT_ONLINE_VERIFIED" {
+		v["status"] = "BLOCKED_DEPENDENCY_CHECK"
 	} else {
-		v["status"] = "INSTALLED_NOT_ONLINE_VERIFIED"
+		v["history_reuse"] = captureHistoryStatus(check, conf)
 	}
 	return v
+}
+
+func captureHistoryStatus(ctx context.Context, conf Config) map[string]any {
+	r, err := openBackend(ctx, conf)
+	if err != nil {
+		return map[string]any{"status": "BLOCKED_HISTORY_STATUS_QUERY", "history_present": nil, "selection_status": "NOT_INSPECTED", "adapter_implementation": "NOT_IMPLEMENTED"}
+	}
+	defer r.Close()
+	history, ok := r.(interface {
+		HistoryCaptureStatus(context.Context) (map[string]any, error)
+	})
+	if !ok {
+		return map[string]any{"status": "BLOCKED_HISTORY_STATUS_QUERY", "history_present": nil, "selection_status": "NOT_INSPECTED", "adapter_implementation": "NOT_IMPLEMENTED"}
+	}
+	status, err := history.HistoryCaptureStatus(ctx)
+	if err != nil {
+		return map[string]any{"status": "BLOCKED_HISTORY_STATUS_QUERY", "history_present": nil, "selection_status": "NOT_INSPECTED", "adapter_implementation": "NOT_IMPLEMENTED"}
+	}
+	return status
 }

@@ -7,6 +7,7 @@ import (
 	"fmt"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/lifecycle"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/sqlitev2"
 	"os"
@@ -40,7 +41,7 @@ func dailyFixture(t *testing.T) (string, *sqlitev2.Store, string) {
 	if e = repo.PutInput(ctx, in); e != nil {
 		t.Fatal(e)
 	}
-	manifest, _ := json.Marshal(map[string]any{"input_bytes_hash": in.RawHash, "observation_date": in.Observation, "cutoff": in.Cutoff, "config_hashes": fixtureHashes, "go_source_hash": "TEST_FIXTURE_RECORDED_SOURCE", "conversion_version": evidence.InputContractVersion})
+	manifest, _ := json.Marshal(map[string]any{"input_bytes_hash": in.RawHash, "observation_date": in.Observation, "cutoff": in.Cutoff, "config_hashes": fixtureHashes, "go_source_hash": c.Hash([]byte("TEST_FIXTURE_RECORDED_SOURCE")), "business_implementation_id": buildidentity.Current(), "daily_evidence_policy": Policy, "conversion_version": evidence.InputContractVersion})
 	items := []c.Item{}
 	for i := 0; i < 250; i++ {
 		iid := fmt.Sprintf("%06d.SH", i)
@@ -62,7 +63,7 @@ func callFixture(t *testing.T, config string, now time.Time, args ...string) ([]
 	t.Helper()
 	var out, log bytes.Buffer
 	args = append(args, "--config", config)
-	e := runAt(context.Background(), args, &out, &log, "TEST_FIXTURE_BUILD", fixtureHashes, now)
+	e := runAt(context.Background(), args, &out, &log, c.Hash([]byte("TEST_FIXTURE_BUILD")), fixtureHashes, now)
 	return out.Bytes(), e
 }
 func TestDailyReadOnlyMatchingPaginationExportsAndNoWriterLease(t *testing.T) {
@@ -77,13 +78,20 @@ func TestDailyReadOnlyMatchingPaginationExportsAndNoWriterLease(t *testing.T) {
 	if e = s.DB().QueryRow("SELECT count(*) FROM app_change_ledger").Scan(&before); e != nil {
 		t.Fatal(e)
 	}
+	queryArgs := []string{}
+	if !buildidentity.Recorded(buildidentity.Current()) {
+		if _, err := callFixture(t, config, now, "picks", "--strategy", "r1"); err == nil {
+			t.Fatal("unrecorded business implementation automatically reused")
+		}
+		queryArgs = []string{"--run-id", "TEST_FIXTURE_RUN"}
+	}
 	for i := 0; i < 2; i++ {
-		raw, e := callFixture(t, config, now, "picks", "--strategy", "r1", "--format", "json")
+		raw, e := callFixture(t, config, now, append([]string{"picks", "--strategy", "r1", "--format", "json"}, queryArgs...)...)
 		if e != nil {
 			t.Fatal(e)
 		}
 		var v Saved
-		if e = json.Unmarshal(raw, &v); e != nil || v.Total != 250 || v.Shown != 250 || len(v.Run.Items) != 250 || v.History {
+		if e = json.Unmarshal(raw, &v); e != nil || v.Total != 250 || v.Shown != 250 || len(v.Run.Items) != 250 || v.History != (len(queryArgs) > 0) {
 			t.Fatalf("%v %+v", e, v)
 		}
 	}
@@ -97,20 +105,20 @@ func TestDailyReadOnlyMatchingPaginationExportsAndNoWriterLease(t *testing.T) {
 		t.Fatal(v)
 	}
 	path := filepath.Join(filepath.Dir(config), "全部.csv")
-	if _, e = callFixture(t, config, now, "picks", "--format", "csv", "--limit", "7", "--output", path); e != nil {
+	if _, e = callFixture(t, config, now, append([]string{"picks", "--format", "csv", "--limit", "7", "--output", path}, queryArgs...)...); e != nil {
 		t.Fatal(e)
 	}
 	csv, _ := os.ReadFile(path)
 	if bytes.Count(csv, []byte("\n")) != 251 || !bytes.Contains(csv, []byte("'000000.SH")) || !bytes.Contains(csv, []byte("'=危险")) {
 		t.Fatal("CSV truncated or unsafe")
 	}
-	if _, e = callFixture(t, config, now, "picks", "--output", path); e == nil {
+	if _, e = callFixture(t, config, now, append([]string{"picks", "--output", path}, queryArgs...)...); e == nil {
 		t.Fatal("overwrote export")
 	}
 	if _, e = callFixture(t, config, now, "picks", "--strategy", "v2"); e == nil {
 		t.Fatal("fell back to R1")
 	}
-	raw, e = callFixture(t, config, now, "explain", "000001.SH", "--format", "json")
+	raw, e = callFixture(t, config, now, append([]string{"explain", "000001.SH", "--format", "json"}, queryArgs...)...)
 	if e != nil || !bytes.Contains(raw, []byte("threshold")) {
 		t.Fatal(e)
 	}

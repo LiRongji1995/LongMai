@@ -17,16 +17,17 @@ import (
 )
 
 type Saved struct {
-	Target         string `json:"target_session"`
-	TargetStatus   string `json:"target_derivation"`
-	SelectionState string `json:"selection_state"`
-	Protocol       string `json:"protocol"`
-	History        bool   `json:"explicit_history"`
-	Integrity      string `json:"integrity"`
-	Total          int    `json:"selected_total"`
-	Shown          int    `json:"shown"`
-	Truncated      bool   `json:"truncated"`
-	Run            c.Run  `json:"run"`
+	Target            string `json:"target_session"`
+	TargetStatus      string `json:"target_derivation"`
+	SelectionState    string `json:"selection_state"`
+	Protocol          string `json:"protocol"`
+	History           bool   `json:"explicit_history"`
+	Integrity         string `json:"integrity"`
+	VerificationScope string `json:"verification_scope"`
+	Total             int    `json:"selected_total"`
+	Shown             int    `json:"shown"`
+	Truncated         bool   `json:"truncated"`
+	Run               c.Run  `json:"run"`
 }
 
 func savedOutput(ctx context.Context, b backend, id, instrument string, history, all bool, limit int, format, output string, out io.Writer) error {
@@ -34,7 +35,7 @@ func savedOutput(ctx context.Context, b backend, id, instrument string, history,
 	if e != nil {
 		return e
 	}
-	v := Saved{Protocol: Protocol, History: history, Integrity: "VERIFIED_SAME_READ_TRANSACTION", Run: r, Total: len(r.Items)}
+	v := Saved{Protocol: Protocol, History: history, Integrity: "VERIFIED_SAME_READ_TRANSACTION", VerificationScope: "FULL_PUBLISHED_RESULT_CLOSURE", Run: r, Total: len(r.Items)}
 	var manifest struct {
 		Observation string `json:"observation_date"`
 		Target      string `json:"target_session"`
@@ -136,6 +137,16 @@ func renderSaved(w io.Writer, v Saved, format string, explain bool) error {
 	case "table", "markdown", "md":
 		var manifest map[string]any
 		_ = json.Unmarshal(v.Run.Manifest, &manifest)
+		source, business := manifest["go_source_hash"], manifest["business_implementation_id"]
+		if source == nil {
+			source = "UNRECORDED_HISTORICAL_MANIFEST"
+		}
+		if business == nil {
+			business = "UNREGISTERED_HISTORICAL_IMPLEMENTATION"
+		}
+		if _, e := fmt.Fprintf(w, "verification_scope=%s\nsaved_go_source_hash=%v business_implementation_id=%v\n", v.VerificationScope, source, business); e != nil {
+			return e
+		}
 		if _, e := fmt.Fprintf(w, "run=%s strategy=%s history=%t integrity=%s\nobservation=%v cutoff=%v generated=%s availability=%s\nRESEARCH_ONLY · production_promotion=DISABLED · MARKET_EDGE=NOT_ESTABLISHED\nshown=%d selected_total=%d truncated=%t\n", v.Run.ID, v.Run.Strategy, v.History, v.Integrity, manifest["observation_date"], manifest["cutoff"], v.Run.CreatedAt, v.Run.CandidateAvailability, v.Shown, v.Total, v.Truncated); e != nil {
 			return e
 		}
@@ -172,15 +183,7 @@ func renderSaved(w io.Writer, v Saved, format string, explain bool) error {
 				return e
 			}
 			if explain {
-				var detail any
-				if e := json.Unmarshal(i.Payload, &detail); e != nil {
-					return e
-				}
-				raw, e := json.MarshalIndent(detail, "", "  ")
-				if e != nil {
-					return e
-				}
-				if _, e = w.Write(append(raw, '\n')); e != nil {
+				if e := renderExplanation(w, i, v.Run.Strategy); e != nil {
 					return e
 				}
 			}

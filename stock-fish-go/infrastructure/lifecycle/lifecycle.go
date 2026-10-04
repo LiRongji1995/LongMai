@@ -568,6 +568,8 @@ func verifyChange(ctx context.Context, db *sql.DB, ch Change) error {
 		if e := sqlitev2.NewReadOnlyAppRepository(db).VerifyRun(ctx, ch.ID); e != nil {
 			return e
 		}
+	case "REVIEW_RECORD":
+		return sqlitev2.VerifyReviewChange(ctx, db, ch.ID, ch.Hash)
 	default:
 		return fmt.Errorf("UNKNOWN_CHANGE_LEDGER_KIND: %s", ch.Kind)
 	}

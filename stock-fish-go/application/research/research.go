@@ -5,6 +5,7 @@ import (
 	"fmt"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	shared "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/strategies/shared"
 	"sort"
@@ -16,6 +17,7 @@ type Diagnostic struct {
 	ImplementationAcceptance string              `json:"implementation_acceptance"`
 	FactCacheHits            int                 `json:"fact_cache_hits"`
 	FactCacheMisses          int                 `json:"fact_cache_misses"`
+	FactCacheScope           string              `json:"fact_cache_scope"`
 	DetailFile               string              `json:"detail_file"`
 	DetailCount              int                 `json:"detail_count"`
 	Contract                 string              `json:"contract"`
@@ -43,6 +45,10 @@ func AnalyzeFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, 
 	return AnalyzeStrategyFrozen(frozen, inputBytesHash, history, b, R1StrategyID, nil)
 }
 func AnalyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, b Budget, strategyID string, cache FactsCache) (Diagnostic, error) {
+	return analyzeStrategyFrozen(frozen, inputBytesHash, history, b, strategyID, cache, buildidentity.Facts())
+}
+
+func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, b Budget, strategyID string, cache FactsCache, factAlgorithm string) (Diagnostic, error) {
 	if strategyID != R1StrategyID && strategyID != V2StrategyID {
 		return Diagnostic{}, errCode("UNKNOWN_STRATEGY")
 	}
@@ -223,6 +229,7 @@ func AnalyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 		w := Window{Sessions: sessions, Bars: map[string]Bar{}}
 		hashes := []string{}
 		bindings := []c.SelectedEvidenceBinding{}
+		selectedRows := []Row{}
 		ports.Observe(b, "source_visibility_selection", resolutionTime.Seconds())
 		revisionStart := time.Now()
 		for session, rows := range byDay {
@@ -239,14 +246,15 @@ func AnalyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 				return out, er
 			}
 			w.Bars[session] = bar
+			selectedRows = append(selectedRows, rows[selected])
 			hashes = append(hashes, bar.Hash)
 			bindings = append(bindings, c.SelectedEvidenceBinding{ProjectionHash: bar.Hash, Identity: origins[session][selected]})
 		}
 		ports.Observe(b, "revision_selection_and_bar_decode", time.Since(revisionStart).Seconds())
 		sort.Strings(hashes)
 		sort.Slice(bindings, func(i, j int) bool { return bindings[i].ProjectionHash < bindings[j].ProjectionHash })
-		cacheIdentity, _ := json.Marshal(map[string]any{"calculation": "SHARED_FACTS_V2_20261002", "input": inputBytesHash, "history": input.HistoryHash, "cutoff": frozen.Cutoff, "observation": input.Observation, "instrument": id, "sessions": sessions, "selected_evidence": hashes, "policy": "FOUR_CLOCK_SCOPE_REVISION_V2"})
-		key := Hash(cacheIdentity)
+		key, cacheScope := factCacheKeyWithIdentity(factAlgorithm, frozen, inputBytesHash, id, states[id], sessions, selectedRows, bindings, resolver)
+		out.FactCacheScope = cacheScope
 		var sf StockFacts
 		hit := false
 		if cache != nil {
@@ -254,7 +262,7 @@ func AnalyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 			if e != nil {
 				return out, e
 			}
-			if hit && sf.ID != id {
+			if hit && (sf.ID != id || sf.Name != states[id].Text("name")) {
 				return out, errCode("FACT_CACHE_IDENTITY_MISMATCH")
 			}
 		}

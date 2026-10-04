@@ -14,6 +14,7 @@ import (
 	"os"
 	"path/filepath"
 	"reflect"
+	"regexp"
 	"strings"
 	"time"
 )
@@ -62,6 +63,31 @@ type remote struct {
 	client *http.Client
 	token  string
 }
+
+type serverHTTPError struct {
+	status    int
+	operation string
+}
+
+func (e *serverHTTPError) Error() string {
+	return fmt.Sprintf("SERVER_%s_HTTP_%d", e.operation, e.status)
+}
+
+// ServerWaitError records a stopped observer, not a cancellation of the shared
+// server job. It preserves the submission identity even after a lost connection.
+type ServerWaitError struct {
+	JobID   string
+	Created bool
+	Reason  string
+	Cause   error
+}
+
+func (e *ServerWaitError) Error() string {
+	return fmt.Sprintf("SERVER_WAIT_%s job_id=%s created=%t cancellation_requested=false; query: stockfish daily --job-id %s --config CONFIG_FILE; cause: %v", e.Reason, e.JobID, e.Created, e.JobID, e.Cause)
+}
+func (e *ServerWaitError) Unwrap() error { return e.Cause }
+
+var serverJobID = regexp.MustCompile(`^[A-Za-z0-9_.:-]{1,200}$`)
 
 func openServer(ctx context.Context, conf Config) (backend, error) {
 	u, e := url.Parse(conf.ServerURL)
@@ -114,11 +140,11 @@ func (r *remote) get(ctx context.Context, path string, out any) error {
 	}
 	resp, e := r.client.Do(req)
 	if e != nil {
-		return errors.New("SERVER_UNAVAILABLE_NO_LOCAL_FALLBACK")
+		return fmt.Errorf("SERVER_UNAVAILABLE_NO_LOCAL_FALLBACK: %w", e)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 {
-		return fmt.Errorf("SERVER_QUERY_FAILED_HTTP_%d", resp.StatusCode)
+		return &serverHTTPError{status: resp.StatusCode, operation: "QUERY_FAILED"}
 	}
 	raw, e := io.ReadAll(io.LimitReader(resp.Body, 128<<20+1))
 	if e != nil {
@@ -146,6 +172,11 @@ func (r *remote) Runs(ctx context.Context, limit, offset int) ([]c.Run, error) {
 	e := r.get(ctx, fmt.Sprintf("/api/daily/runs?limit=%d&offset=%d", limit, offset), &v)
 	return v, e
 }
+func (r *remote) MatchingRuns(ctx context.Context, input, strategy string, limit, offset int) ([]c.Run, error) {
+	var runs []c.Run
+	err := r.get(ctx, fmt.Sprintf("/api/daily/runs?limit=%d&offset=%d&input_id=%s&strategy=%s", limit, offset, url.QueryEscape(input), url.QueryEscape(strategy)), &runs)
+	return runs, err
+}
 func (r *remote) Saved(ctx context.Context, id, iid string, all bool) (c.Run, error) {
 	var v c.Run
 	e := r.get(ctx, "/api/daily/runs/"+url.PathEscape(id)+"?instrument="+url.QueryEscape(iid)+"&all="+fmt.Sprint(all), &v)
@@ -164,15 +195,15 @@ func (r *remote) post(ctx context.Context, path, key string, value any, out any)
 	req.Header.Set("Idempotency-Key", key)
 	resp, e := r.client.Do(req)
 	if e != nil {
-		return errors.New("SERVER_REQUEST_FAILED")
+		return fmt.Errorf("SERVER_REQUEST_FAILED: %w", e)
 	}
 	defer resp.Body.Close()
 	if resp.StatusCode != 200 && resp.StatusCode != 202 {
-		return fmt.Errorf("SERVER_RESEARCH_HTTP_%d", resp.StatusCode)
+		return &serverHTTPError{status: resp.StatusCode, operation: "RESEARCH"}
 	}
 	return json.NewDecoder(io.LimitReader(resp.Body, 64<<10)).Decode(out)
 }
-func (r *remote) research(ctx context.Context, p Plan, s, source string, hashes map[string]string) (string, error) {
+func (r *remote) research(ctx context.Context, p Plan, s, source string, hashes map[string]string, log io.Writer) (string, error) {
 	if r.token == "" {
 		return "", errors.New("SERVER_RESEARCH_PRIVATE_TOKEN_FILE_REQUIRED")
 	}
@@ -188,31 +219,104 @@ func (r *remote) research(ctx context.Context, p Plan, s, source string, hashes 
 	work, cancel := context.WithTimeout(ctx, time.Duration(p.Budget)*time.Second)
 	defer cancel()
 	var result struct {
-		ID string `json:"job_id"`
+		ID      string `json:"job_id"`
+		Created *bool  `json:"created"`
+		State   string `json:"state"`
 	}
 	if e := r.post(work, route, key, body, &result); e != nil {
 		return "", e
 	}
+	if !serverJobID.MatchString(result.ID) || result.Created == nil {
+		return "", errors.New("SERVER_SUBMISSION_IDENTITY_INCOMPLETE_NO_CANCEL_SENT")
+	}
+	if log != nil {
+		if e := json.NewEncoder(log).Encode(map[string]any{"job_id": result.ID, "created": *result.Created, "state": result.State, "action": "WAITING", "query_command": "stockfish daily --job-id " + result.ID + " --config CONFIG_FILE"}); e != nil {
+			return "", &ServerWaitError{result.ID, *result.Created, "OUTPUT_FAILED", e}
+		}
+	}
+	failures := 0
 	for {
+		if e := work.Err(); e != nil {
+			return "", &ServerWaitError{result.ID, *result.Created, "STOPPED", e}
+		}
 		var j c.Job
-		if e := r.get(work, "/api/jobs/"+url.PathEscape(result.ID), &j); e != nil {
-			cleanup, cancel := context.WithTimeout(context.Background(), 3*time.Second)
-			defer cancel()
-			var ignored any
-			_ = r.post(cleanup, "/api/jobs/"+url.PathEscape(result.ID)+"/cancel", "", map[string]any{}, &ignored)
-			return "", e
+		poll, endPoll := context.WithTimeout(work, 5*time.Second)
+		e := r.get(poll, "/api/jobs/"+url.PathEscape(result.ID), &j)
+		endPoll()
+		if e != nil {
+			if work.Err() != nil {
+				return "", &ServerWaitError{result.ID, *result.Created, "STOPPED", work.Err()}
+			}
+			failures++
+			if !transientServerError(e) || failures >= 3 {
+				return "", &ServerWaitError{result.ID, *result.Created, "QUERY_FAILED", e}
+			}
+			if e := waitPoll(work, time.Duration(failures)*250*time.Millisecond); e != nil {
+				return "", &ServerWaitError{result.ID, *result.Created, "STOPPED", e}
+			}
+			continue
+		}
+		failures = 0
+		if j.ID != result.ID {
+			return "", &ServerWaitError{result.ID, *result.Created, "IDENTITY_MISMATCH", errors.New("SERVER_JOB_IDENTITY_MISMATCH")}
 		}
 		switch j.State {
 		case "SUCCEEDED":
+			if j.RunID == "" {
+				return "", &ServerWaitError{result.ID, *result.Created, "RESULT_MISSING", errors.New("SERVER_SUCCEEDED_WITHOUT_RUN_ID")}
+			}
 			return j.RunID, nil
 		case "FAILED", "CANCELLED", "INTERRUPTED":
 			return "", fmt.Errorf("SERVER_ATTEMPT_%s_%s", j.ID, j.State)
+		case "QUEUED", "RUNNING":
+		default:
+			return "", &ServerWaitError{result.ID, *result.Created, "STATE_UNKNOWN", fmt.Errorf("SERVER_UNKNOWN_JOB_STATE_%s", j.State)}
 		}
-		select {
-		case <-work.Done():
-		case <-time.After(500 * time.Millisecond):
+		if e := waitPoll(work, 500*time.Millisecond); e != nil {
+			return "", &ServerWaitError{result.ID, *result.Created, "STOPPED", e}
 		}
 	}
+}
+
+func waitPoll(ctx context.Context, duration time.Duration) error {
+	timer := time.NewTimer(duration)
+	defer timer.Stop()
+	select {
+	case <-ctx.Done():
+		return ctx.Err()
+	case <-timer.C:
+		return nil
+	}
+}
+
+func transientServerError(err error) bool {
+	var response *serverHTTPError
+	if errors.As(err, &response) {
+		return response.status == 503 || response.status == 502 || response.status == 504 || response.status == 408 || response.status == 429
+	}
+	var network net.Error
+	return errors.As(err, &network) || errors.Is(err, context.DeadlineExceeded)
+}
+
+func (r *remote) job(ctx context.Context, id string, cancel bool) (c.Job, error) {
+	var job c.Job
+	if !serverJobID.MatchString(id) {
+		return job, errors.New("INVALID_SERVER_JOB_ID")
+	}
+	if cancel {
+		if r.token == "" {
+			return job, errors.New("EXPLICIT_SERVER_CANCEL_PRIVATE_TOKEN_REQUIRED")
+		}
+		if e := r.post(ctx, "/api/jobs/"+url.PathEscape(id)+"/cancel", "", map[string]any{}, &job); e != nil {
+			return job, e
+		}
+	} else if e := r.get(ctx, "/api/jobs/"+url.PathEscape(id), &job); e != nil {
+		return job, e
+	}
+	if job.ID != id {
+		return job, errors.New("SERVER_JOB_IDENTITY_MISMATCH")
+	}
+	return job, nil
 }
 
 // New inputs update the publication inventory, not this database's stable

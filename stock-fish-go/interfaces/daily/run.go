@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/application"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/calendar"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/lifecycle"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/native"
@@ -19,7 +20,6 @@ import (
 	"path/filepath"
 	"reflect"
 	"runtime"
-	"strings"
 	"time"
 )
 
@@ -27,7 +27,7 @@ const Policy = "FOUR_CLOCK_SCOPE_REVISION_V2"
 
 func IsCommand(s string) bool {
 	switch s {
-	case "--help", "-h", "help", "--version", "init", "doctor", "picks", "explain", "daily":
+	case "--help", "-h", "help", "--version", "init", "doctor", "picks", "explain", "daily", "diff":
 		return true
 	}
 	return false
@@ -39,7 +39,9 @@ const help = `StockFish — saved evidence and local research (no model key)
   stockfish doctor [--format json]
   stockfish picks --strategy r1 [--run-id ID] [--all] [--limit N]
   stockfish explain INSTRUMENT_ID --strategy r1 [--run-id ID]
-  stockfish daily --strategy r1 [--dry-run] [--refresh]
+  stockfish daily --strategy r1 [--dry-run] [--refresh [--refresh-cold]]
+  stockfish daily --job-id JOB_ID [--cancel] (explicit server query/cancel)
+  stockfish diff --from-run-id RUN_A --to-run-id RUN_B (saved evidence only)
 Common: --config FILE (then STOCKFISH_CONFIG, then OS user config)
         --format table|json|csv|markdown --output NEW_FILE
         --budget-seconds 1..1800 (default config 300)
@@ -51,6 +53,7 @@ No query fallback to another date, strategy, database or mode.
 Advanced commands retained: database, isolation, import, import-legacy-input,
 research, runs, show, summary, selected, detail, export, verify-run, jobs,
 job, cancel, recover, resume, health, readiness, schedule, cache-clear, serve.
+Review: review --help | research-lab --help (explicit writes listed by help).
 R1: RESEARCH_ONLY; promotion DISABLED; MARKET_EDGE=NOT_ESTABLISHED.
 `
 
@@ -63,7 +66,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 		return e
 	}
 	if args[0] == "--version" {
-		return json.NewEncoder(out).Encode(map[string]any{"protocol": Protocol, "go_source_hash": source, "go_version": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
+		return json.NewEncoder(out).Encode(map[string]any{"protocol": Protocol, "go_source_hash": source, "business_implementation_id": buildidentity.Current(), "facts_implementation_id": buildidentity.Facts(), "go_version": runtime.Version(), "os": runtime.GOOS, "arch": runtime.GOARCH})
 	}
 	cmd := args[0]
 	rest := args[1:]
@@ -87,13 +90,21 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 	all := f.Bool("all", false, "include rejected/unknown evaluated securities")
 	dry := f.Bool("dry-run", false, "plan only")
 	refresh := f.Bool("refresh", false, "fixed source capture")
+	refreshCold := f.Bool("refresh-cold", false, "explicitly authorize cold capture without reusable verified history")
 	seconds := f.Int("budget-seconds", 0, "research override")
 	server := f.String("server-url", "", "init explicit loopback server")
 	token := f.String("token-file", "", "private token file")
 	provider := f.String("provider", "", "init fixed provider")
 	python := f.String("python", "", "init worker interpreter")
 	worker := f.String("worker", "", "init worker script")
+	jobID := f.String("job-id", "", "inspect an existing server job without research")
+	cancelJob := f.Bool("cancel", false, "explicitly cancel --job-id with administrator token")
+	fromRun := f.String("from-run-id", "", "saved baseline run for diff")
+	toRun := f.String("to-run-id", "", "saved comparison run for diff")
 	if e := f.Parse(rest); e != nil {
+		if errors.Is(e, flag.ErrHelp) {
+			return nil
+		}
 		return e
 	}
 	visited := map[string]bool{}
@@ -101,8 +112,27 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 	if visited["budget-seconds"] && (*seconds < 1 || *seconds > 1800) {
 		return errors.New("BUDGET_MUST_BE_1_TO_1800_SECONDS")
 	}
-	if cmd != "daily" && (visited["dry-run"] || visited["refresh"]) {
+	if cmd != "daily" && (visited["dry-run"] || visited["refresh"] || visited["refresh-cold"]) {
 		return errors.New("DAILY_OPTIONS_ON_NON_DAILY_COMMAND")
+	}
+	if *refreshCold && !*refresh {
+		return errors.New("REFRESH_COLD_REQUIRES_EXPLICIT_REFRESH")
+	}
+	if (visited["job-id"] || visited["cancel"]) && (cmd != "daily" || *jobID == "") {
+		return errors.New("SERVER_JOB_OPTIONS_REQUIRE_DAILY_JOB_ID")
+	}
+	if *jobID != "" && (visited["refresh"] || visited["dry-run"] || visited["run-id"] || visited["all"] || visited["limit"]) {
+		return errors.New("SERVER_JOB_QUERY_CANNOT_COMBINE_RESEARCH_OR_SAVED_RESULT_OPTIONS")
+	}
+	if cmd == "diff" {
+		if *fromRun == "" || *toRun == "" {
+			return errors.New("DIFF_REQUIRES_FROM_AND_TO_SAVED_RUN_IDS")
+		}
+		if visited["run-id"] || visited["all"] || visited["limit"] {
+			return errors.New("DIFF_COMPARES_COMPLETE_SAVED_EVALUATED_SETS")
+		}
+	} else if visited["from-run-id"] || visited["to-run-id"] {
+		return errors.New("DIFF_RUN_OPTIONS_ON_NON_DIFF_COMMAND")
 	}
 	if f.NArg() != 0 || *limit < 0 {
 		return errors.New("INVALID_POSITIONAL_ARGUMENT_OR_LIMIT")
@@ -222,7 +252,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 	queryCtx, queryCancel := context.WithTimeout(ctx, queryLimit)
 	defer queryCancel()
 	ctx = queryCtx
-	if cmd == "picks" || cmd == "explain" {
+	if cmd == "picks" || cmd == "explain" || cmd == "diff" {
 		scope, e := resources.NewBudget(ctx, 300*time.Second, log)
 		if e != nil {
 			return e
@@ -254,7 +284,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 			}
 		}
 		local := query
-		if calError != "" || conf.Mode != "embedded" || strings.HasPrefix(source, "UNRECORDED") {
+		if calError != "" || conf.Mode != "embedded" || !buildidentity.Recorded(source) || !buildidentity.Recorded(buildidentity.Current()) {
 			local = "BLOCKED"
 		}
 		if calError == "" && cal != nil {
@@ -262,7 +292,8 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 				local = "BLOCKED_OBSERVATION_NOT_COMPLETE"
 			} else if b != nil {
 				inputs, err := b.Inputs(ctx, cal["required_observation"].(string))
-				if err != nil || len(inputs) == 0 {
+				_, eligible := latestEligibleInput(inputs, cal["required_observation"].(string), now)
+				if err != nil || !eligible {
 					local = "BLOCKED_LOCAL_INPUT_UNAVAILABLE"
 				}
 			}
@@ -277,6 +308,20 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 		return e
 	}
 	defer b.Close()
+	if cmd == "diff" {
+		return diffOutput(ctx, b, *fromRun, *toRun, *format, *output, out)
+	}
+	if *jobID != "" {
+		remote, ok := b.(*remote)
+		if !ok {
+			return errors.New("SERVER_JOB_QUERY_REQUIRES_EXPLICIT_SERVER_MODE")
+		}
+		job, err := remote.job(ctx, *jobID, *cancelJob)
+		if err != nil {
+			return err
+		}
+		return outputValue(ctx, out, *output, *format, map[string]any{"job": job, "cancellation_requested": *cancelJob, "research_started": false})
+	}
 	historical := *id != ""
 	if historical && (cmd == "daily") {
 		return errors.New("DAILY_CANNOT_REUSE_HISTORY_RUN_FLAG")
@@ -311,6 +356,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 		plan.Research = true
 	}
 	plan.Refresh = *refresh
+	plan.RefreshCold = *refreshCold
 	plan.Capture = *refresh && refreshReady(conf) == "CONFIGURED_NOT_ONLINE_VERIFIED"
 	if *refresh && refreshReady(conf) != "CONFIGURED_NOT_ONLINE_VERIFIED" {
 		plan.Blockers = append(plan.Blockers, refreshReady(conf))
@@ -328,7 +374,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 		if conf.Mode != "embedded" {
 			return errors.New("REFRESH_REQUIRES_EXPLICIT_EMBEDDED_SOURCE_CONTRACT")
 		}
-		input, e := capture(ctx, conf, plan.Observation, log)
+		input, e := captureWithCold(ctx, conf, plan.Observation, log, *refreshCold)
 		if e != nil {
 			return e
 		}
@@ -337,7 +383,7 @@ func runAt(ctx context.Context, args []string, out, log io.Writer, source string
 	}
 	if conf.Mode == "server" {
 		remote := b.(*remote)
-		id, e := remote.research(ctx, plan, s, source, hashes)
+		id, e := remote.research(ctx, plan, s, source, hashes, log)
 		if e != nil {
 			return e
 		}

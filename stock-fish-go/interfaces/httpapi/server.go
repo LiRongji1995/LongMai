@@ -205,7 +205,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if path == "api/daily/runs" {
-			if e := query(r, "limit", "offset"); e != nil {
+			if e := query(r, "limit", "offset", "input_id", "strategy"); e != nil {
 				failure(w, e)
 				return
 			}
@@ -219,7 +219,17 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 				failure(w, e)
 				return
 			}
-			v, e := reader.Runs(ctx, limit, offset)
+			inputID, strategyID := r.URL.Query().Get("input_id"), r.URL.Query().Get("strategy")
+			if (inputID == "") != (strategyID == "") || (inputID != "" && (!idPattern.MatchString(inputID) || (strategyID != c.R1 && strategyID != c.V2))) {
+				failure(w, errors.New("MATCHING_RUN_QUERY_REQUIRES_VALID_INPUT_AND_STRATEGY"))
+				return
+			}
+			var v []c.Run
+			if inputID != "" {
+				v, e = reader.MatchingRuns(ctx, inputID, strategyID, limit, offset)
+			} else {
+				v, e = reader.Runs(ctx, limit, offset)
+			}
 			if e != nil {
 				failure(w, e)
 				return
@@ -428,6 +438,19 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			return
 		}
 		if r.Method == "POST" && len(parts) == 4 && parts[3] == "cancel" {
+			// The existing single-administrator bearer authority controls this
+			// database's jobs. Merely attaching to GET does not grant cancellation.
+			if e := query(r); e != nil {
+				failure(w, e)
+				return
+			}
+			var value struct{}
+			if r.ContentLength != 0 || len(r.TransferEncoding) > 0 {
+				if e := decodeBody(w, r, &value); e != nil {
+					failure(w, e)
+					return
+				}
+			}
 			v, e := s.Service.Cancel(ctx, id)
 			if e != nil {
 				failure(w, e)

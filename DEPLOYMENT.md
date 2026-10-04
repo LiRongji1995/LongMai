@@ -1,3 +1,7 @@
+# 2026-10-04 四阶段新任务：仅源码，容量阻塞
+
+用户后续明确要求“把代码同步到远端仓库”，本次按该授权提交本轮源码、测试与说明并同步远端 main；生产切换仍未授权，资源上限未调整。源码实现与未验证范围见 [四阶段交接](stock-fish-go/delivery/FOUR_STAGE_REPORT.md)，接口用法见 [候选源码说明](stock-fish-go/delivery/FOUR_STAGE_USER_GUIDE.md)。项目实占约 54.1 GiB 超过本轮 50 GiB 上限，工程运行与新包尚未执行；下方既有验收/发布状态不适用于本轮源码。新增复盘扩展只由显式 `review init` 写入，普通查询不初始化；Go 到 Python 历史复用桥未实现，刷新明确阻塞。没有切服务或改用户数据。
+
 # 2026-10-04 日常终端候选包与源码发布
 
 本轮实现现有 `stockfish` 的 init / doctor / picks / explain / daily，修复日志背压、缓存占用采样与恢复后的时钟检查。使用见 [终端说明](stock-fish-go/delivery/USER_GUIDE.md)，人工验收初始 NOT_RUN_BY_USER。验收结束后用户明确授权提交并推送本轮源码、测试与说明到 main；生产切换仍未授权。6205848 是上一轮已完成发布基线。
