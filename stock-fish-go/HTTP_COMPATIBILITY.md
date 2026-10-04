@@ -1,3 +1,11 @@
+# 2026-10-04 日常只读协议
+
+显式 server 配置使用 `STOCKFISH_DAILY_V1`，先 GET `/api/daily/identity` 核对迁移/schema/数据库路径 hash。`/api/daily/readiness`、`/api/daily/inputs?observation=...`、`/api/daily/runs?limit=...&offset=...`、`/api/daily/runs/ID?instrument=...&all=...` 使用独立 mode=ro 连接；完整保存结果在同一事务校验/投影，历史原始兼容端点保持。显式本地读无需服务。
+
+研究仍使用既有受 bearer 保护的 POST `/api/research/r1/run` 或 `/api/daily-primary/run`，日常请求携带 target/config/implementation/policy 身份并使用确定性 Idempotency-Key；实际 engine 拒绝构建/配置/政策不符。查询不取写租约，研究保留单写者。服务不可达、身份不符或协议错误不回退本地；token 来源为私有文件，不是模型 API key。
+
+---
+
 # Go HTTP 保存结果兼容边界
 
 新路由通过同一个 application Service、Repository 和 ResearchQueries 查询；不导入 Python、不重算旧结果。所有 ResearchQueries 入口先要求迁移 PUBLISHED。旧 DAILY_V1 的完整计算/配置入口继续由保留模块负责，Go 不把该入口映射为 V2。

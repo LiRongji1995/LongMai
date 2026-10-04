@@ -18,34 +18,128 @@ const MaxOutputBytes int64 = 128 << 20
 const MaxRSS int64 = 1 << 30
 
 type Budget struct {
-	Context     context.Context
-	cancel      context.CancelFunc
-	start, last time.Time
-	mu          sync.Mutex
-	m           contracts.Metrics
-	writer      io.Writer
-	done        chan struct{}
-	failure     error
-	report      ports.ProgressReporter
+	Context             context.Context
+	cancel              context.CancelFunc
+	start, last         time.Time
+	mu                  sync.Mutex
+	m                   contracts.Metrics
+	sink                ContextWriter
+	logs                chan logEntry
+	logDone             chan struct{}
+	closeOnce           sync.Once
+	clock               Clock
+	duration            time.Duration
+	wallStart, wallLast time.Time
+	monoStart, monoLast time.Duration
+	done                chan struct{}
+	failure             error
+	report              ports.ProgressReporter
+}
+
+var errClock = contracts.ErrCode("CLOCK_OR_SUSPEND_ANOMALY")
+var errWait = contracts.ErrCode("WAIT_BUDGET_EXCEEDED")
+
+type logEntry struct {
+	metrics contracts.Metrics
+	final   bool
 }
 
 func NewBudget(parent context.Context, d time.Duration, w io.Writer) (*Budget, error) {
+	return NewBudgetWithClock(parent, d, w, systemClock{time.Now()})
+}
+func NewBudgetWithClock(parent context.Context, d time.Duration, w io.Writer, clock Clock) (*Budget, error) {
 	if d <= 0 || d > 1800*time.Second {
 		return nil, contracts.ErrCode("BUDGET_MUST_BE_0_TO_1800_SECONDS")
 	}
 	ctx, cancel := context.WithTimeout(parent, d)
-	b := &Budget{Context: ctx, cancel: cancel, start: time.Now(), last: time.Now(), writer: w, done: make(chan struct{}), m: contracts.Metrics{Stage: "input_validation", Stages: map[string]float64{}}}
+	wall, mono := clockSample(clock)
+	b := &Budget{Context: ctx, cancel: cancel, start: time.Now(), last: time.Now(), done: make(chan struct{}), logs: make(chan logEntry, 2), logDone: make(chan struct{}), clock: clock, duration: d, wallStart: wall, wallLast: wall, monoStart: mono, monoLast: mono, m: contracts.Metrics{Stage: "input_validation", Stages: map[string]float64{}, FinalLogStatus: "NOT_ATTEMPTED", CacheSampleStatus: "UNAVAILABLE"}}
 	b.Context = ports.WithBudget(ctx, b)
 	b.report = ports.ProgressFromContext(parent)
-	// Sample immediately as well as periodically; short runs still publish a
-	// measured RSS and cannot start while already over the resident-set limit.
+	var e error
+	b.sink, e = metricsSink(w)
+	if e != nil {
+		b.m.LogWriteErrors++
+		b.m.LogSinkStatus = e.Error()
+	} else if b.sink != nil {
+		b.m.LogSinkStatus = "CONTEXT_WRITER"
+	} else {
+		b.m.LogSinkStatus = "DISABLED"
+	}
 	b.sample()
 	if b.m.RSS != nil && *b.m.RSS > MaxRSS {
 		cancel()
 		return nil, contracts.ErrCode("RSS_BUDGET_EXCEEDED")
 	}
+	go b.logWorker()
 	go b.monitor()
 	return b, nil
+}
+func (b *Budget) enqueue(m contracts.Metrics, final bool) {
+	if b.sink == nil {
+		b.mu.Lock()
+		b.m.LogDropped++
+		if final {
+			b.m.FinalLogStatus = "NOT_DELIVERED"
+		}
+		b.mu.Unlock()
+		return
+	}
+	// Final summary replaces queued periodic records. The in-flight record is
+	// bounded by its own write timeout, so Close can join both workers.
+	if final {
+		for {
+			select {
+			case <-b.logs:
+				b.mu.Lock()
+				b.m.LogDropped++
+				b.mu.Unlock()
+			default:
+				goto drained
+			}
+		}
+	drained:
+	}
+	select {
+	case b.logs <- logEntry{m, final}:
+	default:
+		b.mu.Lock()
+		b.m.LogDropped++
+		if final {
+			b.m.FinalLogStatus = "NOT_DELIVERED"
+		}
+		b.mu.Unlock()
+	}
+}
+func (b *Budget) logWorker() {
+	defer close(b.logDone)
+	for q := range b.logs {
+		m := q.metrics
+		m.Final = q.final
+		m.FinalLogStatus = "DELIVERY_ATTEMPT"
+		raw, e := json.Marshal(m)
+		if e == nil {
+			raw = append(raw, '\n')
+			ctx, cancel := context.WithTimeout(context.Background(), 250*time.Millisecond)
+			n, er := b.sink.WriteContext(ctx, raw)
+			cancel()
+			e = er
+			if e == nil && n != len(raw) {
+				e = io.ErrShortWrite
+			}
+		}
+		b.mu.Lock()
+		if e != nil {
+			b.m.LogWriteErrors++
+			if q.final {
+				b.m.FinalLogStatus = "NOT_DELIVERED"
+			}
+		} else if q.final {
+			b.m.Final = true
+			b.m.FinalLogStatus = "DELIVERED"
+		}
+		b.mu.Unlock()
+	}
 }
 func (b *Budget) monitor() {
 	defer close(b.done)
@@ -56,24 +150,25 @@ func (b *Budget) monitor() {
 		case <-b.Context.Done():
 			return
 		case <-t.C:
-			b.mu.Lock()
 			b.sample()
+			b.mu.Lock()
 			if b.m.RSS != nil && *b.m.RSS > MaxRSS {
 				b.failure = contracts.ErrCode("RSS_BUDGET_EXCEEDED")
 				b.cancel()
 			}
-			if b.writer != nil {
-				if err := json.NewEncoder(b.writer).Encode(b.m); err != nil {
-					b.m.LogWriteErrors++
-				}
-			}
 			b.mu.Unlock()
+			b.enqueue(b.Snapshot(), false)
 		}
 	}
 }
 func (b *Budget) sample() {
-	b.m.Elapsed = time.Since(b.start).Seconds()
+	// OS sampling and runtime memory inspection take place outside the state lock.
 	rss, e := currentRSS()
+	var memory goruntime.MemStats
+	goruntime.ReadMemStats(&memory)
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.checkClockLocked()
 	if e != nil {
 		b.m.RSS = nil
 		b.m.RSSStatus = "UNAVAILABLE"
@@ -85,13 +180,12 @@ func (b *Budget) sample() {
 			b.m.PeakRSS = &v
 		}
 	}
-	var m goruntime.MemStats
-	goruntime.ReadMemStats(&m)
-	b.m.GoHeap = m.HeapAlloc
+	b.m.GoHeap = memory.HeapAlloc
 }
 func (b *Budget) Check() error {
 	b.mu.Lock()
 	defer b.mu.Unlock()
+	b.checkClockLocked()
 	if b.failure != nil {
 		return b.failure
 	}
@@ -120,7 +214,7 @@ func (b *Budget) IndexRow() error {
 	if failure != nil {
 		return failure
 	}
-	return b.Context.Err()
+	return b.Check()
 }
 func (b *Budget) Output(n int64) error {
 	if n < 0 {
@@ -195,7 +289,13 @@ func (b *Budget) CacheObservation(outcome string, occupancy *int64) {
 	case "error":
 		b.m.CacheErrors++
 	}
-	b.m.CacheBytes = occupancy
+	if occupancy != nil {
+		v := *occupancy
+		b.m.CacheBytes = &v
+		b.m.CacheSampleAt = time.Now().UTC().Format(time.RFC3339Nano)
+		b.m.CacheSampleStatus = "MEASURED_AFTER_WRITE"
+		b.m.CacheSamples++
+	}
 }
 func (b *Budget) BindMetrics(run, input, hash, source string) {
 	b.mu.Lock()
@@ -225,9 +325,9 @@ func (b *Budget) HistoryPayload(n int64, unique bool) {
 	}
 }
 func (b *Budget) Snapshot() contracts.Metrics {
+	b.sample()
 	b.mu.Lock()
 	defer b.mu.Unlock()
-	b.sample()
 	m := b.m
 	m.Stages = map[string]float64{}
 	m.Components = map[string]float64{}
@@ -238,19 +338,42 @@ func (b *Budget) Snapshot() contracts.Metrics {
 		m.Stages[k] = v
 	}
 	m.Stages[m.Stage] += time.Since(b.last).Seconds()
+	if m.RSS != nil {
+		v := *m.RSS
+		m.RSS = &v
+	}
+	if m.PeakRSS != nil {
+		v := *m.PeakRSS
+		m.PeakRSS = &v
+	}
+	if m.CacheBytes != nil {
+		v := *m.CacheBytes
+		m.CacheBytes = &v
+	}
 	return m
 }
 func (b *Budget) Close() {
-	b.cancel()
-	<-b.done
-	if b.writer != nil {
-		m := b.Snapshot()
-		m.Final = true
-		if err := json.NewEncoder(b.writer).Encode(m); err != nil {
-			b.mu.Lock()
-			b.m.LogWriteErrors++
-			b.mu.Unlock()
+	b.closeOnce.Do(func() {
+		b.cancel()
+		<-b.done
+		b.enqueue(b.Snapshot(), true)
+		close(b.logs)
+		<-b.logDone
+		if owned, ok := b.sink.(*OwnedPipe); ok {
+			owned.Close()
 		}
+	})
+}
+func (b *Budget) CacheSample(occupancy *int64, status string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	b.m.CacheSamples++
+	b.m.CacheSampleAt = time.Now().UTC().Format(time.RFC3339Nano)
+	b.m.CacheSampleStatus = status
+	b.m.CacheBytes = nil
+	if occupancy != nil {
+		v := *occupancy
+		b.m.CacheBytes = &v
 	}
 }
 func ReadBounded(path string, max int64, b ports.ResearchBudget) ([]byte, error) {

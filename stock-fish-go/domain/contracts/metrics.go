@@ -1,6 +1,15 @@
 package contracts
 
 type Metrics struct {
+	WaitElapsed       float64 `json:"wait_elapsed_seconds"`
+	ClockStatus       string  `json:"clock_status"`
+	LogDropped        int64   `json:"log_dropped"`
+	LogSinkStatus     string  `json:"log_sink_status"`
+	FinalLogStatus    string  `json:"final_log_status"`
+	CacheSampleAt     string  `json:"cache_sample_at"`
+	CacheSampleStatus string  `json:"cache_sample_status"`
+	CacheSamples      int64   `json:"cache_samples"`
+
 	RunID          string `json:"run_id,omitempty"`
 	InputID        string `json:"input_id,omitempty"`
 	InputHash      string `json:"input_bytes_hash,omitempty"`

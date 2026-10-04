@@ -77,5 +77,26 @@ func (cal Calendar) Plan(now time.Time) (map[string]any, error) {
 		}
 		completed = completed.AddDate(0, 0, -1)
 	}
-	return map[string]any{"shanghai_now": now.Format(time.RFC3339Nano), "target_session": target.Format("2006-01-02"), "latest_completed_session": completed.Format("2006-01-02"), "earliest_trade_at": target.Add(9*time.Hour + 30*time.Minute).Format(time.RFC3339), "calendar_raw_sha256": c.Hash(raw), "calendar_coverage_end": cal.End, "calendar_sources": cal.Sources}, nil
+	required := target.AddDate(0, 0, -1)
+	for {
+		yes, e := cal.session(required)
+		if e != nil {
+			return nil, e
+		}
+		if yes {
+			break
+		}
+		required = required.AddDate(0, 0, -1)
+	}
+	phase := "CLOSED"
+	if open {
+		phase = "PRE_OPEN"
+		if !now.Before(day.Add(9*time.Hour + 30*time.Minute)) {
+			phase = "IN_SESSION"
+		}
+		if !now.Before(day.Add(15 * time.Hour)) {
+			phase = "AFTER_CLOSE"
+		}
+	}
+	return map[string]any{"phase": phase, "required_observation": required.Format("2006-01-02"), "observation_complete": required.Format("2006-01-02") <= completed.Format("2006-01-02"), "shanghai_now": now.Format(time.RFC3339Nano), "target_session": target.Format("2006-01-02"), "latest_completed_session": completed.Format("2006-01-02"), "earliest_trade_at": target.Add(9*time.Hour + 30*time.Minute).Format(time.RFC3339), "calendar_raw_sha256": c.Hash(raw), "calendar_coverage_end": cal.End, "calendar_sources": cal.Sources}, nil
 }

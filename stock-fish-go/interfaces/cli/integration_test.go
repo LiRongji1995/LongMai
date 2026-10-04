@@ -185,6 +185,9 @@ func TestNativeInputResearchRestartAndCacheLifecycle(t *testing.T) {
 		if final.CacheReadBytes != summary.Metrics.CacheReadBytes || final.CacheErrors != 0 {
 			t.Fatal("final cache accounting mismatch")
 		}
+		if key == "native-warm" && final.CacheSamples != 2 {
+			t.Fatalf("warm engine must sample only start/end, got %d", final.CacheSamples)
+		}
 		if key == "native-warm" && final.CacheHits != int64(len(items)) {
 			t.Fatal("warm hit accounting missing")
 		}

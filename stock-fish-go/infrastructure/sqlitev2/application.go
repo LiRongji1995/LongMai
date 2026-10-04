@@ -14,6 +14,7 @@ import (
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	"io"
 	"path/filepath"
+	"sync/atomic"
 	"time"
 )
 
@@ -109,8 +110,9 @@ func VerifyApplicationSchemaDB(ctx context.Context, db *sql.DB) error {
 }
 
 type AppRepository struct {
-	store *Store
-	db    *sql.DB
+	cacheOccupancyQueries atomic.Int64
+	store                 *Store
+	db                    *sql.DB
 }
 
 func NewAppRepository(store *Store) *AppRepository {
@@ -247,7 +249,16 @@ func (r *AppRepository) Input(ctx context.Context, id string) (c.InputRecord, er
 	return out, ctx.Err()
 }
 
+func budgetCheckpoint(ctx context.Context) error {
+	if b := ports.BudgetFromContext(ctx); b != nil {
+		return b.Check()
+	}
+	return ctx.Err()
+}
 func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
+	if e := budgetCheckpoint(ctx); e != nil {
+		return e
+	}
 	if e := r.resourceCheck(); e != nil {
 		return e
 	}
@@ -265,7 +276,7 @@ func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
 	seen := map[string]bool{}
 	members := sha256.New()
 	for i, item := range run.Items {
-		if err := ctx.Err(); err != nil {
+		if err := budgetCheckpoint(ctx); err != nil {
 			return err
 		}
 		if seen[item.ID] || item.ID == "" || !json.Valid(item.Payload) {
@@ -303,6 +314,9 @@ func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
 			return e
 		}
 	} else {
+		return e
+	}
+	if e = budgetCheckpoint(ctx); e != nil {
 		return e
 	}
 	if e = tx.Commit(); e != nil {
@@ -367,6 +381,9 @@ func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
 				return err
 			}
 		}
+		if e = budgetCheckpoint(ctx); e != nil {
+			return e
+		}
 		if e = tx.Commit(); e != nil {
 			return e
 		}
@@ -414,6 +431,9 @@ func (r *AppRepository) SaveRun(ctx context.Context, run c.Run) error {
 		}
 	}
 	if e = appLedger(ctx, tx, "RUN", run.ID, memberHash); e != nil {
+		return e
+	}
+	if e = budgetCheckpoint(ctx); e != nil {
 		return e
 	}
 	return tx.Commit()
@@ -467,7 +487,7 @@ func (r *AppRepository) verifyPublishedTx(ctx context.Context, tx *sql.Tx, id st
 		}
 		fmt.Fprintf(members, "%d\x00%s\x00%s\n", n, iid, h)
 		n++
-		if e = ctx.Err(); e != nil {
+		if e = budgetCheckpoint(ctx); e != nil {
 			return e
 		}
 	}

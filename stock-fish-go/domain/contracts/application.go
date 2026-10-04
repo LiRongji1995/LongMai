@@ -19,6 +19,10 @@ type InputRecord struct {
 }
 
 type ResearchRequest struct {
+	TargetSession  string `json:"target_session,omitempty"`
+	ConfigIdentity string `json:"config_identity,omitempty"`
+	Implementation string `json:"implementation_identity,omitempty"`
+	EvidencePolicy string `json:"evidence_policy,omitempty"`
 	InputID        string `json:"input_id"`
 	Strategy       string `json:"strategy_id"`
 	BudgetSeconds  int    `json:"budget_seconds"`

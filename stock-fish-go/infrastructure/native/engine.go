@@ -8,6 +8,7 @@ import (
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
 	evidence "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
 	facts "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/calendar"
 	resources "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/runtime"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	v2 "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/strategies/v2"
@@ -46,11 +47,27 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	if e.SourceHash == "" || strings.HasPrefix(e.SourceHash, "UNRECORDED") {
 		return out, errors.New("BUILD_SOURCE_IDENTITY_REQUIRED_USE_TOOLS_BUILD")
 	}
+	if r.Implementation != "" && r.Implementation != e.SourceHash {
+		return out, errors.New("REQUEST_BUILD_IDENTITY_MISMATCH")
+	}
+	if r.ConfigIdentity != "" {
+		raw, _ := json.Marshal(e.ConfigHashes)
+		if c.Hash(raw) != r.ConfigIdentity {
+			return out, errors.New("REQUEST_CONFIG_IDENTITY_MISMATCH")
+		}
+	}
+	if r.EvidencePolicy != "" && r.EvidencePolicy != "FOUR_CLOCK_SCOPE_REVISION_V2" {
+		return out, errors.New("REQUEST_EVIDENCE_POLICY_MISMATCH")
+	}
 	b := ports.BudgetFromContext(ctx)
 	if b == nil {
 		return out, errors.New("RESEARCH_RESOURCE_SCOPE_REQUIRED")
 	}
 	ports.BindMetrics(b, "", in.ID, in.RawHash, e.SourceHash)
+	if cache, ok := e.Cache.(interface{ SampleCache(context.Context) }); ok {
+		cache.SampleCache(b.Ctx())
+		defer cache.SampleCache(b.Ctx())
+	}
 	var err error
 	if err = b.Read(int64(len(in.Raw))); err != nil {
 		return out, err
@@ -62,8 +79,25 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	if err != nil {
 		return out, err
 	}
+	if r.TargetSession != "" {
+		observation, e := time.Parse(time.RFC3339, f.Input.Observation+"T15:01:00+08:00")
+		if e != nil {
+			return out, e
+		}
+		plan, e := calendar.Official().Plan(observation)
+		if e != nil {
+			return out, e
+		}
+		if r.TargetSession != plan["target_session"] {
+			return out, errors.New("REQUEST_TARGET_OBSERVATION_MISMATCH")
+		}
+	}
 	historyHash := f.Input.HistoryHash
 	manifest := map[string]any{"contract": "STOCKFISH_GO_RUN_V2", "input_id": in.ID, "input_bytes_hash": in.RawHash, "history_hash": f.Input.HistoryHash, "history_ref": f.Input.HistoryRef, "strategy_id": r.Strategy, "go_source_hash": e.SourceHash, "config_hashes": e.ConfigHashes, "schema_version": 2, "history_storage_backend": e.StorageBackend, "conversion_version": evidence.InputContractVersion, "observation_date": f.Input.Observation, "cutoff": f.Cutoff, "budget_seconds": r.BudgetSeconds, "source_bytes_limit": resources.MaxSourceBytes, "rss_bytes_limit": resources.MaxRSS, "product_role": "RESEARCH_ONLY", "production_promotion": "DISABLED", "market_edge": "NOT_ESTABLISHED", "parameter_validation": "尚未验证"}
+	if r.TargetSession != "" {
+		manifest["target_session"] = r.TargetSession
+		manifest["daily_evidence_policy"] = r.EvidencePolicy
+	}
 	manifest["selected_evidence_binding_contract"] = map[string]string{"version": "GO_SELECTED_EVIDENCE_BINDING_V1", "projection": "same index in fact.selected_evidence_hashes", "HISTORY_ROW_parent": "manifest.history_hash", "HISTORY_ROW_locator": "raw_sha256; if raw_sha256_is_projection=true use corresponding projection digest (exact equality checked)", "FROZEN_INPUT_parent": "manifest.input_bytes_hash", "FROZEN_INPUT_locator": "JSON pointer in original frozen input"}
 	identity := e.DatabaseIdentity
 	if e.DatabaseIdentitySource != nil {
@@ -73,6 +107,7 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 		}
 	}
 	manifest["database_identity"] = identity
+	manifest["coverage_type"] = f.Input.Coverage
 	manifest["frozen_envelope_contract"] = evidence.FrozenEnvelopeContractVersion
 	manifest["go_version"] = runtime.Version()
 	manifest["go_os"] = runtime.GOOS

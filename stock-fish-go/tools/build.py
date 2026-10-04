@@ -2,7 +2,7 @@
 import argparse, hashlib, pathlib, subprocess
 p=argparse.ArgumentParser();p.add_argument('--go',default='go');p.add_argument('--output',required=True);p.add_argument('--command',choices=['stockfish','stockfish-r1','stockfish-migrate'],default='stockfish-r1');a=p.parse_args()
 root=pathlib.Path(__file__).resolve().parents[1]
-paths=sorted([*root.rglob('*.go'),*root.rglob('*.sql'),*root.glob('infrastructure/calendar/*.json'),root/'go.mod',root/'go.sum'])
+paths=sorted([*root.rglob('*.go'),*root.rglob('*.sql'),*root.glob('infrastructure/calendar/*.json'),*root.glob('infrastructure/provider/*.py'),root/'go.mod',root/'go.sum'])
 h=hashlib.sha256()
 for path in paths:
  h.update(path.relative_to(root).as_posix().encode()+b'\0'+path.read_bytes()+b'\0')

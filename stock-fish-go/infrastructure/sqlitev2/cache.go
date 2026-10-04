@@ -36,15 +36,7 @@ func (r *AppRepository) CacheGet(ctx context.Context, key, version, dependencies
 	b := ports.BudgetFromContext(ctx)
 	started := time.Now()
 	outcome := "error"
-	defer func() {
-		var total int64
-		var measured *int64
-		// Measurement failure is observational and must not change strategy behavior.
-		if b != nil && r.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total) == nil {
-			measured = &total
-		}
-		ports.CacheObservation(b, outcome, measured)
-	}()
+	defer func() { ports.CacheObservation(b, outcome, nil) }()
 	defer func() { ports.Observe(b, "cache_lookup_and_integrity", time.Since(started).Seconds()) }()
 	var raw []byte
 	var stored string
@@ -67,6 +59,7 @@ func (r *AppRepository) CacheGet(ctx context.Context, key, version, dependencies
 		if _, e = r.db.ExecContext(ctx, "DELETE FROM app_fact_cache WHERE cache_key=?", key); e != nil {
 			return nil, false, e
 		}
+		r.SampleCache(ctx)
 		return nil, false, nil
 	}
 	_, e = r.db.ExecContext(ctx, "UPDATE app_fact_cache SET last_access=? WHERE cache_key=?", appNow(), key)
@@ -76,6 +69,10 @@ func (r *AppRepository) CacheGet(ctx context.Context, key, version, dependencies
 	return raw, true, e
 }
 func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies string, raw []byte) error {
+	started := time.Now()
+	defer func() {
+		ports.Observe(ports.BudgetFromContext(ctx), "cache_write_capacity_and_eviction", time.Since(started).Seconds())
+	}()
 	if key == "" || version == "" || dependencies == "" || int64(len(raw)) > FactCacheCapacity {
 		return errors.New("CACHE_CAPACITY_OR_IDENTITY_INVALID")
 	}
@@ -92,6 +89,7 @@ func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies
 		return e
 	}
 	var total int64
+	r.cacheOccupancyQueries.Add(1)
 	if e = tx.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total); e != nil {
 		return e
 	}
@@ -115,4 +113,26 @@ func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies
 func (r *AppRepository) CacheClear(ctx context.Context) error {
 	_, e := r.db.ExecContext(ctx, "DELETE FROM app_fact_cache")
 	return e
+}
+
+// Sampling is a scope boundary or completed occupancy mutation, never a lookup.
+// Its cost is nested inside evaluate/cache_write, not additive to total time.
+func (r *AppRepository) SampleCache(ctx context.Context) {
+	b := ports.BudgetFromContext(ctx)
+	if b == nil {
+		return
+	}
+	started := time.Now()
+	var total int64
+	var measured *int64
+	status := "UNAVAILABLE"
+	r.cacheOccupancyQueries.Add(1)
+	if r.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total) == nil {
+		measured = &total
+		status = "MEASURED_SCOPE_OR_MUTATION"
+	}
+	ports.Observe(b, "cache_occupancy_sample", time.Since(started).Seconds())
+	if p, ok := b.(interface{ CacheSample(*int64, string) }); ok {
+		p.CacheSample(measured, status)
+	}
 }

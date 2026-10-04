@@ -13,6 +13,7 @@ import (
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/lifecycle"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/native"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/sqlitev2"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/interfaces/daily"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/interfaces/httpapi"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	"io"
@@ -40,6 +41,9 @@ func canonicalDatabasePath(path string) (string, error) {
 }
 
 func Run(ctx context.Context, args []string, out, log io.Writer, sourceHash string) (result error) {
+	if len(args) == 0 || daily.IsCommand(args[0]) {
+		return daily.Run(ctx, args, out, log, sourceHash, ConfigHashes)
+	}
 	if len(args) == 0 {
 		return errors.New("usage: stockfish database|import|research|runs|show|detail|export|verify-run|legacy|jobs|job|cancel|recover|resume|health|readiness|schedule|cache-clear|serve")
 	}

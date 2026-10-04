@@ -1,3 +1,23 @@
+# 2026-10-04 当前终端交付增量
+
+本轮以 6205848 为基线，必要实现及本地候选包验收已完成，用户随后明确授权源码、测试和说明提交推送到 main；不激活生产。日常入口及边界见 [USER_GUIDE](delivery/USER_GUIDE.md)；私有最终验收在 `reports/codex/stockfish-v2-rebuild/daily-cli-20261004/`。下方“尚未开发”表格是上一轮历史交接，不代表本轮实现状态。
+
+- init 不覆盖、不研究、不采集、不迁移；doctor 分列只读、本地研究、来源依赖及在线未验证。
+- picks/explain 在单个 mode=ro 读事务校验全部保存明细/投影/成员集合，再从同一视图读取，不使用 immutable=1 或写租约。默认严格匹配目标/观察日/cutoff/最新合法本地输入/策略/转换与配置；明确 run-id 可查历史。解释仅输出保存事实、全部条件、形态、反证和未知。
+- daily 使用已匹配保存结果或一次满足日期合同的本地冻结输入研究；盘中所需观察日未完成则阻塞。官方有限日历越界拒绝猜测。R1 默认日常偏好不修改系统 V2 默认；CORE_PASS、覆盖与 RESEARCH_ONLY 保持。
+- refresh 固定复用 MainboardPipeline 的 DAILY_PRIMARY_CRITICAL 收集/规范化路径，真实回执、时钟和 PARTIAL 追加在独立目录，最长 600 秒/100 HTTP 含重试；Python 不执行策略。默认无来源配置，不联网，实际批次在网络前因既有 pydantic 编译扩展缺失失败（HTTP 0），ONLINE_REFRESH 单列依赖阻塞，失败回执保留，不重试。
+- 日志队列最多两条、单 worker；每条 pipe 输出限 250ms，最终最多一次。任意 io.Writer 无取消保证，明确拒绝不支持 sink。Close 的 pipe 收尾有界；regular file/kernel 卡死不具有任意强制取消保证。final_resource_scope 表示该条资源 scope 摘要，只有实际收到完整行才说明送达；写成功后内存 final_log_status=DELIVERED，失败为 NOT_DELIVERED。
+- cache_bytes 有 sample_at/status/count；CacheGet 命中/未命中不 SUM，scope 起止和占用变化取样，容量 SUM 不删除。cache_occupancy_sample 与 write/lookup/stage 可能嵌套，不相加当总耗时。取消的普通读保留带时点的最后样本，明确采样失败才 UNAVAILABLE/null。
+- elapsed_seconds 是单调经过时间，不是 CPU 时间；wait_elapsed_seconds 是墙钟等待。超过 2 秒的差异或明显回拨取消 scope，发布前再检查。旧 14411.776 秒记录与原始日志保持，不据此断言休眠或日志是原因。
+
+最终源候选为 `e31cf80666b9bf1d900da17e116a0422ec451c1d00c0b7635962b99c3849bdab`。 发布源码 `0873c035ff05b586a5104628aafc95c7102a83517d634e7267d905799e818bb3` 与候选的唯一 Go 差异是集成测试格式化，运行代码保持；不将旧包重新签成新身份。候选包在仓库外、独立配置/安装根、中文空格路径和空 PATH/禁网策略下执行；私有机器报告分列每项实际状态。Windows 交叉构建与原生验证分别列，不宣称 Windows pipe 原生取消已支持。
+
+当前包已完成一次同输入历史 R1：3040 证券、832.179 秒、RSS peak 953102336 字节；全部明细 hash/字段与旧暖跑一致。manifest 新源码 hash 和新增 coverage_type 两处差异如实保留。真实 picks/explain/export、实际研究期间并发读取、daily 复用和重启已验证；6 CORE_PASS/41 UNKNOWN/2993 FAIL，资料仍 INCOMPLETE。
+
+完整规模旧库增量仍 BLOCKED，不能由本轮只读和本地研究替代。生产激活 NOT_AUTHORIZED，人工验收 NOT_RUN_BY_USER，MARKET_EDGE=NOT_ESTABLISHED。
+
+---
+
 # 后台能力交接：缓存指标与验收边界（2026-10-03）
 
 2026-10-04 收尾结论：当前源码全套普通/race、正式 oracle、vet、Python 工具测试和原生/Windows 交叉构建通过。80 证券两种背景 fixture 的冷暖完整明细差分为零，暖命中均实测 422610 字节。旧五个真实 run、源/备份/账本身份和当前 PUBLISHED 状态重新核对通过。

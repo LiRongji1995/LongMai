@@ -1,3 +1,13 @@
+# 2026-10-04 日常终端候选包与源码发布
+
+本轮实现现有 `stockfish` 的 init / doctor / picks / explain / daily，修复日志背压、缓存占用采样与恢复后的时钟检查。使用见 [终端说明](stock-fish-go/delivery/USER_GUIDE.md)，人工验收初始 NOT_RUN_BY_USER。验收结束后用户明确授权提交并推送本轮源码、测试与说明到 main；生产切换仍未授权。6205848 是上一轮已完成发布基线。
+
+日常查询使用真正只读适配器和一致读事务，不取得写租约、不初始化扩展；本地研究保持原单写者/原子发布合同。在线采集独立使用固定 deterministic worker，缺配置阻塞，不能把合成 PARTIAL 验证称为已在线验收。完整规模旧库增量仍受既有合法源/容量限制；生产服务、调度、默认路径和原研究结果未切换。
+
+本轮新证据目录 `reports/codex/stockfish-v2-rebuild/daily-cli-20261004/` 为私有，不随源码发布。最终源码、命令和二进制身份以该目录 SELFTEST_REPORT/acceptance 为准；分享版实测摘要见 [SELFTEST_REPORT](stock-fish-go/delivery/SELFTEST_REPORT.md)；私有命令、数据库和包仍不随源码发布。
+
+---
+
 > 2026-10-03 后台验收收尾：本轮以 b728c60 为基线，缓存上下文与最终指标修复及能力边界见 [后台交接](stock-fish-go/BACKEND_READINESS_FOR_CLI.md)。2026-10-04 用户已授权本轮源码提交推送，生产未切换；以下既有记录按各自时间与源码身份理解。
 
 # StockFish Go / SQLite V2 隔离交付（2026-10-02）

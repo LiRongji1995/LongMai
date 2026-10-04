@@ -1,0 +1,11 @@
+{
+  "version": "STOCKFISH_DAILY_V1",
+  "database": "existing-published.db",
+  "artifacts": "artifacts",
+  "mode": "embedded",
+  "preferred_strategy": "STAGE_AWARE_RESEARCH_R1",
+  "budget_seconds": 300,
+  "database_identity": {},
+  "database_path_sha256": "POPULATED_BY_INIT",
+  "provider": ""
+}

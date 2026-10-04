@@ -13,6 +13,8 @@ import (
 	"fmt"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/application"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/sqlitev2"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/interfaces/daily"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	"io"
 	"net"
@@ -171,6 +173,89 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 	ctx, release := context.WithTimeout(r.Context(), 5*time.Minute)
 	defer release()
 	r = r.WithContext(ctx)
+
+	if r.Method == "GET" && strings.HasPrefix(path, "api/daily/") {
+		repo, ok := s.Service.Store.(*sqlitev2.AppRepository)
+		if !ok {
+			failure(w, errors.New("SERVER_DATABASE_OWNER_REQUIRED"))
+			return
+		}
+		reader, e := repo.DailyReadOnly(ctx)
+		if e != nil {
+			failure(w, e)
+			return
+		}
+		defer reader.Close()
+		if path == "api/daily/identity" {
+			hash, e := daily.PathHash(repo.DatabasePath())
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			writeJSON(w, 200, map[string]any{"protocol": daily.Protocol, "database_identity": reader.Identity(), "database_path_sha256": hash})
+			return
+		}
+		if path == "api/daily/readiness" {
+			v, e := reader.Ready(ctx)
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if path == "api/daily/runs" {
+			if e := query(r, "limit", "offset"); e != nil {
+				failure(w, e)
+				return
+			}
+			limit, e := integer(r, "limit", 200, 1, 200)
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			offset, e := integer(r, "offset", 0, 0, 1000000000)
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			v, e := reader.Runs(ctx, limit, offset)
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if path == "api/daily/inputs" {
+			if e := query(r, "observation"); e != nil {
+				failure(w, e)
+				return
+			}
+			v, e := reader.Inputs(ctx, r.URL.Query().Get("observation"))
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		if len(parts) == 4 && parts[2] == "runs" {
+			if e := queryOptional(r, "instrument", "all"); e != nil {
+				failure(w, e)
+				return
+			}
+			v, e := reader.Saved(ctx, parts[3], r.URL.Query().Get("instrument"), r.URL.Query().Get("all") == "true")
+			if e != nil {
+				failure(w, e)
+				return
+			}
+			writeJSON(w, 200, v)
+			return
+		}
+		failure(w, errors.New("UNSUPPORTED_DAILY_QUERY"))
+		return
+	}
 	if r.Method == "GET" && (path == "api/health" || path == "api/readiness") {
 		ready, e := s.Service.Store.Ready(ctx)
 		if e != nil {
@@ -250,9 +335,13 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 
 	if r.Method == "POST" && (path == "api/daily-primary/run" || path == "api/research/r1/run") {
 		var value struct {
-			InputID     string `json:"input_id"`
-			Observation string `json:"observation_date"`
-			Budget      int    `json:"budget_seconds"`
+			InputID        string `json:"input_id"`
+			Observation    string `json:"observation_date"`
+			Budget         int    `json:"budget_seconds"`
+			Target         string `json:"target_session,omitempty"`
+			Config         string `json:"config_identity,omitempty"`
+			Implementation string `json:"implementation_identity,omitempty"`
+			Policy         string `json:"evidence_policy,omitempty"`
 		}
 		if e := decodeBody(w, r, &value); e != nil {
 			failure(w, e)
@@ -298,7 +387,7 @@ func (s *Server) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 			}
 			key = "http_" + hex.EncodeToString(nonce[:])
 		}
-		request := c.ResearchRequest{InputID: value.InputID, Strategy: strategy, BudgetSeconds: value.Budget, IdempotencyKey: key}
+		request := c.ResearchRequest{InputID: value.InputID, Strategy: strategy, BudgetSeconds: value.Budget, IdempotencyKey: key, TargetSession: value.Target, ConfigIdentity: value.Config, Implementation: value.Implementation, EvidencePolicy: value.Policy}
 		if len(s.queue) == cap(s.queue) {
 			writeJSON(w, 429, map[string]string{"error": "JOB_QUEUE_FULL"})
 			return
@@ -524,4 +613,17 @@ func Listen(ctx context.Context, address string, s *Server) error {
 		return nil
 	}
 	return fmt.Errorf("http server: %w", e)
+}
+
+func queryOptional(r *http.Request, allowed ...string) error {
+	set := map[string]bool{}
+	for _, key := range allowed {
+		set[key] = true
+	}
+	for key, values := range r.URL.Query() {
+		if !set[key] || len(values) != 1 {
+			return errors.New("INVALID_DAILY_QUERY")
+		}
+	}
+	return nil
 }
