@@ -35,6 +35,7 @@ func NewBudget(parent context.Context, d time.Duration, w io.Writer) (*Budget, e
 	}
 	ctx, cancel := context.WithTimeout(parent, d)
 	b := &Budget{Context: ctx, cancel: cancel, start: time.Now(), last: time.Now(), writer: w, done: make(chan struct{}), m: contracts.Metrics{Stage: "input_validation", Stages: map[string]float64{}}}
+	b.Context = ports.WithBudget(ctx, b)
 	b.report = ports.ProgressFromContext(parent)
 	// Sample immediately as well as periodically; short runs still publish a
 	// measured RSS and cannot start while already over the resident-set limit.
@@ -62,7 +63,9 @@ func (b *Budget) monitor() {
 				b.cancel()
 			}
 			if b.writer != nil {
-				_ = json.NewEncoder(b.writer).Encode(b.m)
+				if err := json.NewEncoder(b.writer).Encode(b.m); err != nil {
+					b.m.LogWriteErrors++
+				}
 			}
 			b.mu.Unlock()
 		}
@@ -174,6 +177,42 @@ func (b *Budget) Observe(label string, seconds float64) {
 	b.m.Components[label] += seconds
 }
 func (b *Budget) CacheRead(n int64) { b.mu.Lock(); defer b.mu.Unlock(); b.m.CacheReadBytes += n }
+func (b *Budget) CacheObservation(outcome string, occupancy *int64) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	switch outcome {
+	case "hit":
+		b.m.CacheHits++
+	case "miss":
+		b.m.CacheMisses++
+	case "corrupt":
+		b.m.CacheMisses++
+		b.m.CacheCorrupt++
+	case "decode_corrupt":
+		b.m.CacheHits--
+		b.m.CacheMisses++
+		b.m.CacheCorrupt++
+	case "error":
+		b.m.CacheErrors++
+	}
+	b.m.CacheBytes = occupancy
+}
+func (b *Budget) BindMetrics(run, input, hash, source string) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	if run != "" {
+		b.m.RunID = run
+	}
+	if input != "" {
+		b.m.InputID = input
+	}
+	if hash != "" {
+		b.m.InputHash = hash
+	}
+	if source != "" {
+		b.m.SourceHash = source
+	}
+}
 func (b *Budget) HistoryPayload(n int64, unique bool) {
 	b.mu.Lock()
 	defer b.mu.Unlock()
@@ -205,7 +244,13 @@ func (b *Budget) Close() {
 	b.cancel()
 	<-b.done
 	if b.writer != nil {
-		_ = json.NewEncoder(b.writer).Encode(b.Snapshot())
+		m := b.Snapshot()
+		m.Final = true
+		if err := json.NewEncoder(b.writer).Encode(m); err != nil {
+			b.mu.Lock()
+			b.m.LogWriteErrors++
+			b.mu.Unlock()
+		}
 	}
 }
 func ReadBounded(path string, max int64, b ports.ResearchBudget) ([]byte, error) {

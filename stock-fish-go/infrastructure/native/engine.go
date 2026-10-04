@@ -50,6 +50,7 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 	if b == nil {
 		return out, errors.New("RESEARCH_RESOURCE_SCOPE_REQUIRED")
 	}
+	ports.BindMetrics(b, "", in.ID, in.RawHash, e.SourceHash)
 	var err error
 	if err = b.Read(int64(len(in.Raw))); err != nil {
 		return out, err
@@ -180,5 +181,5 @@ func (e *NativeEngine) Start(ctx context.Context, seconds int) (context.Context,
 	if err != nil {
 		return nil, nil, err
 	}
-	return ports.WithBudget(b.Ctx(), b), b.Close, nil
+	return b.Ctx(), b.Close, nil
 }

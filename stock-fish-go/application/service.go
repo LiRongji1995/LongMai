@@ -158,6 +158,7 @@ func (s *Service) Execute(parent context.Context, id string) (c.Job, error) {
 		run.InputID = in.ID
 		run.Strategy = j.Request.Strategy
 		run.CreatedAt = s.now()
+		ports.BindMetrics(ports.BudgetFromContext(ctx), run.ID, in.ID, in.RawHash, "")
 		err = s.Store.SaveRun(ctx, run)
 	}
 	if err != nil {

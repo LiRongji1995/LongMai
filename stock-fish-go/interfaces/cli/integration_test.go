@@ -99,7 +99,8 @@ func TestNativeInputResearchRestartAndCacheLifecycle(t *testing.T) {
 		t.Skip("explicit Python TEST_FIXTURE oracle required")
 	}
 	store, repo, _ := appFixture(t)
-	engine := &native.NativeEngine{SourceHash: "TEST_FIXTURE_BUILD", ConfigHashes: cli.ConfigHashes, Cache: repo, DatabaseIdentity: map[string]string{"batch_projection_manifest_hash": "STALE_TEST_FIXTURE"}, DatabaseIdentitySource: store.PublishedResearchIdentity}
+	var metricsLog bytes.Buffer
+	engine := &native.NativeEngine{Progress: &metricsLog, SourceHash: "TEST_FIXTURE_BUILD", ConfigHashes: cli.ConfigHashes, Cache: repo, DatabaseIdentity: map[string]string{"batch_projection_manifest_hash": "STALE_TEST_FIXTURE"}, DatabaseIdentitySource: store.PublishedResearchIdentity}
 	service := application.New(repo, engine)
 	ctx := context.Background()
 	raw, e := os.ReadFile(filepath.Join(dir, "repair.json"))
@@ -132,6 +133,7 @@ func TestNativeInputResearchRestartAndCacheLifecycle(t *testing.T) {
 		if e != nil {
 			t.Fatal(e)
 		}
+		metricsLog.Reset()
 		j, e = service.Execute(ctx, j.ID)
 		if e != nil {
 			t.Fatal(e)
@@ -163,10 +165,38 @@ func TestNativeInputResearchRestartAndCacheLifecycle(t *testing.T) {
 			t.Fatal("long-lived engine retained a stale database identity", e)
 		}
 		var summary struct {
-			Hits int `json:"fact_cache_hits"`
+			Hits    int       `json:"fact_cache_hits"`
+			Metrics c.Metrics `json:"metrics"`
 		}
 		if e = json.Unmarshal(run.Summary, &summary); e != nil {
 			t.Fatal(e)
+		}
+		if summary.Metrics.CacheBytes == nil || *summary.Metrics.CacheBytes <= 0 {
+			t.Fatal("cache occupancy missing")
+		}
+		var final c.Metrics
+		lines := bytes.Split(bytes.TrimSpace(metricsLog.Bytes()), []byte("\n"))
+		if e = json.Unmarshal(lines[len(lines)-1], &final); e != nil {
+			t.Fatal(e)
+		}
+		if !final.Final || final.RunID != j.RunID || final.InputID != in.ID || final.InputHash != in.RawHash || final.SourceHash != "TEST_FIXTURE_BUILD" || final.Elapsed < summary.Metrics.Elapsed {
+			t.Fatalf("final metrics identity or timing missing: %+v", final)
+		}
+		if final.CacheReadBytes != summary.Metrics.CacheReadBytes || final.CacheErrors != 0 {
+			t.Fatal("final cache accounting mismatch")
+		}
+		if key == "native-warm" && final.CacheHits != int64(len(items)) {
+			t.Fatal("warm hit accounting missing")
+		}
+		if key != "native-warm" && final.CacheMisses != int64(len(items)) {
+			t.Fatal("cold miss accounting missing")
+		}
+		t.Logf("%s final metrics: %s", key, lines[len(lines)-1])
+		if key == "native-warm" && summary.Metrics.CacheReadBytes <= 0 {
+			t.Fatal("warm SQLite payload metrics lost across NativeEngine budget context")
+		}
+		if key != "native-warm" && summary.Metrics.CacheReadBytes != 0 {
+			t.Fatal("cache miss inflated payload bytes")
 		}
 		if key == "native-warm" && summary.Hits != len(items) {
 			t.Fatalf("warm cache %d/%d", summary.Hits, len(items))

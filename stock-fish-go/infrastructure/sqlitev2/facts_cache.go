@@ -4,6 +4,8 @@ import (
 	"context"
 	"encoding/json"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
+	"time"
 )
 
 // The engine constructs this key only after raw bytes, projections, visibility
@@ -14,7 +16,11 @@ func (r *AppRepository) GetFact(ctx context.Context, key string) (facts.StockFac
 	if e != nil || !hit {
 		return out, hit, e
 	}
-	if e = json.Unmarshal(raw, &out); e != nil {
+	started := time.Now()
+	e = json.Unmarshal(raw, &out)
+	ports.Observe(ports.BudgetFromContext(ctx), "cache_decode", time.Since(started).Seconds())
+	if e != nil {
+		ports.CacheObservation(ports.BudgetFromContext(ctx), "decode_corrupt", nil)
 		_, e = r.db.ExecContext(ctx, "DELETE FROM app_fact_cache WHERE cache_key=?", key)
 		return facts.StockFacts{}, false, e
 	}

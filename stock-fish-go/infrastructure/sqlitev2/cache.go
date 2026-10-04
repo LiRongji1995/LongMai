@@ -35,25 +35,44 @@ func CacheKey(identity CacheIdentity) (string, error) {
 func (r *AppRepository) CacheGet(ctx context.Context, key, version, dependencies string) ([]byte, bool, error) {
 	b := ports.BudgetFromContext(ctx)
 	started := time.Now()
+	outcome := "error"
+	defer func() {
+		var total int64
+		var measured *int64
+		// Measurement failure is observational and must not change strategy behavior.
+		if b != nil && r.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total) == nil {
+			measured = &total
+		}
+		ports.CacheObservation(b, outcome, measured)
+	}()
 	defer func() { ports.Observe(b, "cache_lookup_and_integrity", time.Since(started).Seconds()) }()
 	var raw []byte
 	var stored string
 	var size int64
 	e := r.db.QueryRowContext(ctx, "SELECT payload,payload_hash,size FROM app_fact_cache WHERE cache_key=? AND version=? AND dependencies_hash=?", key, version, dependencies).Scan(&raw, &stored, &size)
+	ports.Observe(b, "cache_query", time.Since(started).Seconds())
 	if errors.Is(e, sql.ErrNoRows) {
+		outcome = "miss"
 		return nil, false, nil
 	}
 	if e != nil {
 		return nil, false, e
 	}
 	ports.CacheRead(b, int64(len(raw)))
-	if int64(len(raw)) != size || appHash(raw) != stored {
+	validation := time.Now()
+	valid := int64(len(raw)) == size && appHash(raw) == stored
+	ports.Observe(b, "cache_integrity", time.Since(validation).Seconds())
+	if !valid {
+		outcome = "corrupt"
 		if _, e = r.db.ExecContext(ctx, "DELETE FROM app_fact_cache WHERE cache_key=?", key); e != nil {
 			return nil, false, e
 		}
 		return nil, false, nil
 	}
 	_, e = r.db.ExecContext(ctx, "UPDATE app_fact_cache SET last_access=? WHERE cache_key=?", appNow(), key)
+	if e == nil {
+		outcome = "hit"
+	}
 	return raw, true, e
 }
 func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies string, raw []byte) error {
@@ -87,7 +106,11 @@ func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies
 		}
 		total -= n
 	}
-	return tx.Commit()
+	if e = tx.Commit(); e != nil {
+		return e
+	}
+	ports.CacheObservation(ports.BudgetFromContext(ctx), "", &total)
+	return nil
 }
 func (r *AppRepository) CacheClear(ctx context.Context) error {
 	_, e := r.db.ExecContext(ctx, "DELETE FROM app_fact_cache")

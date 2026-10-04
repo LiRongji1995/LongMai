@@ -68,3 +68,55 @@ func TestFirstProgressErrorRemainsCauseAndCancelsWork(t *testing.T) {
 		t.Fatalf("first progress error overwritten: %v", b.Check())
 	}
 }
+
+func TestBudgetContextRetainsIdentityValuesDeadlineAndCancellation(t *testing.T) {
+	type key struct{}
+	parent, cancel := context.WithTimeout(context.WithValue(context.Background(), key{}, "TEST_FIXTURE"), 30*time.Millisecond)
+	defer cancel()
+	b, err := NewBudget(parent, time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b.Close()
+	if ports.BudgetFromContext(b.Ctx()) != b || b.Ctx().Value(key{}) != "TEST_FIXTURE" {
+		t.Fatal("scope or parent value lost")
+	}
+	want, _ := parent.Deadline()
+	got, _ := b.Ctx().Deadline()
+	if !got.Equal(want) {
+		t.Fatal("parent deadline lost")
+	}
+	<-b.Ctx().Done()
+	if !errors.Is(b.Check(), context.DeadlineExceeded) {
+		t.Fatal(b.Check())
+	}
+	parent2, cancel2 := context.WithCancel(context.Background())
+	b2, err := NewBudget(parent2, time.Second, nil)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer b2.Close()
+	cancel2()
+	if !errors.Is(b2.Check(), context.Canceled) {
+		t.Fatal("cancel chain lost")
+	}
+}
+
+type failingMetricsWriter struct{}
+
+func (failingMetricsWriter) Write([]byte) (int, error) {
+	return 0, errors.New("TEST_FIXTURE_LOG_FAILURE")
+}
+func TestMetricsLogFailureDoesNotChangeResearchBudget(t *testing.T) {
+	b, err := NewBudget(context.Background(), 5*time.Second, failingMetricsWriter{})
+	if err != nil {
+		t.Fatal(err)
+	}
+	if b.Snapshot().CacheBytes != nil {
+		t.Fatal("unmeasured occupancy represented as zero")
+	}
+	b.Close()
+	if b.Snapshot().LogWriteErrors != 1 {
+		t.Fatal("final log failure unrecorded")
+	}
+}

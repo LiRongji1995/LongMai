@@ -68,3 +68,18 @@ func HistoryPayload(b ResearchBudget, n int64, unique bool) {
 		p.HistoryPayload(n, unique)
 	}
 }
+
+// CacheObservation measures logical payload occupancy, never physical disk IO.
+// A nil occupancy explicitly means it could not be measured.
+func CacheObservation(b ResearchBudget, outcome string, occupancy *int64) {
+	if p, ok := b.(interface{ CacheObservation(string, *int64) }); ok {
+		p.CacheObservation(outcome, occupancy)
+	}
+}
+func BindMetrics(b ResearchBudget, run, input, hash, source string) {
+	if p, ok := b.(interface {
+		BindMetrics(string, string, string, string)
+	}); ok {
+		p.BindMetrics(run, input, hash, source)
+	}
+}
