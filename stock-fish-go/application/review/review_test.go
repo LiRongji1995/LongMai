@@ -75,6 +75,19 @@ func fixtureEvidence(t *testing.T, in c.InputRecord) *Evidence {
 	}
 	return e
 }
+
+func fixtureFrozenBytes(t *testing.T, f c.Frozen) []byte {
+	t.Helper()
+	input, err := ev.CanonicalInputProjection(context.Background(), f)
+	if err != nil {
+		t.Fatal(err)
+	}
+	raw, err := json.Marshal(map[string]any{"purpose": f.Purpose, "cutoff": f.Cutoff, "input": json.RawMessage(input)})
+	if err != nil {
+		t.Fatal(err)
+	}
+	return raw
+}
 func fixtureRun(t *testing.T, in c.InputRecord) c.Run {
 	t.Helper()
 	manifest, _ := json.Marshal(map[string]any{"go_source_hash": c.Hash([]byte("TEST_FIXTURE_BUILD")), "config_hashes": map[string]string{"TEST_FIXTURE": c.Hash([]byte("TEST_FIXTURE_CONFIG"))}, "conversion_version": ev.InputContractVersion, "input_bytes_hash": in.RawHash, "cutoff": in.Cutoff})
@@ -124,7 +137,7 @@ func TestFrozenSignalAndMatureUnknownNeverZero(t *testing.T) {
 		}
 	}
 	f.Input.Bars = filtered
-	missing.Raw, _ = json.Marshal(f)
+	missing.Raw = fixtureFrozenBytes(t, f)
 	missing.RawHash = c.Hash(missing.Raw)
 	missing.ID = "frozen_" + missing.RawHash
 	out, err = Evaluate(ctx, signals, missing, fixtureEvidence(t, missing), contract, c.Hash([]byte("TEST_FIXTURE_EVALUATOR")))
@@ -175,7 +188,7 @@ func TestReviewBasisRevisionParentVisibilityAndMix(t *testing.T) {
 					}
 				}
 			}
-			label.Raw, _ = json.Marshal(f)
+			label.Raw = fixtureFrozenBytes(t, f)
 			label.RawHash = c.Hash(label.Raw)
 			label.ID = "frozen_" + label.RawHash
 			out, err := Evaluate(context.Background(), signals, label, fixtureEvidence(t, label), contract, c.Hash([]byte("TEST_FIXTURE_EVALUATOR")))
@@ -200,7 +213,7 @@ func TestPublicationUnknownUsesObservedUpperBoundAndReplaySeparated(t *testing.T
 	in := fixtureFrozen(t, "2026-01-02", "10")
 	f, _ := ev.DecodeFrozen(in.Raw)
 	f.Input.Coverage = "PROSPECTIVE_CAPTURED"
-	in.Raw, _ = json.Marshal(f)
+	in.Raw = fixtureFrozenBytes(t, f)
 	in.RawHash = c.Hash(in.Raw)
 	in.ID = "frozen_" + in.RawHash
 	in.Coverage = f.Input.Coverage
@@ -242,7 +255,7 @@ func fixtureLab(t *testing.T) ([]Record, Candidate, Candidate, Contract) {
 	contract.MinSamples = 2
 	contract.MinDates = 2
 	contract.MinBlocks = 2
-	base := Candidate{ID: "TEST_FIXTURE_BASE", Role: "BASELINE", Implementation: c.Hash([]byte("TEST_FIXTURE_BASE")), ConfigHash: c.Hash([]byte("TEST_FIXTURE_BASE_CFG")), ContractHash: Digest(contract), EvaluationStart: "2026-01-02", EvaluationEnd: "2026-04-01", FixtureOnly: true}
+	base := Candidate{ID: "TEST_FIXTURE_BASE", Role: "BASELINE", Scope: "TEST_FIXTURE", TimeSplitContract: CandidateTimeSplitVersion, Implementation: c.Hash([]byte("TEST_FIXTURE_BASE")), ConfigHash: c.Hash([]byte("TEST_FIXTURE_BASE_CFG")), ContractHash: Digest(contract), EvaluationStart: "2026-01-02", EvaluationEnd: "2026-04-01", FixtureOnly: true}
 	candidate := base
 	candidate.ID = "TEST_FIXTURE_CANDIDATE"
 	candidate.Role = "CANDIDATE"
@@ -261,7 +274,7 @@ func fixtureLab(t *testing.T) ([]Record, Candidate, Candidate, Contract) {
 				if (v.Role == "BASELINE" && id == "600002.SH") || (v.Role == "CANDIDATE" && id == "600001.SH") {
 					status = "CORE_PASS"
 				}
-				s := Signal{ID: v.ID + day + id, RunID: v.ID + day, Instrument: id, Observation: day, Decision: status, Implementation: v.Implementation, ConfigHash: v.ConfigHash, ContractHash: Digest(contract), Mode: "TEST_FIXTURE", Qualified: true, PoolComplete: true}
+				s := Signal{ID: v.ID + day + id, RunID: v.ID + day, InputHash: c.Hash([]byte("TEST_FIXTURE_INPUT" + day)), Instrument: id, Observation: day, Decision: status, Implementation: v.Implementation, ConfigHash: v.ConfigHash, ContractHash: Digest(contract), Mode: "TEST_FIXTURE", Qualified: true, QualificationStatus: "QUALIFIED", UniverseComplete: true, PoolComplete: true}
 				r, _ := NewRecord("SIGNAL", s.ID, 1, s)
 				rows = append(rows, r)
 				for _, h := range contract.Windows {
@@ -287,6 +300,7 @@ func TestFixedEvaluationAttemptsMinimumAndFiniteState(t *testing.T) {
 	if err != nil || v.Status != "REVIEW_REQUIRED" || v.Attempt != 1 {
 		t.Fatal(v, err)
 	}
+	v.EvaluatorBuild = c.Hash([]byte("TEST_FIXTURE_EVALUATOR"))
 	r, _ := NewRecord("EVALUATION", v.ID, 1, v)
 	rows = append(rows, r)
 	second, err := Compare(rows, candidate, base, contract, now, "ATTEMPT_TWO")
@@ -364,7 +378,7 @@ func TestCandidateTimeSplitFutureLeakageAndMinimum(t *testing.T) {
 	for i := 0; i < 100; i++ {
 		calendar = append(calendar, first.AddDate(0, 0, i).Format("2006-01-02"))
 	}
-	v := Candidate{ID: "C", Role: "CANDIDATE", Parent: "B", Hypothesis: "fixture hypothesis", Change: "independent fixture version", Scope: "TEST_FIXTURE", Implementation: c.Hash([]byte("TEST_FIXTURE_IMPLEMENTATION")), ConfigHash: c.Hash([]byte("TEST_FIXTURE_CONFIG")), DataCutoff: "2025-12-02T16:00:00+08:00", SelectionEnd: "2025-12-01", EvaluationStart: "2026-01-02", EvaluationEnd: "2026-03-01", CalendarInputID: "CAL", CalendarHash: c.Hash([]byte("TEST_FIXTURE_CALENDAR")), ContractVersion: contract.Version, ContractHash: Digest(contract), PrimaryMetric: "PRIMARY_WINDOW_EXCESS_MEDIAN", SecondaryMetrics: []string{"ALL_FIXED_WINDOWS", "NEGATIVE_TAIL", "FIXED_COST_SENSITIVITY"}, FixtureOnly: true, ProductionPromotion: "DISABLED"}
+	v := Candidate{ID: "C", Role: "CANDIDATE", Parent: "B", TimeSplitContract: CandidateTimeSplitVersion, Hypothesis: "fixture hypothesis", Change: "independent fixture version", Scope: "TEST_FIXTURE", Implementation: c.Hash([]byte("TEST_FIXTURE_IMPLEMENTATION")), ConfigHash: c.Hash([]byte("TEST_FIXTURE_CONFIG")), DataCutoff: "2025-12-02T16:00:00+08:00", SelectionEnd: "2025-12-01", EvaluationStart: "2026-01-02", EvaluationEnd: "2026-03-01", CalendarInputID: "CAL", CalendarHash: c.Hash([]byte("TEST_FIXTURE_CALENDAR")), ContractVersion: contract.Version, ContractHash: Digest(contract), PrimaryMetric: "PRIMARY_WINDOW_EXCESS_MEDIAN", SecondaryMetrics: []string{"ALL_FIXED_WINDOWS", "NEGATIVE_TAIL", "FIXED_COST_SENSITIVITY"}, FixtureOnly: true, ProductionPromotion: "DISABLED"}
 	if err := v.Validate(contract, calendar, now); err != nil {
 		t.Fatal(err)
 	}

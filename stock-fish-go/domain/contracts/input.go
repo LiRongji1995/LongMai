@@ -17,4 +17,7 @@ type Frozen struct {
 	Purpose string `json:"purpose,omitempty"`
 	Input   Input  `json:"input"`
 	Cutoff  string `json:"cutoff"`
+	// SourceProof is an opaque, in-memory attestation owned by the strict
+	// decoder. It is never stored in the source model or reconstructed by JSON.
+	SourceProof any `json:"-"`
 }

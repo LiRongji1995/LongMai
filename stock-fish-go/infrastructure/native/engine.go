@@ -94,9 +94,10 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 		}
 	}
 	historyHash := f.Input.HistoryHash
+	factsImplementation := buildidentity.Facts()
 	manifest := map[string]any{"contract": "STOCKFISH_GO_RUN_V2", "input_id": in.ID, "input_bytes_hash": in.RawHash, "history_hash": f.Input.HistoryHash, "history_ref": f.Input.HistoryRef, "strategy_id": r.Strategy, "go_source_hash": e.SourceHash, "config_hashes": e.ConfigHashes, "schema_version": 2, "history_storage_backend": e.StorageBackend, "conversion_version": evidence.InputContractVersion, "observation_date": f.Input.Observation, "cutoff": f.Cutoff, "budget_seconds": r.BudgetSeconds, "source_bytes_limit": resources.MaxSourceBytes, "rss_bytes_limit": resources.MaxRSS, "product_role": "RESEARCH_ONLY", "production_promotion": "DISABLED", "market_edge": "NOT_ESTABLISHED", "parameter_validation": "尚未验证"}
 	manifest["business_implementation_id"] = buildidentity.Current()
-	manifest["facts_implementation_id"] = buildidentity.Facts()
+	manifest["facts_implementation_id"] = factsImplementation
 	manifest["daily_evidence_policy"] = buildidentity.Policy
 	if r.TargetSession != "" {
 		manifest["target_session"] = r.TargetSession
@@ -137,7 +138,7 @@ func (e *NativeEngine) Evaluate(ctx context.Context, in c.InputRecord, r c.Resea
 			return out, errors.New("AUTHENTICATED_HISTORY_IDENTITIES_REQUIRED")
 		}
 	}
-	d, err := research.AnalyzeStrategyFrozen(f, in.RawHash, history, b, r.Strategy, e.Cache)
+	d, err := research.AnalyzeStrategyFrozenWithIdentity(f, in.RawHash, history, b, r.Strategy, e.Cache, factsImplementation)
 	if err != nil {
 		return out, err
 	}

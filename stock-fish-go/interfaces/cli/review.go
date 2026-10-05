@@ -25,7 +25,7 @@ import (
 func reviewHelp(w io.Writer, lab bool) error {
 	text := "stockfish review init|contract|register|evaluate|list|summary|export --db PATH\nWrites: init, contract, register, evaluate. All inputs are already registered; no network.\nregister --run ID; evaluate --run ID --label-input ID; --contract GO_PRICE_REVIEW_V1\nlist/export --kind CONTRACT|SIGNAL|OUTCOME; summary --run ID --as-of RFC3339\nFormats: --format json|table|csv|markdown; --output NEW_PATH for atomic export.\n"
 	if lab {
-		text = "stockfish research-lab propose|compare|transition|list|diagnose --db PATH\nWrites: propose, compare, transition. No search, training, providers, or production promotion.\npropose --file candidate.json; compare --candidate ID --baseline ID --key ATTEMPT --as-of RFC3339\ntransition --candidate ID --to OFFLINE_EVALUATED|REVIEW_REQUIRED|REJECTED|INSUFFICIENT_EVIDENCE --attempt ID --reason TEXT\nCandidate JSON predeclares identities, data cutoff, time split, calendar input and fixed contract.\n"
+		text = "stockfish research-lab propose|compare|stability|transition|list|diagnose --db PATH\nWrites: propose, compare, stability, transition. No search, training, providers, or production promotion.\npropose --file candidate.json; compare/stability --candidate ID --baseline ID --key ATTEMPT --as-of RFC3339\ntransition --candidate ID --to OFFLINE_EVALUATED|REVIEW_REQUIRED|SHADOW_ELIGIBLE|SHADOW_OBSERVING|REJECTED|INSUFFICIENT_EVIDENCE --attempt ID --reason TEXT\nCandidate JSON predeclares identities, data cutoff, time_split_contract GO_PURGED_FORWARD_EVALUATION_V2, calendar input and fixed contract.\nStability needs predeclared stability_contract GO_INDEPENDENT_HOLDOUT_V1 and stability_start/end, separated by calendar embargo. Shadow states record research admission only and start no job.\nExplicit review init adds the versioned availability extension. Real proposals require Store-generated post-commit read proofs before the first evaluation session opens; old missing or late proofs remain blocked.\n"
 	}
 	_, err := io.WriteString(w, text)
 	return err
@@ -40,7 +40,7 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 	}
 	command := args[1]
 	read := (!lab && (command == "list" || command == "summary" || command == "export")) || (lab && (command == "list" || command == "diagnose"))
-	write := (!lab && (command == "init" || command == "contract" || command == "register" || command == "evaluate")) || (lab && (command == "propose" || command == "compare" || command == "transition"))
+	write := (!lab && (command == "init" || command == "contract" || command == "register" || command == "evaluate")) || (lab && (command == "propose" || command == "compare" || command == "stability" || command == "transition"))
 	if !read && !write {
 		return errors.New("UNKNOWN_REVIEW_OR_RESEARCH_LAB_COMMAND")
 	}
@@ -116,7 +116,7 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 			if err != nil {
 				return err
 			}
-			return emit(out, map[string]any{"schema": review.JournalVersion, "records_added": n, "production_promotion": "DISABLED"})
+			return emit(out, map[string]any{"schema": review.JournalVersion, "availability_schema": review.CandidateAvailabilityVersion, "records_added": n, "production_promotion": "DISABLED"})
 		}
 	}
 	ro, err := sqlitev2.OpenReadOnly(ctx, path)
@@ -299,6 +299,14 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 			if err = reviewJSON(*file, &v); err != nil {
 				return err
 			}
+			// An identical saved proposal keeps its original registration clock.
+			// Replaying it after evaluation starts does not register a new proposal.
+			if old, found, e := savedCandidateProposal(rows, v); e != nil {
+				return e
+			} else if found {
+				value, postWriteErr = completeCandidateProposal(ctx, store, rows, old)
+				break
+			}
 			contract, err := review.ContractFrom(rows, v.ContractVersion)
 			if err != nil {
 				return err
@@ -317,8 +325,16 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 			if v.FixtureOnly != (in.Coverage == "TEST_FIXTURE") {
 				return errors.New("CANDIDATE_FIXTURE_REAL_DATA_MIX_FORBIDDEN")
 			}
-			v.CreatedAt = now.Format(time.RFC3339Nano)
-			if err = v.Validate(contract, frozen.Input.Sessions, now); err != nil {
+			if !v.FixtureOnly {
+				inputCutoff, e := time.Parse(time.RFC3339Nano, in.Cutoff)
+				allowed, e2 := time.Parse(time.RFC3339Nano, v.DataCutoff)
+				if e != nil || e2 != nil || inputCutoff.After(allowed) {
+					return errors.New("CANDIDATE_CALENDAR_INPUT_NOT_VISIBLE_BY_ALLOWED_CUTOFF")
+				}
+			}
+			registeredAt := time.Now().UTC()
+			v.CreatedAt = registeredAt.Format(time.RFC3339Nano)
+			if err = v.Validate(contract, frozen.Input.Sessions, registeredAt); err != nil {
 				return err
 			}
 			count := 0
@@ -328,31 +344,36 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 					if err = json.Unmarshal(r.Payload, &old); err != nil {
 						return err
 					}
-					if old.ID == v.ID {
-						v.CreatedAt = old.CreatedAt
-					}
 					if old.Role == "CANDIDATE" && old.Parent == v.Parent {
 						count++
 					}
 				}
 			}
 			if v.Role == "CANDIDATE" {
-				parent, err := review.CandidateFrom(rows, v.Parent)
-				if err != nil || parent.Role != "BASELINE" {
-					return errors.New("CANDIDATE_PARENT_BASELINE_REQUIRED")
+				parent, err := candidateParentDeclaration(rows, v.Parent)
+				if err != nil {
+					return err
+				}
+				if parent.FixtureOnly != v.FixtureOnly || parent.Scope != v.Scope || parent.ContractHash != v.ContractHash || parent.TimeSplitContract != v.TimeSplitContract || parent.EvaluationStart != v.EvaluationStart || parent.EvaluationEnd != v.EvaluationEnd {
+					return errors.New("CANDIDATE_PARENT_FIXED_SCOPE_OR_CONTRACT_MISMATCH")
+				}
+				if parent.StabilityContract != v.StabilityContract || parent.StabilityStart != v.StabilityStart || parent.StabilityEnd != v.StabilityEnd || (v.StabilityContract != "" && (parent.CalendarInputID != v.CalendarInputID || parent.CalendarHash != v.CalendarHash)) {
+					return errors.New("CANDIDATE_PARENT_INDEPENDENT_STABILITY_DECLARATION_MISMATCH")
 				}
 				if count >= 2 {
-					if _, err = review.CandidateFrom(rows, v.ID); err != nil {
-						return errors.New("RESEARCH_CANDIDATE_LIMIT_TWO")
-					}
+					return errors.New("RESEARCH_CANDIDATE_LIMIT_TWO")
 				}
 			}
 			r, _ := review.NewRecord("CANDIDATE", v.ID, 1, v)
 			if err = appendRecords([]review.Record{r}); err != nil {
 				return err
 			}
-			value = map[string]any{"candidate": v, "state": review.CandidateState(rows, v.ID)}
-		case "compare":
+			value, postWriteErr = completeCandidateProposal(ctx, store, append(append([]review.Record{}, rows...), r), v)
+		case "compare", "stability":
+			phase := review.PrimaryComparisonPhase
+			if command == "stability" {
+				phase = review.IndependentStabilityPhase
+			}
 			if !ev.ValidHash(sourceHash) {
 				return errors.New("EXPERIMENT_BUILD_SHA256_IDENTITY_REQUIRED")
 			}
@@ -368,25 +389,42 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 					if old.CandidateID != *candidateID || old.BaselineID != *baselineID || (*asOf != "" && old.AsOf != asof.UTC().Format(time.RFC3339Nano)) {
 						return errors.New("EXPERIMENT_ATTEMPT_KEY_CONFLICT")
 					}
+					oldPhase := old.Phase
+					if oldPhase == "" {
+						oldPhase = review.PrimaryComparisonPhase
+					}
+					if oldPhase != phase {
+						return errors.New("EXPERIMENT_ATTEMPT_KEY_PHASE_CONFLICT")
+					}
 					value = old
+					if old.Status == "ENGINEERING_ERROR" {
+						postWriteErr = errors.New("SAVED_EXPERIMENT_ENGINEERING_ERROR: " + strings.Join(old.Reasons, "; "))
+					}
 				}
 			}
 			if value != nil {
 				break
 			}
 			candidate, err := review.CandidateFrom(rows, *candidateID)
-			if err != nil {
+			if err != nil && !errors.Is(err, review.ErrPreregistrationPublicationUnproven) {
 				return err
 			}
 			baseline, err := review.CandidateFrom(rows, *baselineID)
-			if err != nil {
+			if err != nil && !errors.Is(err, review.ErrPreregistrationPublicationUnproven) {
 				return err
 			}
 			contract, err := review.ContractFrom(rows, candidate.ContractVersion)
 			if err != nil {
 				return err
 			}
-			v, err := review.Compare(rows, candidate, baseline, contract, asof, *key)
+			var v review.Evaluation
+			if command == "stability" {
+				calendar, loadErr := ro.ReviewInput(ctx, candidate.CalendarInputID)
+				v, err = review.Stability(rows, candidate, baseline, contract, calendar, asof, *key)
+				err = errors.Join(err, loadErr)
+			} else {
+				v, err = review.Compare(rows, candidate, baseline, contract, asof, *key)
+			}
 			v.EvaluatorBuild = sourceHash
 			if err != nil {
 				v.Status = "ENGINEERING_ERROR"
@@ -400,7 +438,7 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 			value = v
 		case "transition":
 			candidate, err := review.CandidateFrom(rows, *candidateID)
-			if err != nil {
+			if err != nil && !(errors.Is(err, review.ErrPreregistrationPublicationUnproven) && (*to == "REJECTED" || *to == "INSUFFICIENT_EVIDENCE")) {
 				return err
 			}
 			v, err := review.TransitionCandidate(rows, candidate, *to, *attemptID, *reason, now)
@@ -443,6 +481,90 @@ func reviewLab(parent context.Context, args []string, out, log io.Writer, source
 		err = writeValue(out)
 	}
 	return errors.Join(err, postWriteErr)
+}
+
+func savedCandidateProposal(rows []review.Record, proposal review.Candidate) (review.Candidate, bool, error) {
+	for _, r := range rows {
+		if r.Kind != "CANDIDATE" || r.ID != proposal.ID {
+			continue
+		}
+		var old review.Candidate
+		if err := json.Unmarshal(r.Payload, &old); err != nil {
+			return old, true, err
+		}
+		proposal.CreatedAt = old.CreatedAt
+		if review.Digest(proposal) != review.Digest(old) {
+			return old, true, errors.New("CANDIDATE_IMMUTABLE_PROPOSAL_CONFLICT")
+		}
+		return old, true, nil
+	}
+	return review.Candidate{}, false, nil
+}
+
+// A parent declaration can bind a child declaration without establishing
+// pre-registration availability. Comparison and admission retain their proof
+// requirement; no other parent read error is suppressed here.
+func candidateParentDeclaration(rows []review.Record, id string) (review.Candidate, error) {
+	parent, err := review.CandidateFrom(rows, id)
+	if err != nil && !errors.Is(err, review.ErrPreregistrationPublicationUnproven) {
+		return parent, err
+	}
+	if parent.Role != "BASELINE" {
+		return parent, errors.New("CANDIDATE_PARENT_BASELINE_REQUIRED")
+	}
+	return parent, nil
+}
+
+func candidateProposalOutput(v review.Candidate, state string) map[string]any {
+	availability := "EXPLICIT_TEST_FIXTURE; NOT_REAL_PREREGISTRATION"
+	if !v.FixtureOnly {
+		availability = review.ErrPreregistrationPublicationUnproven.Error()
+	}
+	return map[string]any{"candidate": v, "state": state, "preregistration_availability": availability}
+}
+
+type candidateAvailabilityWriter interface {
+	ObserveCandidateAvailability(context.Context, string) (review.CandidateAvailability, bool, error)
+}
+
+func completeCandidateProposal(ctx context.Context, store candidateAvailabilityWriter, rows []review.Record, v review.Candidate) (map[string]any, error) {
+	value := candidateProposalOutput(v, review.CandidateState(rows, v.ID))
+	value["declaration_saved"] = true
+	if v.FixtureOnly {
+		value["operation_status"] = "SAVED_TEST_FIXTURE"
+		value["proof_commit_status"] = "NOT_APPLICABLE_TEST_FIXTURE"
+		return value, nil
+	}
+	p, created, err := store.ObserveCandidateAvailability(ctx, v.ID)
+	if err != nil {
+		value["operation_status"] = "PARTIAL_DECLARATION_SAVED"
+		value["proof_commit_status"] = "FAILED_OR_UNPROVEN"
+		value["reason"] = err.Error()
+		return value, err
+	}
+	proof, _ := review.NewRecord(review.CandidateAvailabilityKind, v.ID, 1, p)
+	value["proof_commit_status"] = "COMMITTED"
+	value["proof_created"] = created
+	value["preregistration_proof"] = p
+	value["preregistration_proof_sha256"] = proof.Hash
+	withProof := append([]review.Record{}, rows...)
+	found := false
+	for _, r := range withProof {
+		if r.Kind == proof.Kind && r.ID == proof.ID {
+			found = true
+		}
+	}
+	if !found {
+		withProof = append(withProof, proof)
+	}
+	if _, _, err = review.CandidateAvailabilityFrom(withProof, v.ID); err != nil {
+		value["operation_status"] = "SAVED_ADMISSION_BLOCKED"
+		value["preregistration_availability"] = err.Error()
+		return value, err
+	}
+	value["operation_status"] = "SAVED_AND_VERIFIED_AVAILABLE"
+	value["preregistration_availability"] = "VERIFIED_AVAILABLE_BEFORE_FIRST_EVALUATION_SESSION"
+	return value, nil
 }
 
 func reviewJSON(path string, value any) error {

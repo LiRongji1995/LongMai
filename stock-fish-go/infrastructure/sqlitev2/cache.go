@@ -11,6 +11,12 @@ import (
 
 const FactCacheCapacity int64 = 256 << 20
 
+// Capacity accounting V2 measures stored payload bytes, independently of the
+// integrity metadata. SQLite can read a BLOB length without loading its body;
+// legacy TEXT must be cast so multibyte UTF-8 is counted as bytes, not characters.
+// This operational measurement does not change the fact arithmetic cache key.
+const cachePayloadByteLengthSQL = "CASE WHEN typeof(payload)='blob' THEN length(payload) ELSE length(CAST(payload AS BLOB)) END"
+
 // CacheIdentity includes evidence/policy/visibility/window identities. A caller
 // must verify source bytes before consulting this derived, disposable store.
 type CacheIdentity struct {
@@ -90,13 +96,13 @@ func (r *AppRepository) CachePut(ctx context.Context, key, version, dependencies
 	}
 	var total int64
 	r.cacheOccupancyQueries.Add(1)
-	if e = tx.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total); e != nil {
+	if e = tx.QueryRowContext(ctx, "SELECT coalesce(sum("+cachePayloadByteLengthSQL+"),0) FROM app_fact_cache").Scan(&total); e != nil {
 		return e
 	}
 	for total > FactCacheCapacity {
 		var victim string
 		var n int64
-		if e = tx.QueryRowContext(ctx, "SELECT cache_key,size FROM app_fact_cache ORDER BY last_access,cache_key LIMIT 1").Scan(&victim, &n); e != nil {
+		if e = tx.QueryRowContext(ctx, "SELECT cache_key,"+cachePayloadByteLengthSQL+" FROM app_fact_cache ORDER BY last_access,cache_key LIMIT 1").Scan(&victim, &n); e != nil {
 			return e
 		}
 		if _, e = tx.ExecContext(ctx, "DELETE FROM app_fact_cache WHERE cache_key=?", victim); e != nil {
@@ -127,7 +133,7 @@ func (r *AppRepository) SampleCache(ctx context.Context) {
 	var measured *int64
 	status := "UNAVAILABLE"
 	r.cacheOccupancyQueries.Add(1)
-	if r.db.QueryRowContext(ctx, "SELECT coalesce(sum(size),0) FROM app_fact_cache").Scan(&total) == nil {
+	if r.db.QueryRowContext(ctx, "SELECT coalesce(sum("+cachePayloadByteLengthSQL+"),0) FROM app_fact_cache").Scan(&total) == nil {
 		measured = &total
 		status = "MEASURED_SCOPE_OR_MUTATION"
 	}

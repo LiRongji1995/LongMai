@@ -1,3 +1,11 @@
+# 四阶段工程候选交付（2026-10-05）
+
+现有 stockfish 提供保存结果查询、解释、复盘与受控候选研究。新候选包的对应工程检查及24条包外检查通过，完整检查原失败与定向补验分别保留。当前真实查询picks/explain P95为5.676/5.649秒，目标未达；真实冷暖、跨日、在线与旧库增量状态单独报告。
+
+使用见 [四阶段用户说明](delivery/FOUR_STAGE_USER_GUIDE.md)，证据与限制见 [四阶段报告](delivery/FOUR_STAGE_REPORT.md)，人工清单见 [四阶段人工验收](delivery/FOUR_STAGE_MANUAL_ACCEPTANCE.md)。生产未切换，人工验收未代用户完成。以下记录按各自日期及构建身份理解。
+
+---
+
 # 日常终端入口（2026-10-04）
 
 现有 `stockfish` 增加 `--help / --version / init / doctor / picks / explain / daily`；无需模型密钥、Codex 或 Python 来查询和本地研究。使用与可选固定来源 worker 配置见 [USER_GUIDE](delivery/USER_GUIDE.md)，人工步骤见 [MANUAL_ACCEPTANCE](delivery/MANUAL_ACCEPTANCE.md)，实际验收边界见 [后台交接](BACKEND_READINESS_FOR_CLI.md)。本轮候选包已完成本地验收，用户随后授权源码、测试和说明提交推送；生产仍未切换。可重复打包：`python3 tools/package.py --go /所选工具链/go --output /新候选目录`，包可直接 `./stockfish --help`。
@@ -69,7 +77,7 @@ HTTP 与 CLI 使用同一应用服务。写 API 通过环境变量 `STOCKFISH_V2
 
 CLI打开库可能初始化版本化扩展，因此查询命令与维护命令也共用数据库租约；`serve`占用该租约时，通过其HTTP查询，不另开CLI修改/初始化同库。实例配置在取得根租约后读取，并锁住该配置对应的目标，避免恢复切换与旧路径读取竞争。排队请求执行前、结果发布事务内分别复核就绪状态。
 
-研究默认总预算 300s，最高1800s；消费历史原始 payload 2GiB、RSS 1GiB、主入口 Go 堆软目标512MiB。RSS与Go heap分别报告；不可用指标不能当零。预算覆盖载入、验证、事实、所选策略、保存和校验，进度持续输出；取消沿context传播。迁移按全库大小分批处理，不套研究2GiB上限；本轮新增迁移/生命周期累计14400s（旧7199.963s另记）、重建产物合计50GiB、始终保留10GiB空间。全池策略次数/累计时间另由任务账本统筹。
+研究默认总预算 300s，最高1800s；消费历史原始 payload 2GiB、RSS 1GiB、主入口 Go 堆软目标512MiB。RSS与Go heap分别报告；不可用指标不能当零。预算覆盖载入、验证、事实、所选策略、保存和校验，进度持续输出；取消沿context传播。迁移按全库大小分批处理，不套研究2GiB上限。2026-10-03 旧迁移批次为新增迁移/生命周期累计14400s（旧7199.963s另记）、重建产物合计50GiB、保留10GiB空间；该历史额度不属于后续任务。当前四阶段任务仅由用户将项目总量上限调整为57GiB，新增产物总量仍为2GiB、依赖下载仍为512MiB、各卷空闲仍至少10GiB；工程、真实全池和在线额度分别由原任务账本统筹，见 [四阶段交接](delivery/FOUR_STAGE_REPORT.md)。
 
 ## 检查与验收
 

@@ -226,7 +226,7 @@ def tushare_request_plan(day, sessions):
 
 class MainboardPipeline:
     def __init__(self, root, *, service=None, config=None, executor=execute_request, normalizer=None, budget=None,
-                 history_store=None, history_mode=None):
+                 history_store=None, history_mode=None, history_coverage_plan=None):
         self.root, self.service, self.executor = Path(root), service, executor
         self.normalizer = normalizer
         import os
@@ -236,6 +236,7 @@ class MainboardPipeline:
         self.config = config if config is not None else service.current_config() if service else None
         self.budget = budget if budget is not None else RequestBudget.from_environment()
         self.history_store = history_store
+        self.history_coverage_plan = history_coverage_plan
         if self.history_store is None and service is not None and hasattr(service, 'store'):
             from .history_artifacts import HistoryArtifactStore
             self.history_store = HistoryArtifactStore(service.store)
@@ -284,6 +285,8 @@ class MainboardPipeline:
         if not isinstance(fast_decision, bool):
             raise ValueError('INVALID_CAPTURE_FAST_DECISION')
         critical_only = purpose == CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
+        if self.history_coverage_plan is not None and not critical_only:
+            raise ValueError('GO_HISTORY_COVERAGE_ONLY_DAILY_PRIMARY_CRITICAL')
         per_security_history = critical_only and self.history_mode == 'PER_SECURITY_RAW'
         history_endpoint = 'history' if per_security_history else 'market_daily'
         history_granularity = ('TEN_CURRENT_DIRECTORY_SECURITIES_PER_REQUEST_FULL_REQUIRED_WINDOW'
@@ -345,6 +348,8 @@ class MainboardPipeline:
             if calendar_source != 'CAPTURED_PROVIDER_CALENDAR':
                 sessions = tuple(s for s in registered if s <= day)
             stage_aware_history_sessions = stage_aware_history_sessions_required()
+            if self.history_coverage_plan is not None:
+                self.history_coverage_plan.prepare(ids, sessions, day, initial)
             history_start = sessions[max(0, len(sessions)-stage_aware_history_sessions)]
             structure_start = sessions[max(0, len(sessions)-22)]
             v2_long_history_start = history_start
@@ -372,6 +377,8 @@ class MainboardPipeline:
                     'history_capture_mode': 'PER_SECURITY_RAW' if per_security_history else 'ALL_MARKET_DAILY',
                     'calendar_source': calendar_source, 'calendar_sessions': len(sessions),
                     'history_append_base': history_base,
+                    'verified_go_history_reuse': (self.history_coverage_plan.audit()
+                                                  if self.history_coverage_plan is not None else None),
                     'initial_estimate': {'full_pool_structure_members': len(ids),
                         'full_pool_raw_daily_requests': (len(ids)+9)//10 if per_security_history else sum(v2_long_history_start <= s <= day for s in sessions),
                         'historical_security_master_requests': 0 if per_security_history else sum(v2_long_history_start <= s <= day for s in sessions),
@@ -419,6 +426,9 @@ class MainboardPipeline:
                     cached.update(s for s in wanted if a <= str(s) <= z)
                     queue.requested_ids.add(rid)
                 missing = [s for s in wanted if s not in cached]
+                if self.history_coverage_plan is not None and endpoint == 'history':
+                    external = self.history_coverage_plan.covered_sessions(iid)
+                    missing = [s for s in missing if str(s) not in external]
                 targets = [r[2] for r in fragments]
                 if missing:
                     # Gaps are requested as contiguous calendar spans. Never
@@ -442,8 +452,11 @@ class MainboardPipeline:
                         covered.update(s for s in required if a <= str(s) <= z)
                         queue.requested_ids.add(rid)
                         requested.append(rid)
-                    if required-covered:
-                        remaining.append((iid, min(required-covered)))
+                    external = (self.history_coverage_plan.covered_sessions(iid)
+                                if self.history_coverage_plan is not None and endpoint == 'history' else set())
+                    missing = {s for s in required-covered if str(s) not in external}
+                    if missing:
+                        remaining.append((iid, min(missing)))
                 # Batching changes transport cost, never membership or rank.
                 # Each named ID is explicitly recorded before any call executes.
                 for offset in range(0,len(remaining),batch_size):
@@ -463,7 +476,9 @@ class MainboardPipeline:
                                            'StructureHistoryCapture', 'history', batch_size=10)
             else:
                 structures = [add('market_daily', {'date':str(s)}, 'StructureHistoryCapture', current=s==day)
-                              for s in sessions if v2_long_history_start <= s <= day]
+                              for s in sessions if v2_long_history_start <= s <= day
+                              and (self.history_coverage_plan is None
+                                   or self.history_coverage_plan.raw_request_needed(s, ids))]
                 structures += [add('master_all', {'date':str(s)}, 'HistoricalSecurityReplayCapture', current=s==day)
                                for s in sessions if v2_long_history_start <= s <= day]
                 structures.append(add('stock_basic_all', {}, 'HistoricalSecurityReplayCapture', current=True))

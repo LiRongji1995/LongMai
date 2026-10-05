@@ -34,6 +34,13 @@ func TestReviewJournalAtomicIdempotentRestartAndReadOnly(t *testing.T) {
 	if _, err := s.AppendReview(ctx, []review.Record{gap}); err == nil {
 		t.Fatal("revision gap accepted")
 	}
+	unsupported, _ := review.NewRecord("CANDIDATE_AVAILABILITY", "TEST_FIXTURE_CANDIDATE", 1, map[string]string{"candidate_record_sha256": r.Hash, "available_upper_bound": "2025-12-01T00:00:00Z"})
+	if _, err := s.AppendReview(ctx, []review.Record{unsupported}); err == nil || !strings.Contains(err.Error(), "STORE_OBSERVATION_API_REQUIRED") {
+		t.Fatal("JOURNAL_V1 unexpectedly accepted an unversioned availability event", err)
+	}
+	if saved, err := s.ReviewRecords(ctx); err != nil || len(saved) != 1 {
+		t.Fatal("rejected availability event changed immutable journal", saved, err)
+	}
 	if _, err := s.DB().Exec("UPDATE review_records SET raw_hash='bad'"); err == nil {
 		t.Fatal("immutable journal changed")
 	}

@@ -20,7 +20,8 @@ func TestReadOnlyInputInstantOrderPreservesRawText(t *testing.T) {
 		{ID: "TEST_FIXTURE_INVALID", Cutoff: "invalid"},
 	}
 	for _, in := range inputs {
-		in.Raw = []byte(in.ID)
+		// Real ingestion requires valid original JSON even in a metadata fixture.
+		in.Raw, _ = json.Marshal(map[string]string{"fixture_id": in.ID, "coverage_type": "TEST_FIXTURE"})
 		in.RawHash = c.Hash(in.Raw)
 		in.Observation = "2026-10-02"
 		in.Coverage = "TEST_FIXTURE"

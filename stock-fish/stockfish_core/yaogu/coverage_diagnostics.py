@@ -185,6 +185,14 @@ def _selected_bar_map(ctx, sessions, eligible_ids):
             for part in manifest["partitions"]
             if part["session"] in wanted
         ]
+        if hasattr(owner, 'selected_rows'):
+            # A read-only Go bridge exposes only rows selected and authenticated
+            # by its original history adapter/resolver. No surrogate SQLite
+            # database or fabricated partition descriptors are required.
+            for value in owner.selected_rows(wanted, eligible):
+                session, iid = str(value.get('session')), value.get('instrument_id')
+                if session in wanted and iid in eligible and value.get('quality') != 'INVALID':
+                    groups[(session, iid)].append(value)
         for offset in range(0, len(partition_hashes), 20):
             batch = partition_hashes[offset : offset + 20]
             if not batch:

@@ -1,6 +1,7 @@
 package daily
 
 import (
+	"bytes"
 	"encoding/json"
 	"fmt"
 	"io"
@@ -9,6 +10,14 @@ import (
 
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
 )
+
+// Condition details may contain numeric JSON as well as exact Number strings.
+// UseNumber preserves both large integers and decimal text while displaying it.
+func decodeExplanation(raw []byte, out any) error {
+	decoder := json.NewDecoder(bytes.NewReader(raw))
+	decoder.UseNumber()
+	return decoder.Decode(out)
+}
 
 var explanationNames = map[string]string{
 	"START": "启动", "ACCELERATION": "加速", "HIGH_LEVEL_REPAIR": "高位修复", "TREND_PULLBACK": "趋势回踩",
@@ -116,14 +125,18 @@ func renderExplanation(w io.Writer, item c.Item, strategy string) error {
 			Setups     map[string]c.Condition `json:"setups"`
 			Stages     map[string]c.Condition `json:"stage_candidates"`
 			Conditions json.RawMessage        `json:"conditions"`
-			Matched    []string               `json:"matched_setups"`
 			Reasons    []string               `json:"reason_codes"`
 			Evidence   []string               `json:"evidence_refs"`
 			Background json.RawMessage        `json:"background"`
 		} `json:"decision"`
 	}
-	if err := json.Unmarshal(item.Payload, &saved); err != nil {
+	if err := decodeExplanation(item.Payload, &saved); err != nil {
 		return err
+	}
+	stageView := setupSelection(item)
+	matchedLabel := "全部命中形态"
+	if stageView.V2 && len(stageView.Warnings) > 0 {
+		matchedLabel = "已确认命中形态（保存选择存在缺口/不一致）"
 	}
 	status := saved.Decision.Candidate
 	if status == "" {
@@ -133,8 +146,28 @@ func renderExplanation(w io.Writer, item c.Item, strategy string) error {
 	if conclusion == "" {
 		conclusion = "该历史结果未保存可识别的最终状态。"
 	}
-	if _, err := fmt.Fprintf(w, "中文解释（仅解释保存结果，不重新选股）\n结论：%s 保存状态=%s\n全部命中形态：%s\n", conclusion, status, strings.Join(saved.Decision.Matched, ", ")); err != nil {
+	matchedText := strings.Join(stageView.Matched, ", ")
+	if len(stageView.Matched) == 0 {
+		matchedText = "无（保存的选择没有已确认命中）"
+		if stageView.MatchedJSON == "" || stageView.MatchedJSON == "null" {
+			matchedText = "未记录/未知"
+		}
+		if !stageView.V2 && len(stageView.Warnings) > 0 {
+			matchedText = "未记录/未知（保存形态字段缺失或无效）"
+		}
+	}
+	if _, err := fmt.Fprintf(w, "中文解释（仅解释保存结果，不重新选股）\n结论：%s 保存状态=%s\n%s：%s\n", conclusion, status, matchedLabel, matchedText); err != nil {
 		return err
+	}
+	if stageView.V2 {
+		if _, err := fmt.Fprintf(w, "V2 保存主形态=%s；保存其他形态=%s；候选状态=%s\nV2 命中只包含保存选择中候选状态为 PASS 的形态；候选树中的其他 PASS 不追加为最终命中。\n", stageView.Primary, stageView.AlternateJSON, stageView.StageStatesJSON); err != nil {
+			return err
+		}
+	}
+	if len(stageView.Warnings) > 0 {
+		if _, err := fmt.Fprintf(w, "形态展示资料缺口/不一致：%s\n", stageView.warningsText()); err != nil {
+			return err
+		}
 	}
 	if len(saved.Decision.Reasons) > 0 {
 		if _, err := fmt.Fprintf(w, "决策原因：%s\n", strings.Join(saved.Decision.Reasons, ", ")); err != nil {
@@ -169,7 +202,7 @@ func renderExplanation(w io.Writer, item c.Item, strategy string) error {
 			return err
 		}
 		if _, ok := object["status"]; ok {
-			if err := json.Unmarshal(saved.Decision.Conditions, &condition); err != nil {
+			if err := decodeExplanation(saved.Decision.Conditions, &condition); err != nil {
 				return err
 			}
 			if err := renderCondition(w, "conditions", condition, ""); err != nil {
@@ -182,7 +215,7 @@ func renderExplanation(w io.Writer, item c.Item, strategy string) error {
 			}
 			sort.Strings(keys)
 			for _, key := range keys {
-				if err := json.Unmarshal(object[key], &condition); err != nil {
+				if err := decodeExplanation(object[key], &condition); err != nil {
 					return err
 				}
 				if err := renderCondition(w, key, condition, ""); err != nil {

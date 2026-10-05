@@ -2,7 +2,6 @@ package daily
 
 import (
 	"context"
-	"fmt"
 	"os"
 	"path/filepath"
 	"runtime"
@@ -60,7 +59,7 @@ func TestDependencyCheckTimeoutCanceledProtocolAndClassifiedFailure(t *testing.T
 }
 
 func TestHistoryCapturePresenceReadOnlyAndFailClosed(t *testing.T) {
-	config, s, _ := dailyFixture(t)
+	config, _, _ := dailyFixture(t)
 	conf, err := load(config)
 	if err != nil {
 		t.Fatal(err)
@@ -69,8 +68,13 @@ func TestHistoryCapturePresenceReadOnlyAndFailClosed(t *testing.T) {
 	if before["history_present"] != false || before["status"] != "COLD_CAPTURE_EXPLICIT_OPT_IN_REQUIRED" {
 		t.Fatal(before)
 	}
-	if _, err = s.DB().Exec("INSERT INTO partitions VALUES(1,?)", fmt.Sprintf("%064d", 1)); err != nil {
+	historyConfig, historyStore, _ := dailyFixtureWithHistory(t, true)
+	conf, err = load(historyConfig)
+	if err != nil {
 		t.Fatal(err)
+	}
+	if _, err = historyStore.DB().Exec("INSERT INTO partitions VALUES(2,?)", "TEST_FIXTURE_FORBIDDEN_POST_PUBLISH_INSERT"); err == nil {
+		t.Fatal("published history authority accepted a fixture insert")
 	}
 	after := captureHistoryStatus(context.Background(), conf)
 	if after["history_present"] != true || after["selection_status"] != "NOT_SELECTED" || after["adapter_implementation"] != "NOT_IMPLEMENTED" {

@@ -6,6 +6,7 @@ import pathlib
 import platform
 import shutil
 import subprocess
+from build_identity import CORE_NONRUNTIME_DIRS, worker_config_paths
 
 p = argparse.ArgumentParser()
 p.add_argument('--go', required=True)
@@ -29,24 +30,39 @@ shutil.copyfile(root/'infrastructure/calendar/exchange_calendar_2026.json', out/
 shutil.copyfile(root/'interfaces/daily/config.example.json', out/'resources/config.example.json')
 worker = out/'worker'
 (worker/'python').mkdir(parents=True)
-shutil.copyfile(root/'infrastructure/provider/daily_refresh_worker.py', worker/'daily_refresh_worker.py')
+for source in (root/'infrastructure/provider').glob('*.py'):
+    if not source.name.startswith('test_') and not source.name.endswith('_test.py'):
+        shutil.copyfile(source,worker/source.name)
 # Deterministic capture modules, without caches, data, credentials or weights.
 # Kept as source for the optional worker; normal Go usage imports none of these.
 shutil.copytree(repo/'stock-fish/stockfish_core', worker/'python/stockfish_core',
-                ignore=shutil.ignore_patterns('__pycache__','*.pyc','.env','*.db'))
+                ignore=shutil.ignore_patterns(*sorted(CORE_NONRUNTIME_DIRS), '*.pyc','.env','*.db'))
+# Preserve each public frozen file byte-for-byte at the existing modules'
+# ROOT/config relative lookup. Missing required configuration fails packaging;
+# the portable worker must not depend on the history-window silent fallback.
+(worker/'python/config').mkdir()
+for source in worker_config_paths(root):
+    shutil.copyfile(source, worker/'python/config'/source.name)
 shutil.copyfile(repo/'stock-fish/requirements-rules.txt', worker/'requirements-rules.txt')
 shutil.copyfile(repo/'stock-fish/requirements-daily.txt', worker/'requirements-daily.txt')
 shutil.copyfile(root/'tools/install.sh', out/'install.sh')
 shutil.copyfile(root/'tools/setup-worker.sh', worker/'setup-worker.sh')
-for name in ('USER_GUIDE.md','MANUAL_ACCEPTANCE.md','SELFTEST_REPORT.md'):
-    shutil.copyfile(root/'delivery'/name, out/name)
+# Each candidate carries the guide and verification boundaries of its own
+# source generation. The previous daily package's PASS report is historical.
+for source, name in (('FOUR_STAGE_USER_GUIDE.md','USER_GUIDE.md'),
+                     ('FOUR_STAGE_MANUAL_ACCEPTANCE.md','MANUAL_ACCEPTANCE.md'),
+                     ('FOUR_STAGE_REPORT.md','SELFTEST_REPORT.md')):
+    shutil.copyfile(root/'delivery'/source, out/name)
 meta = {'protocol':'STOCKFISH_DAILY_V1','go_source_hash':identity,
         'host_os':platform.system(),'process_architecture':platform.machine(),
         'go_build':subprocess.check_output([a.go,'version'],text=True).strip(),
-        'production_activation':'NOT_AUTHORIZED','manual_acceptance':'NOT_RUN_BY_USER'}
+        'production_activation':'NOT_AUTHORIZED','manual_acceptance':'NOT_RUN_BY_USER',
+        'verification_report':'SELFTEST_REPORT.md',
+        'build_status':'BUILT; RUNTIME_ACCEPTANCE_REQUIRES_SEPARATE_EVIDENCE'}
 source_manifest=json.loads((out/'stockfish.identity.json').read_text())
 meta['business_implementation_id']=source_manifest['business']['sha256']
 meta['facts_implementation_id']=source_manifest['facts']['sha256']
+meta['fixed_worker_source_manifest']=source_manifest['fixed_worker']
 meta['binary_sha256']=hashlib.sha256((out/'stockfish').read_bytes()).hexdigest()
 meta['dependencies']=subprocess.check_output([a.go,'version','-m',str(out/'stockfish')],text=True)
 (out/'BUILD.json').write_text(json.dumps(meta,indent=2)+'\n')

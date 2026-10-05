@@ -15,16 +15,36 @@ import (
 )
 
 type DiffItem struct {
-	ID                         string `json:"instrument_id"`
-	Change                     string `json:"change"`
-	BeforeStatus               string `json:"before_status"`
-	AfterStatus                string `json:"after_status"`
-	BeforeSetups               string `json:"before_setups"`
-	AfterSetups                string `json:"after_setups"`
-	PriceFactsChanged          *bool  `json:"saved_price_facts_changed"`
-	IdentityOrBenchmarkChanged *bool  `json:"saved_identity_or_relative_strength_changed"`
-	EvidenceChanged            *bool  `json:"consumed_evidence_identity_changed"`
+	ID                         string   `json:"instrument_id"`
+	Change                     string   `json:"change"`
+	BeforeStatus               string   `json:"before_status"`
+	AfterStatus                string   `json:"after_status"`
+	BeforeSetups               string   `json:"before_setups"`
+	AfterSetups                string   `json:"after_setups"`
+	BeforePrimaryStage         string   `json:"before_saved_primary_stage,omitempty"`
+	AfterPrimaryStage          string   `json:"after_saved_primary_stage,omitempty"`
+	BeforeAlternateStages      string   `json:"before_saved_alternate_stages,omitempty"`
+	AfterAlternateStages       string   `json:"after_saved_alternate_stages,omitempty"`
+	BeforeStageStates          string   `json:"before_saved_stage_candidate_states,omitempty"`
+	AfterStageStates           string   `json:"after_saved_stage_candidate_states,omitempty"`
+	BeforeSetupWarnings        []string `json:"before_setup_display_warnings,omitempty"`
+	AfterSetupWarnings         []string `json:"after_setup_display_warnings,omitempty"`
+	PriceFactsChanged          *bool    `json:"saved_price_facts_changed"`
+	IdentityOrBenchmarkChanged *bool    `json:"saved_identity_or_relative_strength_changed"`
+	EvidenceChanged            *bool    `json:"consumed_evidence_identity_changed"`
 }
+
+func (d *DiffItem) beforeSetup(v savedSetups) {
+	d.BeforeStatus, d.BeforeSetups = v.Status, v.MatchedJSON
+	d.BeforePrimaryStage, d.BeforeAlternateStages, d.BeforeStageStates = v.Primary, v.AlternateJSON, v.StageStatesJSON
+	d.BeforeSetupWarnings = v.Warnings
+}
+func (d *DiffItem) afterSetup(v savedSetups) {
+	d.AfterStatus, d.AfterSetups = v.Status, v.MatchedJSON
+	d.AfterPrimaryStage, d.AfterAlternateStages, d.AfterStageStates = v.Primary, v.AlternateJSON, v.StageStatesJSON
+	d.AfterSetupWarnings = v.Warnings
+}
+
 type SavedDiff struct {
 	FromRun            string          `json:"from_run_id"`
 	ToRun              string          `json:"to_run_id"`
@@ -89,9 +109,9 @@ func implementationView(manifest map[string]json.RawMessage) json.RawMessage {
 	return raw
 }
 func detailDiff(before, after c.Item) DiffItem {
-	_, beforeStatus, beforeSetups := fields(before)
-	_, afterStatus, afterSetups := fields(after)
-	change := DiffItem{ID: after.ID, Change: "CHANGED", BeforeStatus: beforeStatus, AfterStatus: afterStatus, BeforeSetups: beforeSetups, AfterSetups: afterSetups}
+	change := DiffItem{ID: after.ID, Change: "CHANGED"}
+	change.beforeSetup(setupSelection(before))
+	change.afterSetup(setupSelection(after))
 	beforeFact := rawFields(before.Payload, "fact")[0]
 	afterFact := rawFields(after.Payload, "fact")[0]
 	beforeCalc := rawFields(beforeFact, "facts")[0]
@@ -158,8 +178,9 @@ func compareSaved(ctx context.Context, before, after c.Run) (SavedDiff, error) {
 		afterOrder = append(afterOrder, item.ID)
 		previous, exists := beforeByID[item.ID]
 		if !exists {
-			_, status, setups := fields(item)
-			v.Changes = append(v.Changes, DiffItem{ID: item.ID, Change: "ADDED_TO_EVALUATED_SET", AfterStatus: status, AfterSetups: setups})
+			change := DiffItem{ID: item.ID, Change: "ADDED_TO_EVALUATED_SET"}
+			change.afterSetup(setupSelection(item))
+			v.Changes = append(v.Changes, change)
 			continue
 		}
 		if reflect.DeepEqual(previous.Payload, item.Payload) {
@@ -174,8 +195,9 @@ func compareSaved(ctx context.Context, before, after c.Run) (SavedDiff, error) {
 	}
 	for _, item := range before.Items {
 		if !afterIDs[item.ID] {
-			_, status, setups := fields(item)
-			v.Changes = append(v.Changes, DiffItem{ID: item.ID, Change: "REMOVED_FROM_EVALUATED_SET_REASON_NOT_INFERRED", BeforeStatus: status, BeforeSetups: setups})
+			change := DiffItem{ID: item.ID, Change: "REMOVED_FROM_EVALUATED_SET_REASON_NOT_INFERRED"}
+			change.beforeSetup(setupSelection(item))
+			v.Changes = append(v.Changes, change)
 		}
 	}
 	v.OrderChanged = !reflect.DeepEqual(beforeOrder, afterOrder)
@@ -221,11 +243,11 @@ func diffOutput(ctx context.Context, b backend, from, to, format, path string, o
 			return json.NewEncoder(w).Encode(diff)
 		case "csv":
 			writer := csv.NewWriter(w)
-			if err := writer.Write([]string{"from_run_id", "to_run_id", "instrument_id_text", "change", "before_status", "after_status", "before_setups", "after_setups", "saved_price_facts_changed", "saved_identity_or_relative_strength_changed", "consumed_evidence_identity_changed", "attribution", "observed_change_factors"}); err != nil {
+			if err := writer.Write([]string{"from_run_id", "to_run_id", "instrument_id_text", "change", "before_status", "after_status", "before_setups", "after_setups", "saved_price_facts_changed", "saved_identity_or_relative_strength_changed", "consumed_evidence_identity_changed", "attribution", "observed_change_factors", "before_saved_primary_stage", "after_saved_primary_stage", "before_saved_alternate_stages", "after_saved_alternate_stages", "before_saved_stage_candidate_states", "after_saved_stage_candidate_states", "before_setup_display_warnings", "after_setup_display_warnings"}); err != nil {
 				return err
 			}
 			for _, item := range diff.Changes {
-				if err := writer.Write([]string{textCell(from), textCell(to), "'" + item.ID, item.Change, textCell(item.BeforeStatus), textCell(item.AfterStatus), textCell(item.BeforeSetups), textCell(item.AfterSetups), changeState(item.PriceFactsChanged), changeState(item.IdentityOrBenchmarkChanged), changeState(item.EvidenceChanged), diff.Attribution, strings.Join(diff.Factors, ";")}); err != nil {
+				if err := writer.Write([]string{textCell(from), textCell(to), "'" + item.ID, item.Change, textCell(item.BeforeStatus), textCell(item.AfterStatus), textCell(item.BeforeSetups), textCell(item.AfterSetups), changeState(item.PriceFactsChanged), changeState(item.IdentityOrBenchmarkChanged), changeState(item.EvidenceChanged), diff.Attribution, strings.Join(diff.Factors, ";"), textCell(item.BeforePrimaryStage), textCell(item.AfterPrimaryStage), textCell(item.BeforeAlternateStages), textCell(item.AfterAlternateStages), textCell(item.BeforeStageStates), textCell(item.AfterStageStates), textCell(strings.Join(item.BeforeSetupWarnings, "; ")), textCell(strings.Join(item.AfterSetupWarnings, "; "))}); err != nil {
 					return err
 				}
 			}
@@ -238,6 +260,11 @@ func diffOutput(ctx context.Context, b backend, from, to, format, path string, o
 			for _, item := range diff.Changes {
 				if _, err := fmt.Fprintf(w, "%s %s：%s [%s] → %s [%s]；价格事实=%s；身份/相对基准事实=%s；证据身份=%s\n", item.ID, item.Change, item.BeforeStatus, item.BeforeSetups, item.AfterStatus, item.AfterSetups, changeState(item.PriceFactsChanged), changeState(item.IdentityOrBenchmarkChanged), changeState(item.EvidenceChanged)); err != nil {
 					return err
+				}
+				if item.BeforeStageStates != "" || item.AfterStageStates != "" || item.BeforePrimaryStage != "" || item.AfterPrimaryStage != "" || len(item.BeforeSetupWarnings) > 0 || len(item.AfterSetupWarnings) > 0 {
+					if _, err := fmt.Fprintf(w, "  保存主形态：%s → %s；保存其他形态：%s → %s\n  保存候选状态：%s → %s\n  展示资料缺口/不一致：%s → %s\n", item.BeforePrimaryStage, item.AfterPrimaryStage, item.BeforeAlternateStages, item.AfterAlternateStages, item.BeforeStageStates, item.AfterStageStates, strings.Join(item.BeforeSetupWarnings, "; "), strings.Join(item.AfterSetupWarnings, "; ")); err != nil {
+						return err
+					}
 				}
 			}
 			return nil

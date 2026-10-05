@@ -423,6 +423,9 @@ func DecodeFrozen(raw []byte) (contracts.Frozen, error) {
 	return DecodeFrozenContext(context.Background(), raw)
 }
 func DecodeFrozenContext(ctx context.Context, raw []byte) (contracts.Frozen, error) {
+	return decodeFrozenContext(ctx, raw, true)
+}
+func decodeFrozenContext(ctx context.Context, raw []byte, recordSource bool) (contracts.Frozen, error) {
 	var f contracts.Frozen
 	if _, e := contracts.CanonicalContext(ctx, raw); e != nil {
 		return f, e
@@ -430,6 +433,16 @@ func DecodeFrozenContext(ctx context.Context, raw []byte) (contracts.Frozen, err
 	r, e := decodeObject(raw, "frozen")
 	if e != nil {
 		return f, e
+	}
+	// Capture the original row bytes before defaults and decimal projections
+	// replace the serialized market representation.
+	var originalBars []json.RawMessage
+	if recordSource {
+		var originalInput contracts.Row
+		// Leave malformed/missing input reporting to the strict contract below.
+		if json.Unmarshal(r["input"], &originalInput) == nil {
+			_ = json.Unmarshal(originalInput["bars"], &originalBars)
+		}
 	}
 	schema := contractSchema{"input": required("market"), "cutoff": required("datetime"), "purpose": optional("string", `""`)}
 	for key, kind := range map[string]string{"parent_input": "frozen_parent", "supplement": "frozen_supplement", "target_session": "date"} {
@@ -450,6 +463,12 @@ func DecodeFrozenContext(ctx context.Context, raw []byte) (contracts.Frozen, err
 	if e = validateFrozenRelations(ctx, &f); e != nil {
 		return f, e
 	}
+	if recordSource {
+		f.SourceProof, e = decodedSourceProof(ctx, raw, originalBars, f.Input.Bars)
+		if e != nil {
+			return f, e
+		}
+	}
 	return f, nil
 }
 
@@ -462,6 +481,7 @@ func ValidateFrozenContext(ctx context.Context, f *contracts.Frozen) error {
 	if f == nil {
 		return contractError("frozen", "OBJECT_REQUIRED")
 	}
+	originalProof := f.SourceProof
 	raw, e := json.Marshal(f)
 	if e != nil {
 		return e
@@ -485,10 +505,13 @@ func ValidateFrozenContext(ctx context.Context, f *contracts.Frozen) error {
 	}
 	envelope["input"], _ = json.Marshal(input)
 	raw, _ = json.Marshal(envelope)
-	next, e := DecodeFrozenContext(ctx, raw)
+	next, e := decodeFrozenContext(ctx, raw, false)
 	if e != nil {
 		return e
 	}
+	// A convenience marshal is not evidence of the original input bytes.
+	// Preserve a decoder attestation, if present, for later per-row matching.
+	next.SourceProof = originalProof
 	*f = next
 	return nil
 }

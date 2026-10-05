@@ -43,7 +43,7 @@ func reviewFrozen(t *testing.T, last string) c.InputRecord {
 	sessions := []string{}
 	bars := []any{}
 	first := time.Date(2025, 12, 1, 0, 0, 0, 0, time.UTC)
-	for i := 0; i < 75; i++ {
+	for i := 0; i < 160; i++ {
 		day := first.AddDate(0, 0, i).Format("2006-01-02")
 		sessions = append(sessions, day)
 		if day > last {
@@ -57,6 +57,12 @@ func reviewFrozen(t *testing.T, last string) c.InputRecord {
 			if id == "600001.SH" && day > "2026-01-20" {
 				price = "12"
 			}
+			if id == "600001.SH" && day > "2026-02-20" && day <= "2026-03-01" {
+				price = "14"
+			}
+			if id == "600001.SH" && day > "2026-03-10" {
+				price = "15"
+			}
 			b := clock(day)
 			for k, v := range map[string]any{"instrument_id": id, "session": day, "open": price, "high": price, "low": price, "close": price, "comparable_close": price, "comparable_basis": "TEST_FIXTURE_SAME_BASIS", "source_refs": []string{"TEST_FIXTURE_REVIEW"}} {
 				b[k] = v
@@ -64,6 +70,7 @@ func reviewFrozen(t *testing.T, last string) c.InputRecord {
 			bars = append(bars, b)
 		}
 	}
+	receipt["row_count"] = len(bars)
 	raw, _ := json.Marshal(map[string]any{"purpose": "TEST_FIXTURE_REVIEW_E2E", "cutoff": last + "T16:00:00+08:00", "input": map[string]any{"observation_date": last, "sessions": sessions, "universe": u, "bars": bars, "receipts": []any{receipt}, "coverage_type": "TEST_FIXTURE"}})
 	in, err := (&native.NativeEngine{}).Validate(raw)
 	if err != nil {
@@ -90,7 +97,28 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 		t.Fatal(err)
 	}
 	defer store.Close()
-	if _, err = store.DB().Exec("INSERT INTO migration_state VALUES(1,'TEST_FIXTURE','PUBLISHED','{}','TEST_FIXTURE')"); err != nil {
+	// Seal an explicitly synthetic, empty authority baseline through the actual
+	// batch publication API before enabling app writers. A PUBLISHED state row
+	// alone cannot satisfy the read-only authority identity gate.
+	fixtureSource := c.Hash([]byte("TEST_FIXTURE_REVIEW_EMPTY_AUTHORITY"))
+	if _, err = store.DB().Exec("INSERT INTO migration_state VALUES(1,?,'VERIFIED',?,?)", fixtureSource, `{"purpose":"TEST_FIXTURE_REVIEW_EMPTY_AUTHORITY; NOT_REAL_MIGRATION_VERIFICATION"}`, time.Now().UTC().Format(time.RFC3339Nano)); err != nil {
+		t.Fatal(err)
+	}
+	publication, err := store.BackfillBatchProjections(ctx, sqlitev2.BatchProjectionOptions{})
+	if err != nil || publication.Status != "PUBLISHED" || !evidence.ValidHash(publication.ManifestHash) {
+		t.Fatal("fixture batch publication failed", publication, err)
+	}
+	verified, err := store.VerifyBatchProjections(ctx)
+	if err != nil || verified.Status != "VERIFIED" || verified.ManifestHash != publication.ManifestHash {
+		t.Fatal("fixture published batch closure failed", verified, err)
+	}
+	if err = store.BatchProjectionsReady(ctx); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = store.DB().Exec("UPDATE migration_state SET status='PUBLISHED' WHERE id=1 AND status='VERIFIED'"); err != nil {
+		t.Fatal(err)
+	}
+	if err = store.Ready(ctx); err != nil {
 		t.Fatal(err)
 	}
 	repo := sqlitev2.NewAppRepository(store)
@@ -140,52 +168,58 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 	baseBuild, candidateBuild := c.Hash([]byte("TEST_FIXTURE_BASE_BUILD")), c.Hash([]byte("TEST_FIXTURE_CANDIDATE_BUILD"))
 	baseConfig, candidateConfig := map[string]string{"TEST_FIXTURE": c.Hash([]byte("TEST_FIXTURE_BASE_CONFIG"))}, map[string]string{"TEST_FIXTURE": c.Hash([]byte("TEST_FIXTURE_CANDIDATE_CONFIG"))}
 	var runIDs []string
-	for _, day := range []string{"2026-01-02", "2026-01-20"} {
-		in := reviewFrozen(t, day)
-		if err = repo.PutInput(ctx, in); err != nil {
-			t.Fatal(err)
-		}
-		for _, role := range []string{"BASE", "CANDIDATE"} {
-			runID := "TEST_FIXTURE_" + role + "_" + day
-			source, config := baseBuild, baseConfig
-			if role == "CANDIDATE" {
-				source, config = candidateBuild, candidateConfig
-			}
-			manifest, _ := json.Marshal(map[string]any{"input_bytes_hash": in.RawHash, "cutoff": in.Cutoff, "go_source_hash": source, "config_hashes": config, "conversion_version": evidence.InputContractVersion})
-			summary, _ := json.Marshal(map[string]any{"qualification": c.Qualification{Eligible: []string{"600001.SH", "600002.SH"}, Excluded: map[string]string{}, Unknown: map[string]string{}, UniverseComplete: true}})
-			items := []c.Item{}
-			for _, id := range []string{"600001.SH", "600002.SH"} {
-				status := "CORE_FAIL"
-				if (role == "BASE" && id == "600002.SH") || (role == "CANDIDATE" && id == "600001.SH") {
-					status = "CORE_PASS"
-				}
-				matched := []string{}
-				if status == "CORE_PASS" {
-					matched = []string{"START"}
-				}
-				payload, _ := json.Marshal(map[string]any{"decision": map[string]any{"candidate_status": status, "matched_setups": matched}, "fact": map[string]any{"instrument_id": id}})
-				items = append(items, c.Item{ID: id, Payload: payload})
-			}
-			run := c.Run{ID: runID, InputID: in.ID, Strategy: c.R1, CreatedAt: day + "T17:00:00+08:00", Manifest: manifest, Summary: summary, Items: items, ImplementationStatus: "TEST_FIXTURE_ONLY", CandidateAvailability: "PRESENT"}
-			if err = repo.SaveRun(ctx, run); err != nil {
+	saveRuns := func(days []string, labelInput c.InputRecord) {
+		for _, day := range days {
+			in := reviewFrozen(t, day)
+			if err = repo.PutInput(ctx, in); err != nil {
 				t.Fatal(err)
 			}
-			runIDs = append(runIDs, runID)
-			args := []string{"review", "register", "--db", path, "--run", runID, "--contract", contract.Version}
-			call(false, args...)
-			if duplicate := call(false, args...); !strings.Contains(duplicate, `"created":false`) {
-				t.Fatal(duplicate)
-			}
-			args = []string{"review", "evaluate", "--db", path, "--run", runID, "--label-input", label.ID, "--contract", contract.Version}
-			call(false, args...)
-			if duplicate := call(false, args...); !strings.Contains(duplicate, `"outcome_records_added":0`) {
-				t.Fatal(duplicate)
+			for _, role := range []string{"BASE", "CANDIDATE"} {
+				runID := "TEST_FIXTURE_" + role + "_" + day
+				source, config := baseBuild, baseConfig
+				if role == "CANDIDATE" {
+					source, config = candidateBuild, candidateConfig
+				}
+				manifest, _ := json.Marshal(map[string]any{"input_bytes_hash": in.RawHash, "cutoff": in.Cutoff, "go_source_hash": source, "config_hashes": config, "conversion_version": evidence.InputContractVersion})
+				summary, _ := json.Marshal(map[string]any{"qualification": c.Qualification{Eligible: []string{"600001.SH", "600002.SH"}, Excluded: map[string]string{}, Unknown: map[string]string{}, UniverseComplete: true}})
+				items := []c.Item{}
+				for _, id := range []string{"600001.SH", "600002.SH"} {
+					status := "CORE_FAIL"
+					if (role == "BASE" && id == "600002.SH") || (role == "CANDIDATE" && id == "600001.SH") {
+						status = "CORE_PASS"
+					}
+					matched := []string{}
+					if status == "CORE_PASS" {
+						matched = []string{"START"}
+					}
+					payload, _ := json.Marshal(map[string]any{"decision": map[string]any{"candidate_status": status, "matched_setups": matched}, "fact": map[string]any{"instrument_id": id}})
+					items = append(items, c.Item{ID: id, Payload: payload})
+				}
+				run := c.Run{ID: runID, InputID: in.ID, Strategy: c.R1, CreatedAt: day + "T17:00:00+08:00", Manifest: manifest, Summary: summary, Items: items, ImplementationStatus: "TEST_FIXTURE_ONLY", CandidateAvailability: "PRESENT"}
+				if err = repo.SaveRun(ctx, run); err != nil {
+					t.Fatal(err)
+				}
+				runIDs = append(runIDs, runID)
+				args := []string{"review", "register", "--db", path, "--run", runID, "--contract", contract.Version}
+				call(false, args...)
+				if duplicate := call(false, args...); !strings.Contains(duplicate, `"created":false`) {
+					t.Fatal(duplicate)
+				}
+				args = []string{"review", "evaluate", "--db", path, "--run", runID, "--label-input", labelInput.ID, "--contract", contract.Version}
+				call(false, args...)
+				if duplicate := call(false, args...); !strings.Contains(duplicate, `"outcome_records_added":0`) {
+					t.Fatal(duplicate)
+				}
 			}
 		}
 	}
+	saveRuns([]string{"2026-01-02", "2026-01-20"}, label)
 	baseConfigRaw, _ := json.Marshal(baseConfig)
 	candidateConfigRaw, _ := json.Marshal(candidateConfig)
-	base := review.Candidate{ID: "TEST_FIXTURE_BASELINE", Role: "BASELINE", Hypothesis: "frozen fixture baseline", Change: "TEST_FIXTURE independent baseline identity", Scope: "TEST_FIXTURE", Implementation: baseBuild, ConfigHash: c.Hash(baseConfigRaw), DataCutoff: "2025-12-02T16:00:00+08:00", SelectionEnd: "2025-12-01", EvaluationStart: "2026-01-02", EvaluationEnd: "2026-02-02", CalendarInputID: label.ID, CalendarHash: label.RawHash, ContractVersion: contract.Version, ContractHash: review.Digest(contract), PrimaryMetric: "PRIMARY_WINDOW_EXCESS_MEDIAN", SecondaryMetrics: []string{"ALL_FIXED_WINDOWS", "NEGATIVE_TAIL", "FIXED_COST_SENSITIVITY"}, FixtureOnly: true, ProductionPromotion: "DISABLED"}
+	base := review.Candidate{ID: "TEST_FIXTURE_BASELINE", Role: "BASELINE", TimeSplitContract: review.CandidateTimeSplitVersion, Hypothesis: "frozen fixture baseline", Change: "TEST_FIXTURE independent baseline identity", Scope: "TEST_FIXTURE", Implementation: baseBuild, ConfigHash: c.Hash(baseConfigRaw), DataCutoff: "2025-12-02T16:00:00+08:00", SelectionEnd: "2025-12-01", EvaluationStart: "2026-01-02", EvaluationEnd: "2026-02-02", CalendarInputID: label.ID, CalendarHash: label.RawHash, ContractVersion: contract.Version, ContractHash: review.Digest(contract), PrimaryMetric: "PRIMARY_WINDOW_EXCESS_MEDIAN", SecondaryMetrics: []string{"ALL_FIXED_WINDOWS", "NEGATIVE_TAIL", "FIXED_COST_SENSITIVITY"}, FixtureOnly: true, ProductionPromotion: "DISABLED"}
+	base.StabilityContract = review.StabilityContractVersion
+	base.StabilityStart = "2026-02-15"
+	base.StabilityEnd = "2026-04-01"
 	one := base
 	one.ID = "TEST_FIXTURE_CANDIDATE_ONE"
 	one.Role = "CANDIDATE"
@@ -198,7 +232,11 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 	two.ConfigHash = c.Hash([]byte("TEST_FIXTURE_NO_OUTPUTS_CONFIG"))
 	two.Hypothesis = "incomplete fixture candidate must remain blocked"
 	for _, v := range []review.Candidate{base, one, two} {
-		call(false, "research-lab", "propose", "--db", path, "--file", writeJSON(v.ID+".json", v))
+		args := []string{"research-lab", "propose", "--db", path, "--file", writeJSON(v.ID+".json", v)}
+		first := call(false, args...)
+		if replay := call(false, args...); replay != first {
+			t.Fatal("proposal replay changed registration identity", replay, first)
+		}
 	}
 	third := two
 	third.ID = "TEST_FIXTURE_CANDIDATE_THREE"
@@ -218,6 +256,47 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 	}
 	call(false, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", "OFFLINE_EVALUATED", "--attempt", "TEST_FIXTURE_ATTEMPT_ONE", "--reason", "fixture full comparison")
 	call(false, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", "REVIEW_REQUIRED", "--attempt", "TEST_FIXTURE_ATTEMPT_ONE", "--reason", "independent stability evidence still required")
+	var jobsBefore int
+	if err = store.DB().QueryRow("SELECT count(*) FROM app_jobs").Scan(&jobsBefore); err != nil {
+		t.Fatal(err)
+	}
+	if result := call(true, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", "SHADOW_ELIGIBLE", "--attempt", "TEST_FIXTURE_ATTEMPT_ONE", "--reason", "TEST_FIXTURE no independent data yet"); !strings.Contains(result, "INDEPENDENT_STABILITY_REQUIRED") {
+		t.Fatal("primary evidence alone entered shadow", result)
+	}
+	holdoutLabel := reviewFrozen(t, "2026-04-20")
+	if err = repo.PutInput(ctx, holdoutLabel); err != nil {
+		t.Fatal(err)
+	}
+	saveRuns([]string{"2026-02-20", "2026-03-10"}, holdoutLabel)
+	futureArgs := []string{"research-lab", "stability", "--db", path, "--candidate", one.ID, "--baseline", base.ID, "--key", "TEST_FIXTURE_STABILITY_FUTURE", "--as-of", "2026-02-01T16:00:00+08:00"}
+	if result := call(false, futureArgs...); !strings.Contains(result, `"admission_status":"INSUFFICIENT_EVIDENCE"`) {
+		t.Fatal("future holdout data was consumed", result)
+	}
+	stableArgs := []string{"research-lab", "stability", "--db", path, "--candidate", one.ID, "--baseline", base.ID, "--key", "TEST_FIXTURE_STABILITY_COMPLETE", "--as-of", "2026-04-21T16:00:00+08:00"}
+	stable := call(false, stableArgs...)
+	if !strings.Contains(stable, `"admission_status":"REVIEW_REQUIRED"`) || !strings.Contains(stable, `"evaluation_phase":"INDEPENDENT_STABILITY"`) {
+		t.Fatal(stable)
+	}
+	if replay := call(false, stableArgs...); replay != stable {
+		t.Fatal("stability attempt replay changed", replay, stable)
+	}
+	for _, to := range []string{"SHADOW_ELIGIBLE", "SHADOW_OBSERVING"} {
+		if result := call(false, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", to, "--attempt", "TEST_FIXTURE_STABILITY_COMPLETE", "--reason", "TEST_FIXTURE fixed holdout research admission"); !strings.Contains(result, "NO_JOB_LIST_OR_PRODUCTION_CHANGE") {
+			t.Fatal("shadow implied an active job or strategy change", result)
+		}
+	}
+	var jobsAfter int
+	if err = store.DB().QueryRow("SELECT count(*) FROM app_jobs").Scan(&jobsAfter); err != nil || jobsBefore != jobsAfter {
+		t.Fatal("shadow state started a research job", jobsBefore, jobsAfter, err)
+	}
+	if result := call(true, "research-lab", "compare", "--db", path, "--candidate", one.ID, "--baseline", base.ID, "--key", "TEST_FIXTURE_PRIMARY_REWIND_FAILURE", "--as-of", "2026-02-01T16:00:00+08:00"); !strings.Contains(result, "CANNOT_REWIND") {
+		t.Fatal(result)
+	}
+	if result := call(false, "research-lab", "propose", "--db", path, "--file", filepath.Join(root, one.ID+".json")); !strings.Contains(result, `"state":"INSUFFICIENT_EVIDENCE"`) {
+		t.Fatal("new primary failure retained shadow admission", result)
+	}
+	call(true, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", "SHADOW_OBSERVING", "--attempt", "TEST_FIXTURE_STABILITY_COMPLETE", "--reason", "TEST_FIXTURE stale old best")
+	call(false, "research-lab", "transition", "--db", path, "--candidate", one.ID, "--to", "REJECTED", "--reason", "TEST_FIXTURE retain rejected research history")
 	if result := call(false, "research-lab", "compare", "--db", path, "--candidate", two.ID, "--baseline", base.ID, "--key", "TEST_FIXTURE_ATTEMPT_TWO", "--as-of", "2026-02-01T16:00:00+08:00"); !strings.Contains(result, `"admission_status":"INSUFFICIENT_EVIDENCE"`) {
 		t.Fatal(result)
 	}
@@ -245,7 +324,7 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 	if err != nil || review.Digest(before) != review.Digest(after) {
 		t.Fatal("read query changed journal", err)
 	}
-	revised := reviewFrozen(t, "2026-02-01")
+	revised := reviewFrozen(t, "2026-04-21")
 	if err = repo.PutInput(ctx, revised); err != nil {
 		t.Fatal(err)
 	}
@@ -272,11 +351,17 @@ func TestCLIReviewAndResearchPersistedFixtureEndToEnd(t *testing.T) {
 			}
 		}
 	}
-	if revisions != 32 {
+	if revisions != 64 {
 		t.Fatal("label revision history lost", revisions)
 	}
 	if result := call(false, "research-lab", "list", "--db", path, "--kind", "EVALUATION"); !strings.Contains(result, "TEST_FIXTURE_ATTEMPT_ONE") || !strings.Contains(result, "TEST_FIXTURE_ATTEMPT_TWO") {
 		t.Fatal("restart lost attempts", result)
+	}
+	if result := call(false, "research-lab", "list", "--db", path, "--kind", "EVALUATION"); !strings.Contains(result, "TEST_FIXTURE_STABILITY_FUTURE") || !strings.Contains(result, "TEST_FIXTURE_STABILITY_COMPLETE") || !strings.Contains(result, "TEST_FIXTURE_PRIMARY_REWIND_FAILURE") {
+		t.Fatal("stability/failed attempts lost after restart", result)
+	}
+	if state := review.CandidateState(persisted, one.ID); state != "REJECTED" {
+		t.Fatal("rejected shadow research history not retained", state)
 	}
 	// Optional persistent fixture output is for the parent budget runner's binary
 	// package checks. It contains only explicit TEST_FIXTURE data.

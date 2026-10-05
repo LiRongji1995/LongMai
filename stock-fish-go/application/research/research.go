@@ -4,8 +4,8 @@ import (
 	"encoding/json"
 	"fmt"
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	ev "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
-	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/infrastructure/buildidentity"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
 	shared "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/strategies/shared"
 	"sort"
@@ -17,6 +17,7 @@ type Diagnostic struct {
 	ImplementationAcceptance string              `json:"implementation_acceptance"`
 	FactCacheHits            int                 `json:"fact_cache_hits"`
 	FactCacheMisses          int                 `json:"fact_cache_misses"`
+	FactRollingUpdates       int                 `json:"fact_rolling_updates"`
 	FactCacheScope           string              `json:"fact_cache_scope"`
 	DetailFile               string              `json:"detail_file"`
 	DetailCount              int                 `json:"detail_count"`
@@ -45,7 +46,14 @@ func AnalyzeFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, 
 	return AnalyzeStrategyFrozen(frozen, inputBytesHash, history, b, R1StrategyID, nil)
 }
 func AnalyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, b Budget, strategyID string, cache FactsCache) (Diagnostic, error) {
-	return analyzeStrategyFrozen(frozen, inputBytesHash, history, b, strategyID, cache, buildidentity.Facts())
+	return analyzeStrategyFrozen(frozen, inputBytesHash, history, b, strategyID, cache, "UNRECORDED_FACTS_IMPLEMENTATION")
+}
+
+// AnalyzeStrategyFrozenWithIdentity accepts the audited calculation identity
+// from the composition layer. The application owns no concrete build adapter;
+// callers without such an identity use AnalyzeStrategyFrozen's safe boundary.
+func AnalyzeStrategyFrozenWithIdentity(frozen Frozen, inputBytesHash string, history HistoryReader, b Budget, strategyID string, cache FactsCache, factsImplementation string) (Diagnostic, error) {
+	return analyzeStrategyFrozen(frozen, inputBytesHash, history, b, strategyID, cache, factsImplementation)
 }
 
 func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history HistoryReader, b Budget, strategyID string, cache FactsCache, factAlgorithm string) (Diagnostic, error) {
@@ -179,6 +187,18 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 		if e = b.Check(); e != nil {
 			return out, e
 		}
+		rollingCache, _ := cache.(rollingStateCache)
+		var previousRolling *rollingState
+		if history != nil && end > 0 {
+			previousRolling, e = loadRollingState(b.Ctx(), rollingCache, factAlgorithm, input.Coverage, id, sessions[end-1])
+			if e != nil {
+				return out, e
+			}
+		}
+		proofStart := start
+		if previousRolling != nil && start > 0 {
+			proofStart--
+		}
 		byDay := map[string][]Row{}
 		origins := map[string][]c.EvidenceIdentity{}
 		seenRaw := map[string]bool{}
@@ -195,12 +215,16 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 				return er
 			}
 			if r.Text("quality") == "INVALID" {
-				rejected["INVALID_PRICE_QUALITY"]++
+				if r.Text("session") >= sessions[start] {
+					rejected["INVALID_PRICE_QUALITY"]++
+				}
 				return nil
 			}
 			resolution := resolver.Resolve(r, Scope{Instrument: id, Session: r.Text("session"), RequireSession: true})
 			if !resolution.Allowed {
-				rejected[resolution.Reason]++
+				if r.Text("session") >= sessions[start] {
+					rejected[resolution.Reason]++
+				}
 				return nil
 			}
 			byDay[r.Text("session")] = append(byDay[r.Text("session")], r)
@@ -209,9 +233,9 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 		}
 		if history != nil {
 			if reader, ok := history.(ports.HistoryIdentityReader); ok {
-				e = reader.BarsWithIdentity(id, sessions[start], input.Observation, consume)
+				e = reader.BarsWithIdentity(id, sessions[proofStart], input.Observation, consume)
 			} else {
-				e = history.Bars(id, sessions[start], input.Observation, func(r Row) error { return consume(r, c.EvidenceIdentity{Origin: "UNBOUND_TEST_ADAPTER"}) })
+				e = history.Bars(id, sessions[proofStart], input.Observation, func(r Row) error { return consume(r, c.EvidenceIdentity{Origin: "UNBOUND_TEST_ADAPTER"}) })
 			}
 			if e != nil {
 				return out, e
@@ -219,10 +243,14 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 		}
 		for _, row := range recent[id] {
 			r := row.row
-			if r.Text("session") < sessions[start] || r.Text("session") > input.Observation {
+			if r.Text("session") < sessions[proofStart] || r.Text("session") > input.Observation {
 				continue
 			}
-			if e = consume(r, c.EvidenceIdentity{Origin: "FROZEN_INPUT", ParentHash: inputBytesHash, Locator: fmt.Sprintf("/input/bars/%d", row.index)}); e != nil {
+			origin := c.EvidenceIdentity{Origin: "FROZEN_INPUT", ParentHash: inputBytesHash, Locator: fmt.Sprintf("/input/bars/%d", row.index)}
+			if verified, ok := ev.DecodedInputBarIdentity(frozen, inputBytesHash, row.index); ok {
+				origin = verified
+			}
+			if e = consume(r, origin); e != nil {
 				return out, e
 			}
 		}
@@ -230,31 +258,53 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 		hashes := []string{}
 		bindings := []c.SelectedEvidenceBinding{}
 		selectedRows := []Row{}
+		proofRows := []Row{}
+		proofBindings := []c.SelectedEvidenceBinding{}
 		ports.Observe(b, "source_visibility_selection", resolutionTime.Seconds())
 		revisionStart := time.Now()
 		for session, rows := range byDay {
 			selected, er := SelectRevisionIndex(rows)
 			if er != nil {
 				if er.Error() == "CONFLICTING_REVISION" {
-					rejected["CONFLICTING_PRICE_REVISION"]++
+					if session >= sessions[start] {
+						rejected["CONFLICTING_PRICE_REVISION"]++
+					}
 					continue
 				}
 				return out, er
 			}
 			bar, er := ParseBar(rows[selected])
 			if er != nil {
+				if session < sessions[start] {
+					continue
+				}
 				return out, er
+			}
+			binding := c.SelectedEvidenceBinding{ProjectionHash: bar.Hash, Identity: origins[session][selected]}
+			proofRows = append(proofRows, rows[selected])
+			proofBindings = append(proofBindings, binding)
+			if session < sessions[start] {
+				continue
 			}
 			w.Bars[session] = bar
 			selectedRows = append(selectedRows, rows[selected])
 			hashes = append(hashes, bar.Hash)
-			bindings = append(bindings, c.SelectedEvidenceBinding{ProjectionHash: bar.Hash, Identity: origins[session][selected]})
+			bindings = append(bindings, binding)
 		}
 		ports.Observe(b, "revision_selection_and_bar_decode", time.Since(revisionStart).Seconds())
 		sort.Strings(hashes)
 		sort.Slice(bindings, func(i, j int) bool { return bindings[i].ProjectionHash < bindings[j].ProjectionHash })
 		key, cacheScope := factCacheKeyWithIdentity(factAlgorithm, frozen, inputBytesHash, id, states[id], sessions, selectedRows, bindings, resolver)
 		out.FactCacheScope = cacheScope
+		var rollingProof *rollingProof
+		if rollingCache != nil && history != nil {
+			started := time.Now()
+			rollingProof, e = makeRollingProof(b.Ctx(), factAlgorithm, frozen, id, states[id], sessions, start, proofRows, proofBindings, resolver)
+			ports.Observe(b, "stock_rolling_prefix_proof", time.Since(started).Seconds())
+			if e != nil {
+				return out, e
+			}
+		}
 		var sf StockFacts
 		hit := false
 		if cache != nil {
@@ -272,14 +322,36 @@ func analyzeStrategyFrozen(frozen Frozen, inputBytesHash string, history History
 			out.FactCacheMisses++
 			var er error
 			started := time.Now()
-			sf, er = buildFacts(b.Ctx(), id, states[id].Text("name"), w, end)
-			ports.Observe(b, "public_facts_arithmetic", time.Since(started).Seconds())
+			sums, days, canRoll, rollErr := advanceRollingState(b.Ctx(), previousRolling, rollingProof, w, end)
+			if rollErr != nil {
+				return out, rollErr
+			}
+			component := "public_facts_arithmetic"
+			if canRoll {
+				sf, er = buildRollingFacts(b.Ctx(), id, states[id].Text("name"), w, end, sums, days)
+				out.FactRollingUpdates++
+				component = "public_facts_rolling_arithmetic"
+			} else {
+				sf, er = buildFacts(b.Ctx(), id, states[id].Text("name"), w, end)
+			}
+			ports.Observe(b, component, time.Since(started).Seconds())
 			if er != nil {
 				return out, er
 			}
 			if cache != nil {
 				if e = cache.PutFact(b.Ctx(), key, sf); e != nil {
 					return out, e
+				}
+			}
+		}
+		if rollingCache != nil && rollingProof != nil {
+			state, er := seedRollingState(b.Ctx(), rollingProof, w, end, sf)
+			if er != nil {
+				return out, er
+			}
+			if state != nil {
+				if er = storeRollingState(b.Ctx(), rollingCache, *state); er != nil {
+					return out, er
 				}
 			}
 		}

@@ -298,6 +298,37 @@ func TestNativeRejectsHistoryWithoutAuthenticatedBindingPort(t *testing.T) {
 func TestNativeInlineBindingResolvesOriginalInputPointer(t *testing.T) {
 	rawBar := json.RawMessage(`{ "instrument_id":"600001.SH", "session":"2026-01-01", "close":"+0010.00", "amount_cny":"5e8", "source_refs":["TEST_FIXTURE"], "event_time":"2026-01-01T15:00:00+08:00", "source_published_at":"2026-01-01T15:00:00+08:00", "first_seen_at":"2026-01-01T16:00:00+08:00", "ingested_at":"2026-01-01T16:00:00+08:00" }`)
 	input := identityFrozen(t, "", []json.RawMessage{rawBar})
+	var envelope struct {
+		Input struct {
+			Bars []json.RawMessage `json:"bars"`
+		} `json:"input"`
+	}
+	if e := json.Unmarshal(input, &envelope); e != nil {
+		t.Fatal(e)
+	}
+	if len(envelope.Input.Bars) != 1 {
+		t.Fatal("original serialized inline row missing")
+	}
+	located := envelope.Input.Bars[0]
+	decoded, e := ev.DecodeFrozenContext(context.Background(), input)
+	if e != nil {
+		t.Fatal(e)
+	}
+	identity, ok := ev.DecodedInputBarIdentity(decoded, c.Hash(input), 0)
+	if !ok || identity.Origin != "FROZEN_INPUT" || identity.Locator != "/input/bars/0" ||
+		identity.RawSHA256 != c.Hash(located) || identity.RawBytes != int64(len(located)) ||
+		identity.ParentHash != c.Hash(input) {
+		t.Fatal("strict decode did not authenticate the original input row bytes", identity, ok)
+	}
+	projected, e := ev.DecodeEvidenceRow(context.Background(), "bar", located)
+	if e != nil {
+		t.Fatal(e)
+	}
+	projectionHash := c.RowHash(decoded.Input.Bars[0])
+	if !ev.ValidHash(projectionHash) || projectionHash != c.RowHash(projected) ||
+		!ev.MatchesDecodedInputBarBinding(decoded, c.Hash(input), c.SelectedEvidenceBinding{ProjectionHash: projectionHash, Identity: identity}) {
+		t.Fatal("original input bytes did not produce a valid independent strict projection")
+	}
 	engine := native.NativeEngine{SourceHash: "TEST_FIXTURE_INLINE_BINDING"}
 	in, e := engine.Validate(input)
 	if e != nil {
@@ -325,8 +356,12 @@ func TestNativeInlineBindingResolvesOriginalInputPointer(t *testing.T) {
 		t.Fatal("inline provenance missing")
 	}
 	b := item.Fact.EvidenceBindings[0]
-	if b.Identity.Origin != "FROZEN_INPUT" || b.Identity.Locator != "/input/bars/0" || b.Identity.RawSHA256 != "" || b.RawEqualsProjection {
+	if b.Identity.Origin != "FROZEN_INPUT" || b.Identity.Locator != "/input/bars/0" ||
+		b.Identity.RawSHA256 != c.Hash(located) || b.RawEqualsProjection {
 		t.Fatal("invalid input binding", b)
+	}
+	if b.ProjectionHash != "" || b.Identity.ParentHash != "" || b.Identity.RawBytes != 0 {
+		t.Fatal("compact binding repeated shared identity", b)
 	}
 	var manifest map[string]any
 	if e = json.Unmarshal(run.Manifest, &manifest); e != nil {
@@ -335,21 +370,21 @@ func TestNativeInlineBindingResolvesOriginalInputPointer(t *testing.T) {
 	if manifest["input_bytes_hash"] != c.Hash(input) {
 		t.Fatal("pointer parent bytes unauthenticated")
 	}
-	var envelope struct {
-		Input struct {
-			Bars []json.RawMessage `json:"bars"`
-		} `json:"input"`
+	contract, ok := manifest["selected_evidence_binding_contract"].(map[string]any)
+	if !ok || contract["FROZEN_INPUT_parent"] != "manifest.input_bytes_hash" ||
+		contract["projection"] != "same index in fact.selected_evidence_hashes" {
+		t.Fatal("compact shared-parent/projection contract missing")
 	}
-	if e = json.Unmarshal(input, &envelope); e != nil {
-		t.Fatal(e)
-	}
-	located := envelope.Input.Bars[0]
-	projected, e := ev.DecodeEvidenceRow(ctx, "bar", located)
-	if e != nil {
-		t.Fatal(e)
-	}
-	if c.RowHash(projected) != item.Fact.EvidenceHashes[0] {
+	if !ev.ValidHash(item.Fact.EvidenceHashes[0]) || projectionHash != item.Fact.EvidenceHashes[0] {
 		t.Fatal("original pointer cannot reproduce selected model projection")
+	}
+	// Recover only fields declared shared by the saved compact contract, and
+	// the exact byte length obtainable from its original authenticated pointer.
+	b.ProjectionHash = item.Fact.EvidenceHashes[0]
+	b.Identity.ParentHash = manifest["input_bytes_hash"].(string)
+	b.Identity.RawBytes = int64(len(located))
+	if b.Identity != identity || !ev.MatchesDecodedInputBarBinding(decoded, c.Hash(input), b) {
+		t.Fatal("saved compact binding cannot reproduce original decoder proof", b)
 	}
 	if c.Hash(located) == item.Fact.EvidenceHashes[0] {
 		t.Fatal("fixture raw/model difference was lost")

@@ -100,22 +100,8 @@ func textCell(value string) string {
 	return value
 }
 func fields(item c.Item) (string, string, string) {
-	var v struct {
-		Fact struct {
-			Name string `json:"name"`
-		} `json:"fact"`
-		Decision struct {
-			Candidate string          `json:"candidate_status"`
-			Status    string          `json:"decision_status"`
-			Setups    json.RawMessage `json:"matched_setups"`
-		} `json:"decision"`
-	}
-	_ = json.Unmarshal(item.Payload, &v)
-	status := v.Decision.Candidate
-	if status == "" {
-		status = v.Decision.Status
-	}
-	return v.Fact.Name, status, string(v.Decision.Setups)
+	v := setupSelection(item)
+	return v.Name, v.Status, v.MatchedJSON
 }
 func renderSaved(w io.Writer, v Saved, format string, explain bool) error {
 	switch format {
@@ -125,10 +111,11 @@ func renderSaved(w io.Writer, v Saved, format string, explain bool) error {
 		var manifest map[string]any
 		_ = json.Unmarshal(v.Run.Manifest, &manifest)
 		csvw := csv.NewWriter(w)
-		_ = csvw.Write([]string{"run_id", "instrument_id_text", "name", "status", "all_matched_setups", "saved_detail_json", "input_id", "strategy_id", "observation_date", "cutoff", "target_session", "generated_at", "selection_state", "saved_summary_json"})
+		_ = csvw.Write([]string{"run_id", "instrument_id_text", "name", "status", "all_matched_setups", "saved_detail_json", "input_id", "strategy_id", "observation_date", "cutoff", "target_session", "generated_at", "selection_state", "saved_summary_json", "saved_primary_stage", "saved_alternate_stages", "saved_stage_candidate_states", "setup_display_warnings"})
 		for _, i := range v.Run.Items {
 			name, status, setups := fields(i)
-			if e := csvw.Write([]string{textCell(v.Run.ID), "'" + i.ID, textCell(name), textCell(status), textCell(setups), textCell(string(i.Payload)), textCell(v.Run.InputID), textCell(v.Run.Strategy), textCell(fmt.Sprint(manifest["observation_date"])), textCell(fmt.Sprint(manifest["cutoff"])), textCell(v.Target), textCell(v.Run.CreatedAt), textCell(v.SelectionState), textCell(string(v.Run.Summary))}); e != nil {
+			stageView := setupSelection(i)
+			if e := csvw.Write([]string{textCell(v.Run.ID), "'" + i.ID, textCell(name), textCell(status), textCell(setups), textCell(string(i.Payload)), textCell(v.Run.InputID), textCell(v.Run.Strategy), textCell(fmt.Sprint(manifest["observation_date"])), textCell(fmt.Sprint(manifest["cutoff"])), textCell(v.Target), textCell(v.Run.CreatedAt), textCell(v.SelectionState), textCell(string(v.Run.Summary)), textCell(stageView.Primary), textCell(stageView.AlternateJSON), textCell(stageView.StageStatesJSON), textCell(stageView.warningsText())}); e != nil {
 				return e
 			}
 		}

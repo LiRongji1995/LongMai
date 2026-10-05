@@ -207,6 +207,24 @@ func (r *remote) research(ctx context.Context, p Plan, s, source string, hashes 
 	if r.token == "" {
 		return "", errors.New("SERVER_RESEARCH_PRIVATE_TOKEN_FILE_REQUIRED")
 	}
+	// Transport can silently replay an idempotent GET after a reused connection
+	// fails. Fresh observer connections leave the three-attempt retry budget
+	// entirely under this loop's control, including disconnected responses.
+	base := r.client.Transport
+	if base == nil {
+		base = http.DefaultTransport
+	}
+	transport, ok := base.(*http.Transport)
+	if !ok {
+		return "", errors.New("SERVER_OBSERVER_TRANSPORT_RETRY_POLICY_UNVERIFIED")
+	}
+	transport = transport.Clone()
+	transport.DisableKeepAlives = true
+	defer transport.CloseIdleConnections()
+	observerClient := *r.client
+	observerClient.Transport = transport
+	observer := *r
+	observer.client = &observerClient
 	raw, _ := json.Marshal(hashes)
 	req := c.ResearchRequest{InputID: p.InputID, Strategy: s, BudgetSeconds: p.Budget, TargetSession: p.Target, ConfigIdentity: c.Hash(raw), Implementation: source, EvidencePolicy: Policy}
 	identity, _ := json.Marshal(req)
@@ -241,7 +259,7 @@ func (r *remote) research(ctx context.Context, p Plan, s, source string, hashes 
 		}
 		var j c.Job
 		poll, endPoll := context.WithTimeout(work, 5*time.Second)
-		e := r.get(poll, "/api/jobs/"+url.PathEscape(result.ID), &j)
+		e := observer.get(poll, "/api/jobs/"+url.PathEscape(result.ID), &j)
 		endPoll()
 		if e != nil {
 			if work.Err() != nil {

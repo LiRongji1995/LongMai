@@ -20,6 +20,10 @@ import (
 var fixtureHashes = map[string]string{"TEST_FIXTURE_CONFIG": "same"}
 
 func dailyFixture(t *testing.T) (string, *sqlitev2.Store, string) {
+	return dailyFixtureWithHistory(t, false)
+}
+
+func dailyFixtureWithHistory(t *testing.T, history bool) (string, *sqlitev2.Store, string) {
 	t.Helper()
 	root := filepath.Join(t.TempDir(), "中文 空格")
 	if e := os.Mkdir(root, 0700); e != nil {
@@ -32,6 +36,11 @@ func dailyFixture(t *testing.T) (string, *sqlitev2.Store, string) {
 		t.Fatal(e)
 	}
 	t.Cleanup(func() { s.Close() })
+	if history {
+		if _, e = s.DB().Exec("INSERT INTO partitions VALUES(1,?)", fmt.Sprintf("%064d", 1)); e != nil {
+			t.Fatal(e)
+		}
+	}
 	if _, e = s.DB().Exec("INSERT INTO migration_state VALUES(1,'TEST_FIXTURE','PUBLISHED','{}','TEST_FIXTURE')"); e != nil {
 		t.Fatal(e)
 	}

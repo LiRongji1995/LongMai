@@ -38,7 +38,10 @@ func (s *Store) InitReview(ctx context.Context) error {
 		return err
 	}
 	if exists > 0 {
-		return verifyReviewSchema(ctx, s.db)
+		if err := verifyReviewSchema(ctx, s.db); err != nil {
+			return err
+		}
+		return s.initReviewAvailability(ctx)
 	}
 	tx, err := s.db.BeginTx(ctx, nil)
 	if err != nil {
@@ -54,10 +57,17 @@ func (s *Store) InitReview(ctx context.Context) error {
 	if err = tx.Commit(); err != nil {
 		return err
 	}
-	return verifyReviewSchema(ctx, s.db)
+	if err = verifyReviewSchema(ctx, s.db); err != nil {
+		return err
+	}
+	return s.initReviewAvailability(ctx)
 }
 
-func verifyReviewSchema(ctx context.Context, db *sql.DB) error {
+type reviewSchemaQuery interface {
+	QueryRowContext(context.Context, string, ...any) *sql.Row
+}
+
+func verifyReviewSchema(ctx context.Context, db reviewSchemaQuery) error {
 	var hash string
 	if err := db.QueryRowContext(ctx, "SELECT checksum FROM review_schema WHERE version=?", review.JournalVersion).Scan(&hash); err != nil {
 		return fmt.Errorf("REVIEW_NOT_INITIALIZED_OR_SCHEMA_MISSING: %w", err)
@@ -91,7 +101,11 @@ func verifyReviewSchema(ctx context.Context, db *sql.DB) error {
 			return fmt.Errorf("REVIEW_SCHEMA_OBJECT_CHANGED: %s", name)
 		}
 	}
-	return rows.Err()
+	if err = rows.Err(); err != nil {
+		return err
+	}
+	_, err = verifyReviewAvailabilitySchema(ctx, db)
+	return err
 }
 
 func reviewLedgerID(r review.Record) string {
@@ -99,6 +113,11 @@ func reviewLedgerID(r review.Record) string {
 }
 
 func readReviewTx(ctx context.Context, tx *sql.Tx) ([]review.Record, error) {
+	// Schema, records, proof members and the ledger must share this snapshot.
+	// An earlier check on the DB handle cannot attest this transaction's schema.
+	if err := verifyReviewSchema(ctx, tx); err != nil {
+		return nil, err
+	}
 	var total int64
 	if err := tx.QueryRowContext(ctx, "SELECT coalesce(sum(length(payload)),0) FROM review_records").Scan(&total); err != nil {
 		return nil, err
@@ -114,10 +133,12 @@ func readReviewTx(ctx context.Context, tx *sql.Tx) ([]review.Record, error) {
 	size := 0
 	for rows.Next() {
 		var r review.Record
-		if err = rows.Scan(&r.Sequence, &r.Kind, &r.ID, &r.Revision, &r.Payload, &r.Hash); err != nil {
+		var payload []byte
+		if err = rows.Scan(&r.Sequence, &r.Kind, &r.ID, &r.Revision, &payload, &r.Hash); err != nil {
 			rows.Close()
 			return nil, err
 		}
+		r.Payload = payload
 		size += len(r.Payload)
 		if size > review.MaxJournalBytes {
 			rows.Close()
@@ -134,6 +155,17 @@ func readReviewTx(ctx context.Context, tx *sql.Tx) ([]review.Record, error) {
 		return nil, err
 	}
 	rows.Close()
+	proofs, err := readReviewAvailabilityTx(ctx, tx, out)
+	if err != nil {
+		return nil, err
+	}
+	for _, r := range proofs {
+		size += len(r.Payload)
+		if size > review.MaxJournalBytes {
+			return nil, errors.New("REVIEW_JOURNAL_OUTPUT_LIMIT; NO_PARTIAL_SUCCESS")
+		}
+		out = append(out, r)
+	}
 	var count int
 	if err = tx.QueryRowContext(ctx, "SELECT count(*) FROM app_change_ledger WHERE kind='REVIEW_RECORD'").Scan(&count); err != nil {
 		return nil, err
@@ -161,9 +193,6 @@ func (s *Store) ReviewRecords(ctx context.Context) ([]review.Record, error) {
 }
 
 func readReview(ctx context.Context, db *sql.DB) ([]review.Record, error) {
-	if err := verifyReviewSchema(ctx, db); err != nil {
-		return nil, err
-	}
 	tx, err := db.BeginTx(ctx, &sql.TxOptions{ReadOnly: true})
 	if err != nil {
 		return nil, err
@@ -178,9 +207,6 @@ func readReview(ctx context.Context, db *sql.DB) ([]review.Record, error) {
 
 func (s *Store) AppendReview(ctx context.Context, records []review.Record) (int, error) {
 	if err := s.Ready(ctx); err != nil {
-		return 0, err
-	}
-	if err := verifyReviewSchema(ctx, s.db); err != nil {
 		return 0, err
 	}
 	if err := CheckResources(filepath.Dir(s.Path)); err != nil {
@@ -208,6 +234,9 @@ func (s *Store) AppendReview(ctx context.Context, records []review.Record) (int,
 	}
 	added := 0
 	for _, r := range records {
+		if r.Kind == review.CandidateAvailabilityKind {
+			return 0, errors.New("CANDIDATE_AVAILABILITY_STORE_OBSERVATION_API_REQUIRED")
+		}
 		if err = ctx.Err(); err != nil {
 			return 0, err
 		}

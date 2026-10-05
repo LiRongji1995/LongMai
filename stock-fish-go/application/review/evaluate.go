@@ -9,6 +9,7 @@ import (
 	ev "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/facts"
 	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/ports"
+	"github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/strategies/shared"
 	"sort"
 	"strconv"
 	"strings"
@@ -210,7 +211,18 @@ func Register(ctx context.Context, run c.Run, in c.InputRecord, e *Evidence, con
 	q := summary.Qualification
 	qualified := map[string]bool{}
 	for _, id := range q.Eligible {
+		if _, exists := q.Excluded[id]; exists {
+			return nil, errors.New("REVIEW_QUALIFICATION_PARTITIONS_OVERLAP")
+		}
+		if _, exists := q.Unknown[id]; exists {
+			return nil, errors.New("REVIEW_QUALIFICATION_PARTITIONS_OVERLAP")
+		}
 		qualified[id] = true
+	}
+	for id := range q.Excluded {
+		if _, exists := q.Unknown[id]; exists {
+			return nil, errors.New("REVIEW_QUALIFICATION_PARTITIONS_OVERLAP")
+		}
 	}
 	items := map[string]c.Item{}
 	for _, item := range run.Items {
@@ -246,6 +258,9 @@ func Register(ctx context.Context, run c.Run, in c.InputRecord, e *Evidence, con
 		}
 		item := items[id]
 		s := Signal{RunID: run.ID, InputID: in.ID, InputHash: in.RawHash, Instrument: id, Strategy: run.Strategy, Matched: []string{}, Observation: in.Observation, Cutoff: in.Cutoff, RunCreatedAt: run.CreatedAt, PublicationLowerBound: availableAt, ObservedAvailableAt: now.UTC().Format(time.RFC3339Nano), AvailabilityBasis: "VERIFIED_SAVED_READ_UPPER_BOUND; ORIGINAL_PUBLICATION_UNKNOWN", RegisteredAt: now.UTC().Format(time.RFC3339Nano), Mode: "HISTORICAL_REPLAY", Implementation: implementation, ConfigHash: c.Hash(manifest["config_hashes"]), ManifestHash: c.Hash(run.Manifest), ContractHash: Digest(contract), ContractVersion: contract.Version, Qualified: qualified[id], PoolComplete: q.UniverseComplete && q.Absent == 0 && len(q.Unknown) == 0, Reasons: []string{}}
+		s.UniverseComplete = q.UniverseComplete
+		s.IdentityAbsent = q.Absent
+		s.QualificationStatus = "QUALIFIED"
 		if in.Coverage == "TEST_FIXTURE" {
 			s.Mode = "TEST_FIXTURE"
 			s.PublishedAt = availableAt
@@ -261,10 +276,17 @@ func Register(ctx context.Context, run c.Run, in c.InputRecord, e *Evidence, con
 		}
 		if !s.Qualified {
 			s.QualificationReason = q.Excluded[id]
+			s.QualificationStatus = "KNOWN_EXCLUDED"
 			s.Decision = "QUALIFICATION_EXCLUDED"
 			if reason, ok := q.Unknown[id]; ok {
 				s.QualificationReason = reason
+				s.QualificationStatus = "UNKNOWN"
 				s.Decision = "QUALIFICATION_UNKNOWN"
+			} else if s.QualificationReason == "" {
+				s.QualificationStatus = "UNKNOWN"
+				s.QualificationReason = "QUALIFICATION_NOT_RECORDED"
+				s.Decision = "QUALIFICATION_UNKNOWN"
+				s.PoolComplete = false
 			}
 			s.Reasons = append(s.Reasons, s.QualificationReason)
 		}
@@ -281,16 +303,12 @@ func Register(ctx context.Context, run c.Run, in c.InputRecord, e *Evidence, con
 				s.Decision = payload.Decision.Text("decision_status")
 			}
 			s.DecisionJSON, _ = json.Marshal(payload.Decision)
-			s.Matched = payload.Decision.Strings("matched_setups")
-			if s.Matched == nil {
-				var setups map[string]c.Condition
-				_ = json.Unmarshal(payload.Decision["stage_candidates"], &setups)
-				for name, condition := range setups {
-					if condition.Status == c.Pass {
-						s.Matched = append(s.Matched, name)
-					}
-				}
+			var matchedReasons []string
+			s.Matched, matchedReasons, err = savedMatchedStages(run.Strategy, payload.Decision)
+			if err != nil {
+				return nil, err
 			}
+			s.Reasons = append(s.Reasons, matchedReasons...)
 		}
 		if s.Decision == "" {
 			s.Decision = "UNKNOWN"
@@ -308,7 +326,6 @@ func Register(ctx context.Context, run c.Run, in c.InputRecord, e *Evidence, con
 		} else {
 			s.Reasons = append(s.Reasons, "FROZEN_REFERENCE_UNAVAILABLE")
 		}
-		s.Matched = sortedUnique(s.Matched)
 		s.Reasons = sortedUnique(s.Reasons)
 		s.ID = "signal_" + Digest([]string{run.ID, id, s.ContractHash})
 		out = append(out, s)
@@ -388,6 +405,9 @@ func Evaluate(ctx context.Context, signals []Signal, label c.InputRecord, e *Evi
 			o.ID = "outcome_" + Digest([]string{s.ID, stringInt(horizon), label.RawHash, implementation})
 			if !s.Qualified {
 				o.Status = "QUALIFICATION_EXCLUDED"
+				if qualification(s) == "UNKNOWN" {
+					o.Status = "QUALIFICATION_UNKNOWN"
+				}
 				o.Reasons = append(o.Reasons, s.QualificationReason)
 				out = append(out, o)
 				continue
@@ -521,6 +541,84 @@ func Evaluate(ctx context.Context, signals []Signal, label c.InputRecord, e *Evi
 		}
 	}
 	return out, nil
+}
+
+// The saved primary/alternate identities express V2's final stage selection.
+// A PASS in an unrelated detector is not an additional final matched stage.
+func savedMatchedStages(strategy string, decision c.Row) ([]string, []string, error) {
+	if strategy == c.R1 {
+		var matched []string
+		if raw, ok := decision["matched_setups"]; ok {
+			if err := json.Unmarshal(raw, &matched); err != nil {
+				return nil, nil, errors.New("REVIEW_R1_MATCHED_SETUPS_INVALID")
+			}
+		}
+		return matched, nil, nil
+	}
+	if strategy != c.V2 {
+		return nil, nil, errors.New("REVIEW_UNKNOWN_SAVED_STRATEGY")
+	}
+	declared := []string{}
+	reasons := []string{}
+	if raw, ok := decision["primary_stage"]; !ok {
+		reasons = append(reasons, "V2_PRIMARY_STAGE_IDENTITY_UNAVAILABLE")
+	} else if !ev.IsNull(raw) {
+		var primary string
+		if err := json.Unmarshal(raw, &primary); err != nil {
+			return nil, nil, errors.New("REVIEW_V2_PRIMARY_STAGE_INVALID")
+		}
+		if primary != "" {
+			declared = append(declared, primary)
+		}
+	}
+	var alternate []string
+	if raw, ok := decision["alternate_stages"]; ok && !ev.IsNull(raw) {
+		if err := json.Unmarshal(raw, &alternate); err != nil {
+			return nil, nil, errors.New("REVIEW_V2_ALTERNATE_STAGES_INVALID")
+		}
+	} else if !ok {
+		reasons = append(reasons, "V2_ALTERNATE_STAGE_IDENTITIES_UNAVAILABLE")
+	}
+	declared = append(declared, alternate...)
+	var stages map[string]c.Condition
+	if raw, ok := decision["stage_candidates"]; ok && !ev.IsNull(raw) {
+		if err := json.Unmarshal(raw, &stages); err != nil {
+			return nil, nil, errors.New("REVIEW_V2_STAGE_TREE_INVALID")
+		}
+	}
+	matched := []string{}
+	seen := map[string]bool{}
+	for _, stage := range declared {
+		if stage == "" || seen[stage] {
+			continue
+		}
+		seen[stage] = true
+		if !c.Contains(shared.Stages, stage) {
+			reasons = append(reasons, "DECLARED_STAGE_IDENTITY_OUTSIDE_FROZEN_SET:"+stage)
+			continue
+		}
+		condition, ok := stages[stage]
+		if ok && condition.Status == c.Pass {
+			matched = append(matched, stage)
+		} else {
+			reasons = append(reasons, "DECLARED_STAGE_NOT_CONFIRMED_PASS:"+stage)
+		}
+	}
+	status := decision.Text("candidate_status")
+	if status == "" {
+		status = decision.Text("decision_status")
+	}
+	if len(matched) == 0 {
+		if status == "UNKNOWN" {
+			reasons = append(reasons, "V2_FINAL_STAGE_SELECTION_UNKNOWN")
+		} else if status == "FOCUS" || status == "WATCH" {
+			reasons = append(reasons, "V2_SELECTED_DECISION_WITHOUT_CONFIRMED_STAGE")
+		}
+	}
+	if len(matched) == 0 && len(reasons) > 0 {
+		matched = nil
+	}
+	return matched, reasons, nil
 }
 
 func Median(values []c.Number) c.Number {

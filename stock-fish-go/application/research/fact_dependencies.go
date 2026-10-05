@@ -5,6 +5,7 @@ import (
 	"sort"
 
 	c "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/domain/contracts"
+	ev "github.com/LiRongji1995/stockfish-qlib-quant-system/stock-fish-go/evidence"
 )
 
 // factCacheKeyWithIdentity runs only after index/raw validation, current qualification,
@@ -30,14 +31,25 @@ func factCacheKeyWithIdentity(algorithm string, frozen Frozen, inputHash, instru
 	}
 	sort.Strings(rows)
 	raw := make([]string, 0, len(bindings))
+	bound := len(bindings) == len(selected)
 	for _, binding := range bindings {
+		switch binding.Identity.Origin {
+		case "FROZEN_INPUT":
+			// A pointer/parent hash alone authenticates no independently reusable
+			// row bytes. Require the strict decoder's opaque source attestation.
+			bound = bound && ev.MatchesDecodedInputBarBinding(frozen, inputHash, binding)
+		case "HISTORY_ROW":
+			bound = bound && validHash(binding.Identity.RawSHA256) && validHash(binding.Identity.ParentHash) && binding.Identity.ParentHash == frozen.Input.HistoryHash
+		default:
+			bound = false
+		}
 		if binding.Identity.RawSHA256 != "" {
 			raw = append(raw, binding.ProjectionHash+":"+binding.Identity.RawSHA256)
 		}
 	}
 	sort.Strings(raw)
 	identity := map[string]any{
-		"contract":  "RESOLVED_STOCK_FACT_ARITHMETIC_DEPENDENCIES_V1",
+		"contract":  "RESOLVED_STOCK_FACT_ARITHMETIC_DEPENDENCIES_V2",
 		"algorithm": algorithm, "instrument": instrument, "security_state": RowHash(state),
 		"observation": frozen.Input.Observation, "sessions": sessions,
 		"coverage_policy": frozen.Input.Coverage, "selected_rows": rows,
@@ -51,6 +63,13 @@ func factCacheKeyWithIdentity(algorithm string, frozen Frozen, inputHash, instru
 		identity["history"] = frozen.Input.HistoryHash
 		identity["cutoff"] = frozen.Cutoff
 		scope = "SAME_INPUT_ONLY_UNRECORDED_ALGORITHM"
+	}
+	if !bound {
+		identity["input"] = inputHash
+		identity["history"] = frozen.Input.HistoryHash
+		identity["cutoff"] = frozen.Cutoff
+		identity["unbound_evidence"] = bindings
+		scope = "SAME_INPUT_ONLY_UNBOUND_EVIDENCE"
 	}
 	encoded, _ := json.Marshal(identity)
 	return Hash(encoded), scope

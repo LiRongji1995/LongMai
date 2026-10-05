@@ -112,7 +112,10 @@ type Signal struct {
 	ContractHash            string          `json:"evaluation_contract_sha256"`
 	ContractVersion         string          `json:"evaluation_contract_version"`
 	Qualified               bool            `json:"qualified"`
+	QualificationStatus     string          `json:"qualification_status"`
 	QualificationReason     string          `json:"qualification_reason,omitempty"`
+	UniverseComplete        bool            `json:"original_universe_complete"`
+	IdentityAbsent          int             `json:"original_missing_identity_count"`
 	Reference               c.Number        `json:"frozen_reference_price"`
 	Basis                   string          `json:"comparable_basis"`
 	ReferenceHash           string          `json:"reference_evidence_sha256"`

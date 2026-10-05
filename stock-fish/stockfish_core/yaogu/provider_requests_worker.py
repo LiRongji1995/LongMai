@@ -37,14 +37,137 @@ def supported_price_schema_identities():
 
 _transport = {}
 _attempt_counts = {'HTTP':0,'SDK':0}
+_admission_lock = threading.RLock()
+
+
+class UnsupportedHttpTransport(RuntimeError):
+    pass
+
+
+@contextlib.contextmanager
+def http_attempt_admission():
+    """Charge each actual stdlib/urllib3 attempt, including redirects/retries.
+
+    The fixed SDK call tree uses requests (including AKShare's pagination and
+    explicit retry helper); urllib.request and direct urllib3 also use these
+    boundaries. A urllib3 pool attempt starts before proxy/TLS/connect validation,
+    so failed connections are charged as well. Its one-shot token prevents the
+    subsequent putrequest from charging the same request twice. CONNECT is a
+    separate HTTP request. BaoStock's socket operations remain separate SDK IO.
+    """
+    import http.client
+    import requests
+    import urllib3.connection
+    import urllib3.connectionpool
+    original_putrequest = http.client.HTTPConnection.putrequest
+    original_urlopen = urllib3.connectionpool.HTTPConnectionPool.urlopen
+    original_make_request = urllib3.connectionpool.HTTPConnectionPool._make_request
+    original_send = requests.Session.send
+    local = threading.local()
+    allowed_connections = {http.client.HTTPConnection, http.client.HTTPSConnection,
+                           urllib3.connection.HTTPConnection, urllib3.connection.HTTPSConnection}
+    token_name = '_stockfish_http_attempt_admission_token'
+
+    def urlopen(pool, *args, **kwargs):
+        # urllib3 can connect an HTTPS proxy before _make_request. Admit at
+        # each pool attempt, including its recursive redirects/retries, first.
+        if (type(pool) not in {urllib3.connectionpool.HTTPConnectionPool, urllib3.connectionpool.HTTPSConnectionPool}
+                or pool.ConnectionCls not in allowed_connections):
+            raise UnsupportedHttpTransport('HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED')
+        reserve_attempt()
+        attempts = getattr(local, 'pool_attempts', [])
+        attempts.append({'consumed': False}); local.pool_attempts = attempts
+        try:
+            return original_urlopen(pool, *args, **kwargs)
+        finally:
+            attempts.pop()
+
+    def putrequest(connection, *args, **kwargs):
+        if type(connection) not in allowed_connections:
+            raise UnsupportedHttpTransport('HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED')
+        if getattr(connection, token_name, False):
+            setattr(connection, token_name, False)
+        else:
+            reserve_attempt()
+        return original_putrequest(connection, *args, **kwargs)
+
+    def make_request(pool, conn, *args, **kwargs):
+        connection = conn
+        if type(connection) not in allowed_connections:
+            raise UnsupportedHttpTransport('HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED')
+        attempts = getattr(local, 'pool_attempts', [])
+        if attempts and not attempts[-1]['consumed']:
+            attempts[-1]['consumed'] = True
+        else:
+            reserve_attempt()
+        setattr(connection, token_name, True)
+        try:
+            return original_make_request(pool, connection, *args, **kwargs)
+        finally:
+            if hasattr(connection, token_name):
+                delattr(connection, token_name)
+
+    def send(session, request, **kwargs):
+        # Custom adapters can send through transports which do not reach the
+        # audited stdlib/urllib3 boundaries. Refuse them before any network IO.
+        if type(session.get_adapter(request.url)) is not requests.adapters.HTTPAdapter:
+            raise UnsupportedHttpTransport('HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED')
+        return original_send(session, request, **kwargs)
+
+    def tunnel_wrapper(original):
+        def tunnel(connection, *args, **kwargs):
+            active = getattr(local, 'tunnels', set())
+            key = id(connection)
+            first = key not in active
+            previous_token = getattr(connection, token_name, None)
+            if first:
+                reserve_attempt()
+                active.add(key); local.tunnels = active
+                # Some CPython versions construct CONNECT via putrequest;
+                # others send it directly. Both paths share this one charge.
+                setattr(connection, token_name, True)
+            try:
+                return original(connection, *args, **kwargs)
+            finally:
+                if first:
+                    active.remove(key)
+                    if previous_token is None:
+                        if hasattr(connection, token_name):
+                            delattr(connection, token_name)
+                    else:
+                        setattr(connection, token_name, previous_token)
+        return tunnel
+
+    tunnels = [(http.client.HTTPConnection, http.client.HTTPConnection._tunnel)]
+    # urllib3 2.8 backports _tunnel itself for older CPython versions, bypassing
+    # the stdlib implementation. Patch that actual override when present.
+    override = urllib3.connection.HTTPConnection.__dict__.get('_tunnel')
+    if override is not None:
+        tunnels.append((urllib3.connection.HTTPConnection, override))
+    http.client.HTTPConnection.putrequest = putrequest
+    urllib3.connectionpool.HTTPConnectionPool.urlopen = urlopen
+    urllib3.connectionpool.HTTPConnectionPool._make_request = make_request
+    requests.Session.send = send
+    for owner, original in tunnels:
+        owner._tunnel = tunnel_wrapper(original)
+    try:
+        yield
+    finally:
+        for owner, original in tunnels:
+            owner._tunnel = original
+        requests.Session.send = original_send
+        urllib3.connectionpool.HTTPConnectionPool._make_request = original_make_request
+        urllib3.connectionpool.HTTPConnectionPool.urlopen = original_urlopen
+        http.client.HTTPConnection.putrequest = original_putrequest
 
 def reserve_attempt(kind='HTTP'):
     from .provider_budget import charge, HttpBudgetExhausted
-    if kind=='HTTP' and _attempt_counts[kind]>=_transport.get('max_http_requests',10000):
-        raise HttpBudgetExhausted('EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED')
-    charge(_transport.get('budget_path'),_transport.get('budget_id'),_transport.get('queue_request_id','standalone'),
-           _transport.get('provider','standalone'),_transport.get('endpoint','unknown'),kind=kind)
-    _attempt_counts[kind]+=1
+    with _admission_lock:
+        if kind=='HTTP' and _attempt_counts[kind]>=_transport.get('max_http_requests',10000):
+            raise HttpBudgetExhausted('EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED')
+        charge(_transport.get('budget_path'),_transport.get('budget_id'),_transport.get('queue_request_id','standalone'),
+               _transport.get('provider','standalone'),_transport.get('endpoint','unknown'),kind=kind)
+        _attempt_counts[kind]+=1
 
 def read_partial(path):
     if not path:return None
@@ -67,6 +190,7 @@ def classify_error(exc):
         if current is None:break
         names.append(type(current).__name__);current=current.__cause__ or current.__context__
     label=' '.join(names)+' '+str(exc)
+    if 'HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED' in label:return 'IMPLEMENTATION','HTTP_TRANSPORT_UNREGISTERED_ONLINE_BLOCKED',names
     if 'EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED' in label:return 'BUDGET','EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED',names
     if 'NameResolution' in label or 'gaierror' in label:return 'NETWORK','DNS_RESOLUTION_FAILED',names
     if 'ProxyError' in label:return 'NETWORK','PROXY_CONNECTION_FAILED',names
@@ -111,7 +235,6 @@ def official_sse_delisting(captured):
     import requests
     url='https://query.sse.com.cn/commonSoaQuery.do'
     params={'sqlId':'PL_SSGSXX_FXJSBGPLB','domesticIndicator':'P','productType':'0'}
-    reserve_attempt()
     response=requests.get(url,params=params,headers={'Referer':'https://www.sse.com.cn/disclosure/listedinfo/riskplate/'},timeout=12)
     response.raise_for_status();body=response.json()
     captured.append(dict(url=url,parameters=params,body=body,status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
@@ -224,7 +347,7 @@ def akshare_request(endpoint,params,captured,max_requests):
                 return response
         with lock:
             if attempted[0]>=max_requests:raise ValueError('EXPLICIT_HTTP_REQUEST_BUDGET_EXHAUSTED')
-            reserve_attempt();attempted[0]+=1
+            attempted[0]+=1
         # Socket timeout is subordinate to the parent process wall-clock bound.
         kwargs['timeout']=min(float(kwargs.get('timeout') or 12),12) if not isinstance(kwargs.get('timeout'),tuple) else (8,12)
         response=original(session,method,url,**kwargs)
@@ -309,7 +432,7 @@ def eastmoney_daily_limits(params,captured,max_requests,partial_path=None):
         try:
             raw_code,iid,secid,symbol=_eastmoney_limit_code(code)
             query={'fltt':'2','invt':'2','secid':secid,'fields':'f43,f51,f52,f57,f59,f86'}
-            reserve_attempt();attempts+=1
+            attempts+=1
             response=requests.get('https://push2.eastmoney.com/api/qt/stock/get',params=query,timeout=(5,12))
             try:body=response.json()
             except ValueError:body={'text_prefix':response.text[:200]}
@@ -415,7 +538,7 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
         page_params={**clean_params,'limit':limit,'offset':offset}
         payload={'api_name':definition['api_name'],'token':token,'params':page_params,'fields':definition['fields']}
         try:
-            reserve_attempt();attempts+=1
+            attempts+=1
             response=requests.post('http://api.tushare.pro',json=payload,timeout=(5,20))
             try:
                 body=response.json()
@@ -472,7 +595,7 @@ def main():
     from .provider_requests import validate_request
     parameters=validate_request(request['endpoint'],request['parameters'])
     try:
-        with contextlib.redirect_stdout(sys.stderr):
+        with contextlib.redirect_stdout(sys.stderr), http_attempt_admission():
             if request['provider']=='baostock':result=baostock_request(request['endpoint'],parameters,request.get('partial_path'))
             elif request['provider']=='sse' and request['endpoint']=='delisting_sse':result=official_sse_delisting(captured)
             elif request['provider']=='eastmoney' and request['endpoint']=='daily_limits_eastmoney':result=eastmoney_daily_limits(parameters,captured,request['max_http_requests'],request.get('partial_path'))
@@ -483,7 +606,8 @@ def main():
         result=dict(status='FETCH_FAILED',failure_category=category,error_code=code,rows=[],pagination_complete=False,
             coverage={'http_responses':len(captured)},diagnostics={'exception_classes':classes},gaps=[code])
     result['http_responses']=captured;result['first_seen_at']=datetime.now(timezone.utc).isoformat()
-    result.setdefault('coverage',{}).update(http_attempts=_attempt_counts['HTTP'],sdk_operations=_attempt_counts['SDK'])
+    result.setdefault('coverage',{}).update(http_attempts=_attempt_counts['HTTP'],sdk_operations=_attempt_counts['SDK'],
+        http_admission_contract='ACTUAL_POOL_ATTEMPT_OR_STDLIB_HEADERS_WITH_CONNECT_RETRY_REDIRECT_V1')
     _transport={}
     print(json.dumps(result,ensure_ascii=True,allow_nan=False))
 

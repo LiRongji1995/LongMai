@@ -1,6 +1,8 @@
 """Fixed public capture only. Never evaluates a strategy or connects to an LLM."""
 import contextlib
 import importlib
+import importlib.util
+import hashlib
 from importlib import metadata
 import io
 import json
@@ -130,8 +132,8 @@ def dependency_check(importer=None, version_reader=None):
             "dependencies": records,
             "missing_dependencies": [row["module"] for row in failures if row["status"] == "DEPENDENCY_MISSING"],
             "failure_categories": sorted({row["status"] for row in failures}),
-            "history_reuse": {"status": "BLOCKED_GO_V2_HISTORY_ADAPTER_UNAVAILABLE",
-                              "policy": "NO_IMPLICIT_PRICE_BASIS_MERGE_OR_COLD_HISTORY_REUSE_CLAIM"}}
+            "history_reuse": {"status": "GO_VERIFIED_TRANSPORT_READER_REQUIRES_SELECTED_BASE_PROOF",
+                              "policy": "RAW_WINDOW_REUSE_ONLY_FRESH_COMPLETE_FACTOR_PROOF_AND_CURRENT_QUALIFICATION_REQUIRED"}}
 
 
 def main():
@@ -146,15 +148,24 @@ def main():
     if checked["status"] != "INSTALLED_NOT_ONLINE_VERIFIED":
         print(json.dumps({"status": "FAILED", "reason": "DEPENDENCY_CHECK_FAILED", "dependency_check": checked}))
         raise SystemExit(1)
-    # Go V2 stores verified original rows, but the Python history writer does
-    # not implement that storage contract. Never pass its ref into a Python
-    # store or silently concatenate adjusted rows from a different basis.
-    if request.get("history_reuse"):
+    bridge = None
+    if request.get("go_history_base"):
+        module_path = Path(__file__).with_name("go_history_bridge.py")
+        module_raw = module_path.read_bytes()
+        if hashlib.sha256(module_raw).hexdigest() != request.get("history_bridge_sha256"):
+            raise ValueError("GO_HISTORY_BRIDGE_IMPLEMENTATION_IDENTITY_MISMATCH")
+        spec = importlib.util.spec_from_file_location("stockfish_verified_go_history_bridge", module_path)
+        module = importlib.util.module_from_spec(spec)
+        # Execute precisely the bytes just authenticated, without resolving a
+        # similarly named import from the packaged Python search path.
+        exec(compile(module_raw, str(module_path), "exec"), module.__dict__)
+        bridge = module.VerifiedGoHistory(root, request["go_history_base"])
+    elif request.get("history_reuse"):
         reason = ("GO_V2_HISTORY_ADAPTER_UNAVAILABLE" if request["history_reuse"].get("history_present") is True else
                   "HISTORY_STATUS_NOT_INSPECTED_COLD_CAPTURE_REJECTED")
         print(json.dumps({"status": "FAILED", "reason": reason, "history_reuse": request["history_reuse"]}))
         raise SystemExit(1)
-    if request.get("allow_cold_capture") is not True:
+    if bridge is None and request.get("allow_cold_capture") is not True:
         print(json.dumps({"status": "FAILED", "reason": "COLD_HISTORY_CAPTURE_EXPLICIT_OPT_IN_REQUIRED"}))
         raise SystemExit(1)
     from stockfish_core.yaogu.config import StrategyConfig
@@ -170,9 +181,12 @@ def main():
         if max(waited, elapsed) >= 600:
             raise ValueError("REFRESH_WAIT_BUDGET_EXCEEDED")
 
+    if bridge is not None:
+        bridge.checkpoint = checkpoint
     pipeline = MainboardPipeline(root / "queue", config=StrategyConfig(),
         budget=RequestBudget(max_requests=100, max_seconds=600,
-                             timeout_seconds=40, max_attempts=2, minimum_interval_seconds=.25))
+                             timeout_seconds=40, max_attempts=2, minimum_interval_seconds=.25),
+        **({"normalizer": bridge.normalize, "history_coverage_plan": bridge} if bridge is not None else {}))
     # The critical path returns normalized input/readiness, before background
     # strategy preview. Its existing persistent HTTP ledger includes retries.
     report = pipeline.capture(root / "capture", datetime.now(timezone.utc),
@@ -190,7 +204,7 @@ def main():
                       "frozen_file": "frozen.json", "started_at": wall.isoformat(), "completed_at": cutoff,
                       "elapsed_seconds": time.monotonic() - mono,
                       "report_file": "capture/capture-report.json", "ai_dependencies": [],
-                      "history_reuse": {**checked["history_reuse"], "cold_capture": True}}))
+                      "history_reuse": bridge.audit() if bridge is not None else {**checked["history_reuse"], "cold_capture": True}}))
 
 
 if __name__ == "__main__":
@@ -200,8 +214,11 @@ if __name__ == "__main__":
         raise SystemExit(checked["status"] != "INSTALLED_NOT_ONLINE_VERIFIED")
     try:
         main()
-    except Exception:
+    except Exception as error:
         # SDK details can contain secrets. Persistent receipts remain private;
         # the parent records a failure attempt, never a fictitious frozen input.
-        print(json.dumps({"status": "FAILED", "reason": "FIXED_CAPTURE_FAILED_OR_DEPENDENCY_MISSING"}))
+        reason = str(error).split(":", 1)[0]
+        if not reason.startswith("GO_HISTORY_"):
+            reason = "FIXED_CAPTURE_FAILED_OR_DEPENDENCY_MISSING"
+        print(json.dumps({"status": "FAILED", "reason": reason}))
         raise SystemExit(1)
