@@ -3,7 +3,7 @@
 - 2026-09-07 权限修订：普通名单、日报、查询和跟踪请求不自动授权修改生产代码、正式策略或提交推送。当前任务明确授权的工程交付，完成对应检查后直接中文提交推送，不重复询问；本次Codex日常入口与项目综述任务已获授权。无文件改动不创建空提交。
 - 发布目标固定为 https://github.com/LiRongji1995/stockfish-qlib-quant-system 的 main 分支。本机业务开发目录是 stock-fish/，发布检出目录是 publish/stockfish-qlib-quant-system/。发布前核对实际远端与工作区变化，只提交本次授权范围内的改动，保护用户其他修改。
 - 各任务较新的明确授权优先；不得把本次工程交付授权扩大为以后普通研究的自动提交权限。
-- 当前为 R05 使用交接。日常先读 [执行协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md)，用户入口见 [README](README.md)，按需展开 [全面综述](stock-fish/docs/PROJECT_OVERVIEW.md)。无需用户打开网页；Codex调用现有逻辑，优先复用保存结果。不能用较早R03/R04历史记录推断当前数据就绪。
+- 当前文档入口以 README、USER_GUIDE、CURRENT_STATUS、CURRENT_STRATEGY 和 DEPLOYMENT 为准；各轮记录见历史归档。日常先读 [执行协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md)，用户入口见 [README](README.md)，按需展开 [全面综述](stock-fish/docs/PROJECT_OVERVIEW.md)。无需用户打开网页；Codex调用现有逻辑，优先复用保存结果。不能用较早R03/R04历史记录推断当前数据就绪。
 - 默认规则入口不以账户、LLM、旧 Alpha158 或下载模型为前提。保留五族公式、权重、阈值及初始假设标记；修改语义必须登记新配置/特征版本，不覆写旧 run。
 - 当前阶段感知主动核心为 `STAGE_AWARE_MOMENTUM_V2`，说明见 [stock-fish/docs/STAGE_AWARE_MOMENTUM_V2.md](stock-fish/docs/STAGE_AWARE_MOMENTUM_V2.md)；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读兼容和审计材料。V2 保留旧策略对照，先分离事实、setup、行为确认、市场/题材/资金情境和关键反证，再给出 `FOCUS/WATCH/REJECTED/UNKNOWN`；A/CLV 不作所有阶段统一硬门槛，初始参数必须标为“尚未验证”，`MARKET_EDGE=NOT_ESTABLISHED`。
 - 先校验证券身份、业务日期和父来源实际可见时间，再使用价格、主题、资金或风险字段。历史下载不能伪装成过去已经取得；未知事件不得当 FALSE，缺结果不计零收益。

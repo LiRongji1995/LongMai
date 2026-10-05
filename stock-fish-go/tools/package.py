@@ -49,9 +49,9 @@ shutil.copyfile(root/'tools/install.sh', out/'install.sh')
 shutil.copyfile(root/'tools/setup-worker.sh', worker/'setup-worker.sh')
 # Each candidate carries the guide and verification boundaries of its own
 # source generation. The previous daily package's PASS report is historical.
-for source, name in (('FOUR_STAGE_USER_GUIDE.md','USER_GUIDE.md'),
-                     ('FOUR_STAGE_MANUAL_ACCEPTANCE.md','MANUAL_ACCEPTANCE.md'),
-                     ('FOUR_STAGE_REPORT.md','SELFTEST_REPORT.md')):
+for source, name in (('USER_GUIDE.md','USER_GUIDE.md'),
+                     ('MANUAL_ACCEPTANCE.md','MANUAL_ACCEPTANCE.md'),
+                     ('DELIVERY_REPORT.md','SELFTEST_REPORT.md')):
     shutil.copyfile(root/'delivery'/source, out/name)
 meta = {'protocol':'STOCKFISH_DAILY_V1','go_source_hash':identity,
         'host_os':platform.system(),'process_architecture':platform.machine(),

@@ -26,7 +26,7 @@
 
 模拟采用 `NEXT_OPEN_HOLD_H_PAPER_V1`：T+1 开盘尝试买入，以尝试日 E 起到 E+h 收盘计划退出，h≥1；买卖合计 0/30/60bp 纯研究情景，30bp 为主。未核验的历史限价不能证明成交，必须保留 `FILL_UNVERIFIED`。价格上涨率与模拟交易胜率分开，受限持仓不能从风险记录删除。
 
-队列按真实 HTTP、分页、重试、缓存和 SDK 操作分别记账；预算先扣后发，checkpoint 支持进程被终止后的成功子项恢复。Tushare 缺 Token 的真实状态为 `AUTH_REQUIRED`，并不阻断独立量价来源。参见 [数据与 Docker 核验](R05_DATA_AND_DOCKER_RECTIFICATION.md)、[审阅包生成](R05_REVIEW_BUNDLE.md)。
+队列按真实 HTTP、分页、重试、缓存和 SDK 操作分别记账；预算先扣后发，checkpoint 支持进程被终止后的成功子项恢复。Tushare 缺 Token 的真实状态为 `AUTH_REQUIRED`，并不阻断独立量价来源。参见 [数据与 Docker 核验](R05_DATA_AND_DOCKER_RECTIFICATION.md)、[审阅包生成](archive/stock-fish/docs/R05_REVIEW_BUNDLE.md)。
 
 本机正式报告位于 `../review/r05-rectification/replay/过去一周实证回放与胜率口径报告.md`，综合验收位于 `../review/r05-rectification/统一整改验收报告.md`。公开源码不提交这些完整市场派生材料、原始缓存、私有数据库、环境文件或凭据；统一审阅包提供允许分享的派生结果及原始输入路径/hash，不声称包含全市场数据的完全自含包。
 

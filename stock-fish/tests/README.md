@@ -12,4 +12,4 @@
 
 `tests/support/daily_delivery.py` 提取自 `r05_product/test_daily_research_delivery_boundaries.py` 的 `stamp/FixtureJobs/FixtureDelivery/identity/add_job/add_attempt/add_ready`，内容与语义保留；旧测试模块重导出以兼容已有导入。测试 node id 未迁移。其他共享辅助函数暂时保留原位置，避免与本次无关的大范围重排。
 
-本次实际测试、既有失败、安装入口与限制以 [瘦身主报告](../docs/SLIMMING_REVIEW_AND_RESULT.md) 为准。
+本次实际测试、既有失败、安装入口与限制以 [瘦身主报告](../docs/archive/stock-fish/docs/SLIMMING_REVIEW_AND_RESULT.md) 为准。

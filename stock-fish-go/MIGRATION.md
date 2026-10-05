@@ -12,7 +12,7 @@ R1/V2 新库原生运行、Python 保存语义投影差分、Go 新旧存储精�
 
 ## 2026-10-02 历史记录（旧验收状态与授权，不代表本轮）
 
-本轮在现有工作区实现模块化 Go 主系统及真实数据库迁移，不改写旧 Python 策略/配置/研究身份，不修改旧数据库，不切换生产服务。旧 `go-core` 影子模块保留。总验收为 **BLOCKED_MIGRATION_BUDGET**：真实搬迁已完成，累计7199.963s达到7200s上限，完整验证未结束且目标未发布；真实全池差分、冷暖性能及独立运行/切换仍未完成。命令退出码由 [VALIDATION](VALIDATION.md) 汇总，不能由本表的“已实现”推导为真实验收通过。
+本轮在现有工作区实现模块化 Go 主系统及真实数据库迁移，不改写旧 Python 策略/配置/研究身份，不修改旧数据库，不切换生产服务。旧 `go-core` 影子模块保留。总验收为 **BLOCKED_MIGRATION_BUDGET**：真实搬迁已完成，累计7199.963s达到7200s上限，完整验证未结束且目标未发布；真实全池差分、冷暖性能及独立运行/切换仍未完成。命令退出码由 [VALIDATION](../stock-fish/docs/archive/stock-fish-go/VALIDATION.md) 汇总，不能由本表的“已实现”推导为真实验收通过。
 
 统一入口是 [README](README.md) 的 `stockfish`。模块职责见 [ARCHITECTURE_V2](ARCHITECTURE_V2.md)，证据和输入边界见 [EVIDENCE_CONTRACT](EVIDENCE_CONTRACT.md)，策略逐条件与fixture范围见 [STRATEGY_PARITY](STRATEGY_PARITY.md)，隔离实例生命周期见 [ISOLATED_LIFECYCLE](ISOLATED_LIFECYCLE.md)。
 

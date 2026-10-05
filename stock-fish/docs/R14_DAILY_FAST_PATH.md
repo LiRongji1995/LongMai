@@ -69,15 +69,15 @@ V2 `put_many()` 为 immutable insert/reuse：同 key 同 payload hash 复用；�
 
 实测报告：
 
-- [R14_PERFORMANCE_BASELINE.md](../../R14_PERFORMANCE_BASELINE.md)
-- [R14_PERFORMANCE_RESULT.md](../../R14_PERFORMANCE_RESULT.md)
-- [BEFORE_AFTER_RESULT_EQUIVALENCE.md](../../BEFORE_AFTER_RESULT_EQUIVALENCE.md)
-- [DATA_READINESS.md](../../DATA_READINESS.md)
-- [SQLITE_SIZE_AUDIT.md](../../SQLITE_SIZE_AUDIT.md)
-- [R14_CPROFILE_SUMMARY.md](../../R14_CPROFILE_SUMMARY.md)
+- [R14_PERFORMANCE_BASELINE.md](archive/R14_PERFORMANCE_BASELINE.md)
+- [R14_PERFORMANCE_RESULT.md](archive/R14_PERFORMANCE_RESULT.md)
+- [BEFORE_AFTER_RESULT_EQUIVALENCE.md](archive/BEFORE_AFTER_RESULT_EQUIVALENCE.md)
+- [DATA_READINESS.md](archive/DATA_READINESS.md)
+- [SQLITE_SIZE_AUDIT.md](archive/SQLITE_SIZE_AUDIT.md)
+- [R14_CPROFILE_SUMMARY.md](archive/R14_CPROFILE_SUMMARY.md)
 
 R14 结果：冷 fast path 179.799 秒、same-input warm 59.760 秒（含隔离 compact persistence/projection 6.139 秒），热路径 peak RSS 992,960,512 bytes；V2 business hash 与 saved research full 完全一致。这里的 same-input warm 不是 true daily incremental。
 
-R15 实测见 [R15_CACHE_IDENTITY_AUDIT.md](../../R15_CACHE_IDENTITY_AUDIT.md)、[R15_TRUE_INCREMENTAL_ARCHITECTURE.md](../../R15_TRUE_INCREMENTAL_ARCHITECTURE.md)、[R15_PERCENTILE_COMPLEXITY_AUDIT.md](../../R15_PERCENTILE_COMPLEXITY_AUDIT.md)、[R15_PERFORMANCE_RESULT.md](../../R15_PERFORMANCE_RESULT.md) 与 [R15_DERIVED_STORE_GROWTH_AUDIT.md](../../R15_DERIVED_STORE_GROWTH_AUDIT.md)。
+R15 实测见 [R15_CACHE_IDENTITY_AUDIT.md](archive/R15_CACHE_IDENTITY_AUDIT.md)、[R15_TRUE_INCREMENTAL_ARCHITECTURE.md](archive/R15_TRUE_INCREMENTAL_ARCHITECTURE.md)、[R15_PERCENTILE_COMPLEXITY_AUDIT.md](archive/R15_PERCENTILE_COMPLEXITY_AUDIT.md)、[R15_PERFORMANCE_RESULT.md](archive/R15_PERFORMANCE_RESULT.md) 与 [R15_DERIVED_STORE_GROWTH_AUDIT.md](archive/R15_DERIVED_STORE_GROWTH_AUDIT.md)。
 
 R15 消除了 R14 cProfile 中 `percentile_rank_midpoint` 的 O(N²) 热点，旧 6082 次 midpoint scan 约 53.736 秒，R15 3041 population/6082 lookups 微基准为 0.019584 秒且逐项等价。真实 2026-09-08 -> 2026-09-09 benchmark 完成，但因历史 consumed source dependencies 大面积变化，T+1 `reuse_ratio=0.0`、总时长 263.098 秒、peak RSS 1,736,269,824 bytes，最终标记 `NOT_MEETING_R15_SLA`。冷启动和 provider/backfill 不计入 daily SLA，网络等待单独看作 external wait。

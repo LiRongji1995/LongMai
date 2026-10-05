@@ -142,7 +142,7 @@ up_rate           = positive / valid_return（无有效终点时为 null）
 
 ## 8. 工程验证与待验证范围
 
-【事实】本轮最终整合回归为 297 passed、退出码 0；实际完整命令、状态边界和受保护文件哈希见 [工程验收记录](PHASE1_DAILY_RESEARCH_VALIDATION.md)。下文 20 项为较早的快照模块定向检查，不是最终总数。
+【事实】本轮最终整合回归为 297 passed、退出码 0；实际完整命令、状态边界和受保护文件哈希见 [工程验收记录](archive/stock-fish/docs/PHASE1_DAILY_RESEARCH_VALIDATION.md)。下文 20 项为较早的快照模块定向检查，不是最终总数。
 
 【事实】本轮快照/renderer/HTML 定向检查实际执行：
 

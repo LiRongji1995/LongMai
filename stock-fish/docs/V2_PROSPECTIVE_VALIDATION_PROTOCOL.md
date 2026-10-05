@@ -30,7 +30,7 @@ theme/funds 等 context UNKNOWN 不自动否决核心已知的评价；核心 pr
 
 Windows 使用仓库 Start-StockFish.ps1 启动单进程 Waitress，端口、既有 DB、state root 写入忽略的 work/stockfish-service.json。进程登记保存 PID、创建时间、根目录及 scheduler thread identity；OS DB 锁阻止另一个 worker/scheduler 写同一 DB。正常停机使用 Stop-StockFish.ps1。
 
-2026-09-08 实际服务证据与 epoch 见 [R12_PROSPECTIVE_INTEGRITY_REPORT.md](R12_PROSPECTIVE_INTEGRITY_REPORT.md)。尚未到 cutoff 时只报告真实计划与存活线程；不补造或提前宣布正式信号。截止后只读核验入口：
+2026-09-08 实际服务证据与 epoch 见 [R12_PROSPECTIVE_INTEGRITY_REPORT.md](archive/stock-fish/docs/R12_PROSPECTIVE_INTEGRITY_REPORT.md)。尚未到 cutoff 时只报告真实计划与存活线程；不补造或提前宣布正式信号。截止后只读核验入口：
 
 ```powershell
 & ./stock-fish/.venv/Scripts/python.exe ./stock-fish/scripts/r12_post_cutoff_check.py

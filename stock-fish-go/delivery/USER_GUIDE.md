@@ -1,23 +1,65 @@
-# StockFish 终端候选包
+# 四阶段候选源码使用说明
 
-先执行 `./stockfish --version` 和 `./stockfish --help`。不需要 Codex、AI 代理、模型密钥、Python 或 Web 服务；可选在线采集 worker 另行配置。
+构建、测试和包身份以本轮 SELFTEST_REPORT.md、BUILD.json 与校验和的实际记录为准。本文说明当前候选源码的命令和合同，不预先声明运行 PASS；用户人工验收仍为 **NOT_RUN_BY_USER**。当前已保存旧 run 可使用原已验收包显式只读查询；旧包不包含新的 review/research-lab/diff。
 
-首次绑定已有已发布 V2 隔离库：`./stockfish init --db /你选择的已有库 --config /你选择的配置文件`。也可指定 `--instance-root` 绑定既有隔离控制目录。init 不创建或迁移数据库，不研究，不联网，不覆盖配置，非交互环境没有提问。配置文件 0600。配置路径优先级：命令 `--config`、环境 `STOCKFISH_CONFIG`、OS 用户配置目录；其他命令选项覆盖该配置。配置内相对路径锚定配置文件所在目录。日常默认 R1；库的 V2 全局默认保持原样。
+用自己的明确路径替换 CONFIG、DB、RUN、FOLLOWUP_INPUT。init 只创建新配置，不创建业务库；不会覆盖配置。系统主动核心为 V2；终端 init 省略 --strategy 时，本地偏好默认为 R1。若要使用 V2，首次配置明确传 --strategy v2；已有配置用 doctor 核对 preferred_strategy。该偏好不改变系统主策略，R1 仍为独立研究用途。
 
-`doctor` 分列只读查询、本地研究和采集配置状态；默认不联网或深扫历史。`picks --strategy r1` 只查严格匹配的已发布结果，无结果不会退回其他策略或日期。`picks --run-id ID` 是明确历史查询。`explain 证券ID --run-id ID` 读取同一保存运行的实际条件、阈值、全部形态、理由与证据；未知保持未知。范围外与范围内未评价分别报错。
+```sh
+stockfish --help
+stockfish --version
+stockfish init --config CONFIG --db DB --artifacts ARTIFACTS --strategy r1
+stockfish doctor --config CONFIG --format json
+stockfish picks --config CONFIG --run-id RUN --format table
+stockfish explain 600000.SH --config CONFIG --run-id RUN --format json
+stockfish explain 600000.SH --config CONFIG --run-id RUN --format markdown
+stockfish diff --config CONFIG --from-run-id RUN_A --to-run-id RUN_B --format json
+stockfish daily --config CONFIG --strategy r1 --dry-run --format json
+```
 
-默认展示所有 CORE_PASS 或 V2 FOCUS/WATCH 候选、全部匹配形态；`--all` 包含已评价的拒绝及未知证券。内部读取全部记录。`--limit N` 仅截断屏幕显示并注明总数；指定 `--output 新文件` 时导出完整选择，拒绝覆盖。支持 `--format json|csv|markdown|table`；JSON 保留完整 run/manifest/summary/coverage/detail。目标日若来自旧保存观察日与官方日历，会明确标 DERIVED；解释/全评价记录不伪装为 CORE_PASS 候选。查询/导出上限 128 MiB，超过就明确失败，不悄悄丢页。CSV 的证券文本前缀为 `'`，公式起始字符也加文本前缀。
+picks/explain/diff、doctor、daily --dry-run 只读；不联网、不研究、不初始化 schema。省略 run-id 的默认结果需满足本轮业务兼容身份，未知旧实现会拒绝自动复用，须显式读取历史。中文解释严格使用保存条件树；JSON 保留原数值和明细。完整明细超限失败，不会静默截取后宣称完整导出。
 
-`daily --strategy r1 --dry-run` 只做计划。`daily --strategy r1` 先复用匹配结果，否则使用满足目标观察日、截止和证据合同的本地冻结输入执行一次现有 Go 应用服务。默认研究 300 秒，需要时显式 `--budget-seconds 1800`。幂等身份包含输入、目标、策略、配置、实现、证据政策及资源预算。失败不自动重试；已有工程 `resume` 保留显式尝试审计。没有当期资料就阻塞，不静默采集。
+```sh
+stockfish review --help
+stockfish review list --db DB --kind OUTCOME --format json
+stockfish review summary --db DB --run RUN --as-of RFC3339 --format json
+stockfish review export --db DB --run RUN --output NEW_FILE --format csv
+stockfish research-lab --help
+stockfish research-lab list --db DB --format json
+stockfish research-lab diagnose --db DB --run RUN --as-of RFC3339
+```
 
-日期采用正式 2026 SH/SZ 日历及 Asia/Shanghai。盘前目标为当日，盘中/盘后为下一会话，休市为下一正式会话；目标所需观察日为前一交易会话。盘中当天日线尚未完成，研究阻塞，不能自动退回昨日。合法长假不会按自然文件年龄误判过期。日历越界拒绝推测。显示观察日、cutoff、生成时间；晚到资料成为新输入。
+这些 review/research-lab 查询只读，要求已存在 GO_REVIEW_JOURNAL_V1。旧库缺少可用时间证明扩展时，读取不会自动初始化或补证明。有写入权限并完成候选包检查后，以下操作会写 SQLite V2，均不联网；标签只能来自已登记的合法冻结输入。`review init` 是显式初始化/升级入口，保留旧 journal schema 与记录字节，新增独立 GO_CANDIDATE_AVAILABILITY_V1 扩展。
 
-`daily --refresh` 只在显式配置 `FIXED_MAINBOARD_PUBLIC_V1`、对应固定 worker 及 Python 时采集，最长 600 秒，最多 100 HTTP（含重试）、单请求 40 秒、固定队列优先级与限速。它复用原 MainboardPipeline 的 DAILY_PRIMARY_CRITICAL 收集/规范化路径，Python 不执行策略。每批使用独立目录/HTTP账本，保留 PARTIAL/失败回执；成功冻结后调用相同 Go 服务。包内 `worker/setup-worker.sh PYTHON NEW_VENV_ROOT` 提供可重复、锁定依赖的可选配置，不会自动执行或更改系统 Python。首次 init 可用 `--provider ... --python ... --worker ...`。未实测在线成功不能称为线上就绪。
+```sh
+stockfish review init --db DB
+stockfish review register --db DB --run RUN
+stockfish review evaluate --db DB --run RUN --label-input FOLLOWUP_INPUT
+stockfish research-lab propose --db DB --file PREDECLARED_CANDIDATE.json
+stockfish research-lab compare --db DB --candidate CANDIDATE --baseline BASELINE --key NEW_ATTEMPT --as-of RFC3339
+stockfish research-lab stability --db DB --candidate CANDIDATE --baseline BASELINE --key NEW_HOLDOUT_ATTEMPT --as-of RFC3339
+stockfish research-lab transition --db DB --candidate CANDIDATE --to OFFLINE_EVALUATED --attempt NEW_ATTEMPT --reason REASON
+stockfish research-lab transition --db DB --candidate CANDIDATE --to REVIEW_REQUIRED --attempt NEW_ATTEMPT --reason REASON
+stockfish research-lab transition --db DB --candidate CANDIDATE --to SHADOW_ELIGIBLE --attempt NEW_HOLDOUT_ATTEMPT --reason REASON
+stockfish research-lab transition --db DB --candidate CANDIDATE --to SHADOW_OBSERVING --attempt NEW_HOLDOUT_ATTEMPT --reason REASON
+stockfish research-lab transition --db DB --candidate CANDIDATE --to REJECTED --reason REASON
+```
 
-embedded 查询以 mode=ro、一致读事务校验全部保存明细/投影/成员集合，不初始化 schema、checkpoint、访问缓存或取写租约。长研究时可读取已发布历史结果。活跃库没有 immutable=1。新增输入改变当前发布库存摘要，仍验证库存；配置绑定的迁移/schema/路径身份保持独立。server 仅显式配置 loopback URL；核对协议、数据库身份与路径 hash，拒绝重定向和本地回退。写 API 令牌来自 0600 私有 token 文件，不经命令行或日志传递。
+评价合同 GO_PRICE_REVIEW_V1 固定展示 1/3/5/10 个交易会话，以第 5 会话为主指标。参考价为冻结观察日可比收盘价，完整合格池中位数为对照；0/10/30 bps 是假设成本扣减，不代表成交、滑点模型或账户收益。停牌/未知会话、不可比价格、缺资料和未成熟标签保留原因与 null；资料修订追加 outcome，不回写原决策。真实合同最低要求 20 个有效样本、5 个观察日、3 个不重叠时间块；显式 fixture 合同可以降低工程演示样本要求，但不冒充真实证据。同日与重复股票的依赖仍明确保留，不输出 IID 置信度、个股成功概率或无合同的组合指标。
 
-日志队列最多两条、单个 worker；每次 pipe 日志写最多 250ms，最终刷新最多一次。锁内不做日志 I/O。外部任意 io.Writer 必须实现可取消 ContextWriter，否则拒绝调用并记录不支持；拥有的 io.Pipe 可关闭收尾。CLI 借用 stdout/stderr 的重复句柄，临时开启 pipe 非阻塞并在关闭时恢复标志，不关闭原 stderr。操作系统或文件系统卡死的普通文件写不具备任意强制取消保证。丢弃/错误/最终送达独立记录，日志丢失不改变策略结果；观察到完整 final 行才证明该条已收到，内存最终送达状态在写成功后更新。
+信号记录分别保留原 run 创建时间、原截止时间、实际发布时间和验证后观察到的可用时间上界。实际发布时间未知时不补写旧 manifest；历史回放以原 cutoff 为假设可用时点，标为 HISTORICAL_REPLAY，不能计入候选真实前瞻比较。已知资格排除、资格未知和缺席身份分母分别输出；未知不当已知排除，资格排除不混入合格股票收益对照。
 
-研究同时记单调经过时间与墙钟等待时间；超过 2 秒的不一致或明显回拨取消 scope，恢复后的首个检查点和发布前检查会拒绝继续发布。整机休眠时进程与监督器可能都不运行，无法保证休眠期间准点终止。Ctrl-C 会取消并按现有单写者事务/租约合同收尾；不会自动清理未知的崩溃租约。
+候选 JSON 必须声明角色、父基线、假设、独立版本变化、范围，及与保存信号相符的实现/配置 SHA256；calendar input、calendar SHA256、评价合同版本/SHA256、允许资料 cutoff、选择期和主评价起止也必须固定。主指标为 `PRIMARY_WINDOW_EXCESS_MEDIAN`，探索指标固定为 `ALL_FIXED_WINDOWS`、`NEGATIVE_TAIL`、`FIXED_COST_SENSITIVITY`；`time_split_contract` 为 GO_PURGED_FORWARD_EVALUATION_V2，`production_promotion` 为 DISABLED。每个基线最多两个研究候选。声明的实现、配置、calendar 和合同身份必须是真实登记的 64 位 SHA256，不能使用任意文字或把未登记旧身份变为可信候选。
 
-R1 是 RESEARCH_ONLY，promotion=DISABLED，MARKET_EDGE=NOT_ESTABLISHED，参数尚未验证。CORE_PASS 不等于 FOCUS 或已验证投资优势。查询能力、资料完整性、线上采集、完整规模旧库增量与生产激活分别验收。许可见 licenses、LICENSES.md 和 THIRD_PARTY_NOTICES.md；仓库含 AGPL-3.0 组件，不统称纯 MIT。
+真实声明需在首评价会话上海 09:30 前完成保存和提交后证明。Store 在声明提交后，用新只读事务验证 schema、完整记录和 ledger，完成读取后取得保守时间上界，再将绑定声明 hash 的证明耐久追加。CLI 不接受手动证明时间；`registered_at` 本身不证明落盘时间。证明提交失败时输出 `PARTIAL_DECLARATION_SAVED` 并返回非零；相同声明可幂等重试补缺证明，但晚于开盘的观测只能保存为真实晚证据并阻塞准入。旧无 proof 真实候选继续 `PREREGISTRATION_PUBLICATION_UNPROVEN`；初始化不倒填旧证明。TEST_FIXTURE 明确标注不是真实预登记证明。
+
+要申请研究影子状态，基线和候选必须在原声明中同时固定 `stability_contract: "GO_INDEPENDENT_HOLDOUT_V1"`、`stability_start`、`stability_end`。两者 holdout 和 calendar 身份必须一致；选择期与主窗口、主窗口与 holdout 均按已登记交易 calendar 隔离至少 10 会话。评价区间结束日排他，跨区间标签不能参与准入。旧声明没有 holdout 时保持阻塞，不能事后追加或用修改后的 Candidate 字段替换原声明。`stability` 只读取该固定 holdout 的既有信号/结果，要求同 input 配对、完整合格池、成熟标签和最低样本/日期/时间块；不复用主窗口或历史最佳尝试。
+
+主比较与独立 holdout 分别采用最新尝试，holdout 必须晚于最新主比较，`--as-of` 不接受未来或相对已保存尝试倒退的时间，也不能早于真实预登记证明。有效比较仍仅给 REVIEW_REQUIRED 等研究状态，统计独立性和 MARKET_EDGE 均未成立。SHADOW_ELIGIBLE / SHADOW_OBSERVING 绑定两份当时最新评价记录的 ID 与 hash；新尝试撤销旧准入，后续成功须重新显式走 OFFLINE_EVALUATED → REVIEW_REQUIRED → SHADOW_ELIGIBLE → SHADOW_OBSERVING，旧观察事件不会自动复活。拒绝/停止观察/失败均保留全部历史；失败比较追加尝试且返回非零。
+
+影子状态仅登记研究准入，不启动作业、定时任务或训练，不改原日常清单、排序或生产服务；production_promotion 始终 DISABLED。`diagnose` 分开输出资料/工程、输入分布、成熟表现三个类别；输入分布目前没有预登记参考，明确 NOT_EVALUATED，不能将覆盖下降或单股涨跌解释为策略失效。工程 fixture、真实数据验证、人工验收与投资结论分别报告。
+
+V2 命中只来自保存的主/备选形态且对应候选状态为 PASS；未被选择的 PASS 不追加为命中。选择资料有缺口且没有确认命中时输出 `null/未知`，不能当作合法空集合。导出和解释保留原选择、候选状态及缺口。
+
+server 模式中 `stockfish daily --config CONFIG --job-id JOB_ID` 查询已有作业；加 `--cancel` 才显式请求管理员取消。客户端断网、503、退出或停止等待不自动取消共享作业。收到有效提交响应后的等待错误保留已知 job_id 和查询方法；提交响应丢失时不能保证客户端已经取得 job_id。
+
+`daily` 本地计算会写 job/run/cache。`daily --refresh` 调用固定 Python 采集链并联网，另需采集/研究预算与运行时 HTTP 硬限额；doctor 的 SDK 检查离线。已有 Go 历史通过受验证的父身份、范围、calendar、修订和可比基准桥接复用，兼容性不能证明时明确阻塞；无历史且明确 `--refresh --refresh-cold` 才允许冷采。真实在线调用状态以当前执行报告为准，不能把离线桥 fixture、SDK 通过、PARTIAL 或 CLI 可启动解释成 ONLINE_REFRESH 成功，本文不声明生产激活。

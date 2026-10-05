@@ -11,6 +11,7 @@ import sys
 
 REPO_ROOT = Path(__file__).resolve().parents[2]
 STOCK_FISH_ROOT = Path(__file__).resolve().parents[1]
+REPORT_ROOT = STOCK_FISH_ROOT / "docs" / "archive"
 sys.path.insert(0, str(STOCK_FISH_ROOT))
 
 from stockfish_core.storage import SQLiteStore  # noqa: E402
@@ -97,8 +98,8 @@ def main():
     stage = saved["results"]["STAGE_AWARE_MOMENTUM_V2"]
     pv = saved["results"]["PV_OBSERVATION_V1"]
     saved_hash = digest_json_stream({"counts": stage.get("counts"), "top_ids": stage.get("top_ids"), "items": stage.get("items")})
-    cold = json.loads(Path("R14_PERFORMANCE_RESULT_COLD.json").read_text(encoding="utf-8"))
-    warm = json.loads(Path("R14_PERFORMANCE_RESULT_WARM.json").read_text(encoding="utf-8"))
+    cold = json.loads((REPORT_ROOT / "R14_PERFORMANCE_RESULT_COLD.json").read_text(encoding="utf-8"))
+    warm = json.loads((REPORT_ROOT / "R14_PERFORMANCE_RESULT_WARM.json").read_text(encoding="utf-8"))
     cold_run, warm_run = cold["runs"][0], warm["runs"][0]
     namespace_counts, largest_documents, strategy_run_sizes, derived = sqlite_audit(db_path)
     queue = queue_state(STOCK_FISH_ROOT / "data" / "core" / "yaogu" / "provider_cache" / "request-queue.sqlite3")
@@ -269,6 +270,7 @@ def main():
         "market_edge": "NOT_ESTABLISHED",
     }
 
+    REPORT_ROOT.mkdir(parents=True, exist_ok=True)
     for name, value in [
         ("R14_PERFORMANCE_BASELINE.json", baseline),
         ("R14_PERFORMANCE_RESULT.json", result),
@@ -277,9 +279,9 @@ def main():
         ("SQLITE_SIZE_AUDIT.json", audit),
         ("R14_CPROFILE_SUMMARY.json", profiles),
     ]:
-        write_json(name, value)
+        write_json(REPORT_ROOT / name, value)
 
-    Path("R14_PERFORMANCE_BASELINE.md").write_text(
+    (REPORT_ROOT / "R14_PERFORMANCE_BASELINE.md").write_text(
         "# R14 Performance Baseline\n\n"
         f"- frozen input: `{baseline['frozen_input']['input_id']}` / {baseline['frozen_input']['observation_date']}\n"
         f"- saved research full run: `{SAVED_RUN_ID}`\n"
@@ -292,7 +294,7 @@ def main():
         encoding="utf-8",
     )
 
-    Path("R14_PERFORMANCE_RESULT.md").write_text(
+    (REPORT_ROOT / "R14_PERFORMANCE_RESULT.md").write_text(
         "# R14 Performance Result\n\n"
         f"- cold fast total: {cold_run['elapsed_seconds']:.3f}s; peak RSS {cold_run['rss_peak_bytes']} bytes; cache misses {cold_run['derived_feature_store']['cache_misses']}\n"
         f"- warm fast total: {warm_run['elapsed_seconds']:.3f}s; strategy compute {warm_run['phase_timings']['strategy_compute']:.3f}s; peak RSS {warm_run['rss_peak_bytes']} bytes\n"
@@ -310,7 +312,7 @@ def main():
         encoding="utf-8",
     )
 
-    Path("DATA_READINESS.md").write_text(
+    (REPORT_ROOT / "DATA_READINESS.md").write_text(
         "# R14 Data Readiness\n\n"
         f"- eligible: {stage['counts']['eligible']}\n"
         "- factor coverage ALL/SSE/SZSE: 3041/3041, 1627/1627, 1414/1414\n"
@@ -323,7 +325,7 @@ def main():
         encoding="utf-8",
     )
 
-    Path("BEFORE_AFTER_RESULT_EQUIVALENCE.md").write_text(
+    (REPORT_ROOT / "BEFORE_AFTER_RESULT_EQUIVALENCE.md").write_text(
         "# R14 Before/After V2 Equivalence\n\n"
         f"- saved research V2 hash: `{saved_hash}`\n"
         f"- fast cold V2 hash: `{cold_run['stage_aware_business_hash']}`\n"
@@ -335,7 +337,7 @@ def main():
         encoding="utf-8",
     )
 
-    Path("SQLITE_SIZE_AUDIT.md").write_text(
+    (REPORT_ROOT / "SQLITE_SIZE_AUDIT.md").write_text(
         "# R14 SQLite Size Audit\n\n"
         f"- db file bytes: {audit['db_file_bytes']}\n"
         f"- largest namespace: {namespace_counts[0]['namespace']} / {namespace_counts[0]['payload_bytes']} payload bytes\n"
@@ -349,7 +351,7 @@ def main():
         encoding="utf-8",
     )
 
-    Path("R14_CPROFILE_SUMMARY.md").write_text(
+    (REPORT_ROOT / "R14_CPROFILE_SUMMARY.md").write_text(
         "# R14 cProfile Summary\n\n"
         f"{profiles['note']}\n\n"
         "## Remaining Hotspots\n\n"

@@ -14,7 +14,7 @@
 - Codex profile：`STAGE_AWARE_MOMENTUM_V2`。
 - R14/R15 execution profile：`DAILY_PRIMARY_FAST` 用于日常 primary；`RESEARCH_FULL` 用于明确的多策略研究比较。
 - 派生缓存：R15 新写入 `DERIVED_FEATURE_STORE_V2`，只保存 deterministic derived facts，按 feature family、instrument、feature session、required source range 与 source dependency fingerprint 绑定，不保存最终策略判定；V1 作为 legacy ignored/read-only 保留。
-- 实施与 replay 报告：[STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md](STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md)。
+- 实施与 replay 报告：[STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md](archive/stock-fish/docs/STAGE_AWARE_MOMENTUM_V2_IMPLEMENTATION_REPORT.md)。
 - 历史 alias：`STAGE_AWARE_MOMENTUM_V1` 只读保留。
 - 参数状态：`INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED` / **尚未验证**。
 - 市场优势：`MARKET_EDGE=NOT_ESTABLISHED`。

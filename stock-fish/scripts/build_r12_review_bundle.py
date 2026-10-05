@@ -43,6 +43,7 @@ def main(argv=None):
     source_prefixes = ('stock-fish/stockfish_core/', 'stock-fish/tests/', 'stock-fish/config/',
         'stock-fish/scripts/', 'stock-fish/docs/', 'stock-fish/static/')
     root_files = {'AGENTS.md', 'README.md', 'DEPLOYMENT.md', 'ENGINEERING_BASELINE.md',
+        'USER_GUIDE.md', 'CURRENT_STATUS.md', 'CURRENT_STRATEGY.md',
         'Start-StockFish.ps1','Stop-StockFish.ps1','Logs-StockFish.ps1','requirements-windows.lock.txt',
         'stock-fish/app.py','stock-fish/wsgi.py','stock-fish/AGENTS.md','stock-fish/requirements-dev.txt',
         'LICENSE', 'THIRD_PARTY_NOTICES.md', 'stock-fish/LICENSE', 'stock-fish/ENGINEERING_BASELINE.md'}
