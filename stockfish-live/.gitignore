@@ -1,0 +1,8 @@
+/data/
+/runtime/
+/artifacts/
+/benchmark/
+*.parquet
+*.duckdb
+*.duckdb.wal
+.coverage

@@ -12,6 +12,8 @@ Python Web/API、单写者SQLite、持久采集队列与调度继续承载已有
 
 ## 数据与真实性
 
+独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前范围为仓库审计、分钟合同、独立 Parquet/DuckDB、严格 PIT 和 replay 基础层；预测、Dashboard、评价和真实 provider 尚未交付。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
+
 BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记证据各自记录实际可见时间、业务日期、父回执、单位、修订和覆盖。连接器存在不保证当前网络/权限或完整历史；旧文档成功数字不代表今天就绪。
 
 每条证据保留事实时间、来源公布、首次取得和入库时间，每次运行保留观察日、截止、生成时间，复盘另有评价时间。RAW用于当日价格事件，可比价格用于跨日窗口；缺资格、基准或来源证明保持未知。历史后取资料不冒充前瞻留档，TEST_FIXTURE只用于独立工程验证。
