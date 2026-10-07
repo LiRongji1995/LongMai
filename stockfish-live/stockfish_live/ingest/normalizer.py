@@ -86,11 +86,14 @@ class QualityMonitor:
         self.stale_minutes = stale_minutes
         self._scope = frozenset(expected_instruments)
         self._exchanges = tuple(sorted({value[-2:] for value in expected_instruments}))
-        self._bars: dict[tuple[str, datetime], MinuteBar] = {}
+        self._observed: dict[str, int] = {}
+        self._bar_count = 0
         self._last: dict[str, datetime] = {}
         self._receipts: dict[str, SourceReceipt] = {}
         self._session_date: date | None = None
         self._last_now: datetime | None = None
+        self._pit_statuses = {calendar.pit_status}
+        self._row_qualities = set()
 
     def _clock(self, now: datetime) -> datetime:
         try:
@@ -111,14 +114,14 @@ class QualityMonitor:
         now: datetime,
     ) -> None:
         now = self._clock(now)
-        staged_receipts = dict(self._receipts)
-        staged_bars = dict(self._bars)
+        staged_receipts = {}
+        staged_bars = {}
         staged_last = dict(self._last)
         supplied = receipts.values() if isinstance(receipts, Mapping) else receipts
         try:
             for raw in supplied:
                 receipt = SourceReceipt.model_validate(raw.model_dump() if isinstance(raw, SourceReceipt) else raw)
-                previous = staged_receipts.get(receipt.source_id)
+                previous = staged_receipts.get(receipt.source_id, self._receipts.get(receipt.source_id))
                 if previous is not None and receipt != previous:
                     raise LiveError("SOURCE_RECEIPT_CONFLICT")
                 if any(value is not None and value > now for value in (
@@ -138,7 +141,7 @@ class QualityMonitor:
                     raise LiveError("RAW_MINUTE_REQUIRED")
                 if bar.quality == "INVALID":
                     raise LiveError("INVALID_MINUTE_BAR")
-                receipt = staged_receipts.get(bar.source_id)
+                receipt = staged_receipts.get(bar.source_id, self._receipts.get(bar.source_id))
                 if receipt is None:
                     raise LiveError("SOURCE_RECEIPT_REQUIRED")
                 validate_receipt(bar, receipt, cutoff=now)
@@ -152,15 +155,20 @@ class QualityMonitor:
                     raise LiveError("DUPLICATE_TIMESTAMP")
                 staged_bars[key] = bar
                 staged_last[bar.instrument_id] = bar.timestamp
-            statuses = {self.calendar.pit_status}
+            statuses = set(self._pit_statuses)
             statuses.update(value.pit_status for value in staged_receipts.values())
             statuses.update(value.pit_status for value in staged_bars.values())
             if "TEST_FIXTURE" in statuses and len(statuses) > 1:
                 raise LiveError("DATA_PROVENANCE_MIXED")
         except (TypeError, ValueError, ValidationError) as exc:
             raise LiveError("MINUTE_BATCH_INVALID") from exc
-        self._receipts = staged_receipts
-        self._bars = staged_bars
+        self._receipts.update(staged_receipts)
+        positions = {timestamp: index for index, timestamp in enumerate(self.calendar.minutes(now.date()))}
+        for bar in staged_bars.values():
+            self._observed[bar.instrument_id] = self._observed.get(bar.instrument_id, 0) | (1 << positions[bar.timestamp])
+        self._bar_count += len(staged_bars)
+        self._pit_statuses = statuses
+        self._row_qualities.update(bar.quality for bar in staged_bars.values())
         self._last = staged_last
         self._session_date = now.date()
         self._last_now = now
@@ -169,24 +177,26 @@ class QualityMonitor:
         now = self._clock(now)
         completed = tuple(value for value in self.calendar.minutes(now.date()) if value <= now)
         positions = {value: index for index, value in enumerate(completed)}
-        gaps = 0
+        gaps = len(completed) * len(self.expected_instruments) - self._bar_count
         examples = []
         stale = False
         for instrument in self.expected_instruments:
-            for timestamp in completed:
-                if (instrument, timestamp) not in self._bars:
-                    gaps += 1
-                    if len(examples) < 20:
+            if gaps and len(examples) < 20:
+                observed = self._observed.get(instrument, 0)
+                for index, timestamp in enumerate(completed):
+                    if not observed & (1 << index):
                         examples.append({"instrument_id": instrument, "timestamp": timestamp.isoformat()})
+                        if len(examples) == 20:
+                            break
             latest = self._last.get(instrument)
             # Count only completed exchange minutes. At 13:00 the reference
             # remains 11:30, so lunch never adds artificial age or gaps.
             lag = len(completed) - (positions[latest] + 1 if latest in positions else 0)
             stale |= lag >= self.stale_minutes
-        row_qualities = {bar.quality for bar in self._bars.values()}
+        row_qualities = self._row_qualities
         gapped = gaps > 0 or "GAPPED" in row_qualities
         stale |= "STALE" in row_qualities
-        partial = not self._bars or "PARTIAL" in row_qualities
+        partial = not self._bar_count or "PARTIAL" in row_qualities
         warnings = []
         if gapped:
             warnings.append("DATA_GAP")
@@ -202,5 +212,5 @@ class QualityMonitor:
             "gap_count": gaps,
             "missing_examples": examples,
             "last_event_time": latest.isoformat() if latest else None,
-            "bar_count": len(self._bars),
+            "bar_count": self._bar_count,
         }

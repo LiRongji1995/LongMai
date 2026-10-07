@@ -1,39 +1,40 @@
-# StockFish Live V1 分阶段实施计划
+# StockFish Live V1 实施与验收边界
 
-本轮交付 Phase 0 / Phase 1。各阶段独立验收后推进；Phase 1 不输出预测、不启动实时服务、不改变 Research 策略或运行实例。
+当前已将 Phase 1 基础层扩展为独立研究工程流程。下表区分代码能力与仍需取得的真实证据；实际测试、退出码和运行性能由[验证记录](VALIDATION_V1.md)与[当前状态](../CURRENT_STATUS.md)登记，不把“已实现”写成“真实供应商或投资价值已验收”。
 
-| 阶段 | 交付与门槛 |
-|---|---|
-| 0 | 代码、当前说明和测试交叉审计；完成 REPO_INTEGRATION_AUDIT.md，确认依赖与数据真实性边界 |
-| 1（本轮） | 独立 Python 包、冻结分钟/来源/快照合同、显式日历、Parquet 与 DuckDB、PIT 守卫、逐分钟 replay、doctor；通过未来访问拒绝、确定性、缺分钟、异常行情、provider timeout、不可覆盖存储测试 |
-| 2 | 指数、全市场宽度、Live 专属情绪、PIT 行业成员与边际强度；缺字段保留 UNAVAILABLE；版本化规则 |
-| 3 | MARKET_FEATURES_V1 / SIMILARITY_MODEL_V1 / INTRADAY_PATH_V1，历史归一化仅 fit 训练窗、成熟标签、同时间相似状态、分位路径、概率、置信度、追加预测与修订 |
-| 4 | 独立 FastAPI / WebSocket / Dashboard，实际路径与概率扇形、revision、regime、宽度、情绪、行业、warning、top 10 相似状态 |
-| 5 | expanding walk-forward，多个决策时间、naive baselines、校准与 coverage、VALIDATION_REPORT_V1.md；缺真实历史时报告不可评价，不制造效果数字 |
-| 6 | replay 门槛通过后接入有来源时钟/权限证明的实时适配器，沿用同一采集与消费路径，区分 provider latency 与内部 latency |
+| 阶段 | 当前工程能力 | 验收边界 |
+|---|---|---|
+| 0 | 独立运行边界、仓库与许可审计 | 原审计记录保留其当时范围，新增模块由当前文档与测试说明 |
+| 1 | 严格分钟合同、显式日历、raw/receipt/manifest、Parquet/DuckDB、doctor、单日/范围 replay | 日历身份和真实历史完整性不能由 fixture 证明 |
+| 2 | V2 逐分钟增量与首次观察快照、V1 无状态参考，五指数、PIT context、宽度、Live 情绪、行业强度与边际变化 | 缺资格/成员/完整市场清单/成交额基准保留未知，特征版本/配置严格隔离，初始规则尚未验证 |
+| 3 | 同证券同时刻 Historical Similarity、训练窗归一化、成熟实际 label、5 个 horizon 分位、regime、置信度、warning、追加 forecast/revision | K=50/100/200 为候选，经验分布和低样本概率不等于已校准投资预测 |
+| 4 | 独立 FastAPI/WebSocket、本地 Dashboard、实际/未来路径、历史时间选择、top 10 相似状态 | 读取指定 run，不自动采集；浏览器和接口检查以验证记录为准 |
+| 5 | expanding walk-forward 回顾诊断、内层 K 选择、5 类 baseline；原保存预测成熟后验；回归/概率/分位/coverage/calibration/confusion | 两类评价分别登记；不为原预测补造 baseline，真实/fixture/PIT 未证明分开；无真实历史为 NOT_EVALUATED |
+| 6 | 显式标准 HTTP feed、实际本机收件时钟、同一 Collector/pipeline、EMPTY 父证据归档、受控 localhost HTTP 工程检查 | localhost 是 TEST_FIXTURE；未配置真实端点、未验证真实供应商授权、完整交易日 capture 或持续 SLA |
 
-## 本轮文件范围（编码前登记）
+## 当前代码范围
 
-- 新增 `stockfish-live/pyproject.toml`、`.gitignore`、`README.md`、`CURRENT_STATUS.md`。
-- 新增 `stockfish_live/common.py`、`calendar.py`、`contracts/{market,quality}.py`。
-- 新增 `providers/{base,replay,mock}.py`、`ingest/{normalizer,collector}.py`。
-- 新增 `storage/{parquet_store,duckdb_store}.py`、`replay/engine.py`、`cli.py`、`__main__.py`。
-- 新增对应独立 `tests/`，显式 TEST_FIXTURE，只在临时/私有目录产生数据。
-- 新增架构、数据合同、PIT、模型阶段规划与验证文档；审计文档绑定当前代码，不把历史测试当本轮结果。
-- 根 README 仅增加入口；`stock-fish/docs/PROJECT_OVERVIEW.md` 仅同步独立子项目边界。不修改根 CURRENT_STATUS / CURRENT_STRATEGY 或业务代码。
+- `contracts/{market,quality,context,forecast}.py`：版本化事实、上下文、feature state、成熟结果和 forecast。
+- `providers/{replay,mock,demo,http_feed}.py`：归档重放、显式合成演示、显式 HTTP feed。
+- `ingest/`、`storage/`：Collector、质量与时钟守卫、分钟/上下文/研究结果的独立不可覆盖保存。
+- `features/`、`models/`、`forecast/`、`evaluation/`：流式/参考状态、规则、相似模型、baseline、revision、chronological 诊断与保存预测后验。
+- `runtime.py`、`cli.py`、`api/`、`stockfish_live/frontend/`：盘前加载与标签来源证明、命令行、本地只读服务与打包界面。
+- 独立 tests、docs；运行数据留私有目录，不发布合成生成物或真实分钟源。
 
-## 设计决定
+Research 既有 Python/Qlib/SQLite、正式策略、账户安全断言和运行服务不变。不引入 broker 或订单。默认模型不依赖账户、LLM、GPU 或旧 Alpha158；不会自动购买服务或扩大采集预算。
 
-独立 runtime 和数据目录；运行时不 import `stockfish_core`、Research Flask、SQLite、scheduler 或 Qlib。语义兼容采用少量独立纯函数与合同测试，暂不抽 shared package。
+## 持续自检
 
-分钟统一为结束标记 RAW OHLC，240 根完整分钟；09:30/13:00 为收集时钟，不伪造零长度 bar。日历必须提供明确 sessions、交易所范围、来源与可见时间，未知覆盖拒绝。
+每次合同或实现变化先做对应独立 TEST_FIXTURE 检查，再检查完整回放、重复回放确定性、缺分钟/晚来源、非法 provider、不可覆盖持久化、API 时间选择与未来访问、dashboard 行为及 walk-forward 训练/测试边界。失败和未执行范围如实保留，不靠削弱断言、删样本或扩大 skip 过关。
 
-严格 replay 只交付 event/source/actual available 三时钟及父回执均已可见的记录。事后下载保留真实 available_at，不以重建例外放行。fixture 使用单独显式命令生成，不是无凭据时的自动替代。
+合成 `demo` 默认逐分钟调用 MARKET_FEATURES_V2 流式引擎，保存首次观察的过去快照，正式 5 分钟决策再提取 HistoricalState；未来 label 经完整窗口成熟路径生成，不手写真实历史效果。research-config 的 forecast.feature_version 可明确选择 V1 无状态累计 prefix 参考，缺配置沿用 V1 兼容默认。版本与特征配置 hash 不混训，新数据集/run 独立，不升级旧 run。
 
-Parquet 是不可覆盖的数据分片，DuckDB 使用独立进程内只读查询。单写者锁与原子发布保护分片；原始来源字节和回执以 hash 绑定。快照输出追加保存，延迟统计不参与确定性内容 hash。
+Collector 使用 VISIBLE_BATCH_CHAIN_V1，V2 状态使用 APPEND_ONLY_DELTA_CONTEXT_CHAIN_V1；标签在启动/评价前核验完整 raw 父证据、未来路径、锚点/目标和 regime。snapshot.forecasts 只保存本轮决策 delta，latest_forecast_ids 追踪最近记录，全部原预测追加至私有 ResearchStore。初始参数、情绪规则、行业延续、warning 阈值、feature/config/model hash 必须可追溯。后续语义变化登记新版本/hash，不覆写旧 run。
 
-## 验证和发布
+## 真实研究与交付门槛
 
-先运行 Phase 1 单元/集成/PIT 测试，再执行完整 fixture 日回放、重复回放和 CLI 失败烟测，记录命令、退出码及实际延迟。此证据只证明工程行为；真实分钟覆盖、投资有效性和实时 SLA 单独保持未验证。
+真实分钟来源首先证明证券身份、许可、业务日、源 publication 与本机 actual availability、父证据和覆盖。全市场宽度还需历史完整 inventory；行业依赖对应时点成员，不使用当前名单回填。下载成功、作业成功和 health 正常都不代表研究就绪。
 
-只暂存本轮文件，保护既存 iCloud fixture 变化。不切分支、不创建 worktree、不改历史。核对 main 发布检出与远端后按项目约定中文提交、推送并核对远端 SHA；若不存在安全发布路径，如实报告阻塞。
+有足够真实可比历史后，固定 chronological 样本范围、候选和 baseline，记录 OOS 与校准；再做独立长期前瞻验证。当前始终 `MARKET_EDGE=NOT_ESTABLISHED`，没有额外证据时 `NO_EVIDENCE_OF_INCREMENTAL_EDGE`。没有自动部署、服务切换或真实外部消息。
+
+发布前核对实际 main 远端、dirty、文件差异，仅同步本次授权文件，保护用户修改。不创建分支/worktree、不改历史、不强推；按项目约定中文提交推送并核对远端 SHA。真实数据、凭据及私有运行产物不进入源码发布。

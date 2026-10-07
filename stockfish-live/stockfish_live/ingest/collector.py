@@ -15,10 +15,11 @@ from .normalizer import QualityMonitor
 
 
 class Collector:
-    def __init__(self, provider, calendar, scope: DatasetScope, *, timeout: float = 10., stale_minutes: int = 2):
+    def __init__(self, provider, calendar, scope: DatasetScope, *, timeout: float = 10., stale_minutes: int = 2, processor=None):
         if not math.isfinite(timeout) or timeout <= 0:
             raise ValueError("timeout must be positive")
         self.provider, self.calendar, self.scope = provider, calendar, scope
+        self.processor = processor
         self.timeout = timeout
         self.monitor = QualityMonitor(calendar, tuple(i.instrument_id for i in scope.instruments), stale_minutes)
         self._types = {i.instrument_id: i.asset_type for i in scope.instruments}
@@ -28,6 +29,12 @@ class Collector:
         self._receipts: dict[str, SourceReceipt] = {}
         self.config_hash = digest({"schema": "LIVE_COLLECTION_V1", "stale_minutes": stale_minutes, "timeout": timeout,
                                    "calendar": calendar.version, "scope": scope})
+        if processor is not None:
+            self.config_hash = digest({"schema": "LIVE_COLLECTION_V2", "base": self.config_hash,
+                "pipeline": processor.config_hash, "input_hash_algorithm": "VISIBLE_BATCH_CHAIN_V1"})
+        self._input_chain = digest({"config_hash": self.config_hash, "schema": "VISIBLE_BATCH_CHAIN_V1"})
+        self._cutoff = None
+        self._pit_statuses = {self.scope.pit_status, self.calendar.pit_status}
 
     async def step(self, now: datetime) -> tuple[dict, dict]:
         now = aware(now)
@@ -44,6 +51,7 @@ class Collector:
         start = perf_counter()
         error = None
         received = ()
+        accepted_receipts = {}
         provider_warnings = ()
         provider_quality = "VALID"
         try:
@@ -80,8 +88,18 @@ class Collector:
                     if (bar.pit_status == "TEST_FIXTURE") != (self.scope.pit_status == "TEST_FIXTURE"):
                         raise LiveError("DATA_PROVENANCE_MIXED")
                 self.monitor.accept(received, receipts, now)
-                self._inputs.extend(received)
+                if self.processor is None or not self.processor.consumes_deltas:
+                    self._inputs.extend(received)
                 self._receipts.update(receipts)
+                accepted_receipts = receipts
+                self._cutoff = max((b.available_at for b in received), default=self._cutoff) if self._cutoff is None else max(
+                    self._cutoff, max((b.available_at for b in received), default=self._cutoff))
+                self._pit_statuses.update(b.pit_status for b in received)
+                self._pit_statuses.update(r.pit_status for r in receipts.values())
+                if self.processor is not None and (received or receipts):
+                    self._input_chain = digest({"previous": self._input_chain,
+                        "bars": sorted(received, key=lambda b: (b.timestamp, b.instrument_id)),
+                        "receipts": [receipts[key] for key in sorted(receipts)]})
                 self._since = now  # Failed/invalid batches do not advance cursor.
             except (LiveError, ValidationError, ValueError) as exc:
                 error = exc.code if isinstance(exc, LiveError) else "INVALID_PROVIDER_DATA"
@@ -99,12 +117,11 @@ class Collector:
                 state["quality"] = "INVALID"
             elif state["quality"] not in ("GAPPED", "STALE"):
                 state["quality"] = "PARTIAL"
-        cutoff = max((b.available_at for b in self._inputs), default=None)
-        input_hash = digest({"config_hash": self.config_hash,
+        cutoff = self._cutoff
+        input_hash = self._input_chain if self.processor is not None else digest({"config_hash": self.config_hash,
             "bars": sorted(self._inputs, key=lambda b: (b.timestamp, b.instrument_id)),
             "receipts": [self._receipts[r] for r in sorted(self._receipts)]})
-        pit_status = effective_pit_status([self.scope.pit_status, self.calendar.pit_status,
-            *(b.pit_status for b in self._inputs), *(r.pit_status for r in self._receipts.values())])
+        pit_status = effective_pit_status(self._pit_statuses)
         record = {"schema_version": "LIVE_REPLAY_STATE_V1", "as_of": now.isoformat(),
             "data_cutoff": cutoff.isoformat() if cutoff else None, "input_hash": input_hash,
             "config_hash": self.config_hash, "scope": self.scope.scope, "pit_status": pit_status,
@@ -113,6 +130,13 @@ class Collector:
             "state": {**state, "warnings": warnings},
             "received_bars": [b.model_dump(mode="json") for b in received],
             "forecast_status": "NOT_IMPLEMENTED_PHASE1", "market_edge": "NOT_ESTABLISHED"}
+        if self.processor is not None:
+            record["schema_version"] = "LIVE_REPLAY_STATE_V2"
+            record["input_hash_algorithm"] = "VISIBLE_BATCH_CHAIN_V1"
+            record["received_receipt_ids"] = sorted(accepted_receipts)
+            record.update(self.processor.process(now,
+                received if self.processor.consumes_deltas else self._inputs,
+                accepted_receipts if self.processor.consumes_deltas else self._receipts, record["state"]))
         record["snapshot_id"] = digest(record)
         provider_delay_ms = max(((b.available_at - b.timestamp).total_seconds() * 1000 for b in received), default=None)
         latency = {"as_of": now.isoformat(), "provider_call_ms": provider_ms,

@@ -32,10 +32,10 @@ def replay_speed(speed: str) -> float | None:
 
 
 class ReplayEngine:
-    def __init__(self, provider, clock, calendar, scope, output: Path, *, timeout: float = 10.):
+    def __init__(self, provider, clock, calendar, scope, output: Path, *, timeout: float = 10., processor=None):
         self.provider, self.clock, self.calendar, self.scope = provider, clock, calendar, scope
         self.output = Path(output)
-        self.collector = Collector(provider, calendar, scope, timeout=timeout)
+        self.collector = Collector(provider, calendar, scope, timeout=timeout, processor=processor)
 
     async def run(self, day: date, *, speed: str = "max") -> dict:
         # Validate all configuration before creating an output directory.
@@ -76,18 +76,34 @@ class ReplayEngine:
                             chunk = min(remaining, 1.)
                             await asyncio.sleep(chunk)
                             remaining -= chunk
-        except Exception:
-            # Retain original snapshots and explicitly mark incomplete output.
-            (self.output / "FAILED").write_text("REPLAY_INCOMPLETE\n", encoding="utf-8")
+            summary = {"date": day.isoformat(), "ticks": len(ticks), "completed_minutes": 240,
+                "failed_cycles": failed_cycles, "warnings": sorted(all_warnings),
+                "snapshot_sequence_hash": digest(hashes), "final_state": record["state"],
+                "pit_status": record["pit_status"], "scope": self.scope.scope,
+                "internal_with_persistence_p50_ms": percentile(latencies, .5),
+                "internal_with_persistence_p95_ms": percentile(latencies, .95),
+                "internal_with_persistence_max_ms": max(latencies),
+                "forecast_status": record["forecast_status"], "market_edge": "NOT_ESTABLISHED"}
+            if self.collector.processor is not None:
+                from ..storage.research_store import ResearchStore
+                self.collector.processor.persist(ResearchStore(self.output))
+                summary["model"] = {"version": self.collector.processor.forecast.config.model_version,
+                    "feature_version": self.collector.processor.feature_version,
+                    "configuration_hash": self.collector.processor.config_hash,
+                    "history_hash": self.collector.processor.prepared.history_hash,
+                    "preloaded_states": self.collector.processor.prepared.state_count,
+                    "preloaded_mature_outcomes": self.collector.processor.prepared.outcome_count,
+                    "published_forecasts": len(self.collector.processor.forecasts),
+                    "parameters_status": "UNVALIDATED"}
+            with (self.output / "summary.json").open("x", encoding="utf-8") as handle:
+                handle.write(canonical_json(summary) + "\n")
+            return summary
+        except BaseException:
+            # Cancellation and summary publication are incomplete runs too.
+            # A full/unavailable filesystem must not hide the original error.
+            try:
+                with (self.output / "FAILED").open("x", encoding="utf-8") as handle:
+                    handle.write("REPLAY_INCOMPLETE\n")
+            except OSError:
+                pass
             raise
-        summary = {"date": day.isoformat(), "ticks": len(ticks), "completed_minutes": 240,
-            "failed_cycles": failed_cycles, "warnings": sorted(all_warnings),
-            "snapshot_sequence_hash": digest(hashes), "final_state": record["state"],
-            "pit_status": record["pit_status"], "scope": self.scope.scope,
-            "internal_with_persistence_p50_ms": percentile(latencies, .5),
-            "internal_with_persistence_p95_ms": percentile(latencies, .95),
-            "internal_with_persistence_max_ms": max(latencies),
-            "forecast_status": "NOT_IMPLEMENTED_PHASE1", "market_edge": "NOT_ESTABLISHED"}
-        with (self.output / "summary.json").open("x", encoding="utf-8") as handle:
-            handle.write(canonical_json(summary) + "\n")
-        return summary

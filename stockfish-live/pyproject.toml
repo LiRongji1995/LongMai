@@ -4,19 +4,22 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "stockfish-live"
-version = "0.1.0"
-description = "Independent PIT-first intraday market research replay foundation"
+version = "0.2.0"
+description = "Independent PIT-first intraday market state, probabilistic forecasts and replay"
 requires-python = ">=3.12,<3.14"
-dependencies = ["pydantic>=2.10,<3", "pyarrow>=18,<24", "duckdb>=1.2,<2"]
+dependencies = ["pydantic>=2.10,<3", "pyarrow>=18,<24", "duckdb>=1.2,<2", "fastapi>=0.115,<1", "uvicorn>=0.30,<1", "wsproto>=1.2,<2"]
 
 [project.optional-dependencies]
-test = ["pytest>=8,<10"]
+test = ["pytest>=8,<10", "httpx>=0.27,<1"]
 
 [project.scripts]
 stockfish-live = "stockfish_live.cli:main"
 
 [tool.setuptools.packages.find]
 include = ["stockfish_live*"]
+
+[tool.setuptools.package-data]
+stockfish_live = ["frontend/*.html", "frontend/*.css", "frontend/*.js"]
 
 [tool.pytest.ini_options]
 testpaths = ["tests"]

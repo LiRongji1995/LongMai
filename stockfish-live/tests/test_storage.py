@@ -7,15 +7,27 @@ from pathlib import Path
 from zoneinfo import ZoneInfo
 
 import pyarrow.parquet as pq
+import pyarrow as pa
 import pytest
 
 from stockfish_live.common import LiveError
 from stockfish_live.contracts.market import MinuteBar, SourceReceipt
 from stockfish_live.storage.duckdb_store import DuckDBStore
-from stockfish_live.storage.parquet_store import ParquetStore, _writer_lock
+from stockfish_live.storage.parquet_store import ParquetStore, _writer_lock, arrow_rows
 
 SH = ZoneInfo("Asia/Shanghai")
 DAY = "2026-10-09"
+
+
+def test_arrow_conversion_preserves_exact_microseconds_and_nulls():
+    values = [datetime(1969, 12, 31, 23, 59, 59, 999999, tzinfo=timezone.utc),
+              datetime(2026, 10, 9, 1, 45, 0, 123457, tzinfo=timezone.utc), None]
+    table = pa.table({"timestamp": pa.array(values, type=pa.timestamp("us", tz="Asia/Shanghai")),
+                      "value": [1, 2, 3]})
+    assert arrow_rows(table) == table.to_pylist()
+    assert arrow_rows(table)[1]["timestamp"].microsecond == 123457
+    with pytest.raises(LiveError, match="STORAGE_INTEGRITY_ERROR"):
+        arrow_rows(pa.table({"timestamp": pa.array(values, type=pa.timestamp("us", tz="UTC"))}))
 
 
 def at(hour=9, minute=45):

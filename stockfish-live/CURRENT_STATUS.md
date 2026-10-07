@@ -1,6 +1,6 @@
 # StockFish Live 当前状态
 
-核对日期：2026-10-07。版本 0.1.0；审计基线为 `a3e06ee8c1d29b9e66ec5c4a22ba2778c3b6960c`。本文件只描述 Live，不覆盖根目录 Research 状态。
+核对日期：2026-10-07。版本 0.2.0；续开发基线为 `6eee881e1edf6674d84309d9f5a036665e708b4c`。本文件只描述 Live，不覆盖根目录 Research 状态。
 
 ```text
 MARKET_EDGE=NOT_ESTABLISHED
@@ -10,18 +10,24 @@ BROKER_CONNECTION=NONE
 
 | 阶段 | 当前判断 |
 |---|---|
-| Phase 0 Repository Audit | 已完成；代码/当前文档/测试定义交叉核验 |
-| Phase 1 Contracts + Replay | 已完成工程交付；独立环境、分钟/来源/快照合同、显式日历、Parquet/DuckDB、严格 PIT、doctor、单日/范围 replay |
-| Phase 2 Market State | 未实现；指数状态/全市场宽度/情绪/行业仍不可用 |
-| Phase 3 Similarity / Forecast | 未实现；尚无模型、分位路径、相似状态或 forecast revision |
-| Phase 4 Dashboard / API | 未实现；没有启动新网页或服务 |
-| Phase 5 Walk-Forward Evaluation | 未实现；没有 MAE/Brier/coverage 或投资效果结论 |
-| Phase 6 Real Live Provider | 未实现；live 明确失败，replay 不依赖凭据 |
+| Phase 0 Repository Audit | 已完成；保留独立运行、许可和发布边界 |
+| Phase 1 Contracts + Replay | 已交付；有限日历、严格 PIT、Parquet/DuckDB、单日/范围回放、失败证据；冻结基础层快照回归一致 |
+| Phase 2 Market State | 已实现并测试；五指数、资格分母、宽度、初始情绪规则、PIT 行业及边际变化；缺资料保留未知 |
+| Phase 3 Similarity / Forecast | 已实现并测试；成熟标签、同证券/时刻/版本训练、五分位、六类概率、Top 10、置信度、同目标价修订 |
+| Phase 4 Dashboard / API | 已实现；本地静态资源打包，11 个 GET 接口、WebSocket、历史时点过滤；已通过应用内浏览器默认视口的加载、指数与历史时点检查 |
+| Phase 5 Walk-Forward Evaluation | 已实现；严格时间外推、训练内 K 选择、五类对照与指标；原保存预测的成熟后验单独追加。真实 OOS 未运行 |
+| Phase 6 Live Provider | 标准 HTTP feed 与有界 runner 已实现；真实供应商未配置，未通过真实联网或长期运行验收 |
 
-完整工程测试及 CLI 结果见 [VALIDATION](docs/VALIDATION.md)：159 项通过，退出 0。已完成一个明确 TEST_FIXTURE 全日回放，240 个结束标记分钟、242 ticks、5 个指数和 3 个股票身份、1,920 rows；两次快照逐字节一致、序列 hash 一致，09:45 仅累计 120 条当时可见记录。双日范围回放也验证每日状态隔离与失败证据保留。
+本轮实际检查、命令、退出码与资源观测见 [V1 工程验证](docs/VALIDATION_V1.md)；原 Phase 1 的 159 项检查及小型 fixture 结果保留在[历史验证](docs/VALIDATION.md)。新演示使用 `MARKET_FEATURES_V2` 严格增量状态；`MARKET_FEATURES_V1` 保留兼容参考。无研究配置时仍使用 V1，训练版本和特征配置 hash 不匹配不会自动混合。
 
-真实分钟历史与 VERIFIED_PIT 覆盖为 **UNAVAILABLE**，真实 provider、Windows 原生、长时间运行、全市场容量和实时 SLA 均未验证。内部处理含持久化 P95 在该小型 fixture 两次分别约 62ms/86ms；这是基础层工程观测，没有 forecast 或 dashboard push，不能作为 V1 全链路验收。
+历史标签在加载前核对实际原始父来源、完整未来分钟、价格锚点、目标、regime 和实际成熟时间。归档/快照/预测/评价追加保存；后来的结果不改写旧 forecast。原始 HTTP 空响应也归档并受实际可见时钟约束。模型准备采用无损路径压缩，不删除历史路径；工程 hash 与预测的优化前后等价性单独验证。
 
-现有 Research 生产代码、策略、数据库、调度与运行实例不变；根 README 与项目综述只增加独立入口和边界。用户既存 iCloud fixture 删除/占位文件未纳入本次修改。
+真实分钟历史、完整市场/历史资格/申万成员和 VERIFIED_PIT OOS 均未取得本轮验收证据。合成 3 股票的宽度只代表声明池；不能声称全市场宽度已就绪。情绪与行业转移仅为有限相似样本的初始辅助统计，长期/中期上下文依赖显式来源，缺日线资料不猜测。
 
-下一阶段按[计划](docs/IMPLEMENTATION_PLAN.md)推进 Market State，先取得来源明确、逐时可见、范围与资格可解释的真实分钟输入，再登记宽度/行业分母与规则版本。当前完整 V1 尚未完成，所有模型参数与市场可预测性仍待验证。
+本轮 517 项全套回归和补充边界检查通过；60 历史会话的合成完整回放三轮快照逐字节一致，230 条预测可追溯，完整评价生成 325 个 W/F 与 490 个原保存分布后验结果。工程 fixture 数字不作为投资价值证据。
+
+性能需按实际规模理解。小型 fixture、全市场局部压力和完整历史加载分别计时，不能互相代替；推荐的特征 2 秒和全链路 SLA 尚不能作为真实市场承诺。Windows 原生、8 核/32GB、连续交易日运行及跨设备视觉验收仍待独立完成。
+
+现有 Research 的生产源码、策略、依赖、数据库、调度和运行实例未修改；根 README 与项目综述仅同步独立入口。用户既存 iCloud fixture 删除/占位文件未纳入本次交付。没有服务部署切换、券商、交易执行或收费采集。
+
+后续成熟门槛为：合法真实来源与实际留档 → 足够 PIT 历史/市场覆盖 → 独立真实 OOS 和校准 → 连续运行及硬件容量 → 长期前瞻验证。工程闭环可运行不等于这些门槛已通过，所有初始参数仍为“尚未验证”。

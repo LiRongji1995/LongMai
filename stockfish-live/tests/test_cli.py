@@ -79,8 +79,8 @@ def test_doctor_empty_root_is_unavailable_and_does_not_create_directory(tmp_path
 
 @pytest.mark.parametrize("command,code", [
     ("live", "LIVE_PROVIDER_UNAVAILABLE"),
-    ("serve", "NOT_IMPLEMENTED_PHASE1"),
-    ("evaluate", "NOT_IMPLEMENTED_PHASE1"),
+    ("serve", "RUN_DIRECTORY_REQUIRED"),
+    ("evaluate", "EVALUATION_CUTOFF_REQUIRED"),
 ])
 def test_unavailable_commands_fail_explicitly_without_data_side_effects(tmp_path, capsys, command, code):
     root = tmp_path / "TEST_FIXTURE_absent"

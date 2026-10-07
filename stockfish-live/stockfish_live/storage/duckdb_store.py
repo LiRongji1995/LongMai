@@ -44,7 +44,7 @@ class DuckDBStore:
         bars = self.parquet.read_day(day)
         if not bars:
             return ()
-        receipts = self.parquet.receipts()
+        receipts = {source: self.parquet._source(source) for source in {bar.source_id for bar in bars}}
         table = table_for_bars(bars)
         for column, field in (("_parent_available_at", "available_at"),
                               ("_parent_received_at", "received_at"),
