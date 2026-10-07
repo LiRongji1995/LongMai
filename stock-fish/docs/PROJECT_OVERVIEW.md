@@ -12,7 +12,7 @@ Python Web/API、单写者SQLite、持久采集队列与调度继续承载已有
 
 ## 数据与真实性
 
-独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前工程已覆盖分钟合同、独立 Parquet/DuckDB、严格 PIT/replay、流式市场状态、历史相似预测与修订、API/WebSocket/Dashboard 和 expanding walk-forward/保存预测后验。标准 HTTP feed 适配器已实现；真实供应商未配置，真实历史覆盖、长期运行和投资有效性尚未验收。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
+独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前工程已覆盖分钟合同、独立 Parquet/DuckDB、严格 PIT/replay、流式市场状态、历史相似预测与修订、API/WebSocket/Dashboard 和 expanding walk-forward/保存预测后验。现有 Dashboard 可在最近一年已保存日期间切换，以当时的原保存预测对照收盘真实走势；事后实际价格单独展示，其他状态仍按观察时点读取。标准 HTTP feed 适配器已实现；真实供应商未配置，真实历史覆盖、长期运行和投资有效性尚未验收。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
 
 BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记证据各自记录实际可见时间、业务日期、父回执、单位、修订和覆盖。连接器存在不保证当前网络/权限或完整历史；旧文档成功数字不代表今天就绪。
 

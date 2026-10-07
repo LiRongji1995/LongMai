@@ -55,7 +55,11 @@ ContextStore 追加 hash 寻址 bundle，并核验所有 raw 父证据。Researc
 
 ## API 与故障观测
 
-FastAPI 读取指定已保存或进行中的 run，提供 status/health/market/indices/breadth/sentiment/sectors/forecast/history/similar-states/warnings 和 `/ws/live`。时间选择受保存 run 的可见边界约束；页面读取不会自动采集、训练或评价。实际路径与未来分位扇形分开呈现，fixture/PIT/质量限制持续可见。
+Dashboard 日期目录采用 `LIVE_DASHBOARD_DATES_V1`。`serve --run-dir` 接受单日目录或范围回放的直接 `YYYY-MM-DD/` 子运行；按上海当前日限制最近一个日历年，闰日边界回退到上一年二月末，不递归扫描，不接受请求中的文件路径。日期与快照业务日必须一致，选日查询同时检查实际当前时钟；各日 RunView 使用有限缓存，查询不写入归档。
+
+新增 `/api/live/dates` 提供日期边界与已有日期；原 GET 和 WebSocket 可附带 `date=YYYY-MM-DD` 与同日 `as_of`。`/api/live/comparison` 单独提供所选观察时点与事后实际路径的对照，只有上海实际时钟已到该日 15:00 才允许展开展示当日已取得的归档实际走势。市场状态及 forecast 仍由原时点视图读取，普通 `market.actual_paths` 的 PIT 语义保持不变。全年目录不代表每日齐备；缺预测、缺日期、部分归档和非法日期分别处理。
+
+FastAPI 读取指定单日或范围目录中的已保存或进行中的 run，提供 status/health/market/indices/breadth/sentiment/sectors/forecast/history/similar-states/warnings 和 `/ws/live`。时间选择受保存 run 的可见边界约束；页面读取不会自动采集、训练或评价。实际路径与未来分位扇形分开呈现，fixture/PIT/质量限制持续可见。
 
 provider timeout、非法返回、未来时钟、来源缺失、乱序与重复分别记录；失败批次不改变已接受状态。记录 event cutoff、as_of、input/config/model/snapshot hash、缺口、警告，以及 provider call、event-to-available、内部计算/持久化 latency。provider event-to-available 依赖源时钟，不等于网络往返或实时 SLA。
 

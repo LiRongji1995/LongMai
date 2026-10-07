@@ -42,6 +42,20 @@ Windows 使用 `.venv\Scripts\python.exe` / `.venv\Scripts\stockfish-live.exe`�
 
 默认 09:45 起每 5 分钟预测；`replay --early-forecasts` 显式启用 09:35/09:40，始终保留早盘低置信度提示。无历史或成熟标签时界面显示 `INSUFFICIENT_HISTORY`，不会替换为人为 forecast。`fixture` 仍提供不含历史与上下文的单日基础测试池，`replay --foundation-only` 保留冻结 Phase 1 基础层路径。细节见[合成演示说明](docs/DEMO.md)。
 
+## 在当前页面选择历史日期
+
+日期选择与现有观察时点滑块位于同一页面。查询范围为上海当前日期向前一个日历年（含边界），只读取已经保存的运行。选择过去日期时默认观察 09:45；该时点没有快照时取此前最近的已有时点，若全日仅有更晚记录则显示首个实际保存时点。页面持续显示完整日期和时间，不将更晚预测冒充早盘预测。
+
+已收盘日期将所选时点原样保存的 Q50 预测与当天归档的真实路径叠加，并保留分位区间。市场状态、宽度、情绪、行业、修订和相似样本仍截至所选观察时点；事后真实走势单独标明显示截止，不参与预测输入。收盘判断依据上海实际时钟，任务运行完成不等于交易已经收盘。缺分钟保留断线，部分归档、缺预测与缺日期分别说明，不补造曲线。
+
+`serve --run-dir` 同时接受单日运行目录或现有范围回放输出目录。范围目录只发现直接的 `YYYY-MM-DD/` 子运行，不递归搜索其他位置；要查看多日，请显式选择范围目录：
+
+```sh
+.venv/bin/stockfish-live serve --run-dir /path/to/private-range-run --host 127.0.0.1 --port 8765
+```
+
+一年限制只作用于页面和日期查询，不删除更早归档，也不限制模型训练窗口。服务不会因选日自动下载、训练或回测；有历史行情但没有原保存预测时，不能用今天的模型补算并称为当时预测。当前接口说明见[架构](docs/ARCHITECTURE.md)。
+
 ## 自有历史与评价
 
 数据根需要 `calendar.json`、`dataset.json`、有 raw/receipt/manifest 的分钟归档；PIT 上下文与历史 feature/label 是独立可选输入，缺失会限制状态与预测。`ParquetStore.append` 接收单父来源批次；`append_many` 可导入单日多父来源，同时保留每个分钟的真实收件时间。不能直接复制没有 manifest 的 Parquet 冒充合法归档。来源与字段见[数据合同](docs/DATA_CONTRACT.md)。

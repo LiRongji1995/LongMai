@@ -162,10 +162,10 @@ def test_serve_reuses_the_app_view_after_prelisten_validation(tmp_path, monkeypa
     import stockfish_live.api.app as api_module
     import uvicorn
     events = []
-    class View:
-        def status(self):
+    class Catalog:
+        def validate_startup(self):
             events.append("precheck")
-    app = SimpleNamespace(state=SimpleNamespace(run_view=View()))
+    app = SimpleNamespace(state=SimpleNamespace(run_catalog=Catalog()))
     def create_app(path):
         assert path == tmp_path
         events.append("create")
@@ -179,6 +179,46 @@ def test_serve_reuses_the_app_view_after_prelisten_validation(tmp_path, monkeypa
     assert cli.main(["serve", "--run-dir", str(tmp_path)]) == 0
     assert events == ["create", "precheck", "listen"]
     assert json.loads(capsys.readouterr().out) == {"server": "STOPPED"}
+
+
+def test_serve_range_directory_uses_same_validated_catalog_without_writing(tmp_path, monkeypatch, capsys):
+    from fastapi.testclient import TestClient
+    import stockfish_live.api.app as api_module
+    from stockfish_live.common import digest
+    import uvicorn
+
+    root = tmp_path / "TEST_FIXTURE_RANGE_SERVE"
+    days = ("2026-10-06", "2026-10-07")
+    for day in days:
+        folder = root / day / "snapshots"
+        folder.mkdir(parents=True)
+        record = {"schema_version": "LIVE_REPLAY_STATE_V2", "as_of": day+"T09:45:00+08:00",
+            "pit_status": "TEST_FIXTURE", "scope": "DECLARED_SCOPE_ONLY", "received_bars": [],
+            "state": {"quality": "PARTIAL", "warnings": ["TEST_FIXTURE_NO_DATA"]}, "forecasts": {}}
+        record["snapshot_id"] = digest(record)
+        (folder / "0945.json").write_text(canonical_json(record))
+    before = {p: p.read_bytes() for p in root.rglob("*") if p.is_file()}
+    real_create_app = api_module.create_app
+    applications = []
+    def create_app(path):
+        app = real_create_app(path, now=lambda: datetime(2026, 10, 8, 9, tzinfo=cli.SHANGHAI))
+        applications.append(app)
+        return app
+    def run(app, *, host, port):
+        assert applications == [app]
+        assert app.state.run_catalog.is_range
+        assert host == "127.0.0.1" and port == 8765
+        with TestClient(app) as client:
+            assert client.get("/api/live/dates").json()["available_dates"] == list(days)
+            for day in days:
+                response = client.get("/api/live/market", params={"date": day})
+                assert response.status_code == 200
+                assert response.json()["as_of"].startswith(day)
+    monkeypatch.setattr(api_module, "create_app", create_app)
+    monkeypatch.setattr(uvicorn, "run", run)
+    assert cli.main(["serve", "--run-dir", str(root)]) == 0
+    assert json.loads(capsys.readouterr().out) == {"server": "STOPPED"}
+    assert {p: p.read_bytes() for p in root.rglob("*") if p.is_file()} == before
 
 
 def test_evaluate_filters_selected_history_but_preserves_unselected_saved_forecast(tmp_path, monkeypatch, capsys):

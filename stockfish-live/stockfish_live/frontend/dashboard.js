@@ -96,23 +96,52 @@
       return `<li>${instruments ? `<strong>${escape(instruments)}</strong><br>` : ""}${escape(text)}<details><summary>查看来源与规则 · ${records.length} 条</summary><pre>${escape(JSON.stringify(records,null,2))}</pre></details></li>`;
     }).join("");
   }
-  let timeline = [], selectedIndex = "000001.SH", generation = 0, socket = null, retry = null;
-  let activeRefreshes = 0, pendingLiveRefresh = false, rendered = false;
+  let timeline = [], selectedIndex = "000001.SH", selectedDate = null, catalog = null, generation = 0, socket = null, retry = null;
+  let activeRefreshes = 0, pendingLiveRefresh = false, rendered = false, defaultSelectionNote = "";
   const emptyRow = (span, message) => `<tr><td colspan="${span}" class="empty">${escape(message)}</td></tr>`;
   const selectedTime = () => timeline[Number($("timeline").value)] || null;
-  const query = asOf => new URLSearchParams({index:selectedIndex,...(asOf ? {as_of:asOf} : {})});
+  const query = (asOf, date=selectedDate, index=selectedIndex) => new URLSearchParams({index,...(date ? {date} : {}),...(asOf ? {as_of:asOf} : {})});
   async function get(url) { const response = await fetch(url, {cache:"no-store"}); const result = await response.json(); if (!response.ok) throw new Error(result.error || `HTTP ${response.status}`); return result; }
   function fail(error) {
-    const reasons={RUN_INTEGRITY_ERROR:"归档完整性校验失败",RUN_UNAVAILABLE:"运行资料暂不可用",RUN_INCOMPLETE:"运行尚未完成",FUTURE_ACCESS_DENIED:"所选时点超过已保存的最新时点",INVALID_AS_OF:"观察时点格式无效",INVALID_INDEX:"指数代码无效",ASSET_NOT_FOUND:"页面资源不存在"};
-    document.body.classList.add("has-error"); document.body.classList.remove("loading"); $("error").hidden = false; $("error").textContent = `无法读取已验证的运行：${reasons[error.message] || "读取请求未成功"}（${error.message}）。未显示替代或未经校验的数据。`; $("connection").textContent = "读取失败";
+    const reasons={RUN_INTEGRITY_ERROR:"归档完整性校验失败",RUN_UNAVAILABLE:"运行资料暂不可用",RUN_INCOMPLETE:"运行尚未完成",FUTURE_ACCESS_DENIED:"所选时点超过已保存的最新时点",INVALID_AS_OF:"观察时点格式无效",INVALID_INDEX:"指数代码无效",ASSET_NOT_FOUND:"页面资源不存在",INVALID_DATE:"请选择有效的观察日期",DATE_OUT_OF_RANGE:"所选日期超出最近一年的可查询范围",DATE_NOT_AVAILABLE:"所选日期没有可用归档，请选择其他日期",AS_OF_DATE_MISMATCH:"观察时点与所选日期不一致",NO_AVAILABLE_DATES:"最近一年内尚无可查询的历史归档",OBSERVATION_CHANGED:"所选观察快照发生变化，请刷新后重试"};
+    document.body.classList.add("has-error"); document.body.classList.remove("loading"); $("error").hidden = false; $("error").textContent = `无法读取所选日期的已验证归档：${reasons[error.message] || "读取请求未成功"}（${error.message}）。不会显示其他日期或未经校验的数据。`; $("connection").textContent = "读取失败"; $("run-status").textContent="资料不可用"; $("fixture-banner").hidden=true;
+  }
+  function applyCatalog(result) {
+    const iso = /^\d{4}-\d{2}-\d{2}$/;
+    if(!iso.test(result.min_date) || !iso.test(result.max_date) || result.min_date>result.max_date || !Array.isArray(result.available_dates) || result.available_dates.some(date=>!iso.test(date) || date<result.min_date || date>result.max_date))throw new Error("RUN_INTEGRITY_ERROR");
+    catalog={...result,available_dates:[...new Set(result.available_dates)].sort()};
+    $("session-date").min=catalog.min_date; $("session-date").max=catalog.max_date; $("session-date").disabled=!catalog.available_dates.length;
+    $("available-dates").innerHTML=catalog.available_dates.map(date=>`<option value="${escape(date)}"></option>`).join("");
+    $("date-note").textContent=`最近一年 · ${catalog.available_dates.length} 个归档日期`;
+    $("date-range").textContent=`可查询 ${catalog.min_date} 至 ${catalog.max_date}（上海日期）· 仅提供已有归档的日期，缺失日期会明确提示。`;
+    $("latest").disabled=!catalog.available_dates.length; $("follow").disabled=!catalog.available_dates.length;
+  }
+  function clearObservation() {
+    timeline=[]; $("timeline").value=0; $("timeline").max=0; $("timeline").disabled=true;
+    $("as-of").textContent=selectedDate?`${selectedDate} —`:"—"; $("cutoff").textContent="观察资料截止 —";
+  }
+  function defaultHistoricalTime() {
+    const early=timeline.map((value,index)=>({value,index})).filter(item=>time(item.value)<="09:45");
+    if(early.length)return early.at(-1).index;
+    if(timeline.length)defaultSelectionNote="该日期没有 09:45 或更早的快照，当前显示最早已保存时点。";
+    return 0;
+  }
+  function validateObservation(market,others,date) {
+    for(const result of [market,...others]) {
+      if(result.as_of && observationTime(result.as_of).slice(0,10)!==date)throw new Error("AS_OF_DATE_MISMATCH");
+      if(result.as_of && result.as_of!==market.as_of || result.snapshot_id && result.snapshot_id!==market.snapshot_id)throw new Error("OBSERVATION_CHANGED");
+    }
   }
   function probability(container, probabilities) {
     const entries = Object.entries(probabilities || {});
     $(container).innerHTML = entries.length ? entries.map(([code,p]) => `<div class="probability"><span>${escape(label(code))}</span><div class="track"><div class="fill" style="width:${finite(p) ? Math.max(0,Math.min(100,p*100)) : 0}%"></div></div><b>${finite(p) ? Math.round(p*100) : "—"}%</b></div>`).join("") : '<div class="empty">暂不可用 · 没有成熟标签支持的概率分布</div>';
   }
-  function chart(market, forecast) {
-    const actual = (market.actual_paths[selectedIndex] || []).filter(p => finite(p.close));
+  function chart(market, forecast, comparison) {
+    const actual = (comparison.actual_paths?.[selectedIndex] || []).filter(p => finite(p.close));
     const horizons = (forecast?.horizons || []).filter(h => h.status === "AVAILABLE");
+    const chartDescription=`${names[selectedIndex]||selectedIndex} · 观察时点 ${observationTime(market.as_of)}，真实走势截至 ${observationTime(comparison.actual_as_of)}，${forecast?"与该时点已保存的分位预测对照":"所选时点没有已保存预测"}`;
+    $("chart").setAttribute("aria-label",chartDescription);
+    if(!actual.length)$("actual-label").textContent="真实走势暂不可用";
     const map = new Map();
     for (const h of horizons) {
       const q = h.price_quantiles || {};
@@ -131,25 +160,31 @@
     const line=(points,key,breakGaps=false)=>points.map((p,i)=>`${i && !(breakGaps && new Date(p.timestamp)-new Date(points[i-1].timestamp)>60000)?"L":"M"}${x(p.timestamp).toFixed(2)},${y(p[key]).toFixed(2)}`).join(" ");
     const band=(lo,hi)=>`${line(future,hi)} ${[...future].reverse().map(p=>`L${x(p.timestamp).toFixed(2)},${y(p[lo]).toFixed(2)}`).join(" ")} Z`;
     const ticks=[0,60,120,210,270,330];
-    let svg=`<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg"><title>${escape(names[selectedIndex]||selectedIndex)} · 截至 ${escape(market.as_of)} 的实际行情与分位预测</title>`;
+    let svg=`<svg viewBox="0 0 ${w} ${h}" xmlns="http://www.w3.org/2000/svg"><title>${escape(chartDescription)}</title>`;
     svg+=`<rect x="${left+120/330*(w-left-right)}" y="${top}" width="${90/330*(w-left-right)}" height="${h-top-bottom}" fill="#f7f9f8"/><text x="${left+165/330*(w-left-right)}" y="${top+15}" text-anchor="middle" fill="#9aa7ac" font-size="10">午休</text>`;
     for(let i=0;i<5;i++){const price=min+(max-min)*i/4,yy=y(price);svg+=`<line x1="${left}" y1="${yy}" x2="${w-right}" y2="${yy}" stroke="#e9eeee"/><text x="${left-10}" y="${yy+3}" text-anchor="end" fill="#71838c" font-size="11">${num(price,price>100?1:2)}</text>`;}
     for(const tick of ticks){const xx=left+tick/330*(w-left-right),hour=Math.floor((570+tick)/60),minute=(570+tick)%60;svg+=`<text x="${xx}" y="${h-10}" text-anchor="middle" fill="#71838c" font-size="11">${String(hour).padStart(2,"0")}:${String(minute).padStart(2,"0")}</text>`;}
-    if(future.length>1) svg+=`<path d="${band("q10","q90")}" fill="#ebe6f7"/><path d="${band("q25","q75")}" fill="#c4bce9" fill-opacity=".8"/><path d="${line(future,"q50")}" fill="none" stroke="#7265b7" stroke-width="2" stroke-dasharray="5 4"/>`;
-    if(actual.length) svg+=`<path d="${line(actual,"close",true)}" fill="none" stroke="#087f83" stroke-width="2.4"/><circle cx="${x(actual.at(-1).timestamp)}" cy="${y(actual.at(-1).close)}" r="3" fill="#087f83"/>`;
-    if(market.as_of) svg+=`<line x1="${x(market.as_of)}" y1="${top}" x2="${x(market.as_of)}" y2="${h-bottom}" stroke="#87979e" stroke-dasharray="3 4"/>`;
+    if(future.length>1) svg+=`<path d="${band("q10","q90")}" fill="#ebe6f7"/><path d="${band("q25","q75")}" fill="#c4bce9" fill-opacity=".8"/><path data-series="forecast-median" d="${line(future,"q50")}" fill="none" stroke="#7265b7" stroke-width="2" stroke-dasharray="5 4"/>`;
+    if(actual.length) svg+=`<path data-series="actual" d="${line(actual,"close",true)}" fill="none" stroke="#087f83" stroke-width="2.4"/><circle cx="${x(actual.at(-1).timestamp)}" cy="${y(actual.at(-1).close)}" r="3" fill="#087f83"/>`;
+    if(market.as_of) svg+=`<line x1="${x(market.as_of)}" y1="${top}" x2="${x(market.as_of)}" y2="${h-bottom}" stroke="#87979e" stroke-dasharray="3 4"/><text x="${Math.min(w-right-4,x(market.as_of)+5)}" y="${top+29}" text-anchor="${minutes(market.as_of)>300?"end":"start"}" fill="#71838b" font-size="10">观察 ${escape(time(market.as_of))}</text>`;
     $("chart").innerHTML=svg+"</svg>";
   }
-  function render(market,history,similar) {
+  function render(market,history,similar,comparison) {
     rendered = true;
     document.body.classList.remove("loading", "has-error"); $("error").hidden=true; $("run-status").textContent=label(market.run_status); $("fixture-banner").hidden=!market.fixture;
-    $("as-of").textContent=observationTime(market.as_of); $("cutoff").textContent=`数据截止 ${time(market.data_cutoff)}`;
+    $("as-of").textContent=observationTime(market.as_of); $("cutoff").textContent=`观察资料截止 ${time(market.data_cutoff)}`;
     const index=market.indices[selectedIndex] || {}, forecast=market.forecasts[selectedIndex], state=market.market_state || {};
     $("price").textContent=num(index.current_price,2); const ret=index.features?.return_pct;
     $("return").textContent=finite(ret)?`较前收 ${pct(ret)}`:"前收参考暂不可用"; $("return").className=ret>=0?"positive":"negative";
     $("confidence").textContent=forecast?`置信度：${label(forecast.confidence)} · 参数${label(forecast.parameters_status || "UNVALIDATED")}`:"模型暂不可用";
-    $("forecast-note").textContent=forecast?`预测 ${time(forecast.as_of)} · ${label(forecast.status)} · ${(forecast.horizons||[]).map(h=>`${horizonLabel(h.horizon)}：${h.sample_size} 个样本`).join(" / ")}`:"未找到已保存预测；不会生成替代曲线。";
-    chart(market,forecast);
+    $("forecast-note").textContent=(forecast?`已保存预测 ${time(forecast.as_of)} · ${label(forecast.status)} · ${(forecast.horizons||[]).map(h=>`${horizonLabel(h.horizon)}：${h.sample_size} 个样本`).join(" / ")}`:"所选时点未找到已保存预测；图中仅显示真实走势，不会生成替代预测。")+(defaultSelectionNote?` ${defaultSelectionNote}`:"");
+    const closed=comparison.display_mode==="CLOSED_SESSION_COMPARISON" && comparison.session_closed, complete=comparison.archive_status==="COMPLETE";
+    $("comparison-title").textContent=closed?(complete?"已收盘 · 预测与全天真实走势对照":"已收盘 · 预测与已归档真实走势对照"):"盘中观察 · 真实走势截至所选时点";
+    $("comparison-text").textContent=closed?`观察资料截止 ${time(market.data_cutoff)}；真实走势单独显示至 ${time(comparison.actual_as_of)}，仅用于收盘对照。预测、市场状态与相似样本保留在所选观察时点。`:`预测与状态只使用 ${time(market.data_cutoff)} 前可见的资料；真实走势截至 ${time(comparison.actual_as_of)}，不显示观察时点以后的真实行情。`;
+    $("archive-note").textContent=closed?(complete?"真实走势来自已核验的完整交易日归档。":"真实行情归档不完整，仅显示已核验的片段；缺失分钟保留断点。"):"收盘后如有完整归档，可在这里对照全天真实走势。";
+    $("comparison-title").parentElement.classList.toggle("partial",closed&&!complete);
+    $("actual-label").textContent=closed?(complete?"全天真实走势":"已归档真实走势（部分）"):"观察时点前的真实走势";
+    chart(market,forecast,comparison);
     const forecastHistory=history.history || [];
     $("revisions").innerHTML=forecastHistory.length?forecastHistory.slice(-8).reverse().map(f=>{const close=(f.horizons||[]).find(h=>h.horizon==="15:00");return `<tr><td>${time(f.as_of)}</td><td>${close?.status==="AVAILABLE"?`${num(close.price_quantiles?.q50)} (${pct(close.quantiles?.q50,true)})`:escape(label(close?.status || "UNAVAILABLE"))}</td><td>${escape(label(f.confidence))}</td></tr>`;}).join(""):emptyRow(3,"暂不可用 · 还没有已保存预测");
     const revision=(history.revisions||[]).at(-1)?.revision;
@@ -173,23 +208,40 @@
     $("evidence").innerHTML=evidence.map(([k,v])=>`<dt>${escape(k)}</dt><dd>${escape(v)}</dd>`).join("");
     $("similar").innerHTML=similar.similar_states?.length?similar.similar_states.map(s=>`<tr><td>${escape(s.decision_at?.slice(0,10))} ${time(s.decision_at)}</td><td>${num(s.distance,3)}</td><td>${escape(stateLabel(s.context?.regime||s.context?.long_term_regime))} / ${escape(stateLabel(s.context?.sentiment||s.context?.sentiment_state))}</td><td>${pct(s.future_results?.["30m"],true)}</td><td>${pct(s.future_results?.["60m"],true)}</td><td>${pct(s.future_results?.["15:00"],true)}</td></tr>`).join(""):emptyRow(6,"样本不足 · 没有符合当时可见性与成熟条件的历史相似状态");
   }
-  async function refresh({latest=false,retainCurrent=false}={}) {
+  async function refresh({latest=false,retainCurrent=false,dateChanged=false,initial=false}={}) {
     const token=++generation; activeRefreshes++;
     if(!retainCurrent || !rendered)document.body.classList.add("loading");
     $("connection").textContent="正在读取…";
     try {
-      const status=await get("/api/live/status");
+      const dates=await get("/api/live/dates");
       if(token!==generation)return;
-      const old=selectedTime(); timeline=status.timeline||[];
+      applyCatalog(dates);
+      if(!catalog.available_dates.length){selectedDate=null;$("session-date").value="";clearObservation();connect();throw new Error("NO_AVAILABLE_DATES");}
+      const previousDate=selectedDate;
+      if(latest || !selectedDate)selectedDate=catalog.latest_date && catalog.available_dates.includes(catalog.latest_date)?catalog.latest_date:catalog.available_dates.at(-1);
+      if(initial && selectedDate<catalog.max_date)$("follow").checked=false;
+      $("session-date").value=selectedDate;
+      if(selectedDate<catalog.min_date || selectedDate>catalog.max_date)throw new Error("DATE_OUT_OF_RANGE");
+      if(!catalog.available_dates.includes(selectedDate))throw new Error("DATE_NOT_AVAILABLE");
+      const changed=dateChanged || selectedDate!==previousDate, old=changed?null:selectedTime(), date=selectedDate;
+      if(changed){clearObservation();defaultSelectionNote="";}
+      if(latest)defaultSelectionNote="";
+      const status=await get(`/api/live/status?${new URLSearchParams({date})}`);
+      if(token!==generation)return;
+      timeline=status.timeline||[];
       $("timeline").max=Math.max(0,timeline.length-1); $("timeline").disabled=!timeline.length;
-      $("timeline").value=latest||$("follow").checked||!old?timeline.length-1:Math.max(0,timeline.indexOf(old));
+      if(!timeline.length)throw new Error("RUN_UNAVAILABLE");
+      const priorIndex=old?timeline.indexOf(old):-1;
+      $("timeline").value=latest||$("follow").checked?timeline.length-1:priorIndex>=0?priorIndex:date<catalog.max_date?defaultHistoricalTime():timeline.length-1;
       const identities=status.indices?.length?status.indices:["000001.SH"];
       if(!identities.includes(selectedIndex))selectedIndex=identities[0];
       $("index").innerHTML=identities.map(id=>`<option value="${escape(id)}">${escape(names[id]||id)} · ${escape(id)}</option>`).join(""); $("index").value=selectedIndex;
-      const asOf=selectedTime(),q=query(asOf);
-      const [market,history,similar]=await Promise.all([get(`/api/live/market?${q}`),get(`/api/live/forecast/history?${q}`),get(`/api/live/similar-states?${q}`)]);
+      const asOf=selectedTime(),q=query(asOf,date);
+      const [market,history,similar,comparison]=await Promise.all([get(`/api/live/market?${q}`),get(`/api/live/forecast/history?${q}`),get(`/api/live/similar-states?${q}`),get(`/api/live/comparison?${q}`)]);
       if(token!==generation)return;
-      render(market,history,similar); $("connection").textContent=$("follow").checked?"已同步":"历史观察";
+      validateObservation(market,[history,similar,comparison],date);
+      render(market,history,similar,comparison); $("connection").textContent=$("follow").checked?"已同步":comparison.session_closed?"收盘对照":"历史观察";
+      connect();
     } catch(error){if(token===generation)fail(error);}
     finally {
       activeRefreshes--;
@@ -199,20 +251,33 @@
     }
   }
   function connect() {
+    if(socket && socket.date===selectedDate && $("follow").checked && [WebSocket.CONNECTING,WebSocket.OPEN].includes(socket.readyState))return;
     if(socket){socket.onclose=null;socket.close();socket=null;}clearTimeout(retry);
-    if(!$("follow").checked)return;
-    socket=new WebSocket(`${location.protocol==="https:"?"wss":"ws"}://${location.host}/ws/live`);
-    socket.onmessage=event=>{const data=JSON.parse(event.data);if(data.type==="snapshot"){
-      if(activeRefreshes)pendingLiveRefresh=true;else refresh({latest:true,retainCurrent:true});
-    }else if(data.type==="error")fail(new Error(data.error));};
-    socket.onclose=()=>{socket=null;if($("follow").checked)retry=setTimeout(connect,2500);};
-    socket.onerror=()=>{$("connection").textContent="连接恢复中";};
+    if(!$("follow").checked || !selectedDate || !catalog?.available_dates.includes(selectedDate))return;
+    const date=selectedDate, ws=new WebSocket(`${location.protocol==="https:"?"wss":"ws"}://${location.host}/ws/live?${new URLSearchParams({date})}`);
+    ws.date=date;socket=ws;
+    ws.onmessage=event=>{
+      if(socket!==ws || selectedDate!==date || !$("follow").checked)return;
+      let data;try{data=JSON.parse(event.data);}catch{fail(new Error("RUN_INTEGRITY_ERROR"));return;}
+      if(data.type==="snapshot"){
+        if(activeRefreshes)pendingLiveRefresh=true;else refresh({latest:true,retainCurrent:true});
+      }else if(data.type==="error")fail(new Error(data.error));
+    };
+    ws.onclose=()=>{if(socket!==ws)return;socket=null;if($("follow").checked)retry=setTimeout(connect,2500);};
+    ws.onerror=()=>{if(socket===ws)$("connection").textContent="连接恢复中";};
   }
-  $("timeline").addEventListener("input",()=>{generation++; document.body.classList.add("loading"); $("follow").checked=false;connect();$("as-of").textContent=observationTime(selectedTime());});
+  $("session-date").addEventListener("change",()=>{
+    generation++; $("follow").checked=false;pendingLiveRefresh=false;selectedDate=$("session-date").value;defaultSelectionNote="";connect();clearObservation();
+    if(!selectedDate){fail(new Error("INVALID_DATE"));return;}
+    document.body.classList.add("loading");refresh({dateChanged:true});
+  });
+  $("timeline").addEventListener("input",()=>{generation++; defaultSelectionNote="";pendingLiveRefresh=false;document.body.classList.add("loading"); $("follow").checked=false;connect();$("as-of").textContent=observationTime(selectedTime());});
   $("timeline").addEventListener("change",()=>refresh());
   $("index").addEventListener("change",()=>{selectedIndex=$("index").value;refresh();});
-  $("follow").addEventListener("change",()=>{connect();refresh({latest:$("follow").checked});});
-  $("latest").addEventListener("click",()=>{$("follow").checked=true;connect();refresh({latest:true});});
+  $("follow").addEventListener("change",()=>{pendingLiveRefresh=false;connect();refresh({latest:$("follow").checked});});
+  $("latest").addEventListener("click",()=>{$("follow").checked=true;defaultSelectionNote="";pendingLiveRefresh=false;refresh({latest:true});});
   $("refresh").addEventListener("click",()=>refresh());
-  refresh({latest:true});connect();
+  // 跨日时重新读取目录，让“跟随最新”能够发现新的交易日归档。
+  setInterval(()=>{if($("follow").checked && !document.hidden && !activeRefreshes)refresh({latest:true,retainCurrent:true});},60000);
+  refresh({initial:true});
 })();

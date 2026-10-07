@@ -1,12 +1,14 @@
 """Integrity-checked, time-bounded views over one explicitly selected run.
 
 The trusted archive reader can load later snapshots to verify a completed run.
-Responses expose only snapshots and actual observations at or before ``as_of``.
+Ordinary PIT responses expose only observations at or before ``as_of``. The
+explicit comparison view can display later actual bars after the real session
+close, while retaining the selected prediction's original observation metadata.
 No client-supplied filename, database path or directory is ever opened.
 """
 from __future__ import annotations
 
-from datetime import datetime
+from datetime import datetime, time, timedelta
 from copy import deepcopy
 import json
 from pathlib import Path
@@ -15,7 +17,7 @@ import stat
 from threading import RLock
 
 from .. import BROKER_CONNECTION, LIVE_TRADING, MARKET_EDGE
-from ..common import LiveError, aware, canonical_instrument, canonical_json, digest
+from ..common import LiveError, SHANGHAI, aware, canonical_instrument, canonical_json, digest
 from ..contracts.forecast import ForecastResult
 from ..contracts.market import MinuteBar
 
@@ -155,6 +157,11 @@ class RunView:
                     compact = previous[1]
                 if compact["instrument_id"] != identity or parse_as_of(compact["as_of"]) > when:
                     raise ValueError("future or mismatched forecast")
+                if (parse_as_of(compact["as_of"]).date() != when.date()
+                    or parse_as_of(compact["decision_at"]).date() != when.date()
+                    or any(parse_as_of(horizon["target_at"]).date() != when.date()
+                           for horizon in compact.get("horizons", []))):
+                    raise ValueError("wrong-day forecast")
                 if previous is None:
                     staged[key] = (fingerprint, compact)
                 forecasts[identity] = compact
@@ -335,6 +342,60 @@ class RunView:
             "forecast_revisions": current.get("forecast_revisions") or {},
             "data_quality": current.get("state") or _unavailable("NO_SAVED_SNAPSHOT"),
             "warnings": self._warnings(records)})
+
+    def comparison(self, as_of=None, *, now: datetime, identity="000001.SH"):
+        """Explicit hindsight display, separate from every PIT market response.
+
+        The observation metadata and saved forecast remain at ``as_of``. Only
+        this response's actual path may extend to the real session close.
+        A replay job finishing early never makes its trading session closed.
+        """
+        identity = self._identity(identity)
+        current_time = aware(now)
+        records, _, status, requested = self._select(as_of)
+        if not records:
+            raise LiveError("DATE_NOT_AVAILABLE")
+        day = parse_as_of(records[0]["as_of"]).date()
+        close = datetime.combine(day, time(15), SHANGHAI)
+        closed = current_time >= close
+        selected_time = parse_as_of(records[-1]["as_of"])
+        cutoff = min(current_time, close if closed else selected_time)
+        received_cutoff = current_time if closed else cutoff
+        archive_records, summary, archive_run_status = self._load()
+        visible_archive = [record for record in archive_records
+                           if parse_as_of(record["as_of"]) <= current_time]
+        _, all_paths = self._indices(visible_archive if closed else records)
+        paths = {key: [point for point in points
+                       if parse_as_of(point["timestamp"]) <= cutoff
+                       and parse_as_of(point["available_at"]) <= received_cutoff]
+                 for key, points in all_paths.items()}
+        paths = {key: points for key, points in paths.items() if points}
+        actual_times = [parse_as_of(point["timestamp"]) for point in paths.get(identity, [])]
+        # END-labelled bars cover exactly 240 exchange minutes. Checking the
+        # full timestamp set catches gaps, shifted/auction bars and duplicates.
+        expected = {datetime.combine(day, time(9, 31), SHANGHAI) + timedelta(minutes=i)
+                    for i in range(120)} | {
+                    datetime.combine(day, time(13, 1), SHANGHAI) + timedelta(minutes=i)
+                    for i in range(120)}
+        indices, _ = self._indices(visible_archive)
+        complete = (closed and summary is not None and archive_run_status == "COMPLETE"
+                    and parse_as_of(archive_records[-1]["as_of"]) <= current_time
+                    and summary.get("failed_cycles") == 0
+                    and identity in paths and set(indices).issubset(paths)
+                    and all({parse_as_of(point["timestamp"]) for point in points} == expected
+                            for points in all_paths.values())
+                    and all({parse_as_of(point["timestamp"]) for point in points} == expected
+                            and all(point["quality"] == "VALID" for point in points)
+                            for points in paths.values())
+                    and not any(record.get("cycle_error") is not None for record in visible_archive)
+                    and visible_archive[-1].get("state", {}).get("quality") == "VALID")
+        return deepcopy({**self._metadata(records, status, requested),
+            "actual_paths": paths,
+            "actual_as_of": max(actual_times).isoformat() if actual_times else None,
+            "session_closed": closed,
+            "display_mode": "CLOSED_SESSION_COMPARISON" if closed else "AS_OF_ONLY",
+            "archive_status": "COMPLETE" if complete else "PARTIAL",
+            "forecast_status": "SAVED_FORECAST" if self._forecasts(records, identity) else "NO_SAVED_FORECAST"})
 
     def component(self, name: str, as_of=None):
         if name not in ("breadth", "sentiment", "sectors"):

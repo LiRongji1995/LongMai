@@ -133,3 +133,34 @@ stockfish-live/.venv/bin/python -m stockfish_live.cli evaluate \
 220 次内层 K 选择全部为 INSUFFICIENT_INNER_VALIDATION：K=50 最多 9 个验证样本，K=100/200 为 0，故全部保留默认 50，**没有 K 胜出证据**。原保存预测 230 IDs 中 125 个具有成熟可用分布，形成 490 个合成 horizon 后验；395 个预测不足单独登记，不补造 baseline，不重训或改旧预测。真实与 PIT 未证明结果均为 0，投资评价为 NOT_EVALUATED，增量优势为 NO_EVIDENCE_OF_INCREMENTAL_EDGE。
 
 首轮评价实际退出 2、STORAGE_CHANGED_DURING_READ（121.595 秒），没有报告。诊断确认研究分片 ctime 改变而 mtime 保持原值，具体后台修改进程未确定；没有把它武断归因于 iCloud，也未移除断言。保留失败与 metadata/SHA 证据，之后 240 份文件的 SHA/stat 复查无变化，原目录第二轮同 CLI 才通过。两轮跨越本机睡眠/恢复间隔，最终耗时只作观测，不称性能验收。
+
+## 0.2.1：同页最近一年日期选择与收盘对照
+
+2026-10-07 工程续开发：现有 Dashboard 新增中文日期控件，保留观察时点滑块。范围依据上海实际当前日向前一个日历年，含边界并处理闰日；只发现显式运行根的直接日期子目录。已收盘日期默认停在 09:45，以原保存 Q50/分位区间对照全天已归档真实路径。普通 API 的真实行情、预测、市场状态、修订与相似样本仍按所选时点读取，新增 comparison 接口单独展示事后实际，不改旧预测。
+
+最终相称检查如下，均退出 0；两轮 pytest 有重叠，不累计称为全套数量：
+
+```sh
+stockfish-live/.venv/bin/python -m pytest -q stockfish-live/tests/test_api.py stockfish-live/tests/test_cli.py stockfish-live/tests/test_cli_research.py stockfish-live/tests/test_release_package.py
+# 114 passed，184.56 秒
+stockfish-live/.venv/bin/python -m pytest -q stockfish-live/tests/test_history_dashboard.py stockfish-live/tests/test_api.py stockfish-live/tests/test_release_package.py
+# 109 passed，13.86 秒；其中新增历史边界 50 项
+node stockfish-live/tests/frontend_history_state.cjs
+STOCKFISH_DASHBOARD_INITIAL_ARCHIVE=past node stockfish-live/tests/frontend_history_state.cjs
+stockfish-live/.venv/bin/python -m compileall -q stockfish-live/stockfish_live
+node --check stockfish-live/stockfish_live/frontend/dashboard.js
+stockfish-live/.venv/bin/python -m pip check
+git diff --check
+```
+
+新增检查覆盖 11 个选日 PIT 接口、跨日 as_of 拒绝、当前真实时钟、当天尚无可见快照、上海/UTC 跨日、一年边界/闰日、目录与预测业务日期、符号链接、最多四日解析缓存、缺档/缺预测、WS 选日和只读性。收盘完整性按精确 240 个 END 分钟集合判断，缺口、移位、盘外多余分钟、失败、质量受限或无 summary 均不称完整；15:00 末根晚收到后可显示，但仍要求实际收件与快照已可见。各指数各自报告真实路径截止，不能借另一指数的收盘时间。前端测试覆盖初载过去日/今天、09:40 不借用后来预测、选日/换指数/时点一致、倒序响应和旧 WS 不覆盖、缺档错误与返回最新。
+
+真实应用内浏览器默认视口检查通过：三日切换、上证/创业板切换、历史 09:45 双线、09:40 无保存预测提示、缺日期不显示上日图，以及中文资料截止与真实显示截止。浏览器图片仅作为私有验收产物。localhost 真实 TCP WebSocket 的日期查询另验证 HTTP 101 与 09:45 snapshot，真实路径只有前 15 分钟；没有用 TestClient 代替该 TCP 检查。
+
+隔离工程数据为显式 TEST_FIXTURE：4 个合成会话、7,680 行分钟、690 个历史 state，生成 37.118 秒；范围回放保存 2026-10-05/06/07 三个独立日，各 242 ticks、240 完成分钟、230 条保存预测、failed_cycles=0。小样本视觉演示使用独立配置 `k=2/min_samples=2/feature_names=(return_from_open_pct,)`，配置 hash 为 `93dc205bbaf051185989f7870666f5c6ffd5c4678cacb07e4c3f355feae9e5a1`，不修改正式默认参数，不代表真实模型验证或一年真实覆盖。
+
+最终 wheel `stockfish_live-0.2.1-py3-none-any.whl` SHA256 为 `c039496dc390fa2ca444cc3284885f631eee4641061111f2b3d7323bd01c10cf`。56 个包内 Python/HTML/CSS/JS 文件与最终源码逐字节一致；全新临时 target 安装后，在外目录以 `python -I` 导入包，33 个选日 GET、3 日收盘对照和选日 WS 通过。普通市场每指数仅 15 分钟、对照每指数 240 分钟，729 份快照/汇总文件查询前后 hash 不变。未将运行产物、截图或 wheel 提交源码。
+
+保留中间失败：首次开发目录演示生成退出 2/STORAGE_INTEGRITY_ERROR，原失败产物保留；未放宽校验，另建操作系统临时隔离目录生成与范围回放才通过，未确认首轮具体原因。初次无构建隔离的 wheel 命令退出 2，因独立运行环境未安装 setuptools 构建后端；标准临时构建隔离命令随后退出 0，运行环境依赖未升级。早期 API 检查发现滑块中文 aria-label 合同被改，已恢复；新历史测试曾错误禁止相似样本中的合法前日日期，改为核对所选 input_hash 和拒绝混入另一日保存 forecast_id，相关边界断言均保留。最终只有原有 Starlette/HTTPX 弃用提示。
+
+本次没有重跑上一轮 60 日三次确定性回放、完整 walk-forward 或全模块全套测试；预测/特征/训练/评价实现没有修改。未取得一年真实分钟与历史原预测覆盖，未配置真实 feed，未验收真实联网、Windows 原生、全年目录容量或长期运行。工程通过与投资有效性分开，MARKET_EDGE 仍为 NOT_ESTABLISHED；现有 Research 生产实例未切换。

@@ -440,7 +440,8 @@ def parser() -> argparse.ArgumentParser:
             command.add_argument("--foundation-only", action="store_true", help="explicit frozen Phase1 replay without research")
             command.add_argument("--early-forecasts", action="store_true", help="experimental 09:35/09:40 low confidence")
         if name == "serve":
-            command.add_argument("--run-dir", type=Path)
+            command.add_argument("--run-dir", type=Path,
+                help="saved single run or range root containing YYYY-MM-DD runs; read-only latest-year dashboard")
             command.add_argument("--host", default="127.0.0.1")
             command.add_argument("--port", type=int, default=8765)
         if name == "evaluate":
@@ -485,7 +486,7 @@ def main(argv=None) -> int:
             from .api.app import create_app
             import uvicorn
             app = create_app(args.run_dir)
-            app.state.run_view.status()
+            app.state.run_catalog.validate_startup()
             uvicorn.run(app, host=args.host, port=args.port)
             result, code = {"server": "STOPPED"}, 0
         else:
