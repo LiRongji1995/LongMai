@@ -577,6 +577,17 @@ def strategy_comparison(daily_summary,pv,dna,theme,focus=None,extra_strategies=N
 def implementation_conformance(run):
     """Append this assessment separately; never rewrite the historical run."""
     version=run.get('implementation_version')
+    if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
+        from .short_horizon_strength import short_horizon_source_identity
+        identity = short_horizon_source_identity()
+        conformant = (all(run.get(key) == identity.get(key) for key in
+            ('implementation_version', 'spec_hash', 'source_hash', 'config_hash', 'feature_version'))
+            and bool(run.get('decision_cutoff'))
+            and all(len(str(run.get(key, ''))) == 64 for key in ('input_hash', 'universe_hash')))
+        return {'status': 'SPEC_CONFORMANT' if conformant else 'SPEC_NOT_VERIFIED',
+            'run_id': run.get('run_id'), 'implementation_version': version,
+            'assessment_policy': 'SHORT_HORIZON_RESEARCH_IDENTITY_R1',
+            'exclude_from_compliant_performance': not conformant, 'preserve_original_record': True}
     identity=source_identity()
     conformant=(version==IMPLEMENTATION_VERSION and run.get('spec_hash')==identity['spec_hash']
         and run.get('source_hash')==identity['source_hash'] and run.get('config_hash')==identity['config_hash']
@@ -746,14 +757,99 @@ def run_active_daily_strategy(bundle,daily_summary=None,*,top_n=100,cutoff=None,
         'decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash','execution_profile')})
     return payload
 
+def run_short_horizon_strategy(bundle, *, cutoff=None, input_id=None):
+    """One explicitly selected research arm using the ordinary immutable input.
+
+    This wrapper does not execute the full research suite or the active V2
+    strategy. Observation selection and formal FOCUS remain distinct.
+    """
+    from .short_horizon_strength import (SHORT_HORIZON_ID, run_short_horizon_strength,
+                                         short_horizon_source_identity)
+    from .history_artifacts import history_identity, digest_market_input, digest_json_stream
+
+    identity = short_horizon_source_identity()
+    ctx = _prepare_context(bundle, cutoff)
+    result = run_short_horizon_strength(bundle, cutoff=ctx.cutoff, _context=ctx)
+    if short_horizon_source_identity() != identity:
+        raise ValueError('SHORT_HORIZON_RESEARCH_IDENTITY_CHANGED_DURING_EVALUATION')
+    for row in result.get('items') or []:
+        row.setdefault('display_order', row.get('rank'))
+        row.setdefault('rank_semantics', result.get('rank_semantics'))
+    input_hash = digest_market_input(bundle)
+    selected_ids = list(result.get('research_selected_ids') or [])
+    selected_set = set(selected_ids)
+    selected_rows = [row for row in result.get('items') or []
+                     if row.get('instrument_id') in selected_set]
+    policy_id = SHORT_HORIZON_ID + '_OBSERVATION'
+    scope = {'status': 'COMPLETE' if ctx.universe_complete else 'LIMITED_SCOPE',
+             'scope_role': 'DATED_QUALIFICATION_ONLY_NOT_PRICE_WINDOW_OR_DAILY_V1_READINESS',
+             'eligible': len(ctx.eligible_ids), 'evaluated': result.get('counts', {}).get('evaluated'),
+             'universe_complete': ctx.universe_complete,
+             'formal_recommendation_ready': False,
+             'price_window_readiness': 'SEE_PER_INSTRUMENT_EXACT_FEATURE_EVIDENCE',
+             'feature_unknown_instrument_count': (result.get('counts') or {}).get('unknown'),
+             'fact_coverage': result.get('fact_coverage')}
+    result.update(data_scope_status=scope['status'], coverage_scope=scope)
+    payload = {'strategy_family': 'SHORT_HORIZON_STRENGTH_RESEARCH',
+        'strategy_id': SHORT_HORIZON_ID, 'execution_profile': 'SHORT_HORIZON_RESEARCH_SINGLE',
+        'input_id': input_id or 'market_' + input_hash, 'input_hash': input_hash,
+        'observation_date': ctx.observation_date, 'decision_cutoff': ctx.cutoff.isoformat(),
+        'coverage_type': bundle.coverage_type,
+        'audit_mode': 'HISTORICAL_RECONSTRUCTION' if bundle.coverage_type == 'RECONSTRUCTED_HISTORICAL'
+            else 'ARCHIVED_POINT_IN_TIME' if bundle.coverage_type == 'PROSPECTIVE_CAPTURED' else bundle.coverage_type,
+        'rule_application_role': 'NEW_RESEARCH_VERSION_MATURITY_UNVALIDATED',
+        'parameter_status': result.get('parameter_status'), 'spec_conformance': 'SPEC_CONFORMANT',
+        'qualification': ctx.qualification, 'universe_hash': digest(ctx.qualification),
+        'effective_input_hash': digest_json_stream(ctx.resolver.effective_dependencies()),
+        'source_refs': sorted(ctx.resolver.used),
+        'data_watermark': max((row.ingested_at.isoformat() for row in bundle.receipts), default=None),
+        'data_readiness': {'SHORT_HORIZON_QUALIFICATION': scope,
+            'SHORT_HORIZON_RESEARCH': {'status': 'NOT_FORMAL_READY',
+                'scope_role': 'EXPLICIT_RESEARCH_OBSERVATION_NOT_PRODUCTION_RECOMMENDATION',
+                'formal_recommendation_ready': False,
+                'unknown_decision_count': (result.get('counts') or {}).get('unknown'),
+                'evidence_policy': 'NO_MISSING_PRICE_OR_CONTEXT_IMPUTATION_SEE_PER_INSTRUMENT_DETAILS'}},
+        'results': {SHORT_HORIZON_ID: result},
+        'selection_results': {policy_id: {'selection_policy_id': policy_id,
+            'strategy_id': SHORT_HORIZON_ID, 'selected_ids': selected_ids, 'count': len(selected_ids),
+            'selection_basis': 'RESEARCH_SELECTED_BY_FROZEN_SHORT_HORIZON_RULES',
+            'selection_role': 'RESEARCH_OBSERVATION_NOT_FORMAL_FOCUS',
+            'items': [{'instrument_id': row['instrument_id'], 'rank': row.get('rank'),
+                'primary_stage': row.get('primary_stage'), 'reason_codes': row.get('reason_codes', [])}
+                for row in selected_rows]}},
+        'prospective_validation': {'validation_role': 'EXPLICIT_SHORT_HORIZON_RESEARCH',
+            'input_integrity_valid': True, 'signal_run_persisted': False,
+            'official_primary_capture': False, 'official_validation_signal_countable': False,
+            'official_primary_signal_countable': False,
+            'signal_observation_date': ctx.observation_date,
+            'coverage_type': bundle.coverage_type, 'market_edge': 'NOT_ESTABLISHED'},
+        'signal_data_quality': {'signal_evaluable': False,
+            'data_quality_status': 'RESEARCH_NOT_COUNTABLE_AS_V2_PRIMARY',
+            'reason_codes': ['EXPLICIT_RESEARCH_STRATEGY_NOT_V2_PRIMARY']},
+        'comparison': {'comparison_version': 'SHORT_HORIZON_RESEARCH_SINGLE_R1',
+            'strategies': [{'strategy_id': SHORT_HORIZON_ID, 'status': result.get('status'),
+                'scope_label': result.get('scope_label'), 'counts': result.get('counts'),
+                'research_selected_ids': selected_ids, 'top_ids': []}],
+            'active_daily_strategy_executed': False, 'market_edge': 'NOT_ESTABLISHED'},
+        'market_edge': 'NOT_ESTABLISHED', **identity, **history_identity(bundle)}
+    result.update(input_hash=input_hash, decision_cutoff=ctx.cutoff.isoformat(),
+        coverage_type=bundle.coverage_type, execution_profile=payload['execution_profile'],
+        **history_identity(bundle))
+    payload['run_id'] = _stable_id('strategy_experiment', {key: payload[key] for key in
+        ('input_hash', 'observation_date', 'decision_cutoff', 'spec_hash', 'source_hash',
+         'implementation_version', 'universe_hash', 'execution_profile', 'feature_version')})
+    return payload
+
 def strategy_specs():
     from .stage_aware_momentum import stage_aware_strategy_specs
+    from .short_horizon_strength import short_horizon_strategy_specs
     from .theme_capital_trend import theme_capital_strategy_specs
     return {'task_id':'R05','implementation_version':IMPLEMENTATION_VERSION,**source_identity(),
         'strategies':[{'strategy_id':'DAILY_V1','description':'原五族冻结对照，缺数据不由PV替代。','config_hash':source_identity()['frozen_daily_config_hash']},
             *[{'strategy_id':k,'parameter_status':PARAMETER_STATUS,'spec':v} for k,v in SPEC['strategies'].items()],
             {'strategy_id':FOCUS_POLICY_ID,'selection_policy':FOCUS_POLICY,'parameter_status':PARAMETER_STATUS},
             *theme_capital_strategy_specs(),
-            *stage_aware_strategy_specs()]}
+            *stage_aware_strategy_specs(),
+            *short_horizon_strategy_specs()]}
 
 STRATEGY_SPECS=strategy_specs()['strategies']

@@ -99,10 +99,11 @@ def register_candidate_routes(app, service):
     @app.post('/api/strategy-experiments/run')
     def start_strategy_experiment_run():
         value = body()
-        if set(value) - {'input_id', 'observation_date'}:
+        if set(value) - {'input_id', 'observation_date', 'strategy_id'}:
             raise ValueError('select an existing market input only')
         parsed_date = datetime.fromisoformat(value['observation_date']).date() if value.get('observation_date') else None
-        return accepted(service.submit_strategy_experiments(input_id=value.get('input_id'), observation_date=parsed_date))
+        return accepted(service.submit_strategy_experiments(input_id=value.get('input_id'),
+            observation_date=parsed_date, strategy_id=value.get('strategy_id')))
 
     @app.post('/api/daily-primary/run')
     def start_daily_primary_run():

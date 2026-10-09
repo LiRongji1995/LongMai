@@ -29,7 +29,9 @@ THEME_CAPITAL = "THEME_CAPITAL_TREND_V1"
 THEME_CAPITAL_TECHNICAL = "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1"
 SIMPLE_TREND = "SIMPLE_TREND_TEMPLATE_REFERENCE_V1"
 STAGE_AWARE = "STAGE_AWARE_MOMENTUM_V2"
-RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE)
+SHORT_HORIZON = "SHORT_HORIZON_STRENGTH_R1"
+DECISION_PROFILES = (STAGE_AWARE, SHORT_HORIZON)
+RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE, SHORT_HORIZON)
 READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
     # R05 V4 before the additive THEME_CAPITAL_TREND_V1 experiment arms.
     "cde229340f46f123246c7ce7fe9b15331dc62f2a516b19e9524390ff4858031c",
@@ -174,9 +176,9 @@ def prefix(run_id):
     return "/api/strategy-experiments/" + identifier(run_id)
 
 
-def summary(client, run_id, page=1, page_size=10, strategy_id=PV):
+def summary(client, run_id, page=1, page_size=10, strategy_id=PV, selection="all"):
     return client.get(prefix(run_id) + "/summary?" + parse.urlencode(
-        {"strategy_id": identifier(strategy_id), "selection": "all", "page": page, "page_size": page_size}))
+        {"strategy_id": identifier(strategy_id), "selection": selection, "page": page, "page_size": page_size}))
 
 
 def concise(saved, strategy_id=PV):
@@ -192,6 +194,10 @@ def concise(saved, strategy_id=PV):
                  focus_count=len(saved.get("focus_ids") or []),
                  strategy_states={key: row.get("status") for key, row in saved.get("results", {}).items()},
                  excerpt=saved.get("items", [])[:10], excerpt_is_complete=(saved.get("filtered_total", 11) <= 10))
+    if strategy_id == SHORT_HORIZON:
+        value.update(research_observation_count=len(result.get("research_selected_ids") or []),
+                     formal_focus_count=(result.get("counts") or {}).get("focus", 0),
+                     selection_role="RESEARCH_OBSERVATION_NOT_FORMAL_FOCUS")
     return value
 
 
@@ -252,11 +258,13 @@ def detail_summary(item):
     return result
 
 
-def official_exports(client, run_id, strategy_id=PV):
+def official_exports(client, run_id, strategy_id=PV, selection="all"):
     """Verify official JSON, CSV, and every saved summary page without reranking."""
     base = prefix(run_id)
     strategy_id = identifier(strategy_id)
-    query = "&strategy_id=" + parse.quote(strategy_id) + "&selection=all"
+    if selection not in {"all", "focus", "unselected"} and not (selection == "observation" and strategy_id == SHORT_HORIZON):
+        raise ResearchError("UNKNOWN_STRATEGY_SELECTION")
+    query = "&strategy_id=" + parse.quote(strategy_id) + "&selection=" + selection
     json_bytes = client.raw(base + "/export?format=json" + query)
     csv_bytes = client.raw(base + "/export?format=csv" + query)
     try:
@@ -264,10 +272,10 @@ def official_exports(client, run_id, strategy_id=PV):
         rows = saved["results"][strategy_id]["items"]
         csv_rows = list(csv.DictReader(io.StringIO(csv_bytes.decode("utf-8-sig"))))
         view = saved["export_view"]
-        if saved["run_id"] != run_id or view["strategy_id"] != strategy_id or view["selection"] != "all":
+        if saved["run_id"] != run_id or view["strategy_id"] != strategy_id or view["selection"] != selection:
             raise ResearchError("EXPORT_IDENTITY_MISMATCH")
         def saved_identity(row):
-            rank = row.get("rank") if strategy_id == STAGE_AWARE else row["rank"]
+            rank = row.get("rank") if strategy_id in DECISION_PROFILES else row["rank"]
             return str(row["instrument_id"]), "" if rank is None else str(rank)
         expected = [saved_identity(row) for row in rows]
         actual = [(row["instrument_id"], row["rank"]) for row in csv_rows]
@@ -276,20 +284,20 @@ def official_exports(client, run_id, strategy_id=PV):
         if any(row["run_id"] != run_id or row["strategy_id"] != strategy_id or
                row["observation_date"] != saved["observation_date"] for row in csv_rows):
             raise ResearchError("CSV_METADATA_MISMATCH")
-        first = summary(client, run_id, page_size=500, strategy_id=strategy_id)
+        first = summary(client, run_id, page_size=500, strategy_id=strategy_id, selection=selection)
         if first["source_run_hash"] != view["source_content_hash"] or first["filtered_total"] != len(rows):
             raise ResearchError("SUMMARY_EXPORT_IDENTITY_MISMATCH")
         shown = list(first["items"])
         page = first
         while page["has_next"]:
-            page = summary(client, run_id, page=page["page"] + 1, page_size=500, strategy_id=strategy_id)
+            page = summary(client, run_id, page=page["page"] + 1, page_size=500, strategy_id=strategy_id, selection=selection)
             if page["source_run_hash"] != first["source_run_hash"]:
                 raise ResearchError("SUMMARY_VERSION_CHANGED")
             shown.extend(page["items"])
         if [saved_identity(row) for row in shown] != expected:
             raise ResearchError("SUMMARY_EXPORT_SAVED_ORDER_MISMATCH")
         ranked_total = len(rows)
-        if strategy_id == STAGE_AWARE:
+        if strategy_id in DECISION_PROFILES:
             decisions = [row["decision_status"] for row in rows]
             if any(value not in {"FOCUS", "WATCH", "REJECTED", "UNKNOWN"} for value in decisions):
                 raise ResearchError("EXPORT_DECISION_STATUS_MISMATCH")
@@ -298,6 +306,24 @@ def official_exports(client, run_id, strategy_id=PV):
             if [row["decision_status"] for row in shown] != decisions:
                 raise ResearchError("SUMMARY_EXPORT_SAVED_DECISION_MISMATCH")
             ranked_total = decisions.count("FOCUS")
+            if selection != "all":
+                ranked_total = (saved["results"][strategy_id].get("counts") or {}).get("focus", ranked_total)
+        if strategy_id == SHORT_HORIZON:
+            result = saved["results"][strategy_id]
+            selected_ids = result.get("research_selected_ids") or []
+            flags = [row.get("research_selected") for row in rows]
+            if any(type(value) is not bool for value in flags) or ranked_total != 0:
+                raise ResearchError("RESEARCH_SELECTION_FORMAL_FOCUS_MISMATCH")
+            if [row.get("research_selected") for row in shown] != flags:
+                raise ResearchError("SUMMARY_RESEARCH_SELECTION_MISMATCH")
+            if [row.get("research_selected") for row in csv_rows] != [str(value) for value in flags]:
+                raise ResearchError("CSV_RESEARCH_SELECTION_MISMATCH")
+            if selection == "all" and [row["instrument_id"] for row in rows if row["research_selected"]] != selected_ids:
+                raise ResearchError("SAVED_RESEARCH_SELECTION_IDS_MISMATCH")
+            if selection == "observation" and (not all(flags) or [row["instrument_id"] for row in rows] != selected_ids):
+                raise ResearchError("OBSERVATION_SELECTION_IDS_MISMATCH")
+            if len(selected_ids) != (result.get("counts") or {}).get("research_observation"):
+                raise ResearchError("RESEARCH_OBSERVATION_COUNT_MISMATCH")
         if view["filtered_total"] != len(rows) or view["ranked_total"] != ranked_total:
             raise ResearchError("EXPORT_COUNT_MISMATCH")
     except (KeyError, TypeError, ValueError, UnicodeError):
@@ -334,6 +360,9 @@ def select_saved(client, context, input_id=None, strategy_id=PV):
     candidates.sort(key=lambda row: (row["observation_date"], row.get("decision_cutoff") or ""), reverse=True)
     skipped = []
     for row in candidates:
+        if strategy_id not in (row.get("results") or {}):
+            skipped.append({"run_id": row["run_id"], "reason": "PROFILE_NOT_IN_SAVED_RUN"})
+            continue
         bundle = official_exports(client, row["run_id"], strategy_id)
         try:
             verify_reusable(bundle[0], strategy_id)
@@ -348,10 +377,12 @@ def report_text(saved, review, context=None, strategy_id=PV):
     result = saved["results"][strategy_id]
     counts = result.get("counts") or {}
     focus = saved.get("selection_results", {}).get(FOCUS, {})
-    ranked = [row for row in result.get("items", []) if row.get("rank") is not None]
+    ranked = ([row for row in result.get("items", []) if row.get("research_selected") is True]
+              if strategy_id == SHORT_HORIZON else [row for row in result.get("items", []) if row.get("rank") is not None])
     profile_title = (
         "沪深主板量价研究简报" if strategy_id == PV
         else "沪深主板阶段感知强势股研究简报" if strategy_id == STAGE_AWARE
+        else "沪深主板短线强势研究观察简报" if strategy_id == SHORT_HORIZON
         else "沪深主板新版板块资金趋势研究简报"
     )
     lines = ["# " + profile_title, "", "本报告由正式保存结果派生；范围仅为输入实际覆盖的沪深主板。",
@@ -371,6 +402,12 @@ def report_text(saved, review, context=None, strategy_id=PV):
     if strategy_id == STAGE_AWARE:
         lines.append("- 阶段感知 V2 初始研究参数状态：**尚未验证**；setup 标签是研究分类，不是市场事实；`MARKET_EDGE=NOT_ESTABLISHED`。")
         lines.append("- 正式 FOCUS 要求趋势、setup、行为确认、市场兼容、同题材板块/资金与关键反证全部达标；证据不足输出 WATCH/UNKNOWN。")
+    if strategy_id == SHORT_HORIZON:
+        lines += ["- 本版为显式短线研究策略；强启动、强延续、强势首次回撤分别评价，研究观察不代表正式 FOCUS。",
+                  "- 完整合格池保存 " + str(counts.get("eligible")) + " 只；研究形态入选 "
+                  + str(counts.get("research_observation")) + " 只；正式 FOCUS 为0；展示序号不表示推荐优先级。",
+                  "- 规则应用角色：" + str(saved.get("rule_application_role")) + "；生成时间不证明当时已经存在这些规则。",
+                  "- 初始参数状态：**尚未验证**；`MARKET_EDGE=NOT_ESTABLISHED`；限价、市场、题材与资金未知保持未知。"]
     if context:
         lines += ["- 目标交易日：" + context["target_session"] + "；该目标前一交易日：" + context["expected_observation_date"] + "。",
                   "- 请求时最后收盘交易日：" + context["latest_completed_session"] + "；当前报告使用最后可复用的原保存结果。"]
@@ -386,7 +423,7 @@ def report_text(saved, review, context=None, strategy_id=PV):
             detail += "；风险标记=" + json.dumps(row.get("risk_flags", []), ensure_ascii=False) + "，风险核对状态=" + str(row.get("risk_review_status", "未提供额外结论"))
         else:
             detail += "：状态=" + str(row.get("status")) + "，参考分=" + str(row.get("reference_score"))
-            if strategy_id == STAGE_AWARE:
+            if strategy_id in DECISION_PROFILES:
                 detail += "，阶段=" + str(row.get("primary_stage")) + "，流动性/题材/资金=" + "/".join(
                     str(row.get(k)) for k in ("liquidity_status", "sector_status", "funds_status"))
             else:
@@ -471,9 +508,14 @@ def save_bundle(client, bundle, output=None, context=None, with_report=True, str
                 "observation_date": saved["observation_date"], "coverage_type": saved.get("coverage_type"),
                 "spec_hash": saved.get("spec_hash"), "source_hash": saved.get("source_hash"),
                 "source_content_hash": saved["export_view"]["source_content_hash"],
-                "ranking_count": len(saved["results"][strategy_id]["items"]), "strategy_id": strategy_id, "selection": "all", "target": context,
+                "ranking_count": len(saved["results"][strategy_id]["items"]), "strategy_id": strategy_id,
+                "selection": saved["export_view"]["selection"], "target": context,
                 "verification": "OFFICIAL_JSON_CSV_ALL_SUMMARY_PAGES_SAME_IDS_RANKS_COUNT_SOURCE_HASH",
                 "files": {name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()}}
+    if strategy_id == SHORT_HORIZON:
+        manifest.update(qualified_pool_count=(saved["results"][strategy_id].get("counts") or {}).get("eligible"),
+            research_observation_count=(saved["results"][strategy_id].get("counts") or {}).get("research_observation"),
+            formal_focus_count=0, ranking_role="RESEARCH_DISPLAY_ORDER_NOT_RECOMMENDATION_PRIORITY")
     reused = reusable_local_bundle(directory.parent, manifest) if output is None else None
     result = concise(first, strategy_id)
     result.update(saved_directory=str((reused or directory).resolve()), files=[*files, "manifest.json"], target=context,
@@ -511,12 +553,13 @@ def await_job(client, accepted, wait_seconds):
         time.sleep(min(1, max(0, deadline - time.monotonic())))
 
 
-def submit_or_reuse_job(client, kind, path, body, wait_seconds, run_id=None):
+def submit_or_reuse_job(client, kind, path, body, wait_seconds, run_id=None, payload_match=None):
     jobs = client.get("/api/jobs?limit=100")
     if not isinstance(jobs, list):
         raise ResearchError("INVALID_JOB_LIST_RESPONSE")
     matches = [job for job in jobs if job.get("kind") == kind and job.get("state") not in TERMINAL
-               and (run_id is None or job.get("payload", {}).get("run_id") == run_id)]
+               and (run_id is None or job.get("payload", {}).get("run_id") == run_id)
+               and all(job.get("payload", {}).get(key) == value for key, value in (payload_match or {}).items())]
     if matches:
         result = await_job(client, matches[0], wait_seconds)
         result["reused_inflight_job"] = True
@@ -604,11 +647,13 @@ def parser():
     sub.add_argument("--limit", type=int, default=20, help="历史运行摘要数量；不是股票候选显示上限")
     for name in ("select", "run"):
         sub = commands.add_parser(name, help="只读复用保存的研究视图，不重复计算")
-        sub.add_argument("--profile", choices=RESEARCH_PROFILES, required=True)
+        sub.add_argument("--profile", choices=RESEARCH_PROFILES, required=name == "select")
         sub.add_argument("--target", default="next-session", help="tomorrow / next-session / YYYY-MM-DD")
         sub.add_argument("--output", type=Path)
         if name == "run":
             sub.add_argument("--input-id", required=True, help="精确复用已保存输入；无匹配时关闭执行并报告")
+            sub.add_argument("--strategy", choices=(SHORT_HORIZON,), help="显式执行独立新策略；只用已登记输入，不采集/切换主动策略")
+            sub.add_argument("--wait-seconds", type=float, default=30, help="显式新策略作业的有界等待：0..60秒")
     for name in ("detail", "export", "report", "track"):
         sub = commands.add_parser(name)
         sub.add_argument("run_id")
@@ -617,6 +662,7 @@ def parser():
         if name in {"export", "report"}:
             sub.add_argument("--output", type=Path)
             sub.add_argument("--profile", choices=RESEARCH_PROFILES, default=PV)
+            sub.add_argument("--selection", choices=("all", "focus", "unselected", "observation"), default="all")
         if name == "track":
             sub.add_argument("--update", action="store_true", help="显式追加正式后验和研究周期，不重算原名单")
             sub.add_argument("--input-id", help="可选已登记后续资料 input_id")
@@ -708,12 +754,40 @@ def execute(args, client):
         return [concise(row) for row in client.get("/api/strategy-experiments?limit=" + str(args.limit))]
     if args.command in {"select", "run"}:
         context = calendar_context(args.target)
+        explicit_strategy = getattr(args, "strategy", None)
+        if explicit_strategy:
+            if args.profile is not None and args.profile != explicit_strategy:
+                raise ResearchError("PROFILE_AND_EXPLICIT_STRATEGY_MISMATCH")
+            if not 0 <= args.wait_seconds <= 60:
+                raise ResearchError("WAIT_SECONDS_OUT_OF_RANGE")
+            try:
+                bundle, skipped = select_saved(client, context, args.input_id, explicit_strategy)
+            except ResearchError as exc:
+                if str(exc) != "NO_REUSABLE_REAL_RUN_INPUT_VERIFICATION_REQUIRED":
+                    raise
+                body = {"input_id": identifier(args.input_id), "strategy_id": explicit_strategy}
+                job = submit_or_reuse_job(client, "strategy_experiments", "/api/strategy-experiments/run",
+                    body, args.wait_seconds, payload_match=body)
+                if job.get("state") != "SUCCEEDED":
+                    return {**job, "target": context, "research_profile": explicit_strategy}
+                run_id = identifier((job.get("result") or {})["run_id"])
+                bundle = official_exports(client, run_id, explicit_strategy)
+                verify_reusable(bundle[0], explicit_strategy)
+                skipped = []
+                result = save_bundle(client, bundle, args.output, context, strategy_id=explicit_strategy)
+                result.update(newly_computed_ranking=True, reused_saved_run=False, job_id=job["job_id"])
+                return result
+            result = save_bundle(client, bundle, args.output, context, strategy_id=explicit_strategy)
+            result["skipped_non_reusable_runs"] = skipped
+            return result
+        if args.profile is None:
+            raise ResearchError("EXPLICIT_RESEARCH_PROFILE_REQUIRED")
         bundle, skipped = select_saved(client, context, getattr(args, "input_id", None), args.profile)
         result = save_bundle(client, bundle, args.output, context, strategy_id=args.profile)
         result["skipped_non_reusable_runs"] = skipped
         return result
     if args.command in {"export", "report"}:
-        return save_bundle(client, official_exports(client, args.run_id, args.profile), args.output,
+        return save_bundle(client, official_exports(client, args.run_id, args.profile, getattr(args, "selection", "all")), args.output,
                            with_report=args.command == "report", strategy_id=args.profile)
     if args.command == "detail":
         item = client.get(prefix(args.run_id) + "/items/" + identifier(args.instrument_id))

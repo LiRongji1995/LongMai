@@ -1,0 +1,56 @@
+strategy_id: SHORT_HORIZON_STRENGTH_R1
+implementation_version: SHORT_HORIZON_STRENGTH_R1_EXACT_THREE_STAGE
+spec_revision: SHORT_HORIZON_STRENGTH_R1_SPEC_2
+feature_version: SHORT_HORIZON_EXACT_V2
+parameter_status: INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED
+parameter_status_label_zh: 尚未验证
+market_edge: NOT_ESTABLISHED
+product_role: RESEARCH_OBSERVATION_ONLY
+production_promotion: DISABLED
+selection_policy_id: SHORT_HORIZON_STRENGTH_R1_OBSERVATION
+stage_order: [STRONG_START, STRONG_CONTINUATION, FIRST_PULLBACK]
+stages:
+  STRONG_START:
+    ret1_min: '0.06'
+    rs1_min: '0.02'
+    amount_min_cny: 100000000
+    amount_ratio_prior5_min: '1.5'
+    clv_min: '0.7'
+    prior_ret5_T_minus_1_max: '0.12'
+    close_above_ma_windows: [5, 10]
+    close_above_prior5_close_high: true
+    positive_flat_raw_alternative: true
+  STRONG_CONTINUATION:
+    amount_min_cny: 50000000
+    ret5_min: '0.15'
+    ret10_min: '0.25'
+    ret1_min: '0.05'
+    ret3_min: '0'
+    rs5_min_exclusive: '0'
+    clv_min: '0.7'
+    close_above_ma_windows: [20]
+    ma20_slope_lookback: 5
+    positive_flat_raw_alternative: true
+  FIRST_PULLBACK:
+    amount_min_cny: 200000000
+    ret1_min: '-0.08'
+    ret1_max_exclusive: '0'
+    ret5_min: '0.20'
+    ret3_min: '0.05'
+    prior_positive_sessions: 3
+    close_above_ma_windows: [20]
+    ma20_slope_lookback: 5
+    repair_confirmation: UNCONFIRMED
+safety:
+  known_close_limit_down: REJECT
+  unknown_limit_event: PRESERVE_UNKNOWN
+  formal_focus: false
+  core_pass: false
+  executability: UNCONFIRMED
+  zero_range: KEEP_CLV_NULL_NOT_VERIFIED_LIMIT_UP
+  contexts: PRESERVE_UNKNOWN_NO_FABRICATED_CONFIRMATION
+  identity_or_target_labels_in_predicate: false
+  top_n_truncation: false
+  original_start_or_high_or_momentum_gate: false
+  long_trend_gate: false
+  uniform_turnover_gate: false

@@ -10,6 +10,8 @@ Python Web/API、单写者SQLite、持久采集队列与调度继续承载已有
 
 主动核心为STAGE_AWARE_MOMENTUM_V2，日常DAILY_PRIMARY_FAST与多策略RESEARCH_FULL分开；R1必须显式选择，生产晋级关闭。V2按阶段分离事实、setup、行为确认、情境和反证，不使用A/CLV统一硬门槛。完整V2定义见[当前规格](STAGE_AWARE_MOMENTUM_V2.md)，R1见[R1规格](STAGE_AWARE_RESEARCH_R1.md)与[冻结修订](R1_REPAIR_SPEC_V3.md)。初始参数尚未验证，MARKET_EDGE=NOT_ESTABLISHED。
 
+2026-10-09 新增显式研究版本 [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md)。它在共同 MarketInput、日期化资格、可见性和可比价格合同上，以25会话事实独立识别强启动、强势延续和首次回撤，不继承旧 START/HIGH 标签。研究选择与正式 FOCUS 分开，经原实验运行、保存查询和导出体系调用；不另外建名单数据库。原 V2 日常入口、DAILY 和 Go 实现未自动切换。已见正反样本仅用于风格校准，源码测试与同日回算不能证明独立投资有效性。
+
 ## 数据与真实性
 
 独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前工程已覆盖分钟合同、独立 Parquet/DuckDB、严格 PIT/replay、流式市场状态、历史相似预测与修订、API/WebSocket/Dashboard 和 expanding walk-forward/保存预测后验。现有 Dashboard 可在最近一年已保存日期间切换，以当时的原保存预测对照收盘真实走势；事后实际价格单独展示，其他状态仍按观察时点读取。标准 HTTP feed 适配器已实现；真实供应商未配置，真实历史覆盖、长期运行和投资有效性尚未验收。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
@@ -28,6 +30,7 @@ BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记�
 | Python来源与时间 | [数据合同](../stockfish_core/DATA_CONTRACT.md)、[特征证据合同](architecture/FEATURE_EVIDENCE_CONTRACT_V1.md) |
 | 日常闭环与观察 | [闭环](PHASE1_DAILY_RESEARCH_LOOP.md)、[观察工具](PHASE1_OBSERVATION_MONITOR.md)、[评价分数](DAILY_RECOMMENDATION_SCORE_V1.md) |
 | Python快路径与历史存储 | [日常路径](R14_DAILY_FAST_PATH.md)、[历史合同](R12_HISTORY_ARTIFACT_REPORT.md) |
+| 短线强势三阶段研究 | [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md) |
 | Go构建、架构和迁移 | [Go入口](../../stock-fish-go/README.md)、[架构](../../stock-fish-go/ARCHITECTURE_V2.md)、[迁移](../../stock-fish-go/MIGRATION.md) |
 | 完整技术资料及旧报告 | [技术索引](README.md)、[历史归档](archive/README.md) |
 
@@ -50,6 +53,7 @@ BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记�
 | `THEME_CONTEXT_V1` | 已实现的事件题材增强实验，在合格子群重算 PV 后混合 T | 截止前可见完整 EVENT 主题、至少5成员、同伴价格/板事件覆盖≥95%；最新实际输入不足 |
 | `THEME_CAPITAL_TREND_V1` | 上一版板块、资金、多头趋势独立研究臂，保留为对照 | 成交额、换手、长窗均线、题材联动、同题材活跃资金均需 `PASS` |
 | `STAGE_AWARE_MOMENTUM_V2` | 当前主动核心阶段感知强势股策略；R14 起为 daily primary 默认 active strategy；V1 冻结为历史只读兼容 | 主板资格、成交额/换手底线、慢趋势状态、setup 识别、行为确认、市场兼容、同题材板块/资金和关键反证；最终输出 `FOCUS/WATCH/REJECTED/UNKNOWN` |
+| `SHORT_HORIZON_STRENGTH_R1` | 显式选择的短线强势研究版本；保留全池和独立观察选择，生产晋级关闭 | 共同资格、真实可见RAW与可比价、25会话精确事实；强启动/延续/首次回撤独立条件，情境与限价未知不造通过 |
 
 `DNA_REVERSAL_V1` 与 `THEME_LIMITUP_V1` 是旧客户端兼容别名；实际 canonical ID 分别为 DNA_RERANK/THEME_CONTEXT，不是两个新增策略，也不重复统计。配置 `execution_enabled: false` 指不启用交易执行，不代表禁止运行研究实验。日常以已确认 PV 路径处理量价请求，仍明确 DAILY 是冻结原基线，不拿 PV 结果冒充 DAILY 已齐备。
 
