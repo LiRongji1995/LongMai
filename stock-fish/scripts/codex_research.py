@@ -29,9 +29,11 @@ THEME_CAPITAL = "THEME_CAPITAL_TREND_V1"
 THEME_CAPITAL_TECHNICAL = "THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1"
 SIMPLE_TREND = "SIMPLE_TREND_TEMPLATE_REFERENCE_V1"
 STAGE_AWARE = "STAGE_AWARE_MOMENTUM_V2"
-SHORT_HORIZON = "SHORT_HORIZON_STRENGTH_R1"
-DECISION_PROFILES = (STAGE_AWARE, SHORT_HORIZON)
-RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE, SHORT_HORIZON)
+SHORT_HORIZON_LEGACY = "SHORT_HORIZON_STRENGTH_R1"
+SHORT_HORIZON = "SHORT_HORIZON_STRENGTH_R2"
+SHORT_HORIZON_PROFILES = (SHORT_HORIZON_LEGACY, SHORT_HORIZON)
+DECISION_PROFILES = (STAGE_AWARE, *SHORT_HORIZON_PROFILES)
+RESEARCH_PROFILES = (PV, THEME_CAPITAL, THEME_CAPITAL_TECHNICAL, SIMPLE_TREND, STAGE_AWARE, *SHORT_HORIZON_PROFILES)
 READ_ONLY_LEGACY_PV_SOURCE_HASHES = {
     # R05 V4 before the additive THEME_CAPITAL_TREND_V1 experiment arms.
     "cde229340f46f123246c7ce7fe9b15331dc62f2a516b19e9524390ff4858031c",
@@ -194,7 +196,7 @@ def concise(saved, strategy_id=PV):
                  focus_count=len(saved.get("focus_ids") or []),
                  strategy_states={key: row.get("status") for key, row in saved.get("results", {}).items()},
                  excerpt=saved.get("items", [])[:10], excerpt_is_complete=(saved.get("filtered_total", 11) <= 10))
-    if strategy_id == SHORT_HORIZON:
+    if strategy_id in SHORT_HORIZON_PROFILES:
         value.update(research_observation_count=len(result.get("research_selected_ids") or []),
                      formal_focus_count=(result.get("counts") or {}).get("focus", 0),
                      selection_role="RESEARCH_OBSERVATION_NOT_FORMAL_FOCUS")
@@ -262,7 +264,7 @@ def official_exports(client, run_id, strategy_id=PV, selection="all"):
     """Verify official JSON, CSV, and every saved summary page without reranking."""
     base = prefix(run_id)
     strategy_id = identifier(strategy_id)
-    if selection not in {"all", "focus", "unselected"} and not (selection == "observation" and strategy_id == SHORT_HORIZON):
+    if selection not in {"all", "focus", "unselected"} and not (selection == "observation" and strategy_id in SHORT_HORIZON_PROFILES):
         raise ResearchError("UNKNOWN_STRATEGY_SELECTION")
     query = "&strategy_id=" + parse.quote(strategy_id) + "&selection=" + selection
     json_bytes = client.raw(base + "/export?format=json" + query)
@@ -308,7 +310,7 @@ def official_exports(client, run_id, strategy_id=PV, selection="all"):
             ranked_total = decisions.count("FOCUS")
             if selection != "all":
                 ranked_total = (saved["results"][strategy_id].get("counts") or {}).get("focus", ranked_total)
-        if strategy_id == SHORT_HORIZON:
+        if strategy_id in SHORT_HORIZON_PROFILES:
             result = saved["results"][strategy_id]
             selected_ids = result.get("research_selected_ids") or []
             flags = [row.get("research_selected") for row in rows]
@@ -378,11 +380,11 @@ def report_text(saved, review, context=None, strategy_id=PV):
     counts = result.get("counts") or {}
     focus = saved.get("selection_results", {}).get(FOCUS, {})
     ranked = ([row for row in result.get("items", []) if row.get("research_selected") is True]
-              if strategy_id == SHORT_HORIZON else [row for row in result.get("items", []) if row.get("rank") is not None])
+              if strategy_id in SHORT_HORIZON_PROFILES else [row for row in result.get("items", []) if row.get("rank") is not None])
     profile_title = (
         "沪深主板量价研究简报" if strategy_id == PV
         else "沪深主板阶段感知强势股研究简报" if strategy_id == STAGE_AWARE
-        else "沪深主板短线强势研究观察简报" if strategy_id == SHORT_HORIZON
+        else "沪深主板短线强势研究观察简报" if strategy_id in SHORT_HORIZON_PROFILES
         else "沪深主板新版板块资金趋势研究简报"
     )
     lines = ["# " + profile_title, "", "本报告由正式保存结果派生；范围仅为输入实际覆盖的沪深主板。",
@@ -402,7 +404,7 @@ def report_text(saved, review, context=None, strategy_id=PV):
     if strategy_id == STAGE_AWARE:
         lines.append("- 阶段感知 V2 初始研究参数状态：**尚未验证**；setup 标签是研究分类，不是市场事实；`MARKET_EDGE=NOT_ESTABLISHED`。")
         lines.append("- 正式 FOCUS 要求趋势、setup、行为确认、市场兼容、同题材板块/资金与关键反证全部达标；证据不足输出 WATCH/UNKNOWN。")
-    if strategy_id == SHORT_HORIZON:
+    if strategy_id in SHORT_HORIZON_PROFILES:
         lines += ["- 本版为显式短线研究策略；强启动、强延续、强势首次回撤分别评价，研究观察不代表正式 FOCUS。",
                   "- 完整合格池保存 " + str(counts.get("eligible")) + " 只；研究形态入选 "
                   + str(counts.get("research_observation")) + " 只；正式 FOCUS 为0；展示序号不表示推荐优先级。",
@@ -512,7 +514,7 @@ def save_bundle(client, bundle, output=None, context=None, with_report=True, str
                 "selection": saved["export_view"]["selection"], "target": context,
                 "verification": "OFFICIAL_JSON_CSV_ALL_SUMMARY_PAGES_SAME_IDS_RANKS_COUNT_SOURCE_HASH",
                 "files": {name: {"bytes": len(data), "sha256": hashlib.sha256(data).hexdigest()} for name, data in files.items()}}
-    if strategy_id == SHORT_HORIZON:
+    if strategy_id in SHORT_HORIZON_PROFILES:
         manifest.update(qualified_pool_count=(saved["results"][strategy_id].get("counts") or {}).get("eligible"),
             research_observation_count=(saved["results"][strategy_id].get("counts") or {}).get("research_observation"),
             formal_focus_count=0, ranking_role="RESEARCH_DISPLAY_ORDER_NOT_RECOMMENDATION_PRIORITY")
@@ -629,6 +631,13 @@ def parser():
     result.add_argument("--env-file", type=Path, help="可选私有配置；只读取 STOCKFISH_API_KEY")
     result.add_argument("--timeout", type=float, default=30)
     commands = result.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser("short-horizon-r2", help="原生R2只读研究：认证保存R1与原始来源，另存新产物；不写业务库")
+    for flag in ("input", "base-run", "provenance", "source-receipts", "source-map", "output"):
+        sub.add_argument("--" + flag, type=Path, required=True)
+    sub.add_argument("--cutoff", required=True, help="真实资料截止，带时区；不会改写原R1 cutoff")
+    sub.add_argument("--target-session", type=date.fromisoformat, required=True)
+    sub.add_argument("--theme-market-pack", type=Path)
+    sub.add_argument("--membership-mode", choices=("DATED_ONLY", "CURRENT_COHORT_BACKVIEW"), default="DATED_ONLY")
     sub = commands.add_parser("research-r1", help="显式离线R1研究；只读取自包含导出输入，不连接生产库")
     sub.add_argument("--input", type=Path, action="append", help="导出JSON：input/cutoff/publication/可选execution_tape")
     sub.add_argument("--mode", choices=("run", "diagnose", "summarize"), default="run")
@@ -652,7 +661,7 @@ def parser():
         sub.add_argument("--output", type=Path)
         if name == "run":
             sub.add_argument("--input-id", required=True, help="精确复用已保存输入；无匹配时关闭执行并报告")
-            sub.add_argument("--strategy", choices=(SHORT_HORIZON,), help="显式执行独立新策略；只用已登记输入，不采集/切换主动策略")
+            sub.add_argument("--strategy", choices=SHORT_HORIZON_PROFILES, help="显式执行独立新策略；只用已登记输入，不采集/切换主动策略")
             sub.add_argument("--wait-seconds", type=float, default=30, help="显式新策略作业的有界等待：0..60秒")
     for name in ("detail", "export", "report", "track"):
         sub = commands.add_parser(name)
@@ -816,7 +825,14 @@ def main(argv=None):
     args = parser().parse_args(argv)
     key = ""
     try:
-        if args.command == "research-r1":
+        if args.command == "short-horizon-r2":
+            from stockfish_core.yaogu.research_context_artifacts import run_saved_context
+            result = run_saved_context(input_path=args.input, base_run_path=args.base_run,
+                provenance_path=args.provenance, source_receipts_path=args.source_receipts,
+                source_map_path=args.source_map, output=args.output, cutoff=args.cutoff,
+                target_session=args.target_session, theme_market_pack_path=args.theme_market_pack,
+                membership_mode=args.membership_mode)
+        elif args.command == "research-r1":
             from stockfish_core.yaogu.research_r1_io import run_local, summarize_saved
             if args.mode == "summarize":
                 if not args.saved_result: raise ValueError("SAVED_RESULT_REQUIRED")
@@ -834,7 +850,7 @@ def main(argv=None):
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
-        if args.command == "research-r1" and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
+        if args.command in {"research-r1", "short-horizon-r2"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
             print(json.dumps({"status":"BLOCKED", "reason":str(exc).split(":")[0]}))
             return 2
         # No tracebacks or raw provider payloads that could contain credentials.

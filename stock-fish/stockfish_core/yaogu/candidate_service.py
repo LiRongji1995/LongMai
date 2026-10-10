@@ -22,6 +22,7 @@ from .config import StrategyConfig, load_config
 from .auction import AuctionSnapshot, evaluate_auction, freeze_theses
 from .outcomes import evaluate_outcomes
 from .daily_research_service import DailyResearchMixin
+from .short_horizon_profiles import SHORT_HORIZON_IDS, short_horizon_module
 
 
 class CandidateRequest(Frozen):
@@ -564,13 +565,13 @@ class CandidateService(DailyResearchMixin):
         return list(STRATEGY_SPECS)
 
     def submit_strategy_experiments(self, *, input_id=None, observation_date=None, strategy_id=None, job_id=None):
-        if strategy_id not in (None, 'SHORT_HORIZON_STRENGTH_R1'):
+        if strategy_id not in (None, *SHORT_HORIZON_IDS):
             raise ValueError('unsupported explicitly selected research strategy')
         resolved,_=self.strategy_input(input_id,observation_date)
         payload = {'input_id': resolved, 'cutoff': utc_now().isoformat()}
         if strategy_id is not None:
-            from .short_horizon_strength import short_horizon_source_identity
-            payload.update(strategy_id=strategy_id, research_identity=short_horizon_source_identity())
+            payload.update(strategy_id=strategy_id,
+                research_identity=short_horizon_module(strategy_id).short_horizon_source_identity())
         return self.jobs.submit('strategy_experiments', payload, job_id=job_id)
 
     def submit_daily_primary_strategy(self, *, input_id=None, observation_date=None, job_id=None):
@@ -1094,10 +1095,10 @@ class CandidateService(DailyResearchMixin):
             result['content_hash'] = digest_json_stream({k:v for k,v in result.items() if k != 'content_hash'})
         return result
 
-    def _build_short_horizon_strategy_result(self, input_id, bundle, cutoff):
+    def _build_short_horizon_strategy_result(self, input_id, bundle, cutoff, *, strategy_id=SHORT_HORIZON_IDS[0]):
         from .strategy_experiments import run_short_horizon_strategy
         from .history_artifacts import digest_json_stream
-        result = run_short_horizon_strategy(bundle, cutoff=cutoff, input_id=input_id)
+        result = run_short_horizon_strategy(bundle, cutoff=cutoff, input_id=input_id, strategy_id=strategy_id)
         result['generated_at'] = utc_now().isoformat()
         target = self._stage_aware_target_session(bundle)
         result['target_session'] = str(target) if target else None
@@ -1213,7 +1214,10 @@ class CandidateService(DailyResearchMixin):
             'primary_sector_absolute_level','primary_sector_relative_level','primary_sector_market_rs_pct',
             'primary_sector_stock_role_known_feature_count','primary_sector_stock_role_unknown_feature_count',
             'primary_sector_stock_role_evidence_coverage','detail_ref','detail_hash','detail_encoding',
-            'research_selected','matched_arms','setup_match_status','repair_status','feature_version'}
+            'research_selected','matched_arms','setup_match_status','repair_status','feature_version',
+            'participation_status','participation_peak_turnover_fraction', 'style_status',
+            'liquidity_selection_gate', 'liquidity_position', 'liquidity_reference_cny',
+            'liquidity_ratio_to_reference', 'liquidity_soft_score'}
 
     @staticmethod
     def _primary_focus_selection(run):
@@ -1228,7 +1232,7 @@ class CandidateService(DailyResearchMixin):
 
     @classmethod
     def _focus_ids_for_strategy(cls, run, strategy_id, rows):
-        if strategy_id == 'SHORT_HORIZON_STRENGTH_R1':
+        if strategy_id in SHORT_HORIZON_IDS:
             return {row['instrument_id'] for row in rows
                     if row.get('instrument_id') and row.get('decision_status') == 'FOCUS'}
         if strategy_id == 'STAGE_AWARE_MOMENTUM_V2':
@@ -1455,16 +1459,16 @@ class CandidateService(DailyResearchMixin):
         _,bundle=self.input(payload['input_id'])
         config=self.current_config()
         cutoff=datetime.fromisoformat(payload['cutoff'])
-        if payload.get('strategy_id') == 'SHORT_HORIZON_STRENGTH_R1':
-            from .short_horizon_strength import short_horizon_source_identity
-            if payload.get('research_identity') != short_horizon_source_identity():
+        if payload.get('strategy_id') in SHORT_HORIZON_IDS:
+            strategy_id = payload['strategy_id']
+            if payload.get('research_identity') != short_horizon_module(strategy_id).short_horizon_source_identity():
                 raise ValueError('SHORT_HORIZON_RESEARCH_IDENTITY_CHANGED_AFTER_SUBMISSION')
             ctx.update(.25, '运行独立短线强势研究；原主动V2与冻结DAILY保持')
-            result = self._build_short_horizon_strategy_result(payload['input_id'], bundle, cutoff)
-            stage = result['results']['SHORT_HORIZON_STRENGTH_R1']
+            result = self._build_short_horizon_strategy_result(payload['input_id'], bundle, cutoff, strategy_id=strategy_id)
+            stage = result['results'][strategy_id]
             terminal = {'strategy_experiment_run_id': result['run_id'], 'run_id': result['run_id'],
                 'status': 'complete', 'quality': stage['status'],
-                'strategy_id': 'SHORT_HORIZON_STRENGTH_R1',
+                'strategy_id': strategy_id,
                 'execution_profile': result['execution_profile'], 'counts': stage.get('counts'),
                 'formal_focus_count': 0,
                 'research_observation_count': len(stage.get('research_selected_ids') or [])}
@@ -1655,7 +1659,7 @@ class CandidateService(DailyResearchMixin):
                 'research_selected_ids','full_eligible_pool_retained','feature_version')}
             header['results'][sid]['item_count'] = len(rows)
             header['selections'][sid] = {}
-            selections = ('all', 'focus', 'unselected', 'observation') if sid == 'SHORT_HORIZON_STRENGTH_R1' else ('all', 'focus', 'unselected')
+            selections = ('all', 'focus', 'unselected', 'observation') if sid in SHORT_HORIZON_IDS else ('all', 'focus', 'unselected')
             for selection in selections:
                 selected = ([row for row in rows if row.get('research_selected') is True]
                             if selection == 'observation' else self._selected_strategy_rows(rows, strategy_focus_ids, selection))
@@ -1769,7 +1773,7 @@ class CandidateService(DailyResearchMixin):
         if not 1 <= page_size <= 500 or page < 1:
             raise ValueError('summary 分页大小必须为 1..500')
         selection = selection or 'all'
-        if selection not in {'all','focus','unselected'} and not (selection == 'observation' and strategy_id == 'SHORT_HORIZON_STRENGTH_R1'):
+        if selection not in {'all','focus','unselected'} and not (selection == 'observation' and strategy_id in SHORT_HORIZON_IDS):
             raise ValueError('unknown strategy experiment selection')
         projection = self.store.get_document('strategy_experiment_summaries', run_id)
         if projection is None:
@@ -1815,7 +1819,7 @@ class CandidateService(DailyResearchMixin):
             'focus_selection': focus_matches[0] if focus_matches else None,
             'selection_policy': selection_policy_id or focus.get('selection_policy_id') or focus.get('selection_policy'),
             'research_observation_selection': next((row for row in
-                ((run.get('selection_results') or {}).get('SHORT_HORIZON_STRENGTH_R1_OBSERVATION') or {}).get('items') or []
+                ((run.get('selection_results') or {}).get((run.get('strategy_id') or SHORT_HORIZON_IDS[0]) + '_OBSERVATION') or {}).get('items') or []
                 if row.get('instrument_id') == instrument_id), None),
             'outcomes': self._strategy_item_observations('strategy_trading_session_observations', run_id, instrument_id),
             'tracking': self._strategy_item_observations('research_episode_observations', run_id, instrument_id, latest=100),
@@ -1857,7 +1861,7 @@ class CandidateService(DailyResearchMixin):
         if result.get('strategy_id') == 'STAGE_AWARE_MOMENTUM_V2' or result.get('full_eligible_pool_retained'):
             all_rows = [self._expand_strategy_row_detail(row) for row in result.get('items') or []]
             selection = selection or 'all'
-            if selection == 'observation' and strategy_id == 'SHORT_HORIZON_STRENGTH_R1':
+            if selection == 'observation' and strategy_id in SHORT_HORIZON_IDS:
                 rows = [row for row in all_rows if row.get('research_selected') is True]
             elif selection not in {'all', 'focus', 'unselected'}:
                 raise ValueError('unknown strategy experiment selection')
@@ -1888,8 +1892,12 @@ class CandidateService(DailyResearchMixin):
                   'low_to_close_rebound_pct', 'RS_market_1d_pct', 'RS_sector_1d_pct',
                   'shape_type', 'amount_cny', 'turnover_fraction', 'reason', 'reason_codes', 'selected_focus',
                   'focus_reason_codes', 'close_location', 'scope_label', 'parameter_status', 'parameter_status_label_zh']
-        if strategy_id == 'SHORT_HORIZON_STRENGTH_R1':
+        if strategy_id in SHORT_HORIZON_IDS:
             fields.extend(('research_selected', 'matched_arms', 'setup_match_status', 'repair_status', 'feature_version'))
+        if strategy_id == 'SHORT_HORIZON_STRENGTH_R2':
+            fields.extend(('participation_status', 'participation_peak_turnover_fraction', 'style_status',
+                           'liquidity_selection_gate', 'dynamic_liquidity_status', 'dynamic_reference_cny',
+                           'amount_to_dynamic_reference', 'dynamic_liquidity_soft_score'))
         writer = csv.DictWriter(stream, fieldnames=fields)
         writer.writeheader()
         for item in items:
@@ -1960,12 +1968,21 @@ class CandidateService(DailyResearchMixin):
                 'parameter_status': run.get('parameter_status'),
                 'parameter_status_label_zh': item.get('parameter_status_label_zh'),
             }
-            if strategy_id == 'SHORT_HORIZON_STRENGTH_R1':
+            if strategy_id in SHORT_HORIZON_IDS:
                 row.update(research_selected=item.get('research_selected'),
                            matched_arms='|'.join(item.get('matched_arms') or []),
                            setup_match_status=item.get('setup_match_status'),
                            repair_status=item.get('repair_status'),
                            feature_version=item.get('feature_version') or result.get('feature_version'))
+            if strategy_id == 'SHORT_HORIZON_STRENGTH_R2':
+                dynamic = item.get('liquidity') or {}
+                row.update(participation_status=item.get('participation_status'),
+                           participation_peak_turnover_fraction=item.get('participation_peak_turnover_fraction'),
+                           style_status=item.get('style_status'), liquidity_selection_gate=False,
+                           dynamic_liquidity_status=dynamic.get('status'),
+                           dynamic_reference_cny=json.dumps(dynamic.get('reference_cny'), ensure_ascii=False),
+                           amount_to_dynamic_reference=json.dumps(dynamic.get('ratio_to_reference'), ensure_ascii=False),
+                           dynamic_liquidity_soft_score=json.dumps(dynamic.get('soft_score_exact'), ensure_ascii=False))
             writer.writerow({k: "'" + v if isinstance(v, str) and v[:1] in '=+-@' else v for k, v in row.items()})
         return stream.getvalue()
 
@@ -1978,7 +1995,7 @@ class CandidateService(DailyResearchMixin):
             source_content_hash = run.get('content_hash') or digest(run)
             run = copy.deepcopy(run)
             result = copy.deepcopy(original_result)
-            if strategy_id == 'SHORT_HORIZON_STRENGTH_R1':
+            if strategy_id in SHORT_HORIZON_IDS:
                 # Full eligible rows already carry every diagnostic in this view.
                 # Also normalize earlier immutable R1 runs that embedded a second
                 # complete row list; only the export view changes, never the run.

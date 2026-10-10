@@ -12,6 +12,14 @@ Python Web/API、单写者SQLite、持久采集队列与调度继续承载已有
 
 2026-10-09 新增显式研究版本 [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md)。它在共同 MarketInput、日期化资格、可见性和可比价格合同上，以25会话事实独立识别强启动、强势延续和首次回撤，不继承旧 START/HIGH 标签。研究选择与正式 FOCUS 分开，经原实验运行、保存查询和导出体系调用；不另外建名单数据库。原 V2 日常入口、DAILY 和 Go 实现未自动切换。已见正反样本仅用于风格校准，源码测试与同日回算不能证明独立投资有效性。
 
+2026-10-10本次授权新增 [SHORT_HORIZON_STRENGTH_R2](SHORT_HORIZON_STRENGTH_R2.md)：继承已认证R1强势结构并追加近期参与度，动态成交额按完整沪深四板原始资料计算为软参考，不以缺额或低于参考线剔除观察项。新增[题材演进情境](THEME_EVOLUTION_R1.md)，将成交占比、相对价格推进、上涨广度、阶段确认与独立高位风险分开。SourceArtifactReader只读取显式来源manifest，核验原字节SHA/同日证券范围/实际时钟，不另建名单数据库。旧run冻结；新context与冻结父SHA均纳入新run身份。
+
+本次盘前清单和题材周期报告均只关注有合格研究候选、完整成分活跃条件成立且已通过既有两日确认的主线，按已验证梯度展示；非主线仅用作解释主线轮动的必要背景。单日活跃待确认及没有题材合力的合格个股归模型组，未知不按弱题材处理。呈现范围版本`NATIVE_TWO_SESSION_CONFIRMED_ACTIVE_MAINLINE_DISPLAY_V2`不改股票选择、原题材数值或参数。年度主线资格逐时点核验，当前成分回看与真实历史主题分离，并保留选择偏差与缺数边界。
+
+[题材关系研究](../stockfish_core/yaogu/theme_cycle_validation.py)是独立描述性情境层，不替代选股：关系只计算显式主线/必要背景组合，扣除共同成分，并以各自前60会话拟合的市场补集因子检验当日金额变化与收益残差。成交占比的闭合相关仅作诊断，不能当资金净流入或竞争因果。10个有效检验会话、3个经过独立认证的情绪周期均为尚未验证的初始覆盖假设；缺旧成员、旧资格或情绪注册权威时保持UNKNOWN。父阶段标签需原生producer能力认证，JSON自重算hash不构成认证；当前主线cohort回看不声称历史主线全覆盖或PIT预测成功。
+
+日历目标元数据另登记`TARGET_SESSION_CALENDAR_CONTEXT_V1`：原始日历字节、完整自然日范围、版本和实际收件时点认证后，目标交易日与日历证据纳入新run身份。原normalizer的日历覆盖截止`event_time`保持不变，以专属已发布日程语义处理；普通价格、主题、事件的时点规则不放宽。
+
 ## 数据与真实性
 
 独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前工程已覆盖分钟合同、独立 Parquet/DuckDB、严格 PIT/replay、流式市场状态、历史相似预测与修订、API/WebSocket/Dashboard 和 expanding walk-forward/保存预测后验。现有 Dashboard 可在最近一年已保存日期间切换，以当时的原保存预测对照收盘真实走势；事后实际价格单独展示，其他状态仍按观察时点读取。标准 HTTP feed 适配器已实现；真实供应商未配置，真实历史覆盖、长期运行和投资有效性尚未验收。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
@@ -31,6 +39,8 @@ BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记�
 | 日常闭环与观察 | [闭环](PHASE1_DAILY_RESEARCH_LOOP.md)、[观察工具](PHASE1_OBSERVATION_MONITOR.md)、[评价分数](DAILY_RECOMMENDATION_SCORE_V1.md) |
 | Python快路径与历史存储 | [日常路径](R14_DAILY_FAST_PATH.md)、[历史合同](R12_HISTORY_ARTIFACT_REPORT.md) |
 | 短线强势三阶段研究 | [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md) |
+| 参与度与动态成交额 | [SHORT_HORIZON_STRENGTH_R2](SHORT_HORIZON_STRENGTH_R2.md) |
+| 题材发酵/走强/分歧/走弱与独立风险 | [THEME_EVOLUTION_R1](THEME_EVOLUTION_R1.md) |
 | Go构建、架构和迁移 | [Go入口](../../stock-fish-go/README.md)、[架构](../../stock-fish-go/ARCHITECTURE_V2.md)、[迁移](../../stock-fish-go/MIGRATION.md) |
 | 完整技术资料及旧报告 | [技术索引](README.md)、[历史归档](archive/README.md) |
 

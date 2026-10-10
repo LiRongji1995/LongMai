@@ -578,15 +578,15 @@ def implementation_conformance(run):
     """Append this assessment separately; never rewrite the historical run."""
     version=run.get('implementation_version')
     if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-        from .short_horizon_strength import short_horizon_source_identity
-        identity = short_horizon_source_identity()
+        from .short_horizon_profiles import short_horizon_module
+        identity = short_horizon_module(run.get('strategy_id', 'SHORT_HORIZON_STRENGTH_R1')).short_horizon_source_identity()
         conformant = (all(run.get(key) == identity.get(key) for key in
             ('implementation_version', 'spec_hash', 'source_hash', 'config_hash', 'feature_version'))
             and bool(run.get('decision_cutoff'))
             and all(len(str(run.get(key, ''))) == 64 for key in ('input_hash', 'universe_hash')))
         return {'status': 'SPEC_CONFORMANT' if conformant else 'SPEC_NOT_VERIFIED',
             'run_id': run.get('run_id'), 'implementation_version': version,
-            'assessment_policy': 'SHORT_HORIZON_RESEARCH_IDENTITY_R1',
+            'assessment_policy': 'SHORT_HORIZON_RESEARCH_IDENTITY_' + run.get('strategy_id', 'SHORT_HORIZON_STRENGTH_R1').rsplit('_', 1)[-1],
             'exclude_from_compliant_performance': not conformant, 'preserve_original_record': True}
     identity=source_identity()
     conformant=(version==IMPLEMENTATION_VERSION and run.get('spec_hash')==identity['spec_hash']
@@ -757,19 +757,55 @@ def run_active_daily_strategy(bundle,daily_summary=None,*,top_n=100,cutoff=None,
         'decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash','execution_profile')})
     return payload
 
-def run_short_horizon_strategy(bundle, *, cutoff=None, input_id=None):
+def run_short_horizon_strategy(bundle, *, cutoff=None, input_id=None, strategy_id='SHORT_HORIZON_STRENGTH_R1',
+                               _frozen_base_run=None, _base_provenance=None,
+                               _source_payload_reader=None, _source_receipts=None,
+                               _theme_market_pack=None, _theme_market_pack_validator=None,
+                               _theme_membership_mode='DATED_ONLY',
+                               _target_calendar_context=None, _target_calendar_validator=None):
     """One explicitly selected research arm using the ordinary immutable input.
 
     This wrapper does not execute the full research suite or the active V2
     strategy. Observation selection and formal FOCUS remain distinct.
     """
-    from .short_horizon_strength import (SHORT_HORIZON_ID, run_short_horizon_strength,
-                                         short_horizon_source_identity)
+    from .short_horizon_profiles import short_horizon_module
+    module = short_horizon_module(strategy_id)
+    SHORT_HORIZON_ID = module.SHORT_HORIZON_ID
+    short_horizon_source_identity = module.short_horizon_source_identity
     from .history_artifacts import history_identity, digest_market_input, digest_json_stream
 
     identity = short_horizon_source_identity()
-    ctx = _prepare_context(bundle, cutoff)
-    result = run_short_horizon_strength(bundle, cutoff=ctx.cutoff, _context=ctx)
+    enhanced = strategy_id == 'SHORT_HORIZON_STRENGTH_R2'
+    if not enhanced and any(value is not None for value in
+            (_source_payload_reader, _source_receipts, _theme_market_pack, _theme_market_pack_validator,
+             _target_calendar_context, _target_calendar_validator)):
+        raise ValueError('EXTRA_RESEARCH_CONTEXT_REQUIRES_R2')
+    if (_target_calendar_context is None) != (_target_calendar_validator is None):
+        raise ValueError('TARGET_CALENDAR_REQUIRES_NATIVE_SOURCE_VALIDATOR_AND_CONTEXT')
+    if _target_calendar_context is not None:
+        if not callable(_target_calendar_validator):
+            raise ValueError('TARGET_CALENDAR_NATIVE_SOURCE_VALIDATOR_UNAVAILABLE')
+    context_arguments = ({'_source_payload_reader': _source_payload_reader,
+                          '_source_receipts': _source_receipts} if enhanced else {})
+    ctx = (module.prepare_inline_style_context(bundle, cutoff) if _frozen_base_run is not None
+           and strategy_id == 'SHORT_HORIZON_STRENGTH_R2' else _prepare_context(bundle, cutoff))
+    if _target_calendar_context is not None:
+        if _target_calendar_validator(_target_calendar_context, bundle=bundle, cutoff=ctx.cutoff) is False:
+            raise ValueError('TARGET_CALENDAR_NATIVE_AUTHENTICATION_FAILED')
+    if _frozen_base_run is None:
+        result = module.run_short_horizon_strength(bundle, cutoff=ctx.cutoff, _context=ctx, **context_arguments)
+    else:
+        if strategy_id != 'SHORT_HORIZON_STRENGTH_R2':
+            raise ValueError('FROZEN_BASE_REPLAY_REQUIRES_R2')
+        result = module.apply_style_to_r1_result(bundle,
+            _frozen_base_run['results']['SHORT_HORIZON_STRENGTH_R1'],
+            cutoff=ctx.cutoff, _context=ctx, base_provenance=_base_provenance, base_run=_frozen_base_run,
+            **context_arguments)
+    if enhanced:
+        from .theme_evolution import run_theme_evolution
+        result['theme_evolution'] = run_theme_evolution(bundle, cutoff=ctx.cutoff,
+            market_pack=_theme_market_pack, _market_pack_validator=_theme_market_pack_validator,
+            membership_mode=_theme_membership_mode)
     if short_horizon_source_identity() != identity:
         raise ValueError('SHORT_HORIZON_RESEARCH_IDENTITY_CHANGED_DURING_EVALUATION')
     for row in result.get('items') or []:
@@ -826,7 +862,7 @@ def run_short_horizon_strategy(bundle, *, cutoff=None, input_id=None):
         'signal_data_quality': {'signal_evaluable': False,
             'data_quality_status': 'RESEARCH_NOT_COUNTABLE_AS_V2_PRIMARY',
             'reason_codes': ['EXPLICIT_RESEARCH_STRATEGY_NOT_V2_PRIMARY']},
-        'comparison': {'comparison_version': 'SHORT_HORIZON_RESEARCH_SINGLE_R1',
+        'comparison': {'comparison_version': 'SHORT_HORIZON_RESEARCH_SINGLE_' + strategy_id.rsplit('_', 1)[-1],
             'strategies': [{'strategy_id': SHORT_HORIZON_ID, 'status': result.get('status'),
                 'scope_label': result.get('scope_label'), 'counts': result.get('counts'),
                 'research_selected_ids': selected_ids, 'top_ids': []}],
@@ -835,14 +871,58 @@ def run_short_horizon_strategy(bundle, *, cutoff=None, input_id=None):
     result.update(input_hash=input_hash, decision_cutoff=ctx.cutoff.isoformat(),
         coverage_type=bundle.coverage_type, execution_profile=payload['execution_profile'],
         **history_identity(bundle))
-    payload['run_id'] = _stable_id('strategy_experiment', {key: payload[key] for key in
-        ('input_hash', 'observation_date', 'decision_cutoff', 'spec_hash', 'source_hash',
-         'implementation_version', 'universe_hash', 'execution_profile', 'feature_version')})
+    if _frozen_base_run is not None:
+        payload.update(base_run_provenance=result['base_run_provenance'],
+            rule_application_role='POSTHOC_VERIFIED_FROZEN_R1_PLUS_INLINE_STYLE')
+        payload['source_refs'] = sorted(set(payload['source_refs']) | set(_frozen_base_run['source_refs']))
+        payload['effective_input_hash'] = digest_json_stream({
+            'new_inline_style_dependencies': ctx.resolver.effective_dependencies(),
+            'frozen_r1_effective_input_hash': _frozen_base_run['effective_input_hash'],
+            'frozen_r1_content_hash': _base_provenance['base_run_content_hash']})
+    id_fields = ('input_hash', 'observation_date', 'decision_cutoff', 'spec_hash', 'source_hash',
+                 'implementation_version', 'universe_hash', 'execution_profile', 'feature_version')
+    if enhanced:
+        context_layer = {'dynamic_liquidity': result.get('market_turnover_context'),
+                         'theme_evolution': result.get('theme_evolution'),
+                         'theme_market_pack_hash': digest_json_stream(_theme_market_pack) if _theme_market_pack is not None else None,
+                         'theme_membership_mode': _theme_membership_mode,
+                         'application_mode': 'VERIFIED_FROZEN_R1_CONTEXT_UPDATE' if _frozen_base_run is not None else 'NATIVE_R1_PLUS_CONTEXT',
+                         'base_run_content_hash': (_base_provenance or {}).get('base_run_content_hash')}
+        if _target_calendar_context is not None:
+            context_layer['target_calendar_context'] = _target_calendar_context
+            payload['target_calendar_evidence'] = _target_calendar_context
+            payload['target_session'] = _target_calendar_context['requested_target_session']
+        payload['research_context_hash'] = digest_json_stream(context_layer)
+        payload['research_context_role'] = context_layer['application_mode']
+        payload['effective_input_hash'] = digest_json_stream({
+            'price_and_participation_dependencies': payload['effective_input_hash'],
+            'context_hash': payload['research_context_hash']})
+        payload['source_refs'] = sorted(set(payload['source_refs']) |
+            set((result.get('market_turnover_context') or {}).get('source_refs') or ()) |
+            set((result.get('theme_evolution') or {}).get('source_refs') or ()) |
+            set((_target_calendar_context or {}).get('source_refs') or ()))
+        extra = (_source_receipts if _source_receipts is not None else
+                 getattr(_source_payload_reader, 'receipts', ())) or ()
+        from .contracts import SourceReceipt
+        context_receipts = [SourceReceipt.model_validate(row) for row in extra]
+        visible_used = [row for row in context_receipts
+            if row.receipt_id in payload['source_refs'] and
+            (max(row.event_time, row.source_published_at, row.first_seen_at, row.ingested_at) <= ctx.cutoff
+             or (row.dataset == 'calendar'
+                 and row.receipt_id in set((_target_calendar_context or {}).get('source_refs') or ())
+                 and max(row.source_published_at, row.first_seen_at, row.ingested_at) <= ctx.cutoff))]
+        payload['base_data_watermark'] = payload['data_watermark']
+        payload['context_data_watermark'] = max((row.ingested_at.isoformat() for row in visible_used), default=None)
+        payload['data_watermark'] = max(filter(None, (payload['base_data_watermark'],
+            payload['context_data_watermark'])), default=None)
+        id_fields += ('research_context_hash',)
+    payload['run_id'] = _stable_id('strategy_experiment', {key: payload[key] for key in id_fields})
     return payload
 
 def strategy_specs():
     from .stage_aware_momentum import stage_aware_strategy_specs
     from .short_horizon_strength import short_horizon_strategy_specs
+    from .short_horizon_participation import short_horizon_strategy_specs as participation_specs
     from .theme_capital_trend import theme_capital_strategy_specs
     return {'task_id':'R05','implementation_version':IMPLEMENTATION_VERSION,**source_identity(),
         'strategies':[{'strategy_id':'DAILY_V1','description':'原五族冻结对照，缺数据不由PV替代。','config_hash':source_identity()['frozen_daily_config_hash']},
@@ -850,6 +930,7 @@ def strategy_specs():
             {'strategy_id':FOCUS_POLICY_ID,'selection_policy':FOCUS_POLICY,'parameter_status':PARAMETER_STATUS},
             *theme_capital_strategy_specs(),
             *stage_aware_strategy_specs(),
-            *short_horizon_strategy_specs()]}
+            *short_horizon_strategy_specs(),
+            *participation_specs()]}
 
 STRATEGY_SPECS=strategy_specs()['strategies']
