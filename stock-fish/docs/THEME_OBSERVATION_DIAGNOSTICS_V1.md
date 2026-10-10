@@ -1,10 +1,10 @@
-# 题材缺源与早期发酵展示诊断 V1
+# 题材缺源、早期发酵与活跃分歧展示诊断 V2
 
-2026-10-10授权的报告修正，呈现版本`ACTIVE_MAINLINE_AND_EARLY_SIGNAL_DISPLAY_V3`，特征版本`THEME_COVERAGE_AND_PENDING_OBSERVATION_DIAGNOSTICS_V1`。旧run、原FSM、全部数值阈值和股票选择冻结；参数仍尚未验证，MARKET_EDGE=NOT_ESTABLISHED。
+2026-10-10授权的报告修正，当前呈现版本`ACTIVE_MAINLINE_EARLY_SIGNAL_AND_DIVERGENCE_DISPLAY_V4`，特征版本`THEME_COVERAGE_PENDING_AND_ACTIVE_DIVERGENCE_DIAGNOSTICS_V2`。先前V3仅补缺源与首日观察；长窗真实复算揭示原FSM可在候选/确认仍PASS时转DIVERGENCE，V4再单列活跃分歧。旧run、原FSM、全部数值阈值和股票选择冻结；参数仍尚未验证，MARKET_EDGE=NOT_ESTABLISHED。
 
 原始题材记录或已认证观察日题材行缺失时，报告必须突出“主线识别不可用，个股名单不能证明主线覆盖”。UNKNOWN不能呈现为无主线或弱题材，也不能用事后取得的当前成分补写旧盘前预测。
 
-重点仍是有冻结合格候选交集、完整成分当日发酵/走强条件成立的题材。通过原两交易会话确认的列为“确认主线”；只有原候选条件PASS、处于EMERGING_PENDING/STRENGTHENING_PENDING的，另列“主线发酵观察，尚未确认”。不能为了早报而改成已确认。按既有阶段、精确扩张倍数、RS5、广度排序，没有新分数、经济阈值或行业排除。
+重点仍是有冻结合格候选交集、完整成分当日发酵/走强条件成立的题材。通过原两交易会话确认且仍为EMERGING/STRENGTHENING的列为“确认主线”；只有原候选条件PASS、处于EMERGING_PENDING/STRENGTHENING_PENDING的，另列“主线发酵观察，尚未确认”。V4另外保留原候选和两日确认仍PASS但阶段为DIVERGENCE的“活跃主线，出现分歧”，不因分歧隐藏，也不改称走强。不能为了早报而改成已确认。各组按既有阶段、精确扩张倍数、RS5、广度排序，没有新分数、经济阈值或行业排除。
 
 发酵条件沿用原RS3，走强沿用原RS5；不能在展示层再给发酵附加RS5已知门槛。RS5未知仅影响排序中该轴的可比较性，未知值仍原样保存。
 

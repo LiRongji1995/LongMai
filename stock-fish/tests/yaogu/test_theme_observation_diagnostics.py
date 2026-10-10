@@ -2,6 +2,7 @@
 from copy import deepcopy
 from datetime import datetime, timedelta
 from dataclasses import dataclass
+from decimal import Decimal
 
 import pytest
 
@@ -75,8 +76,27 @@ def native_case(kind='confirmed'):
     value['bars'] = [row for row in value['bars'] if row['session'] in value['sessions']]
     for row in value['bars']:
         row['instrument_id'] = remap[row['instrument_id']]
-        if kind != 'inactive' and row['instrument_id'] == CONT_ID and row['session'] in full_calendar[-2:]:
+        active_tail = full_calendar[-3:] if kind == 'divergence' else full_calendar[-2:]
+        if kind != 'inactive' and row['instrument_id'] == CONT_ID and row['session'] in active_tail:
             row['amount_cny'] = '900000000'
+        if kind == 'divergence' and row['instrument_id'] == CONT_ID and row['session'] == observation:
+            # Three genuine active days establish the previous STRENGTHENING
+            # state. A still-positive latest price slows relative momentum,
+            # letting the original FSM diagnose divergence without stage edits.
+            prior, close = Decimal('14.641'), Decimal('15.37305')
+            for key, amount in (('open', prior), ('high', close), ('low', prior), ('close', close)):
+                row[key] = str(amount)
+                row['comparable_' + key] = str(amount * 2)
+            row['reference_prev_close'] = str(prior)
+        if kind == 'divergence' and row['instrument_id'] == WEAK_ID and row['session'] == observation:
+            # The explicitly artificial market peer advances faster than the
+            # still-qualified theme leader. This changes native relative
+            # momentum, while the leader still passes the original 5% arm.
+            prior, close = Decimal('10.10'), Decimal('12.12')
+            for key, amount in (('open', prior), ('high', close), ('low', prior), ('close', close)):
+                row[key] = str(amount)
+                row['comparable_' + key] = str(amount * 2)
+            row['reference_prev_close'] = str(prior)
     for index, security in enumerate(value['universe']['securities']):
         iid = IDS[index]
         security.update(instrument_id=iid, exchange='SSE' if iid.endswith('.SH') else 'SZSE',
@@ -146,7 +166,7 @@ def native_case(kind='confirmed'):
 def cases():
     return {name: native_case(name) for name in ('first', 'confirmed', 'missing_themes',
         'short_baseline', 'overlap', 'inactive', 'emerging_rs5_unknown',
-        'zero_members', 'missing_markets')}
+        'zero_members', 'missing_markets', 'divergence')}
 
 
 def test_absent_native_membership_requires_unknown_banner_not_no_mainline(cases):
@@ -190,6 +210,41 @@ def test_native_second_day_confirmation_is_mainline_without_selection_change(cas
     assert report['confirmed_mainlines'][0]['selected_ids'] == [CONT_ID]
     assert report['stock_selection_changed'] is False
     assert report['stage_or_threshold_changed'] is False
+    assert report['frozen_selected_ids'] == list(case.selected_ids)
+    assert digest_json_stream(case.context) == before_context
+    assert digest_json_stream(case.stock_parent) == before_stock
+
+
+def test_native_active_divergence_remains_visible_without_becoming_strengthening(cases):
+    case = cases['divergence']
+    before_context, before_stock = digest_json_stream(case.context), digest_json_stream(case.stock_parent)
+    previous, row = case.context['items'][-2:]
+    stock_row = next(item for item in case.stock_parent['items'] if item['instrument_id'] == CONT_ID)
+    assert previous['stage'] == 'STRENGTHENING'
+    assert row['stage'] == 'DIVERGENCE'
+    assert theme.exact(row['rs5']) < theme.exact(previous['rs5'])
+    assert row['candidate_states']['emerging'] == row['candidate_states']['strengthening'] == 'PASS'
+    assert row['confirmation_states']['emerging'] == row['confirmation_states']['strengthening'] == 'PASS'
+    assert stock_row['arms']['STRONG_CONTINUATION']['status'] == 'PASS'
+    assert stock_row['exact_features']['returns']['1'] == {'numerator': 1, 'denominator': 20}
+    assert CONT_ID in case.selected_ids
+
+    report = case.report()
+    assert report['confirmed_mainlines'] == report['fermentation_watch'] == []
+    assert len(report['active_divergence_mainlines']) == 1
+    shown = report['active_divergence_mainlines'][0]
+    assert shown['display_role'] == 'ACTIVE_THEME_DIVERGENCE_CONFIRMED'
+    assert shown['stage'] == 'DIVERGENCE'
+    assert shown['selected_ids'] == [CONT_ID]
+    assert shown['candidate_states'] == row['candidate_states']
+    assert shown['confirmation_states'] == row['confirmation_states']
+    assert shown['high_risk'] == row['high_risk']
+    assert shown['high_risk'] is not row['high_risk']
+    assert shown['source_feature_axes'] == {key: row[key] for key in
+        ('theme_amount_cny', 'market_amount_cny', 'share', 'expansion', 'breadth', 'rs3', 'rs5')}
+    assert shown['source_refs'] == row['source_refs']
+    assert CONT_ID not in report['model_only_selected_ids']
+    assert report['stock_selection_changed'] is report['stage_or_threshold_changed'] is False
     assert report['frozen_selected_ids'] == list(case.selected_ids)
     assert digest_json_stream(case.context) == before_context
     assert digest_json_stream(case.stock_parent) == before_stock

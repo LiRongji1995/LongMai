@@ -15,8 +15,8 @@ from .history_artifacts import digest_json_stream, digest_market_input
 from .theme_evolution import exact
 from .visibility import stamp
 
-VERSION = 'ACTIVE_MAINLINE_AND_EARLY_SIGNAL_DISPLAY_V3'
-FEATURE_VERSION = 'THEME_COVERAGE_AND_PENDING_OBSERVATION_DIAGNOSTICS_V1'
+VERSION = 'ACTIVE_MAINLINE_EARLY_SIGNAL_AND_DIVERGENCE_DISPLAY_V4'
+FEATURE_VERSION = 'THEME_COVERAGE_PENDING_AND_ACTIVE_DIVERGENCE_DIAGNOSTICS_V2'
 
 
 def source_identity():
@@ -58,7 +58,7 @@ def build_theme_observation_diagnostics(bundle, theme_context, *, cutoff, select
             if str(row.get('session')) == str(bundle.observation_date)]
     if len({row.get('theme_id') for row in rows}) != len(rows):
         raise ValueError('THEME_DISPLAY_DUPLICATE_OBSERVATION_THEME')
-    confirmed, pending, incomplete = [], [], []
+    confirmed, pending, divergence, incomplete = [], [], [], []
     matched_ids = set()
     reasons = []
     if not rows:
@@ -102,6 +102,12 @@ def build_theme_observation_diagnostics(bundle, theme_context, *, cutoff, select
         elif complete and active and row.get('stage') in ('EMERGING_PENDING', 'STRENGTHENING_PENDING'):
             pending.append({**observation, 'display_role': 'ACTIVE_THEME_FERMENTATION_WATCH_UNCONFIRMED'})
             matched_ids.update(intersection)
+        elif complete and active and known_confirmation and row.get('stage') == 'DIVERGENCE':
+            # The native FSM can flag divergence while activity and its two-day
+            # confirmation still pass. Keep that fact visible with its risk;
+            # neither erase the mainline nor relabel it as strengthening.
+            divergence.append({**observation, 'display_role': 'ACTIVE_THEME_DIVERGENCE_CONFIRMED'})
+            matched_ids.update(intersection)
         elif not available_axes or all(exact(row.get(key)) is None for key in ('rs3', 'rs5')):
             incomplete.append({**observation, 'display_role': 'DATA_INCOMPLETE_NOT_WEAK_THEME',
                                'partial_facts_are_not_confirmed_mainline': True})
@@ -115,6 +121,7 @@ def build_theme_observation_diagnostics(bundle, theme_context, *, cutoff, select
                 exact(source.get('breadth')))
     confirmed.sort(key=strength, reverse=True)
     pending.sort(key=strength, reverse=True)
+    divergence.sort(key=strength, reverse=True)
     result = {'schema_version': VERSION, **source_identity(), 'source_input_hash': input_hash,
         'decision_cutoff': cutoff.isoformat(), 'observation_date': str(bundle.observation_date),
         'theme_context_hash': theme_context['context_content_hash'],
@@ -125,6 +132,7 @@ def build_theme_observation_diagnostics(bundle, theme_context, *, cutoff, select
         'report_banner_required': bool(reasons), 'reason_codes': reasons,
         'report_banner': '主线识别不可用：缺少题材来源；本次个股名单不能证明主线覆盖。' if reasons else None,
         'confirmed_mainlines': confirmed, 'fermentation_watch': pending,
+        'active_divergence_mainlines': divergence,
         'qualified_theme_data_incomplete': incomplete,
         'model_only_selected_ids': sorted(set(selected) - matched_ids),
         'missing_reason_counts': dict(Counter(reason for row in rows for reason in row.get('reason_codes', ()))),
