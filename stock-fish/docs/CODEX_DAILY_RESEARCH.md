@@ -21,6 +21,8 @@
 
 变化趋势依该标准单列资金、参与、集中、持续、相对市场及席位事实和反证，不能把当前篮子交易家数说成历史规则合格家数。新增[报道事件V1](THEME_EVENT_EVIDENCE_V1.md)尚未接每日默认run/export；使用时必须认证真实原件及原生父/冻结选择，不接受普通自hash JSON授权，不据新闻加名单或升级FOCUS。
 
+[席位原件V1](LHB_SEAT_EVIDENCE_V1.md)须认证实际归档manifest及全部原件，再恢复提供方编码；买卖榜重复appearance不当独立游资，无编码机构不按同名合并、渠道不推定自然人。单位/披露窗/独立发布时间未知时reported数值不用于FUNDS评分。新捕获附件按新cutoff绑定冻结原生父与选择，不能回填原run；当前默认入口尚未接线。同期指数明确代码、覆盖/权重、原字段基准及实际收件时间，与四板等权市场参考分列，历史SDK下载不冒充历史身份或PIT证明；指数金额不跨覆盖求和。
+
 ## 调用入口
 
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。
