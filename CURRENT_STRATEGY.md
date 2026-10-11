@@ -66,3 +66,11 @@ R2统一5%初始参与条件仍保持原身份。紫竹高科的已验证延续�
 R1完整定义见[R1规格](stock-fish/docs/STAGE_AWARE_RESEARCH_R1.md)及[冻结修订合同](stock-fish/docs/R1_REPAIR_SPEC_V3.md)。DAILY五族公式见[策略规格](stock-fish/STRATEGY_SPEC_V1.md)；其他规则与详细公式由[项目综述](stock-fish/docs/PROJECT_OVERVIEW.md)统一定位。
 
 旧策略的公式、权重、阈值和保存运行保持原版本。新增短线强势R1采用独立配置和来源身份；所有初始参数仍标“尚未验证”，MARKET_EDGE=NOT_ESTABLISHED；系统不连接券商、不下单。
+
+## 原始父来源时间与行业代理证据
+
+[晚派生来源时间V1](stock-fish/docs/ORIGINAL_PARENT_ASOF_LATE_DERIVATION_V1.md)在显式研究中核验原RAW、回执和结果，只将实际截止前可见的父来源用于旧截止计算，另存今天派生及验证的真实时间。原始缺数、批次不完整、历史资格和目标日历未知分别保留。
+
+[Sina行业代理V1](stock-fish/docs/INDUSTRY_SINA_CONTEXT_V1.md)新增独立目录和成员来源；行业代理、供应商概念及经济主线的覆盖分别表达。原始目录计数与实际成员计数冲突时保留UNKNOWN；未标业务日的报价只用于成员发现。该来源增强保持冻结R2选择、公式、参数和FOCUS规则，尚未接默认入口。
+
+[复权值事实V2](stock-fish/docs/HISTORICAL_FACTOR_VALUE_FACTS_V2.md)修复把PARTIAL审计祖先要求为完整数值来源而造成的误拒。逐股事实只在原始完整行和真实祖先三件验证通过后发行，全部祖先仍须审计；显式消费者一次运行冻结R1，保留价格、换手、资格与五族公式。当前研究截止不能恢复过去PIT，原来源V1与旧结果只读保留。

@@ -96,6 +96,8 @@ ENDPOINTS={
     'concept_members_sina':{'provider':'akshare','function':'stock_sector_detail','params':('symbol',),'required':('symbol',)},
     'industry_list':{'provider':'akshare','function':'stock_board_industry_name_em','params':(),'required':()},
     'industry_members':{'provider':'akshare','function':'stock_board_industry_cons_em','params':('symbol',),'required':('symbol',)},
+    'industry_list_sina':{'provider':'akshare','function':'stock_sector_spot','params':(),'required':()},
+    'industry_members_sina':{'provider':'akshare','function':'stock_sector_detail','params':('symbol',),'required':('symbol',)},
     'money_flow':{'provider':'akshare','function':'stock_individual_fund_flow','params':('stock','market'),'required':('stock','market')},
     'lhb_summary':{'provider':'akshare','function':'stock_lhb_detail_em','params':('start_date','end_date'),'required':('start_date','end_date')},
     'limit_up_pool':{'provider':'akshare','function':'stock_zt_pool_em','params':('date',),'required':('date',)},
@@ -137,6 +139,7 @@ def validate_request(endpoint,parameters):
         if len(normalized)!=len(set(normalized)):raise ValueError('DUPLICATE_REQUEST_SECURITY')
         parameters['codes']=normalized
     if 'symbol' in parameters and (not isinstance(parameters['symbol'],str) or not 1<=len(parameters['symbol'])<=80):raise ValueError('INVALID_THEME_ID')
+    if endpoint=='industry_members_sina' and not re.fullmatch(r'hangye_[A-Za-z0-9_]+',parameters['symbol']):raise ValueError('INVALID_SINA_INDUSTRY_NODE')
     if endpoint=='money_flow' and (not re.fullmatch(r'\d{6}',parameters['stock']) or parameters['market'] not in ('sh','sz')):raise ValueError('INVALID_MONEY_SECURITY')
     return parameters
 

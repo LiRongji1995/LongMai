@@ -326,6 +326,84 @@ def _baostock_session_request(endpoint,params,partial_path=None):
     finally:
         reserve_attempt('SDK');bs.logout()
 
+def sina_industry_capture_proof(endpoint,params,rows,captured):
+    """New opt-in industry transport contract; old concept paths are unchanged.
+
+    The SDK uses one directory request or one node-count request followed by
+    every 80-row page. Successful SDK rows alone cannot prove completeness.
+    Captured originals, including duplicates/missing pages, are retained.
+    """
+    count_url='http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeStockCount'
+    data_url='http://vip.stock.finance.sina.com.cn/quotes_service/api/json_v2.php/Market_Center.getHQNodeData'
+    directory_url='http://money.finance.sina.com.cn/q/view/newFLJK.php'
+    reasons=[]
+    proof=dict(contract='SINA_INDUSTRY_ORIGINAL_COUNT_PAGES_V1',indicator='行业',
+        returned_rows=len(rows),complete=False)
+    if endpoint=='industry_list_sina':
+        proof['kind']='DIRECTORY_ONE_HTTP'
+        if (not rows or len(captured)!=1 or captured[0].get('status_code')!=200
+                or captured[0].get('url')!=directory_url
+                or captured[0].get('parameters')!={'param':'industry'}):
+            reasons.append('SINA_INDUSTRY_DIRECTORY_HTTP_SCOPE_UNVERIFIED')
+        nodes=[row.get('label') if isinstance(row,dict) else None for row in rows]
+        if (any(not isinstance(node,str) or re.fullmatch(r'hangye_[A-Za-z0-9_]+',node) is None for node in nodes)
+                or len({node for node in nodes if isinstance(node,str)})!=len(nodes)):
+            reasons.append('SINA_INDUSTRY_DIRECTORY_NAMESPACE_OR_DUPLICATE')
+        proof['directory_row_count']=len(rows)
+    elif endpoint=='industry_members_sina':
+        node=params['symbol'];proof.update(kind='NODE_COUNT_AND_ALL_80_ROW_PAGES',node=node,page_size=80)
+        counts=[r for r in captured if r.get('url')==count_url]
+        pages=[r for r in captured if r.get('url')==data_url]
+        count=None
+        if (len(counts)==1 and counts[0].get('status_code')==200
+                and counts[0].get('parameters')=={'node':node}
+                and not isinstance(counts[0].get('body'),bool)
+                and re.fullmatch(r'\d+',str(counts[0].get('body'))) is not None):
+            count=int(counts[0]['body'])
+        else:reasons.append('SINA_INDUSTRY_NODE_COUNT_UNVERIFIED')
+        # A malformed count must not allocate an unbounded page list. The
+        # unverified count and all real responses remain in the proof; only
+        # a count consistent with returned rows can become complete below.
+        page_total=(count+79)//80 if count is not None else None
+        expected=list(range(1,page_total+1)) if count is not None and count<=len(rows)+80 else None
+        if expected is None:reasons.append('SINA_INDUSTRY_PAGE_COUNT_SCOPE_UNVERIFIED')
+        observed=[];page_rows=[];members=[]
+        for response in pages:
+            query=response.get('parameters') or {}
+            if (response.get('status_code')!=200 or query.get('node')!=node
+                    or str(query.get('num'))!='80'
+                    or re.fullmatch(r'[1-9]\d*',str(query.get('page'))) is None):
+                reasons.append('SINA_INDUSTRY_PAGE_REQUEST_SCOPE_UNVERIFIED');continue
+            page=int(query['page']);observed.append(page)
+            body=response.get('body')
+            if isinstance(body,dict) and body.get('encoding')=='base64':
+                try:
+                    import base64
+                    from akshare.utils import demjson
+                    body=demjson.decode(base64.b64decode(body['data'],validate=True).decode('utf-8'))
+                except (ValueError,KeyError,UnicodeDecodeError,TypeError):
+                    body=None
+            if not isinstance(body,list) or any(not isinstance(row,dict) for row in body):
+                reasons.append('SINA_INDUSTRY_PAGE_BODY_UNVERIFIED');continue
+            page_rows.append(dict(page=page,rows=len(body)))
+            members.extend((row.get('code'),row.get('symbol')) for row in body)
+            required=min(80,max(0,count-(page-1)*80)) if count is not None else None
+            if required is None or len(body)!=required:
+                reasons.append('SINA_INDUSTRY_PAGE_ROW_COUNT_MISMATCH')
+        if (observed!=expected or len(captured)!=len(pages)+len(counts)
+                or len(observed)!=len(set(observed))):
+            reasons.append('SINA_INDUSTRY_PAGE_COVERAGE_NOT_COMPLETE')
+        returned=[(row.get('code'),row.get('symbol')) if isinstance(row,dict) else (None,None) for row in rows]
+        identities_valid=all(isinstance(code,str) and isinstance(symbol,str) for code,symbol in members+returned)
+        if (count is None or count!=len(rows) or len(members)!=len(rows)
+                or not identities_valid or len(set(members))!=len(members) or sorted(members)!=sorted(returned)):
+            reasons.append('SINA_INDUSTRY_COUNT_OR_ORIGINAL_ROWS_MISMATCH')
+        proof.update(upstream_count=count,expected_page_count=page_total,expected_pages=expected,observed_pages=observed,page_row_counts=page_rows)
+    else:raise ValueError('SINA_INDUSTRY_ENDPOINT_UNSUPPORTED')
+    proof.update(complete=bool(rows) and not reasons,reason_codes=sorted(set(reasons)))
+    return proof
+
+
 def akshare_request(endpoint,params,captured,max_requests):
     import akshare as ak
     import requests
@@ -367,6 +445,8 @@ def akshare_request(endpoint,params,captured,max_requests):
     elif endpoint=='master_szse':kwargs={'symbol':'A股列表'}
     elif endpoint=='concept_list_sina':kwargs={'indicator':'概念'}
     elif endpoint=='concept_members_sina':kwargs={'sector':params['symbol']}
+    elif endpoint=='industry_list_sina':kwargs={'indicator':'行业'}
+    elif endpoint=='industry_members_sina':kwargs={'sector':params['symbol']}
     elif endpoint=='lhb_summary':kwargs={k:v.replace('-','') for k,v in kwargs.items()}
     elif endpoint=='limit_up_pool':kwargs={'date':params['date'].replace('-','')}
     result=getattr(ak,ENDPOINTS[endpoint]['function'])(**kwargs)
@@ -389,12 +469,18 @@ def akshare_request(endpoint,params,captured,max_requests):
     if endpoint=='concept_members_sina':
         totals=[int(r['body']) for r in captured if isinstance(r['body'],(int,str)) and str(r['body']).isdigit()]
         complete=bool(totals) and len(rows)==totals[0]
+    industry_proof=None
+    if endpoint in ('industry_list_sina','industry_members_sina'):
+        industry_proof=sina_industry_capture_proof(endpoint,params,rows,captured)
+        complete=industry_proof['complete']
     if endpoint=='limit_up_pool':
         complete=bool(rows) and any(isinstance(r['body'],dict) and isinstance(r['body'].get('data'),dict) and isinstance(r['body']['data'].get('pool'),list) and len(r['body']['data']['pool'])==len(rows) for r in captured)
     if endpoint=='spot_sina':complete=False # Explicit count/page proof remains necessary; successful quotes are still retained.
+    coverage={'returned_rows':len(rows),'upstream_total_values':expected,'http_requests':attempted[0],'cache_hits':reused[0],'pages_this_run':attempted[0],'page_sets':{k:sorted(v) for k,v in page_sets.items()}}
+    if industry_proof is not None:coverage['sina_industry']=industry_proof
     return dict(status='COMPLETE' if rows and complete else 'PARTIAL',rows=rows,pagination_complete=complete,
-        field_version='AKSHARE_'+ak.__version__+'_R03_V1',source_url=captured[0]['url'] if captured else None,
-        coverage={'returned_rows':len(rows),'upstream_total_values':expected,'http_requests':attempted[0],'cache_hits':reused[0],'pages_this_run':attempted[0],'page_sets':{k:sorted(v) for k,v in page_sets.items()}},
+        field_version='AKSHARE_'+ak.__version__+('_SINA_INDUSTRY_ORIGINAL_COUNT_PAGES_V1' if industry_proof is not None else '_R03_V1'),source_url=captured[0]['url'] if captured else None,
+        coverage=coverage,
         gaps=[] if complete else ['PAGINATION_OR_EMPTY_RESULT_NOT_VERIFIED'],diagnostics={'schema_columns':list(result.columns),'endpoint_function':ENDPOINTS[endpoint]['function']})
 
 def _eastmoney_limit_code(code):
