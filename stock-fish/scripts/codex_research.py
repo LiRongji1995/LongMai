@@ -698,6 +698,12 @@ def parser():
     sub.add_argument("--wait-seconds", type=float, default=30)
     sub = commands.add_parser("job", help="读取已有作业，不重试或重提")
     sub.add_argument("job_id")
+    sub = commands.add_parser("deliver-saved-r2", help="完整交付冻结R2：原件认证后生成同run分组和业务解释；不采集、不重选")
+    for flag in ("run", "run-manifest", "input", "sources-manifest", "output"):
+        sub.add_argument("--" + flag, type=Path, required=True)
+    sub.add_argument("--context-cutoff", required=True, help="新的真实情境截止，带时区；原run截止保持")
+    sub.add_argument("--membership-mode", choices=("DATED_ONLY", "CURRENT_COHORT_BACKVIEW"), default="DATED_ONLY")
+    sub.add_argument("--as-of", help="显示截止；缺省在全部新附件生成后取实际当前时间")
     sub = commands.add_parser("economic-direction-display", help="只读经济方向解释及同一完整分组父文件；不采集、不重选")
     sub.add_argument("--attachment", type=Path, required=True)
     sub.add_argument("--grouped-parent", type=Path, required=True, help="原完整分组文件；核对原SHA、全部观察项及子题材角色")
@@ -872,6 +878,12 @@ def main(argv=None):
             result = run_market_explanation(input_path=args.input, run_path=args.run,
                 source_receipts_path=args.source_receipts, source_map_path=args.source_map,
                 output=args.output, cutoff=args.cutoff, as_of=args.as_of)
+        elif args.command == "deliver-saved-r2":
+            from stockfish_core.yaogu.saved_r2_delivery import deliver_saved_r2
+            result = deliver_saved_r2(run_path=args.run, run_manifest_path=args.run_manifest,
+                input_path=args.input, sources_manifest_path=args.sources_manifest,
+                output=args.output, context_cutoff=args.context_cutoff,
+                membership_mode=args.membership_mode, as_of=args.as_of)
         elif args.command == "economic-direction-display":
             from stockfish_core.yaogu.economic_direction_display import save_archived_economic_direction_display
             result = save_archived_economic_direction_display(args.attachment,
@@ -894,7 +906,7 @@ def main(argv=None):
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
-        if args.command in {"research-r1", "short-horizon-r2", "market-explanation", "economic-direction-display", "daily-report", "report"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
+        if args.command in {"research-r1", "short-horizon-r2", "market-explanation", "economic-direction-display", "deliver-saved-r2", "daily-report", "report"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
             print(json.dumps({"status":"BLOCKED", "reason":str(exc).split(":")[0]}))
             return 2
         # No tracebacks or raw provider payloads that could contain credentials.
