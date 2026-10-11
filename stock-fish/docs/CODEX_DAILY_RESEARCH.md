@@ -31,6 +31,8 @@
 
 [市场解释V1](MARKET_EXPLANATION_V1.md)经 `market-explanation` 显式认证原始来源、重新发行原生事实能力并绑定已保存run，另存新附件；receipt/map JSON仅定位原件，不恢复旧capability。`report --market-explanation` 和 `daily-report --market-explanation` 只读展示同run/input/观察日附件，保持原结果、CSV和快照hash。显示截止必须覆盖原件四时钟、情境截止和附件实际生成时间；晚到资料不能回填旧盘前。完整1/3/5会话的变化与斜率只作描述反证，无主题成员/合格范围时不得升格为主线或情绪周期。默认服务尚未自动采纳附件，日常协调要明确记录调用和UNKNOWN。
 
+[同股参与变化V1](COHORT_PARTICIPATION_TRENDS_V1.md)仅作显式研究数学层：调用方先核验保存 run 全文、全部 eligible 行、同日身份、规则及实际来源时钟，再构造完整声明，按真实交易日历调用。未知资格和已知排除的原因另存，不能把池外当形态退出。共同 eligible 同股比较留存、新增、退出与 Jaccard；固定篮子金额与每日变化成员的名单金额分列，不把后者变化当同股扩张或净流入。缺整日、未知决策、资格迁移、规则变化和首尾覆盖分别截断观察段；跨缺日端点不能称连续留存或完整周期。多个固定题材篮子若重叠，调用方仍须先另证并处理共享成员，不能把各篮子金额相加当独立吸金。该组件不认证输入声明，不读 DB/网络、不运行 selector，尚未接默认 CLI、每日服务或预测权重；工程通过与实样本数学通过分别报告。
+
 ## 调用入口
 
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。
