@@ -492,7 +492,8 @@ def reusable_local_bundle(root, manifest):
     return None
 
 
-def save_bundle(client, bundle, output=None, context=None, with_report=True, strategy_id=PV):
+def save_bundle(client, bundle, output=None, context=None, with_report=True, strategy_id=PV,
+                market_explanation=None, attachment_as_of=None):
     saved, json_bytes, csv_bytes, first = bundle
     if saved.get("coverage_type") not in REAL_COVERAGE:
         raise ResearchError("NON_REAL_OR_UNVERIFIABLE_INPUT_NOT_FOR_DAILY_RESEARCH")
@@ -503,7 +504,16 @@ def save_bundle(client, bundle, output=None, context=None, with_report=True, str
     files = {"source.json": json_bytes, "candidates.csv": csv_bytes}
     if with_report:
         files["review.json"] = json.dumps(review, ensure_ascii=False, indent=2).encode("utf-8")
-        files["report.md"] = report_text(saved, review, context, strategy_id).encode("utf-8")
+        rendered = report_text(saved, review, context, strategy_id)
+        if market_explanation:
+            from stockfish_core.yaogu.market_explanation_artifacts import archived_explanation
+            snapshot = {"identity": {key: saved.get(key) for key in ("run_id", "observation_date")},
+                        "input_hash": saved.get("input_hash"), "source_run_hash": saved.get("content_hash")}
+            attachment = archived_explanation(market_explanation, snapshot=snapshot,
+                as_of=attachment_as_of or datetime.now(SH))
+            files["market-explanation-display.json"] = json.dumps(attachment, ensure_ascii=False, indent=2).encode("utf-8")
+            rendered += "\n\n## 独立市场趋势解释附件\n\n" + attachment["markdown"]
+        files["report.md"] = rendered.encode("utf-8")
     manifest = {"created_at": now.isoformat(), "api_base_url": client.base_url, "run_id": saved["run_id"],
                 "input_id": saved["input_id"], "input_hash": saved.get("input_hash"),
                 "decision_cutoff": saved.get("decision_cutoff"), "data_watermark": saved.get("data_watermark"),
@@ -638,6 +648,11 @@ def parser():
     sub.add_argument("--target-session", type=date.fromisoformat, required=True)
     sub.add_argument("--theme-market-pack", type=Path)
     sub.add_argument("--membership-mode", choices=("DATED_ONLY", "CURRENT_COHORT_BACKVIEW"), default="DATED_ONLY")
+    sub = commands.add_parser("market-explanation", help="显式原生市场趋势解释：认证原件，绑定已保存run，另存附件；不重排名单")
+    for flag in ("input", "run", "source-receipts", "source-map", "output"):
+        sub.add_argument("--" + flag, type=Path, required=True)
+    sub.add_argument("--cutoff", required=True, help="新情境真实截止，带时区；原run截止单列")
+    sub.add_argument("--as-of", help="附件显示截止，带时区；早于附件或来源可见时间则不显示事实")
     sub = commands.add_parser("research-r1", help="显式离线R1研究；只读取自包含导出输入，不连接生产库")
     sub.add_argument("--input", type=Path, action="append", help="导出JSON：input/cutoff/publication/可选execution_tape")
     sub.add_argument("--mode", choices=("run", "diagnose", "summarize"), default="run")
@@ -672,6 +687,9 @@ def parser():
             sub.add_argument("--output", type=Path)
             sub.add_argument("--profile", choices=RESEARCH_PROFILES, default=PV)
             sub.add_argument("--selection", choices=("all", "focus", "unselected", "observation"), default="all")
+        if name == "report":
+            sub.add_argument("--market-explanation", type=Path, help="只读已保存独立附件；必须绑定同一原run/input/观察日")
+            sub.add_argument("--attachment-as-of", help="附件显示截止，带时区；默认当前报告时点")
         if name == "track":
             sub.add_argument("--update", action="store_true", help="显式追加正式后验和研究周期，不重算原名单")
             sub.add_argument("--input-id", help="可选已登记后续资料 input_id")
@@ -686,6 +704,7 @@ def parser():
     target.add_argument("--run-id")
     sub.add_argument("--as-of", help="可选带时区的历史报告截止")
     sub.add_argument("--output", type=Path, help="不存在的私有报告目录；不覆盖旧报告")
+    sub.add_argument("--market-explanation", type=Path, help="只读独立附件；必须绑定同一冻结日报run/input/观察日")
     sub = commands.add_parser("daily-observation", help="只读每日交付状态与最近 20 交易日观察；不触发作业")
     sub.add_argument("--target-session", type=observation_session, help="YYYY-MM-DD；默认由服务选择今日或最近交易日")
     sub.add_argument("--days", type=int, default=20, help="交易日数量，1..20；默认 20")
@@ -711,6 +730,15 @@ def execute(args, client):
                 raise ResearchError("REPORT_CUTOFF_REQUIRES_TIMEZONE")
             query["as_of"] = instant.isoformat()
         report = client.get("/api/daily-research/report?" + parse.urlencode(query))
+        if getattr(args, "market_explanation", None):
+            from stockfish_core.yaogu.market_explanation_artifacts import archived_explanation
+            attachment = archived_explanation(args.market_explanation, snapshot=report.get("snapshot"),
+                                              as_of=report["report_as_of"])
+            existing = report.get("research_attachments") or []
+            if not isinstance(existing, list):
+                raise ValueError("MARKET_EXPLANATION_EXISTING_ATTACHMENT_SCHEMA_INVALID")
+            report = {**report, "research_attachments": [*existing, attachment],
+                      "markdown": report["markdown"] + "\n\n## 独立市场趋势解释附件\n\n" + attachment["markdown"]}
         directory = args.output or ROOT / "reports" / "codex" / "daily-loop" / datetime.now(SH).strftime("%Y%m%dT%H%M%S%f")
         directory.mkdir(parents=True, exist_ok=False)
         contents = {"report.json": json.dumps(report, ensure_ascii=False, indent=2).encode("utf-8"),
@@ -797,7 +825,9 @@ def execute(args, client):
         return result
     if args.command in {"export", "report"}:
         return save_bundle(client, official_exports(client, args.run_id, args.profile, getattr(args, "selection", "all")), args.output,
-                           with_report=args.command == "report", strategy_id=args.profile)
+                           with_report=args.command == "report", strategy_id=args.profile,
+                           market_explanation=getattr(args, "market_explanation", None),
+                           attachment_as_of=getattr(args, "attachment_as_of", None))
     if args.command == "detail":
         item = client.get(prefix(args.run_id) + "/items/" + identifier(args.instrument_id))
         if item.get("run_id") != args.run_id or item.get("instrument_id") != args.instrument_id:
@@ -832,6 +862,11 @@ def main(argv=None):
                 source_map_path=args.source_map, output=args.output, cutoff=args.cutoff,
                 target_session=args.target_session, theme_market_pack_path=args.theme_market_pack,
                 membership_mode=args.membership_mode)
+        elif args.command == "market-explanation":
+            from stockfish_core.yaogu.market_explanation_artifacts import run_market_explanation
+            result = run_market_explanation(input_path=args.input, run_path=args.run,
+                source_receipts_path=args.source_receipts, source_map_path=args.source_map,
+                output=args.output, cutoff=args.cutoff, as_of=args.as_of)
         elif args.command == "research-r1":
             from stockfish_core.yaogu.research_r1_io import run_local, summarize_saved
             if args.mode == "summarize":
@@ -850,7 +885,7 @@ def main(argv=None):
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
-        if args.command in {"research-r1", "short-horizon-r2"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
+        if args.command in {"research-r1", "short-horizon-r2", "market-explanation", "daily-report", "report"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
             print(json.dumps({"status":"BLOCKED", "reason":str(exc).split(":")[0]}))
             return 2
         # No tracebacks or raw provider payloads that could contain credentials.

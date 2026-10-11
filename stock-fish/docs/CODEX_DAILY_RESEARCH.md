@@ -27,6 +27,8 @@
 
 [市场事实V1](MARKET_DESCRIPTIVE_CONTEXT_V1.md)须显式传入真实原生market stream能力与新产物目录，不能由保存JSON重启来源权限。输出保存全RAW分段审计、逐轴UNKNOWN、真实相邻会话与排除T的prior20；验证同时锁定发行时来源/文件registry，并在产物核验后重新读消费原件。它未接默认run/export或题材composer，不将四板总体称为历史合格池，不凭事实序列或工程通过添加预测分数。
 
+[市场解释V1](MARKET_EXPLANATION_V1.md)经 `market-explanation` 显式认证原始来源、重新发行原生事实能力并绑定已保存run，另存新附件；receipt/map JSON仅定位原件，不恢复旧capability。`report --market-explanation` 和 `daily-report --market-explanation` 只读展示同run/input/观察日附件，保持原结果、CSV和快照hash。显示截止必须覆盖原件四时钟、情境截止和附件实际生成时间；晚到资料不能回填旧盘前。完整1/3/5会话的变化与斜率只作描述反证，无主题成员/合格范围时不得升格为主线或情绪周期。默认服务尚未自动采纳附件，日常协调要明确记录调用和UNKNOWN。
+
 ## 调用入口
 
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。
