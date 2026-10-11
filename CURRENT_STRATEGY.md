@@ -74,3 +74,5 @@ R1完整定义见[R1规格](stock-fish/docs/STAGE_AWARE_RESEARCH_R1.md)及[冻�
 [Sina行业代理V1](stock-fish/docs/INDUSTRY_SINA_CONTEXT_V1.md)新增独立目录和成员来源；行业代理、供应商概念及经济主线的覆盖分别表达。原始目录计数与实际成员计数冲突时保留UNKNOWN；未标业务日的报价只用于成员发现。该来源增强保持冻结R2选择、公式、参数和FOCUS规则，尚未接默认入口。
 
 [复权值事实V2](stock-fish/docs/HISTORICAL_FACTOR_VALUE_FACTS_V2.md)修复把PARTIAL审计祖先要求为完整数值来源而造成的误拒。逐股事实只在原始完整行和真实祖先三件验证通过后发行，全部祖先仍须审计；显式消费者一次运行冻结R1，保留价格、换手、资格与五族公式。当前研究截止不能恢复过去PIT，原来源V1与旧结果只读保留。
+
+[经济方向解释V1](stock-fish/docs/ECONOMIC_DIRECTION_EXPLANATION_V1.md)把正式业务关系与原供应商子题材、模型分组并列。整个冻结观察集合及每项原数值保持，节点完整性不授予经济全集或历史成员权限。已证观察子集的成交额与广度使用原R2精确值；整体方向强度、资金归因及竞争UNKNOWN时不能按子集金额排名。新附件采用实际新截止，保留原主线阶段、独立风险和旧报告；不新增权重、阈值或FOCUS，默认服务未自动接线。
