@@ -25,6 +25,8 @@
 
 历史换手资料采用显式新[重建适配V1](HISTORICAL_REPLAY_TURNOVER_V1.md)，保持冻结base认证且仅同父RAW补turn。使用时保存新input及新audit身份，保留原实际时钟、资格、复权和未知；仅inline，默认入口/DB未接线。全市场交易/上涨家数与规则合格家数分列，扩展RAW范围不自动授予历史资格。资金变化须结合价格广度和集中度；主线相对市场优势下降与自身广度下降分别解释。近5日软参考含观察日、前20日描述基准排除观察日，不跨定义补点；新联合假设须留账且经独立周期检验才接预测配置。
 
+[市场事实V1](MARKET_DESCRIPTIVE_CONTEXT_V1.md)须显式传入真实原生market stream能力与新产物目录，不能由保存JSON重启来源权限。输出保存全RAW分段审计、逐轴UNKNOWN、真实相邻会话与排除T的prior20；验证同时锁定发行时来源/文件registry，并在产物核验后重新读消费原件。它未接默认run/export或题材composer，不将四板总体称为历史合格池，不凭事实序列或工程通过添加预测分数。
+
 ## 调用入口
 
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。
