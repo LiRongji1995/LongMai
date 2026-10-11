@@ -14,6 +14,8 @@
 
 分页期望集合只在技术 count 与完整规范化结果实际行数一致后构造；超长或异常计数先拒绝，不能把小原件变成无界 range 分配。正式 PDF 回执须是实际 HTTP200 完整捕获状态；失败响应即使有 PDF 头或同形字段也不能支持业务关系。
 
+官方域名兼容特征 V2（`FINITE_OFFICIAL_BUSINESS_RELATIONS_PRESERVED_NATIVE_SUBTHEMES_V2`）仅新增已实际观察的深交所披露域 `https://disc.static.szse.cn`，按解析后的完整 hostname 精确匹配。仿冒前缀、后缀、近似拼写或 userinfo 指向其他 hostname 均拒绝；HTTP200、完整状态、父 SHA、四时钟和同一登记业务页上的全部 literal 门槛保持。旧特征 V1 的 run、源身份、附件和失败记录保留，新特征只用于新目录及实际新 cutoff。财务预告只证明其中直接披露的业务关系，未经审计、非主营和项目阶段限制仍须单列。
+
 每个解释主显示组的并集必须精确等于原全部观察项，各项全文保持；原模型和原分组另存。电池及消费业务关系子集按原选择顺序显示。有限已证观察子集的金额只取原 R2 `exact_features.amount` Fraction，广度只取原 `exact_features.returns['1']`；任何项缺失，整轴 UNKNOWN，不补零。金额/广度不代表全板块、全概念资金或强度。广义经济方向发酵、持续性、强度、资金净流入与竞争均 UNKNOWN；不新增权重或预测信号。证券的业务联系不是当日资金归因，供应商标签缺业务原件时仍 UNKNOWN，不据行业硬排除。
 
 可选 `reported_scope=RegisteredFile(...)` 显式复用已固定 SHA 的原文主体审阅。其全部 source registry、HTML 原件与 HTTP 回执均须随 `extra_registered_files` 登记并重读；发布日期区间、真实收到时间及观察日一致。另存“当日报道了此方向”，不据关键词、新闻具名或同稿转载增加成员/资金计分，不把转载或发布者数量称为独立资金来源。此次投影不重跑原文 parser，须明确记录 `SAVED_PRIOR_ORIGINAL_TEXT_REVIEW_REUSED_NOT_REPARSED`；保存审阅不恢复 native 权限，原件缺失或子集登记必须拒绝。

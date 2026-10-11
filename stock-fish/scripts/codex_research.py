@@ -698,6 +698,11 @@ def parser():
     sub.add_argument("--wait-seconds", type=float, default=30)
     sub = commands.add_parser("job", help="读取已有作业，不重试或重提")
     sub.add_argument("job_id")
+    sub = commands.add_parser("economic-direction-display", help="只读经济方向解释及同一完整分组父文件；不采集、不重选")
+    sub.add_argument("--attachment", type=Path, required=True)
+    sub.add_argument("--grouped-parent", type=Path, required=True, help="原完整分组文件；核对原SHA、全部观察项及子题材角色")
+    sub.add_argument("--as-of", help="带时区的显示截止；晚到解释在旧截止隐藏")
+    sub.add_argument("--output", type=Path, required=True, help="新的私有交付目录；不覆盖旧报告")
     sub = commands.add_parser("daily-report", help="只读 Phase 1 日报；包含失败日状态与 T+1..T+20 统计")
     target = sub.add_mutually_exclusive_group(required=True)
     target.add_argument("--target-session", type=date.fromisoformat)
@@ -867,6 +872,10 @@ def main(argv=None):
             result = run_market_explanation(input_path=args.input, run_path=args.run,
                 source_receipts_path=args.source_receipts, source_map_path=args.source_map,
                 output=args.output, cutoff=args.cutoff, as_of=args.as_of)
+        elif args.command == "economic-direction-display":
+            from stockfish_core.yaogu.economic_direction_display import save_archived_economic_direction_display
+            result = save_archived_economic_direction_display(args.attachment,
+                grouped_parent=args.grouped_parent, output=args.output, as_of=args.as_of)
         elif args.command == "research-r1":
             from stockfish_core.yaogu.research_r1_io import run_local, summarize_saved
             if args.mode == "summarize":
@@ -885,7 +894,7 @@ def main(argv=None):
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
     except (OSError, KeyError, TypeError, ValueError, RuntimeError) as exc:
-        if args.command in {"research-r1", "short-horizon-r2", "market-explanation", "daily-report", "report"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
+        if args.command in {"research-r1", "short-horizon-r2", "market-explanation", "economic-direction-display", "daily-report", "report"} and isinstance(exc, ValueError) and re.fullmatch(r"[A-Z][A-Z0-9_]+", str(exc).split(":")[0]):
             print(json.dumps({"status":"BLOCKED", "reason":str(exc).split(":")[0]}))
             return 2
         # No tracebacks or raw provider payloads that could contain credentials.

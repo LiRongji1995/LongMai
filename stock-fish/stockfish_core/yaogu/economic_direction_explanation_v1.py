@@ -19,7 +19,7 @@ from urllib.parse import urlparse
 from .history_artifacts import digest_json_stream
 
 VERSION = 'ECONOMIC_DIRECTION_EXPLANATION_V1'
-FEATURE_VERSION = 'FINITE_OFFICIAL_BUSINESS_RELATIONS_PRESERVED_NATIVE_SUBTHEMES_V1'
+FEATURE_VERSION = 'FINITE_OFFICIAL_BUSINESS_RELATIONS_PRESERVED_NATIVE_SUBTHEMES_V2'
 NODE_CONTRACT = 'CURRENT_WHOLE_COUNTED_PROVIDER_NODE_V2'
 MAX_FILE_BYTES = 8 * 1024**2
 ROOT = Path(__file__).resolve().parents[2]
@@ -142,7 +142,7 @@ def _official_clocks(receipt):
     if tuple(sorted(clocks)) != clocks:
         raise ValueError('ECONOMIC_EXPLANATION_OFFICIAL_CAPTURE_CLOCK_ORDER')
     parsed = urlparse(url or '')
-    if parsed.scheme != 'https' or parsed.hostname not in ('static.cninfo.com.cn', 'www.sse.com.cn', 'www.szse.cn'):
+    if parsed.scheme != 'https' or parsed.hostname not in ('static.cninfo.com.cn', 'www.sse.com.cn', 'www.szse.cn', 'disc.static.szse.cn'):
         raise ValueError('ECONOMIC_EXPLANATION_OFFICIAL_DOCUMENT_URL_UNREGISTERED')
     return claimed, url, dict(zip(CAPTURE_CLOCKS, (value.isoformat() for value in clocks)))
 

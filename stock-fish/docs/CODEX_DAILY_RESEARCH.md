@@ -65,3 +65,5 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 显式历史重建可使用[复权值事实V2](HISTORICAL_FACTOR_VALUE_FACTS_V2.md)的一次原生消费者；旧capture实现、完整逐股值和全部真实祖先分别核验，原PARTIAL/时钟缺口继续保留。来源修复与真实市场状态变化分列；当前事实发行不授予旧PIT，有限深圳范围不当作全市场周期。
 
 显式[经济方向解释V1](ECONOMIC_DIRECTION_EXPLANATION_V1.md)只在同一完整保存分组、整节点原件及正式业务原件核对通过后附加。原全部观察项与每项数值、确认/发酵/活跃分歧角色保持；已证业务关系观察子集与整体方向强度分列。原目录计数冲突、节点中非A证券、参股/其他主营/项目终止及晚取得材料均保留。新资料截止须晚于实际接收，不能回填旧run；保存附件不恢复来源权限或再跑selector。默认每日服务尚未自动生成，不能仅凭14项工程测试或真实同61投影称全年主线覆盖已完成。
+
+同一保存经济方向附件可显式调用[归档展示V1](ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md)：`economic-direction-display --attachment SAVED_EXPLANATION_JSON --grouped-parent EXACT_GROUPED_PARENT_JSON --output NEW_PRIVATE_DIRECTORY`。省略 `--as-of` 使用实际当前UTC，显式时刻必须带时区。完整并集、实际业务/模型显示索引、原分组角色与父及真实捕获时钟下界分别校验；新目录不覆盖。该入口在创建API Client之前只读归档，不认证来源能力、不重选、不打开业务DB。早截止返回NOT_YET_VISIBLE且不显示候选或数值。常态每日任务先验收当次新附件再完整交付，不能把已保存旧附件改日期当作新清单。

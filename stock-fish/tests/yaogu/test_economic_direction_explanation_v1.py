@@ -146,6 +146,45 @@ class EconomicExplanationTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError,'HTTP_CAPTURE_NOT_COMPLETE'):
             m.build_economic_direction_explanation(frozen_grouped=saved,business_sources=(failed,),counted_nodes=(),cutoff=CUTOFF)
 
+    def test_exact_szse_disclosure_domain_registered_in_new_feature_version(self):
+        saved,old=parent(self.root);b=business(self.root)
+        value=json.loads(b.receipt.path.read_bytes())
+        value['url']='https://disc.static.szse.cn/disc/disk03/finalpage/2026-01-01/TEST_FIXTURE.PDF'
+        changed=replace(b,receipt=file(b.receipt.path,value))
+        out=m.build_economic_direction_explanation(frozen_grouped=saved,business_sources=(changed,),counted_nodes=(),cutoff=CUTOFF)
+        self.assertEqual(out['feature_version'],'FINITE_OFFICIAL_BUSINESS_RELATIONS_PRESERVED_NATIVE_SUBTHEMES_V2')
+        self.assertEqual(out['economic_directions'][0]['business_relations'][0]['official_url'],value['url'])
+        self.assertEqual(out['frozen_original_groups'],old['groups'])
+        self.assertEqual(out['preserved_native_subtheme_layers'],old['V4'])
+
+    def test_lookalike_szse_disclosure_domains_are_not_registered(self):
+        saved,_=parent(self.root);b=business(self.root)
+        for url in ('https://disc.static.szse.cn.evil.example/TEST_FIXTURE.PDF',
+                    'https://evil.disc.static.szse.cn/TEST_FIXTURE.PDF',
+                    'https://disc-static.szse.cn/TEST_FIXTURE.PDF',
+                    'https://disc.static.szse.cn@evil.example/TEST_FIXTURE.PDF'):
+            with self.subTest(url=url):
+                value=json.loads(b.receipt.path.read_bytes());value['url']=url
+                changed=replace(b,receipt=file(b.receipt.path,value))
+                with self.assertRaisesRegex(ValueError,'DOCUMENT_URL_UNREGISTERED'):
+                    m.build_economic_direction_explanation(frozen_grouped=saved,business_sources=(changed,),counted_nodes=(),cutoff=CUTOFF)
+
+    def test_all_business_literals_must_be_on_the_single_registered_page(self):
+        saved,_=parent(self.root);b=business(self.root)
+        literals=('TEST_FIXTURE电解液','TEST_FIXTURE未经审计')
+        for body,supported in ((('600001 TEST_FIXTURE甲\n'+literals[0]+' '+literals[1]+'\f').encode(),True),
+                               (('600001 TEST_FIXTURE甲\n'+literals[0]+'\f'+literals[1]+'\f').encode(),False)):
+            with self.subTest(supported=supported):
+                text=file(b.derived_text.path,body)
+                transform=file(b.transform.path,dict(exit_code=0,original_sha256=b.original.sha256,derived_sha256=text.sha256))
+                changed=replace(b,literals=literals,derived_text=text,transform=transform)
+                if supported:
+                    out=m.build_economic_direction_explanation(frozen_grouped=saved,business_sources=(changed,),counted_nodes=(),cutoff=CUTOFF)
+                    self.assertEqual(out['economic_directions'][0]['business_relations'][0]['literals_checked'],list(literals))
+                else:
+                    with self.assertRaisesRegex(ValueError,'IDENTITY_OR_BUSINESS_LITERAL_MISMATCH'):
+                        m.build_economic_direction_explanation(frozen_grouped=saved,business_sources=(changed,),counted_nodes=(),cutoff=CUTOFF)
+
     def test_wrong_identity_business_literal_and_source_sha_rejected(self):
         saved,_=parent(self.root);b=business(self.root)
         for changed in (replace(b,instrument_id='600003.SH'), replace(b,literals=('不存在的业务',)),
