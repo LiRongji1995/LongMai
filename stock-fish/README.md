@@ -6,4 +6,4 @@
 
 Codex执行先读[日常协议](docs/CODEX_DAILY_RESEARCH.md)；规则和模块说明见[项目综述](docs/PROJECT_OVERVIEW.md)，维护约定见[根工程基线](../ENGINEERING_BASELINE.md)。源码、数据与结果口径见[技术索引](docs/README.md)。
 
-原R05操作手册完整保留在[历史归档](docs/archive/before-cleanup-20261005/stock-fish/README.md)；各轮数字、机器路径和验收只适用于对应日期。上游英文说明[README_EN](README_EN.md)保留原语境。
+原R05操作手册可从[固定Git历史版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/README.md)追溯；各轮数字、机器路径和验收只适用于对应日期。上游英文说明[README_EN](README_EN.md)保留原语境。

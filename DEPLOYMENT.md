@@ -25,7 +25,7 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 这些脚本要求Windows虚拟环境布局 `stock-fish/.venv/Scripts/python.exe` 和已有本地配置。端口、数据库、state支持脚本参数或已有登记配置；默认端口8000不代表本机正在使用8000。脚本核对进程身份，只管理选定实例。
 
-新Windows环境使用Python3.12、PowerShell7和项目锁文件；已有环境先核对，避免重复创建或升级。Docker是可选方式，维护入口为业务目录的 `Start-StockRecommendation-Docker.ps1` / `start-stockrecommendation-docker.sh`、`docker-compose.yml`；使用自己的私有 `.env.docker.local`，核对卷、地址及备份后部署。完整历史安装步骤见[原操作手册](stock-fish/docs/archive/before-cleanup-20261005/stock-fish/README.md)，当地首次运行需单独验证。
+新Windows环境使用Python3.12、PowerShell7和项目锁文件；已有环境先核对，避免重复创建或升级。Docker是可选方式，维护入口为业务目录的 `Start-StockRecommendation-Docker.ps1` / `start-stockrecommendation-docker.sh`、`docker-compose.yml`；使用自己的私有 `.env.docker.local`，核对卷、地址及备份后部署。历史安装步骤可从[原操作手册的固定Git版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/README.md)追溯；其机器、依赖及步骤只适用于原日期，首次运行仍需按当前环境验证。
 
 ## Go候选工具
 

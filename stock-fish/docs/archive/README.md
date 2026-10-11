@@ -1,6 +1,6 @@
 # 历史文档归档
 
-整理日期：2026-10-05。这里保留旧计划、历次性能/验证报告、旧包说明及整理前完整手册。它们记录当时版本、机器、数据、失败和授权，不能作为现在已就绪或新的权限来源。原内容保留，Markdown相对链接按新位置调整；成对公开JSON与报告一起移动且JSON字节保持。
+整理日期：2026-10-05；重复手册清理日期：2026-10-11。这里保留必要历史规则、性能/验证记录及旧包说明，整理前重复完整手册由下方固定Git版本追溯。历史资料记录当时版本、机器、数据、失败和授权，不能作为现在已就绪或新的权限来源。仍保留的Markdown相对链接按位置调整；成对公开JSON与报告字节保持。
 
 当前阅读入口：[项目首页](../../../README.md)、[使用说明](../../../USER_GUIDE.md)、[当前状态](../../../CURRENT_STATUS.md)、[当前策略](../../../CURRENT_STRATEGY.md)、[部署维护](../../../DEPLOYMENT.md)。当前技术合同见[技术索引](../README.md)。
 
@@ -66,18 +66,9 @@
 | `stock-fish/docs/V2_PROSPECTIVE_READINESS.md` | [V2_PROSPECTIVE_READINESS.md](stock-fish/docs/V2_PROSPECTIVE_READINESS.md) |
 | `stock-fish/docs/V2_SEMANTIC_COMPLETION_REPORT.md` | [V2_SEMANTIC_COMPLETION_REPORT.md](stock-fish/docs/V2_SEMANTIC_COMPLETION_REPORT.md) |
 
-## 整理前完整入口
+## 整理前入口的历史版本
 
-- [README.md](before-cleanup-20261005/README.md)
-- [DEPLOYMENT.md](before-cleanup-20261005/DEPLOYMENT.md)
-- [ENGINEERING_BASELINE.md](before-cleanup-20261005/ENGINEERING_BASELINE.md)
-- [stock-fish/README.md](before-cleanup-20261005/stock-fish/README.md)
-- [stock-fish/ENGINEERING_BASELINE.md](before-cleanup-20261005/stock-fish/ENGINEERING_BASELINE.md)
-- [stock-fish/docs/PROJECT_OVERVIEW.md](before-cleanup-20261005/stock-fish/docs/PROJECT_OVERVIEW.md)
-- [stock-fish/docs/CODEX_DAILY_RESEARCH.md](before-cleanup-20261005/stock-fish/docs/CODEX_DAILY_RESEARCH.md)
-- [stock-fish-go/README.md](before-cleanup-20261005/stock-fish-go/README.md)
-
-- [stock-fish-go/delivery/FOUR_STAGE_USER_GUIDE.md](before-cleanup-20261005/stock-fish-go/delivery/FOUR_STAGE_USER_GUIDE.md)
+本轮按用户要求清理重复入口副本，旧机器与操作步骤由[固定Git版本的原归档目录](https://github.com/LiRongji1995/stockfish-qlib-quant-system/tree/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005)追溯。继续开发所需的冻结规则、来源合同、工程JSON和许可证保留；年度短线正文统一维护[总报告](../2026_SHORT_TERM_MAINLINE_REPORT.md)。
 
 ## 当前终端说明重命名
 

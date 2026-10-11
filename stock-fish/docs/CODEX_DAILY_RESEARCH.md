@@ -59,7 +59,7 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 
 资料缺失仍可读取最后真实结果并标日期；服务离线先按[部署维护](../../DEPLOYMENT.md)核对实例。备份包含库和文件证据，恢复到新目录。新源码落盘不等于服务已重新加载；不覆盖现有配置或数据。
 
-授权改变策略、来源、存储、运行或协作边界时，同步对应现状及[项目综述](PROJECT_OVERVIEW.md)。没有自动综述维护或已验证的新模型会话加载流程。过去机器路径、端口、PID与逐轮测试记录见[原协议归档](archive/before-cleanup-20261005/stock-fish/docs/CODEX_DAILY_RESEARCH.md)，不能据此推断当前实例。
+授权改变策略、来源、存储、运行或协作边界时，同步对应现状及[项目综述](PROJECT_OVERVIEW.md)。没有自动综述维护或已验证的新模型会话加载流程。过去机器路径、端口、PID与逐轮测试记录可从[原协议的固定Git版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/docs/CODEX_DAILY_RESEARCH.md)追溯，不能据此推断当前实例。
 
 本次用户已授权常态化：每个交易日收盘后在原聊天通知并给完整清单，周末汇总题材/市场周期。已创建线程heartbeat，Mon–Sat 09:30 Europe/London（中国收盘后，周六周报）；非交易日按正式日历解释，节假日无新行情则明确写明。它是本地聊天计划，电脑和应用需运行，不承诺必然无人值守成功，不自动切换项目服务。普通每日研究不自动调参数、修改源码或提交推送。名单按题材分组；阶段与风险独立；关系扣除共同成分/市场影响后仍只能说明观察关系，不写成互利互害因果。
 
