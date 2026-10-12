@@ -66,7 +66,7 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 
 当次完整R2、原input和真实SOURCES_V2均已合法取得时，可显式使用[当日保存交付协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)的模块prepare/execute入口。按真实Asia/Shanghai时间和原件日历核最新已完成观察日、下一交易日、原日线截止与生成可见性；外层终态跨收盘再核。唯一claim、全部原池与观察项、真实V3交付及最终seal分别核验；没有固定日期、run_id或数量。失败封存，不把详细actual的PASS越过最终FAILED，不将旧61只改日期当新清单。
 
-上游仍走既有capture及strategy-experiments API；完整原run的JSON导出不传strategy_id/selection，带筛选view不能当原content_hash。当前完整原input导出/历史owner接通、当日缺口续采与来源发行、市场/席位默认接线、整体方向梯度、原聊天实际通知及连续可靠性仍分别待验收。该协调器只完成“已保存完整R2到当次原件核验与完整交付”阶段，工程fixture通过不替代真实每日端到端验收。
+上游仍走既有capture及strategy-experiments API；完整原run的JSON导出不传strategy_id/selection，带筛选view不能当原content_hash。[原input只读导出V1](ORIGINAL_MARKET_INPUT_EXPORT_V1.md)提供显式同一权威库及精确market地址的本地CLI路径，每块64KiB读取原payload，输出原字节与原SHA，不构造服务或改库。compact原件保留history引用，回执不能恢复owner或来源权限；V3题材窗口使用真实RAW panels，不能将其与原selector历史认证混同。历史owner原生接通、当日缺口续采与来源发行、市场/席位默认接线、整体方向梯度、原聊天实际通知及连续可靠性仍分别待验收。该协调器只完成“已保存完整R2到当次原件核验与完整交付”阶段，工程fixture通过不替代真实每日端到端验收。
 
 显式使用[Sina行业代理V1](INDUSTRY_SINA_CONTEXT_V1.md)时，目录、节点原始计数与完整分页分别核验；计数冲突保留UNKNOWN，行业代理和经济主线完整性分列，未标日期报价不进入价格、金额或历史成员序列。优先补当前合格观察股所属且有独立当日活跃依据的方向。使用[晚派生来源时间V1](ORIGINAL_PARENT_ASOF_LATE_DERIVATION_V1.md)复算旧截止时，保存实际当前派生时间，仅在原RAW/回执/result全部真实鉴权且父来源实际已可见时使用原数值；目标日历、历史资格及晚到题材资料保持各自缺口。两项能力仍为显式研究，默认服务尚未自动接线。
 
@@ -75,6 +75,8 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 旧result缺失而日期化RAW与物理receipt仍在时，可显式使用[物理原件历史研究V1](PHYSICAL_HISTORICAL_RESEARCH_V1.md)的Python入口，重新发行真实来源、构造当前派生input并只运行一次冻结R1。完整当日目录缺失须拒绝，缺行情保留UNKNOWN；继承因子必须登记全部真实祖先并核对行多重集与时间链。原PARTIAL及缺RAW首见钟不升级，来源失败不当股票形态拒绝。新资料截止与派生时间如实保存，不补造旧包装，不接默认服务或另建数据库，历史PIT及完整周期计数仍分别验收。
 
 验证新R2相对旧R1的增量时，显式使用[同物理原件成对研究V1](PHYSICAL_HISTORICAL_PAIR_V1.md)：一次真实来源发行、一次输入构造，两臂使用同一完整资格、输入和精确截止。逐股基础事实必须相等，参与度保留三值，动态成交额只作软参考；未知不计零收益。R2原生内部另评估R1，外层各一次不能称全部评估一次。单日对照、跨日留存、完整周期、历史PIT和投资优势各自验收，完整明细压缩保存，结论汇入唯一年度总报告。
+
+4/5月需要包含沪市普通主板时，显式选择独立[物理历史对照V2](PHYSICAL_HISTORICAL_PAIR_V2.md)，另提供固定六份官方原件/实际回执的authority清单。只允许600/601/603/605和登记业务窗；全部代码资料先核六位ASCII身份，不规范化非法代码或静默丢弃未选行。沪市退市前缀和深市后缀分别适用。旧V1及run不扩池，工程检查及政策原件验真不替代完整真实沪深输入、历史题材成员或PIT认证。
 
 显式[经济方向解释V1](ECONOMIC_DIRECTION_EXPLANATION_V1.md)只在同一完整保存分组、整节点原件及正式业务原件核对通过后附加。原全部观察项与每项数值、确认/发酵/活跃分歧角色保持；已证业务关系观察子集与整体方向强度分列。原目录计数冲突、节点中非A证券、参股/其他主营/项目终止及晚取得材料均保留。新资料截止须晚于实际接收，不能回填旧run；保存附件不恢复来源权限或再跑selector。默认每日服务尚未自动生成，不能仅凭14项工程测试或真实同61投影称全年主线覆盖已完成。
 
