@@ -4,6 +4,8 @@
 
 当前阅读入口：[项目首页](../../../README.md)、[使用说明](../../../USER_GUIDE.md)、[当前状态](../../../CURRENT_STATUS.md)、[当前策略](../../../CURRENT_STRATEGY.md)、[部署维护](../../../DEPLOYMENT.md)。当前技术合同见[技术索引](../README.md)。
 
+2026-10-12清理退出使用的根目录 `R14_FAST_WARM.cprofile` 过程二进制。必要性能摘要及复现脚本保留，脚本遇原件缺失会报告 `PROFILE_NOT_FOUND`；旧测量不重写为当前测量。原二进制可由Git提交 `00cb579abe4982dfdfcac9e438879f5cebd6f2db` 追溯，当前开发和日常研究不依赖它。
+
 ## 移动清单
 
 | 原路径 | 归档文件 |
