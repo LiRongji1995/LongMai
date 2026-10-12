@@ -20,6 +20,10 @@ RAW、物理receipt、证券身份、业务日、来源公布/取得/入库及�
 
 只读[原input导出](ORIGINAL_MARKET_INPUT_EXPORT_V1.md)保留原字节、原SHA及compact历史引用，同库history owner须实际原生认证。完整[流式交付V3](SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md)和[保存后当日协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)认证当次原件、日期及完整并集，67会话不压缩；保存JSON不能恢复能力。当前每日完整通知已配置，真实采集到聊天交付、默认市场/业务/席位附件和连续可靠性仍须验收，不自动切换服务或改策略。
 
+最新真实链路已分别完成10月12日原资料到10月13日完整34只R2观察的核心、导出和聊天交付；独立67会话题材附件则触原读取预算失败。核心、各附件及整个每日流程分别验收，缺附件不删原观察股，也不把单日媒体和完整子篮子的活跃提升为连续阶段或正式强度梯度。当前采集、工程状态及唯一年度报告由各自入口持续更新。
+
+[证据日志V2隔离原型](EVIDENCE_AUDIT_SPOOL_V2.md)将规范依赖与manifest放在同一完整前后验证过程，保留写入账本及全部行/索引，减少重复读取。它尚未接线，旧V1、来源发行、题材数学和生产入口保持；工程等价与真实全链预算分别验收。
+
 闭合派生明细可经完整回解认证后无损归档为ARCHIVE_ONLY。活动库、最新完整备份、仍被使用的历史库和真实来源保留，退休索引登记删除及恢复边界。代码与运行数据分开，公开仓库不含DB、凭据、全市场原件或完整私有审阅包。普通日报不继承工程发布或清理权限。
 
 独立[StockFish Live](../../stockfish-live/README.md)研究分钟合同、Parquet/DuckDB、PIT/replay与盘中预测；真实供应商、长期运行和投资有效性尚未验收，不修改Research的服务、SQLite和日频策略。见[Live审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)。
