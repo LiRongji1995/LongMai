@@ -30,6 +30,8 @@ RAW、物理receipt、证券身份、业务日、来源公布/取得/入库及�
 
 新增[压缩日志V3](EVIDENCE_AUDIT_SPOOL_V3.md)及[主题执行原型V3](THEME_EVOLUTION_STREAMING_V3.md)分别保持完整物理审计、全部逻辑解码与实际返回计量；不能从manifest或callback恢复来源能力。原数学、日历与UNKNOWN等价已隔离检查，但同67会话夹具总返回比V2多290,351字节，较小输出不代表较低读取成本。它们目前只作诊断原型，未选作真实日报后端，不修改已有完整流式交付V3命令的实现或默认服务。真实预算、外层来源和每日连续交付继续独立验收。
 
+新增[同次源投影V1隔离原型](../stockfish_core/yaogu/session_payload_fusion_v1.py)以同一次实际读取并SHA认证的market/master数据，同时生成原市场统计和完整价格panel；两轮67会话及缺日、日期身份、分页、交易状态、量额矛盾、可见时间和价格反证的54项TEST_FIXTURE检查通过。它仅接受原exact reader/resolver，不缓存跨panel资料或恢复JSON能力；新源码、配置与规格登记只是直接投影的身份元数据，完整caller运行依赖并集和来源终验仍须另行认证。合并删除旧_session中间第二次market读取的观察点，不能宣称所有并发变化异常逐次等价；必须保留外层完整初终整SHA/7FP。原型未接旧stream、正式每日入口或默认服务，真实67会话读取与输出总预算仍未证明READY，不修改选股参数或重写原run。
+
 独立[StockFish Live](../../stockfish-live/README.md)研究分钟合同、Parquet/DuckDB、PIT/replay与盘中预测；真实供应商、长期运行和投资有效性尚未验收，不修改Research的服务、SQLite和日频策略。见[Live审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)。
 
 ## 模块与合同定位
