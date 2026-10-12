@@ -64,6 +64,10 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 
 本次用户已授权常态化：每个交易日收盘后在原聊天通知并给完整清单，周末汇总题材/市场周期。已创建线程heartbeat，Mon–Sat 09:30 Europe/London（中国收盘后，周六周报）；非交易日按正式日历解释，节假日无新行情则明确写明。它是本地聊天计划，电脑和应用需运行，不承诺必然无人值守成功，不自动切换项目服务。普通每日研究不自动调参数、修改源码或提交推送。名单按题材分组；阶段与风险独立；关系扣除共同成分/市场影响后仍只能说明观察关系，不写成互利互害因果。
 
+当次完整R2、原input和真实SOURCES_V2均已合法取得时，可显式使用[当日保存交付协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)的模块prepare/execute入口。按真实Asia/Shanghai时间和原件日历核最新已完成观察日、下一交易日、原日线截止与生成可见性；外层终态跨收盘再核。唯一claim、全部原池与观察项、真实V3交付及最终seal分别核验；没有固定日期、run_id或数量。失败封存，不把详细actual的PASS越过最终FAILED，不将旧61只改日期当新清单。
+
+上游仍走既有capture及strategy-experiments API；完整原run的JSON导出不传strategy_id/selection，带筛选view不能当原content_hash。当前完整原input导出/历史owner接通、当日缺口续采与来源发行、市场/席位默认接线、整体方向梯度、原聊天实际通知及连续可靠性仍分别待验收。该协调器只完成“已保存完整R2到当次原件核验与完整交付”阶段，工程fixture通过不替代真实每日端到端验收。
+
 显式使用[Sina行业代理V1](INDUSTRY_SINA_CONTEXT_V1.md)时，目录、节点原始计数与完整分页分别核验；计数冲突保留UNKNOWN，行业代理和经济主线完整性分列，未标日期报价不进入价格、金额或历史成员序列。优先补当前合格观察股所属且有独立当日活跃依据的方向。使用[晚派生来源时间V1](ORIGINAL_PARENT_ASOF_LATE_DERIVATION_V1.md)复算旧截止时，保存实际当前派生时间，仅在原RAW/回执/result全部真实鉴权且父来源实际已可见时使用原数值；目标日历、历史资格及晚到题材资料保持各自缺口。两项能力仍为显式研究，默认服务尚未自动接线。
 
 显式历史重建可使用[复权值事实V2](HISTORICAL_FACTOR_VALUE_FACTS_V2.md)的一次原生消费者；旧capture实现、完整逐股值和全部真实祖先分别核验，原PARTIAL/时钟缺口继续保留。来源修复与真实市场状态变化分列；当前事实发行不授予旧PIT，有限深圳范围不当作全市场周期。
