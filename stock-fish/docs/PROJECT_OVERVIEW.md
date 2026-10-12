@@ -24,6 +24,8 @@ RAW、物理receipt、证券身份、业务日、来源公布/取得/入库及�
 
 [证据日志V2隔离原型](EVIDENCE_AUDIT_SPOOL_V2.md)将规范依赖与manifest放在同一完整前后验证过程，保留写入账本及全部行/索引，减少重复读取。它尚未接线，旧V1、来源发行、题材数学和生产入口保持；工程等价与真实全链预算分别验收。
 
+[主题流V2](THEME_EVOLUTION_STREAMING_V2.md)显式使用真实V2日志，保持旧逐日FSM及全部数值、完整67会话与UNKNOWN；真实日志预算失败不降为格式未知，primary/cleanup分列。作者及独立96项夹具通过，42份依赖初终整SHA/7FP一致；真实保存核心到新67日附件尚待接线，不修改旧run、默认CLI或服务。原件终验callback只执行caller提供的检查，不能认证owner或从JSON恢复来源。外层必须新登记并认证完整原件、原run/input和五份正式导出，保存原截止与新情境截止，不再次选股或正常化，不因工程通过扩大预算。
+
 闭合派生明细可经完整回解认证后无损归档为ARCHIVE_ONLY。活动库、最新完整备份、仍被使用的历史库和真实来源保留，退休索引登记删除及恢复边界。代码与运行数据分开，公开仓库不含DB、凭据、全市场原件或完整私有审阅包。普通日报不继承工程发布或清理权限。
 
 独立[StockFish Live](../../stockfish-live/README.md)研究分钟合同、Parquet/DuckDB、PIT/replay与盘中预测；真实供应商、长期运行和投资有效性尚未验收，不修改Research的服务、SQLite和日频策略。见[Live审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)。
