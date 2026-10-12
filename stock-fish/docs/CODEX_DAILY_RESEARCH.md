@@ -62,7 +62,7 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 
 授权改变策略、来源、存储、运行或协作边界时，同步对应现状及[项目综述](PROJECT_OVERVIEW.md)。没有自动综述维护或已验证的新模型会话加载流程。过去机器路径、端口、PID与逐轮测试记录可从[原协议的固定Git版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/docs/CODEX_DAILY_RESEARCH.md)追溯，不能据此推断当前实例。
 
-本次用户已授权常态化：每个交易日收盘后在原聊天通知并给完整清单，周末汇总题材/市场周期。已创建线程heartbeat，Mon–Sat 09:30 Europe/London（中国收盘后，周六周报）；非交易日按正式日历解释，节假日无新行情则明确写明。它是本地聊天计划，电脑和应用需运行，不承诺必然无人值守成功，不自动切换项目服务。普通每日研究不自动调参数、修改源码或提交推送。名单按题材分组；阶段与风险独立；关系扣除共同成分/市场影响后仍只能说明观察关系，不写成互利互害因果。
+本次用户已授权常态化：每个交易日收盘后在原聊天通知并给完整清单，周末汇总题材/市场周期。原线程heartbeat已实际更新并回读一致，Mon–Sat 11:30触发，原聊天、ACTIVE状态及每天完整通知保持。配置没有独立timezone字段；按本任务Europe/London环境对应上海夏时18:30、冬时19:30，不能称已存Asia/Shanghai时区。执行时另核实际上海日期/18:00和market、master、复权真实完整性，时钟已过不等于资料已齐。非交易日按正式日历解释，节假日无新行情则明确写明。它是本地聊天计划，电脑和应用需运行，实际连续交付仍待验收；服务不可达时报告具体缺口，不默认起服务或新建DB。普通每日研究不自动调参数、修改源码或提交推送。名单按题材分组，阶段与风险独立；关系扣除共同成分/市场影响后仍只是观察关系，不写成互利互害因果。
 
 当次完整R2、原input和真实SOURCES_V2均已合法取得时，可显式使用[当日保存交付协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)的模块prepare/execute入口。按真实Asia/Shanghai时间和原件日历核最新已完成观察日、下一交易日、原日线截止与生成可见性；外层终态跨收盘再核。唯一claim、全部原池与观察项、真实V3交付及最终seal分别核验；没有固定日期、run_id或数量。失败封存，不把详细actual的PASS越过最终FAILED，不将旧61只改日期当新清单。
 

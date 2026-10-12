@@ -1,102 +1,41 @@
 # 项目综述与规则参考
 
-当前用户入口为[项目首页](../../README.md)、[使用说明](../../USER_GUIDE.md)、[状态与待办](../../CURRENT_STATUS.md)、[策略概览](../../CURRENT_STRATEGY.md)和[部署维护](../../DEPLOYMENT.md)。本综述用于按需理解模块和冻结对照，不再叠加每轮发布日志。动态数据与服务状态以实际核验为准。
+用户入口为[README](../../README.md)、[USER_GUIDE](../../USER_GUIDE.md)、[CURRENT_STATUS](../../CURRENT_STATUS.md)、[CURRENT_STRATEGY](../../CURRENT_STRATEGY.md)和[DEPLOYMENT](../../DEPLOYMENT.md)。本综述解释架构、规则与合同；当前完成度、运行缺口和检查结果看CURRENT_STATUS，逐轮历史可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/stock-fish/docs/PROJECT_OVERVIEW.md)。
 
-年度自主复盘统一维护[2026年以来短线主线与情绪周期总报告](2026_SHORT_TERM_MAINLINE_REPORT.md)。金额、广度、核心留存和接力分列，已知WATCH集合指标不覆盖UNKNOWN；集团项目与上市公司业务归属另核。三个候选窗口仍非三个完整周期，历史PIT和完整周期认证均为0。每日本聊天完整交付的原任务已更新，连续无人值守运行另验收。本轮已按授权清理旧恢复副本、重复手册及可再生过程产物，实测可用空间净增约1.29GiB，保留开发必要资料、活动状态、最新备份和最小可复验证据。新审计明细无损压缩为ARCHIVE_ONLY，真实来源权限不从归档恢复；删除及可恢复性变化由私有退休索引记录。同步指定main；普通日报不继承删除或源码提交授权。
-
-后续又退休两份闭合TEST_FIXTURE安装内194个重复二进制/worker文件，按192唯一inode计算并扣必要证明后净逻辑减量约42.60MiB、allocated约43.02MiB；完整原包、58控制和真实来源保留。原整目录计划因自检报告/校验表差异拒绝的失败仍保存，成功范围改为独立精确白名单；历史重验需新namespace重装。未删除仍承担活动运行、完整恢复或日期化来源证明的大数据库，详细依赖及实际终验见当前状态。
-
-当前10月12日盘前的原市场来源和新解释时钟已独立核对，交付在集合竞价前完成；当前时间可用性与历史成员回看、10月9日历史PIT分别判断。年度正文新增成交/广度/集中度联合状态的持续与转换描述，以及事后固定五股的锚价承接股数和当日成交权重。市场日差片段不认证主线周期或预测概率，成交加权承接不代表净流入或获利资金，仍需合格主线的固定成员和核心承接验证。实际计算、来源差异、未知及投资边界集中维护于同一年度正文；当前工程状态见根当前状态。
-
-独立67日原生题材核验真实完成，全部会话可用、来源终态一致；固态电池在9月29日已发酵待确认，10月8日走强、9日活跃分歧，旧22日归档分别缺前期阶段或延后确认。原输入与61只集合未改，两类电池当前成员实际10月10日取得，另两项当前成员实际10月11日取得，历史成员均未验；来源和适配版本也不同，属于描述性对照。该核验不认证旧盘前PIT、完整情绪周期或V2完整交付协调器。
-
-七月补证把盘中下跌、局部价格修复、成员更替和催化切换分开，不按同一医药标签认证同一周期。龙虎榜现有单股同一披露旁证也与当前策略接线、原金额单位/披露窗口、跨日持续样本分别核验；雄韬原异常原因涉及连续三日，业务日期不能替代榜单精确起讫。已见席位不等于已知游资身份或资金评分成立。具体数字、原文时点及反证只维护于年度正文，当前工程可用性见根当前状态。
-
-[保存R2完整交付V2](SAVED_R2_COMPLETE_DELIVERY_V2.md)通过既有薄封装串联严格原run/input绑定、真实来源重验、当次原生题材情境、经济方向解释及完整展示，不重新运行selector或打开业务DB。完整资格池和原观察集合都核对，原数值/策略身份/正式导出保留；题材或业务未知不丢候选，缺历史会话不冒充完整预热。新解释先入非交付审计目录，只有归档完整验真后投影到交付索引；精确派生归档状态失败且原来源与实现仍通过时，完整原模型名单照常交付、新解释UNKNOWN。原选择截止、新附件截止与实际可见时间分开，过早展示只给不可见状态。DATED_ONLY默认，当前cohort回看须显式选择。V1的35项隔离检查与3项独立绑定反例、真实61只协调失败和独立归档展示成功分别保存；V2工程、真实消费、连续调度和投资有效性分别验收，不能覆盖旧失败。
-
-V2 revision 2最终定向隔离48项通过，退出0，实际18.30秒；展示消费的父档案另与本次原写入路径、SHA和完整字节数绑定，首次读取前自洽改写也拒绝。成功返回后的TXT/JSON按真正返回的hash验真。旧测试失败、revision 1的46通过及主动中断的真实协调记录保留，ctime原因UNKNOWN，未放松来源守卫。revision 2真实61只协调与连续调度尚未验收。
-
-[保存R2完整流式交付V3](SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md)增加独立原件发行路径，适用于RAW和物理回执仍完整但旧规范化包装缺失的来源。新版来源清单不改原时钟、null行数或空scope声明；整RAW/master的同日证券范围与量价语义由真实reader/stream核验。最后67个原日历会话不压缩，原生父与完整sealed journal绑定当次真实producer，保留原全池、全部观察行及正式导出。旧V2入口不变，历史PIT、年度完整周期、连续每日执行和投资优势不由新版本登记替代；实际验收见[当前状态](../../CURRENT_STATUS.md)。
-
-新增显式[当日保存交付协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)，在合法完整原run/input与真实SOURCES_V2之后核最新完成会话及下一会话，再唯一执行既有V3。原日线截止不早于观察日收盘，生成可见性不晚于当次截止，外层最终seal之后仍核日历跨界、身份和资源；不硬编码日期或名单。当前薄封装筛选view不当原run；[精确原input只读导出V1](ORIGINAL_MARKET_INPUT_EXPORT_V1.md)现提供同一权威库原文及原地址的本地路径，已完成独立16项TEST_FIXTURE核验，保留compact历史引用，不重拼输入。历史owner原生接通、当日续采、默认市场/席位、跨方向梯度与聊天通知仍待完成；此阶段没有声称全链路连续无人值守已完成。实际工程和独立边界结果见当前状态，原失败和固定V3不覆写。
-
-本轮新增历史明细也已完整核验后无损归档，随旧性能二进制和本轮pyc退休净逻辑减量约96.25MiB。来源原件、实际执行证明和必要摘要保留，归属未证的临时目录不在已清理计数内；原件审计归档及过程清理各自留证，年度研究始终汇入同一正文。
-
-相邻5月19/20日明细随后亦经独立全决策/资格核验及root完整回解，比较完成后只退休两份重复明文，保留无损归档，归档净逻辑减量约192.22MiB。18→19、19→20共同1380只的保存事实显示市场成交变化与观察名单更替不同步；共同池状态和资格新进、UNKNOWN分别报告，完整20日变动集合金额仍未知。数值及反证统一纳入年度总报告，不新增阶段研究正文。
-
-[原父逐字段派生V2](ORIGINAL_PARENT_FIELD_DERIVATION_V2.md)提供独立显式inline工程入口，将whole COMPLETE自足数值父与PARTIAL审计祖先分开，完整原件认证、原钟、冲突门禁和owner单次消费保持，最终61项隔离检查通过。新[原父历史与字段绑定V1](ORIGINAL_PARENT_HISTORY_FIELD_DERIVATION_V1.md)另由原整件、真实只读队列库存及官方live history owner发行同进程能力，完整原历史index/最后25会话/receipt分别认证。无真RAW三件的mixed PARTIAL历史行不升级，可比值另核同basis实际因子的精确乘积；新inline投影不冒充原history_ref。新V1最终38项隔离检查通过；元数据准备后两次独立真实尝试均退出1，新轮正常化及字段投影已返回，但旧base交易轴须为新日历整轴子集的门禁失败，R2未运行。只读值核查确认差异仅为25会话研究窗之外的六个旧日，不代表门禁已修复或全池消费已验收；目标10月9日历及T5全市场父来源仍UNKNOWN。唯一原件大小、官方history payload累计读取和物理I/O分列；内部2GiB payload及1GiB RSS门禁保持。默认模型和服务未切换，历史PIT、完整周期及投资优势状态不变。
-
-年度正文新增五月固定电力/IDC电源子样本的绝对金额、价格广度、原换手及模型状态：19→20日两组金额均收缩、五股全跌而IDC样本份额上升，反驳单凭份额认定资金转入。精确数学与独立原事实复算通过，不重新采集或重选，不将互补份额负相关当竞争，也不将五股当完整题材。详细表、实际资源与反证集中维护于唯一年度报告；上交所第2次修订原件、日期化完整成员和真实历史PIT仍各自UNKNOWN。
-
-新增独立[历史与字段绑定V2](ORIGINAL_PARENT_HISTORY_FIELD_DERIVATION_V2.md)修复该窗外旧左端差异：共同覆盖typed轴、完整范围、四时钟和25日窗口仍硬核，union只用于旧history resolver视图，最终R2轴不变。新V2与冻结V1共96项隔离检查通过，首轮测试拒绝码失配与两轮真实消费失败分别保留。随后独立真实全池执行退出0，六入口均1次完整返回、来源初末整件一致；原10月8日截止下3037只得到WATCH25、REJECTED2766、UNKNOWN246、FOCUS0，完整25会话2391、当前来源UNKNOWN0。旧22只run保留，计数差不冒充逐股转换；T5参考和目标日历仍UNKNOWN。未授旧RAW权限、延长目标日历或改变正常化器、原策略和默认服务，历史PIT0、完整周期0及投资优势未成立保持。
+年度研究只维护[2026短线主线与情绪周期总报告](2026_SHORT_TERM_MAINLINE_REPORT.md)，聚焦活跃且与冻结选股标准相交的主线。市场成交、同股参与、成员更替、价格承接、题材发酵及风险分别研究；当前成员回看不冒充历史成分或过去盘前知识。完整独立周期及历史PIT均未认证，MARKET_EDGE=NOT_ESTABLISHED。
 
 ## 当前系统
 
-新增显式[沪深历史原件对照V2](PHYSICAL_HISTORICAL_PAIR_V2.md)，在固定六份官方原件/真实回执认证后批准4/5月600/601/603/605有限范围，沪市退市前缀按两版同第9.6.1条独立核验。观察日资格和此前价格窗分离，原风险/日期/因子守卫保持；全代码原件先核六位ASCII身份，历史与未选非法记录不得隐去。旧V1、原选择规则与run冻结。最终作者79项、独立35项及4个新增因子反例通过，政策小范围真实正校验通过；完整真实沪深输入/两臂作业、历史题材成员及PIT仍待核。已暴露的Unicode误收、回执字段差异和检查入口失败均保留，不能用工程通过推定全市场主线研究完成。
+Python Web/API、单写者SQLite、持久采集队列与调度是现有业务入口，Codex通过薄封装调用同一保存结果。服务地址和权威库每次实查，不能据旧健康/采集成功判定当日就绪。Go候选工具独立运行，生产未切换；Qlib、旧Alpha158、MiroFish及模型注册保留研究用途，不是规则入口前置。pyqlib使用0.9.7 wheel，上游许可及第三方通知保留。
 
-[同物理原件R1/R2成对历史研究V1](PHYSICAL_HISTORICAL_PAIR_V1.md)补上旧R1序列不能验证新R2的盲点：一次真实发行和构造，两臂使用同一完整资格、输入与精确截止，完整原生父身份和逐股基础事实核对后，单独解释参与度及动态金额。最终160项隔离工程检查通过，原8项独审漏洞及证书漏登记失败保留。5月20日子消费者得到有限1383只中WATCH28→26；独立流式档案逐股核两臂全池、基础事实及参与三值通过，动态金额公式未独立重算，原外层指纹失败及原因UNKNOWN保留。新私有V3修复执行入口丢venv前缀，5月19日有限1380只的真实两臂及来源终态、外层全部通过，WATCH40→34；旧V2缺依赖失败保留。5月19日完整独立档案扫描在原时间上限封存失败，不扩预算或追认完成。两日保存R2集合34→26但只留存9、新入17、不再选25，固定交集金额与变化名单合计方向相反；共同资格迁移和题材主线归因未知，事后交集有选择偏差。研究反馈应分别跟踪完整预先冻结集合、成员更替、参与持续和模型阶段，待跨周期验证后再登记预测特征。主线周期、PIT及投资增量仍未成立；数值及反证只维护唯一年度正文，实际工程与清理指标见根当前状态。
+主动核心为[STAGE_AWARE_MOMENTUM_V2](STAGE_AWARE_MOMENTUM_V2.md)，按阶段分离事实、setup、确认、情境和反证，A/CLV不作统一硬门槛。DAILY_PRIMARY_FAST与RESEARCH_FULL分开，DAILY_V1另报可用性。[短线强势R1](SHORT_HORIZON_STRENGTH_R1.md)及[R2](SHORT_HORIZON_STRENGTH_R2.md)是显式版本，识别启动/延续/首次回撤；R2追加近期参与度和动态金额软参考。参数尚未验证，旧配置、source identity和run冻结，研究WATCH与正式FOCUS分别表达。
 
-4月15日同入口后来研究也已完成真实两臂、来源终态及外层验收，有限1411只中WATCH26→22，金额继续软参考。完整压缩档案回解与原观察子集数学通过，完整1411条独立逐股重数未在本消费者中进行。14→15与15→16完整明确WATCH集合随后经独立数学核验，分别只留存6/8只；两端共有10只中6只中间中断，不能把端点留存当连续承接或把38→26→53命名为退潮再启动。15日完整资格转换仍待核，未选不全归因setup失败或资金撤离。同期成交增加但广度恶化、成交下降但广度修复的反证只作发现样本，待跨周期检验后再登记特征。滚动新闻还须分别核对页头、段落业务时间和实际版本收件，不能把下午追加正文回填早盘；相关数字、时钟和身份只维护年度正文及当前状态，不新增阶段报告。
-
-[物理原件历史研究V1](PHYSICAL_HISTORICAL_RESEARCH_V1.md)提供显式Python入口，认证仍在的日期化RAW、物理receipt和完整真实复权祖先，重新发行当前来源后只运行一次冻结旧R1。完整同日目录缺失拒绝，缺行情保留UNKNOWN，原PARTIAL及缺RAW首见钟不升级；当次发行对象、实际派生时钟、策略调用与终态核验绑定，不从保存JSON恢复权限。50项工程检查通过，5月18至20日有限深市真实计算已完成，WATCH31/40/28，20日另有1个决策UNKNOWN及资格池净增3只；结果、旧来源失败和全范围缺口集中维护于年度正文及根当前状态。未接默认服务，未补历史PIT或完整独立周期。
-
-项目研究沪深主板普通A股，沿用日期化资格、来源时点和可比价格合同。名单、焦点、分页节选、原始导出和Codex推断分别表达，不凑数量、不补零收益。
-
-Python Web/API、单写者SQLite、持久采集队列与调度继续承载已有业务入口；Codex通过codex_research.py调用现有逻辑。Go候选工具具有独立R1/V2实现、SQLite V2、CLI/HTTP、保存查询和复盘研究入口，生产尚未切换。Qlib、旧Alpha158、MiroFish及模型注册保留研究/参考用途，不作为日常规则前置。
-
-主动核心为STAGE_AWARE_MOMENTUM_V2，日常DAILY_PRIMARY_FAST与多策略RESEARCH_FULL分开；R1必须显式选择，生产晋级关闭。V2按阶段分离事实、setup、行为确认、情境和反证，不使用A/CLV统一硬门槛。完整V2定义见[当前规格](STAGE_AWARE_MOMENTUM_V2.md)，R1见[R1规格](STAGE_AWARE_RESEARCH_R1.md)与[冻结修订](R1_REPAIR_SPEC_V3.md)。初始参数尚未验证，MARKET_EDGE=NOT_ESTABLISHED。
-
-2026-10-09 新增显式研究版本 [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md)。它在共同 MarketInput、日期化资格、可见性和可比价格合同上，以25会话事实独立识别强启动、强势延续和首次回撤，不继承旧 START/HIGH 标签。研究选择与正式 FOCUS 分开，经原实验运行、保存查询和导出体系调用；不另外建名单数据库。原 V2 日常入口、DAILY 和 Go 实现未自动切换。已见正反样本仅用于风格校准，源码测试与同日回算不能证明独立投资有效性。
-
-2026-10-10本次授权新增 [SHORT_HORIZON_STRENGTH_R2](SHORT_HORIZON_STRENGTH_R2.md)：继承已认证R1强势结构并追加近期参与度，动态成交额按完整沪深四板原始资料计算为软参考，不以缺额或低于参考线剔除观察项。新增[题材演进情境](THEME_EVOLUTION_R1.md)，将成交占比、相对价格推进、上涨广度、阶段确认与独立高位风险分开。SourceArtifactReader只读取显式来源manifest，核验原字节SHA/同日证券范围/实际时钟，不另建名单数据库。旧run冻结；新context与冻结父SHA均纳入新run身份。
-
-本次盘前清单和题材周期报告均聚焦有合格研究候选、活跃条件成立且有独立当日主线依据的方向，按已验证梯度展示；非主线仅作为解释主线轮动的必要背景。电池漏报审计后登记[呈现V4](THEME_OBSERVATION_DIAGNOSTICS_V1.md)：确认主线、首日发酵观察和仍满足原候选/确认的活跃分歧分列，缺题材来源显著提示主线识别不可用；内部PENDING微标签不能自动扩成用户主线。同一交易方向归并时保留原来源，供应商篮子完整性与经济题材覆盖分别记录。旧run、呈现版本身份和必要审计证据保留；退役V2/V3报告及原包副本按本轮引用和活动依赖核对后清理。股票选择、原题材数值和参数不改。年度主线资格逐时点核验，当前成分回看与真实历史主题分离，并保留选择偏差与缺数边界。
-
-本次新增[原生流式研究](THEME_STREAMING_RESEARCH_R1.md)，逐日通过原SourceArtifactReader认证市场全范围，复用原阶段数学与关系计算，完整行证据分段保存并认证父结果和研究范围。它解决长窗计算的执行与审计资源问题，不证明历史主线覆盖或投资有效性。R2统一5%参与门槛仍属初始未验证假设；延续龙头被过滤的事实另列，待分阶段、多情绪周期对照验证后才可登记新数值版本。
-
-新增[主线周期复盘标准V1](MAINLINE_CYCLE_RESEARCH_STANDARD_V1.md)约束用户授权的自主持续复盘：只重点研究活跃且符合规则的主线，先将多源报道线索与逐日资格、成员、限价事实分开认证；转载与同上游归源，计数、单位、发布时间与成交额范围冲突不调和成假事实。固定日历区间不当情绪周期，历史阶段片段保留左/右删失和缺日；新假设在其他周期验证，旧run/配置保持。第一批四组报道节点后增加5月算电/绿电和7月医药节点；累计36份原件、六组候选片段仍不能代替全年覆盖或多周期投资验证，缺历史资格者不进入正式排名。
-
-新增[报道事件证据V1](THEME_EVENT_EVIDENCE_V1.md)以固定原文解析、来源SHA/实际时钟、原生父及冻结候选能力提供催化、梯队、分歧解释附件；尚未接默认服务或run/export。趋势挖掘另按复盘标准记录资金扩张、有效参与、持续、集中度、同期市场和席位轴，先报告事实及反证，跨周期验证后才登记预测配置。当前四日电池篮子研究不能推广为全年规律。
-
-独立[CLS可选署名解析V2](CLS_NEXT_DATA_OPTIONAL_BYLINE_V2.md)修复历史短讯author缺失导致整篇正文不可用的问题，核对固定URL/id、JSON、原件SHA和实际时钟，署名缺失只标UNKNOWN。报道业务日须来自同份连续原文上下文，不套发布日期或相对年份；姓名见证不授予历史身份、完整题材成员、限价或选择能力。冻结V1/旧run与默认策略、服务不改。5月12至15日新增连续原生R1状态研究仅在深市主板有限资格池，分别检查每日名单、同股留存/新增/退出、量价与换手、左右截断持续时间；名单轮换或局部放量不自动证明主线持续或资金净迁移。工程、真实接线、完整周期与预测增量分层验收。
-
-新增[龙虎榜原件席位身份V1](LHB_SEAT_EVIDENCE_V1.md)，外部manifest SHA绑定真实归档，恢复SDK投影丢失的提供方编码并审核同披露重复appearance。非零营业部编码不认证自然人，机构占位0不归为统一身份，证券窗口总金额不能逐席位累加。单位、披露窗与发布时间未知仍无FUNDS评分权限；解释附件只绑定冻结原生父与选择，在独立新cutoff使用，未改旧provider、服务、FSM或selector。同期三指数SDK历史捕获与原生市场参考分开；当前549行字段验收和36项收益独立核验不是原生指数适配、历史交易所身份或PIT认证。
-
-新增[历史换手适配V1](HISTORICAL_REPLAY_TURNOVER_V1.md)组合冻结HistoricalReplayAssembler，修复原RAW有turn而DailyBar遗漏的信息损失。新input/audit/source identity绑定同父、代码、业务日、原件SHA和精确百分数换算；原build的价格/资格/复权/四时钟不改，非法、缺失或float往返失真保持UNKNOWN。仅inline显式调用，拒绝history_store，不改旧CLI、持久化或默认服务。真实历史资格仍由旧原生守卫独立决定。
-
-截至10月9日的183个年内交易日（1月5日至10月9日），原始市场字节、数值及全证券范围认证与描述事实序列均已完成。前114日8节点312字段独立原件审样一致；161日与前114日4423项、183日与前161日6260项既有字段一致。新增全市场广度/中位收益/换手/集中度、前20日描述基准及题材广度优势变化只反馈研究反证，不能替代历史合格池、独立情绪周期或预测验证。发现样本及尝试的联合假设留账，旧run和正式选择不变。
-
-新增[原生市场事实V1](MARKET_DESCRIPTIVE_CONTEXT_V1.md)将私有事实挖掘转为独立且显式的来源能力组件，绑定完整原生market stream、输入、cutoff、精确RAW与逐日总体。前20会话排除观察日、缺日不压缩；金额/价格/换手轴独立保留未知。输出来源与文件登记表绑定发行摘要，原件和完整行审计均进行终态复验；自hash JSON或削弱登记表不授予来源权限。默认每日入口、composer、数据库、原R1/R2/V2、题材FSM和新预测评分均未接线或改变，投资验证单独报告。
-
-新增[市场解释附件V1](MARKET_EXPLANATION_V1.md)作为独立显示消费者，复用已发行市场能力并前后终态复验。当前水平、完整1/3/5会话变化、水平OLS斜率和描述反证分别保存，证券总体变化与逐轴缺数保留；原run全文/选择/score不改。新的显式source adapter通过薄封装生成原件绑定附件，研究报告与日报可按同run/input/观察日及实际可见时间只读附加；保存JSON仅作归档显示，不重授来源能力。默认服务、旧来源身份和预测配置保持，完整主线合格范围与独立周期投资验证仍待完成。
-
-[题材关系研究](../stockfish_core/yaogu/theme_cycle_validation.py)是独立描述性情境层，不替代选股：关系只计算显式主线/必要背景组合，扣除共同成分，并以各自前60会话拟合的市场补集因子检验当日金额变化与收益残差。成交占比的闭合相关仅作诊断，不能当资金净流入或竞争因果。10个有效检验会话、3个经过独立认证的情绪周期均为尚未验证的初始覆盖假设；缺旧成员、旧资格或情绪注册权威时保持UNKNOWN。父阶段标签需原生producer能力认证，JSON自重算hash不构成认证；当前主线cohort回看不声称历史主线全覆盖或PIT预测成功。
-
-日历目标元数据另登记`TARGET_SESSION_CALENDAR_CONTEXT_V1`：原始日历字节、完整自然日范围、版本和实际收件时点认证后，目标交易日与日历证据纳入新run身份。原normalizer的日历覆盖截止`event_time`保持不变，以专属已发布日程语义处理；普通价格、主题、事件的时点规则不放宽。
+[题材演进](THEME_EVOLUTION_R1.md)计算金额、占比、相对价格、广度和集中度；[呈现V4](THEME_OBSERVATION_DIAGNOSTICS_V1.md)分列确认主线、首日发酵观察和仍活跃的分歧，风险独立。只展示有当日活跃依据、独立主线范围证据及合格候选交集的方向，不展开全部PENDING微标签。供应商篮子、经济业务关系和策略资格分别核验，缺题材源显著提示不可用。
 
 ## 数据与真实性
 
-独立子项目 [StockFish Live](../../stockfish-live/README.md) 已开始按阶段建设盘中 Market Weather / Intraday Forecasting。当前工程已覆盖分钟合同、独立 Parquet/DuckDB、严格 PIT/replay、流式市场状态、历史相似预测与修订、API/WebSocket/Dashboard 和 expanding walk-forward/保存预测后验。现有 Dashboard 可在最近一年已保存日期间切换，以当时的原保存预测对照收盘真实走势；事后实际价格单独展示，其他状态仍按观察时点读取。标准 HTTP feed 适配器已实现；真实供应商未配置，真实历史覆盖、长期运行和投资有效性尚未验收。它不依赖或修改 Research 的 CandidateService、SQLite、scheduler、日频策略和运行实例；仅兼容证券身份、单位、来源时钟等底层语义。工程 fixture 不等于真实分钟覆盖，MARKET_EDGE 仍为 NOT_ESTABLISHED。边界与实施门槛见 [Live 审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)和[阶段计划](../../stockfish-live/docs/IMPLEMENTATION_PLAN.md)。
+RAW、物理receipt、证券身份、业务日、来源公布/取得/入库及实际生成时间先认证，再使用价格、换手、资金或风险。历史后取资料只作事后研究；UNKNOWN、未成熟、合法空与失败分列，缺结果不计零收益。完整日期化四板金额总体与有限主板合格池分开，成交不当净流入。
 
-BaoStock、AkShare相关公开来源、Eastmoney、可选Tushare及本地登记证据各自记录实际可见时间、业务日期、父回执、单位、修订和覆盖。连接器存在不保证当前网络/权限或完整历史；旧文档成功数字不代表今天就绪。
+历史真实复权须完整数值父、真实祖先、无冲突锚和精确同basis乘积；完整同日目录及价格窗不能互相替代。[物理历史对照V2](PHYSICAL_HISTORICAL_PAIR_V2.md)有限批准4/5月600/601/603/605身份和沪市退市前缀，全部代码字段先核ASCII。规则适配、真实因子补齐、原生两臂、历史成员和PIT分别验收；旧V1及原R1/R2冻结。
 
-每条证据保留事实时间、来源公布、首次取得和入库时间，每次运行保留观察日、截止、生成时间，复盘另有评价时间。RAW用于当日价格事件，可比价格用于跨日窗口；缺资格、基准或来源证明保持未知。历史后取资料不冒充前瞻留档，TEST_FIXTURE只用于独立工程验证。
+只读[原input导出](ORIGINAL_MARKET_INPUT_EXPORT_V1.md)保留原字节、原SHA及compact历史引用，同库history owner须实际原生认证。完整[流式交付V3](SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md)和[保存后当日协调V1](SAVED_R2_DAILY_COORDINATION_V1.md)认证当次原件、日期及完整并集，67会话不压缩；保存JSON不能恢复能力。当前每日完整通知已配置，真实采集到聊天交付、默认市场/业务/席位附件和连续可靠性仍须验收，不自动切换服务或改策略。
 
-旧run、输入、来源字节和正式配置不覆写；后续标签和资料修订追加保存。完整后验池、已知资格排除、未知资格、缺席身份和未成熟分母分开。备份恢复按[部署维护](../../DEPLOYMENT.md)与[Go隔离生命周期](../../stock-fish-go/ISOLATED_LIFECYCLE.md)执行。
+闭合派生明细可经完整回解认证后无损归档为ARCHIVE_ONLY。活动库、最新完整备份、仍被使用的历史库和真实来源保留，退休索引登记删除及恢复边界。代码与运行数据分开，公开仓库不含DB、凭据、全市场原件或完整私有审阅包。普通日报不继承工程发布或清理权限。
+
+独立[StockFish Live](../../stockfish-live/README.md)研究分钟合同、Parquet/DuckDB、PIT/replay与盘中预测；真实供应商、长期运行和投资有效性尚未验收，不修改Research的服务、SQLite和日频策略。见[Live审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)。
 
 ## 模块与合同定位
 
-| 内容 | 参考 |
-|---|---|
-| 日常调用与权限 | [日常协议](CODEX_DAILY_RESEARCH.md)、[AGENTS](../../AGENTS.md) |
-| Python来源与时间 | [数据合同](../stockfish_core/DATA_CONTRACT.md)、[特征证据合同](architecture/FEATURE_EVIDENCE_CONTRACT_V1.md) |
-| 日常闭环与观察 | [闭环](PHASE1_DAILY_RESEARCH_LOOP.md)、[观察工具](PHASE1_OBSERVATION_MONITOR.md)、[评价分数](DAILY_RECOMMENDATION_SCORE_V1.md) |
-| Python快路径与历史存储 | [日常路径](R14_DAILY_FAST_PATH.md)、[历史合同](R12_HISTORY_ARTIFACT_REPORT.md) |
-| 短线强势三阶段研究 | [SHORT_HORIZON_STRENGTH_R1](SHORT_HORIZON_STRENGTH_R1.md) |
-| 参与度与动态成交额 | [SHORT_HORIZON_STRENGTH_R2](SHORT_HORIZON_STRENGTH_R2.md) |
-| 题材发酵/走强/分歧/走弱与独立风险 | [THEME_EVOLUTION_R1](THEME_EVOLUTION_R1.md) |
-| Go构建、架构和迁移 | [Go入口](../../stock-fish-go/README.md)、[架构](../../stock-fish-go/ARCHITECTURE_V2.md)、[迁移](../../stock-fish-go/MIGRATION.md) |
-| 完整技术资料及旧报告 | [技术索引](README.md)、[历史归档](archive/README.md) |
+| 内容 | 入口 |
+| --- | --- |
+| 日常调用、权限与现状 | [日常协议](CODEX_DAILY_RESEARCH.md)、[AGENTS](../../AGENTS.md)、[当前状态](../../CURRENT_STATUS.md) |
+| 来源、时钟与历史存储 | [数据合同](../stockfish_core/DATA_CONTRACT.md)、[特征证据](architecture/FEATURE_EVIDENCE_CONTRACT_V1.md)、[历史合同](R12_HISTORY_ARTIFACT_REPORT.md) |
+| 规则、参与和题材 | [主动V2](STAGE_AWARE_MOMENTUM_V2.md)、[短线R2](SHORT_HORIZON_STRENGTH_R2.md)、[题材演进](THEME_EVOLUTION_R1.md) |
+| 年度复盘与关系 | [唯一年度报告](2026_SHORT_TERM_MAINLINE_REPORT.md)、[周期标准](MAINLINE_CYCLE_RESEARCH_STANDARD_V1.md)、[原生流式研究](THEME_STREAMING_RESEARCH_R1.md) |
+| 市场及参与描述 | [市场事实](MARKET_DESCRIPTIVE_CONTEXT_V1.md)、[市场解释](MARKET_EXPLANATION_V1.md)、[同股参与](COHORT_PARTICIPATION_TRENDS_V1.md) |
+| 席位和业务解释 | [龙虎榜](LHB_SEAT_EVIDENCE_V1.md)、[经济方向](ECONOMIC_DIRECTION_EXPLANATION_V1.md)、[归档展示](ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md) |
+| 历史重建与因子 | [物理V1](PHYSICAL_HISTORICAL_RESEARCH_V1.md)、[两臂V2](PHYSICAL_HISTORICAL_PAIR_V2.md)、[因子事实V2](HISTORICAL_FACTOR_VALUE_FACTS_V2.md) |
+| Go及全部技术资料 | [Go入口](../../stock-fish-go/README.md)、[隔离生命周期](../../stock-fish-go/ISOLATED_LIFECYCLE.md)、[技术索引](README.md)、[历史归档](archive/README.md) |
 
 ## 冻结对照与详细公式
 
