@@ -28,6 +28,8 @@ RAW、物理receipt、证券身份、业务日、来源公布/取得/入库及�
 
 闭合派生明细可经完整回解认证后无损归档为ARCHIVE_ONLY。活动库、最新完整备份、仍被使用的历史库和真实来源保留，退休索引登记删除及恢复边界。代码与运行数据分开，公开仓库不含DB、凭据、全市场原件或完整私有审阅包。普通日报不继承工程发布或清理权限。
 
+新增[压缩日志V3](EVIDENCE_AUDIT_SPOOL_V3.md)及[主题执行原型V3](THEME_EVOLUTION_STREAMING_V3.md)分别保持完整物理审计、全部逻辑解码与实际返回计量；不能从manifest或callback恢复来源能力。原数学、日历与UNKNOWN等价已隔离检查，但同67会话夹具总返回比V2多290,351字节，较小输出不代表较低读取成本。它们目前只作诊断原型，未选作真实日报后端，不修改已有完整流式交付V3命令的实现或默认服务。真实预算、外层来源和每日连续交付继续独立验收。
+
 独立[StockFish Live](../../stockfish-live/README.md)研究分钟合同、Parquet/DuckDB、PIT/replay与盘中预测；真实供应商、长期运行和投资有效性尚未验收，不修改Research的服务、SQLite和日频策略。见[Live审计](../../stockfish-live/docs/REPO_INTEGRATION_AUDIT.md)。
 
 ## 模块与合同定位

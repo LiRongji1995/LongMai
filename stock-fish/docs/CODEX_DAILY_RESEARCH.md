@@ -43,6 +43,8 @@
 
 ## 调用入口
 
+[压缩证据日志V3](EVIDENCE_AUDIT_SPOOL_V3.md)和[主题执行原型V3](THEME_EVOLUTION_STREAMING_V3.md)目前仅用于显式工程诊断，未选作真实日报后端，也没有改接下表或完整流式交付V3命令。完整数学等价的同67会话夹具中，总实际返回反而由V2的1,620,240升至V3的1,910,591字节；压缩输出较小不能判资源就绪。真实完整来源、原run/input、五导出、完整日历及外层终验合同保持，资源上界未知时不自动真实重跑或扩大预算。
+
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。
 
 | 请求 | 已有入口 |
