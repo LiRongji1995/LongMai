@@ -9,6 +9,7 @@ import subprocess
 import sys
 import tempfile
 import unittest
+from unittest.mock import patch
 
 from stockfish_core.yaogu import premarket_runtime_v1 as runtime
 
@@ -24,6 +25,94 @@ class RuntimeFixture(unittest.TestCase):
 
     def total(self, budget):
         return sum(budget.metrics['returned_read_bytes'].values())
+
+    def test_directory_sum_tracks_growth_without_following_any_links(self):
+        tree, outside = self.root/'tree', self.root/'outside'
+        (tree/'nested').mkdir(parents=True)
+        outside.mkdir()
+        (tree/'a').write_bytes(b'1234')
+        (tree/'nested'/'b').write_bytes(b'1234567')
+        (outside/'large').write_bytes(b'x'*9000)
+        (tree/'file-link').symlink_to(outside/'large')
+        (tree/'directory-link').symlink_to(outside, target_is_directory=True)
+        (tree/'cycle-link').symlink_to(tree, target_is_directory=True)
+        (tree/'dangling-link').symlink_to(outside/'missing')
+        self.assertEqual(runtime.directory_bytes(tree), 11)
+        with (tree/'a').open('ab') as handle:
+            handle.write(b'56')
+        self.assertEqual(runtime.directory_bytes(tree), 13)
+        self.assertEqual(runtime.directory_bytes(self.root/'missing'), 0)
+        root_link = self.root/'root-link'
+        root_link.symlink_to(tree, target_is_directory=True)
+        self.assertEqual(runtime.directory_bytes(root_link), 13)
+        with self.assertRaisesRegex(runtime.BudgetExceeded, 'CACHE_SIZE_LIMIT'):
+            with runtime.Budget({'cache_bytes':12}, cache_dir=root_link).phase('capture'):
+                self.fail('root alias must not bypass the cache budget')
+
+    def test_slow_full_scan_is_throttled_from_completion_not_each_read(self):
+        clock, scans = [10.0], []
+        def slow_scan(path):
+            scans.append(path)
+            clock[0] += .75
+            return 0
+        with patch.object(runtime.time, 'monotonic', side_effect=lambda:clock[0]), \
+                patch.object(runtime, 'directory_bytes', side_effect=slow_scan), \
+                patch.object(runtime, 'atomic_json'):
+            budget = runtime.Budget(job_dir=self.root/'job', cache_dir=self.root/'cache')
+            budget.check('initial', force=True)
+            self.assertEqual(len(scans), 2)
+            for _ in range(50):
+                budget.charge_read(1)
+            self.assertEqual(len(scans), 2)
+            clock[0] += .49
+            budget.check('still_throttled')
+            self.assertEqual(len(scans), 2)
+            clock[0] += .02
+            budget.check('next_period')
+            self.assertEqual(len(scans), 4)
+            self.assertEqual(self.total(budget), 50)
+
+    def test_phase_entry_and_exit_force_complete_growth_checks(self):
+        for scope in ('job', 'cache'):
+            for boundary in ('entry', 'exit'):
+                with self.subTest(scope=scope, boundary=boundary):
+                    folder = self.root/(scope+'-'+boundary)
+                    job, cache = folder/'job', folder/'cache'
+                    job.mkdir(parents=True); cache.mkdir()
+                    target = (job if scope=='job' else cache)/'TEST_FIXTURE_growth'
+                    with patch.object(runtime.time, 'monotonic', return_value=100.0):
+                        budget = runtime.Budget({'output_bytes':4096,'cache_bytes':4096},
+                            job_dir=job, cache_dir=cache)
+                        if boundary=='entry':
+                            target.write_bytes(b'x'*5000)
+                        entered = False
+                        reason = 'OUTPUT_LIMIT' if scope=='job' else 'CACHE_SIZE_LIMIT'
+                        with self.assertRaisesRegex(runtime.BudgetExceeded, reason):
+                            with budget.phase('capture'):
+                                entered = True
+                                target.write_bytes(b'x'*5000)
+                        self.assertEqual(entered, boundary=='exit')
+                        self.assertEqual(budget.phase_name, 'capture')
+                        with self.assertRaisesRegex(runtime.BudgetExceeded, reason):
+                            budget.check('caught_limit_stays_sticky')
+
+    def test_phase_exit_keeps_primary_error_and_failed_check_sticky(self):
+        cache = self.root/'cache'
+        cache.mkdir()
+        budget = runtime.Budget({'cache_bytes':32}, cache_dir=cache)
+        with self.assertRaisesRegex(LookupError, 'TEST_FIXTURE_PRIMARY'):
+            with budget.phase('capture'):
+                (cache/'growth').write_bytes(b'x'*64)
+                raise LookupError('TEST_FIXTURE_PRIMARY')
+        with self.assertRaisesRegex(runtime.BudgetExceeded, 'CACHE_SIZE_LIMIT'):
+            budget.check('primary_caught_cannot_hide_exit_budget')
+        other = runtime.Budget(cache_dir=cache)
+        with patch.object(runtime, 'directory_bytes', side_effect=[0, OSError('TEST_FIXTURE_FS')]):
+            with self.assertRaisesRegex(LookupError, 'TEST_FIXTURE_PRIMARY'):
+                with other.phase('capture'):
+                    raise LookupError('TEST_FIXTURE_PRIMARY')
+        with self.assertRaisesRegex(runtime.BudgetExceeded, 'PHASE_EXIT_CHECK_FAILED:OSError'):
+            other.check('primary_caught_cannot_hide_unavailable_exit_check')
 
     def test_physical_four_and_all_seven_fingerprint_fields_are_enforced(self):
         _, reference = runtime.Budget().read(self.path)

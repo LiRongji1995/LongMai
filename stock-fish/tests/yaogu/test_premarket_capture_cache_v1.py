@@ -146,7 +146,8 @@ class CaptureCacheTests(unittest.TestCase):
             config=dict(allow_test_fixture=True,**config),executor=executor or FixtureExecutor())
 
     def test_request_is_immutable_and_ascii(self):
-        spec = cache_module.RequestSpec('stock_basic',{'codes':['sh.600001']},'2026-10-15',current=True)
+        spec = cache_module.RequestSpec('stock_basic',{'codes':['sh.600001']},
+            datetime.now(cache_module.SH).date().isoformat(),current=True)
         spec.parameters['codes'].append('sh.600002')
         self.assertEqual(spec.parameters['codes'],['sh.600001'])
         with self.assertRaisesRegex(ValueError,'ASCII_REQUEST'):
@@ -175,7 +176,8 @@ class CaptureCacheTests(unittest.TestCase):
 
     def test_failed_original_stays_failed_and_explicit_retry_is_single(self):
         executor = FixtureExecutor(basic_failure=True); cache = self.cache(executor)
-        spec = cache_module.RequestSpec('stock_basic_all',{},'2026-10-15',current=True)
+        spec = cache_module.RequestSpec('stock_basic_all',{},
+            datetime.now(cache_module.SH).date().isoformat(),current=True)
         record = cache.capture_one(spec)
         self.assertEqual(record.status,'FETCH_FAILED')
         self.assertFalse(record.metadata['raw_first_seen_present'])
@@ -190,7 +192,8 @@ class CaptureCacheTests(unittest.TestCase):
 
     def test_crash_claim_cannot_silently_retry_and_path_patches_restore(self):
         executor = FixtureExecutor(crash=True); cache = self.cache(executor)
-        spec = cache_module.RequestSpec('stock_basic_all',{},'2026-10-15',current=True)
+        spec = cache_module.RequestSpec('stock_basic_all',{},
+            datetime.now(cache_module.SH).date().isoformat(),current=True)
         with self.assertRaisesRegex(RuntimeError,'EXECUTOR_DIED'):cache.capture_one(spec)
         with self.assertRaisesRegex(ValueError,'NO_IMPLICIT_RETRY'):cache.capture_one(spec)
         self.assertEqual(len(executor.calls),1)

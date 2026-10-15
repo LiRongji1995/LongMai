@@ -165,6 +165,67 @@ class PremarketPresentationFixture(unittest.TestCase):
                     self.assertIsNone(provided['high_risk']['conditions']['breadth_decline'])
                     self.assertEqual(report['groups'][0]['items'][0]['native_relations'], [])
 
+    def test_missing_failed_or_unavailable_diagnostic_is_unknown_not_negative(self):
+        rows = [item(33, 400000000)]
+        failed = theme(rows)
+        failed.update(status='FAILED', diagnostic=None)
+        unavailable = theme(rows)
+        for category in presentation.CATEGORIES:
+            unavailable['diagnostic'][category] = []
+        unavailable['diagnostic'].update(report_banner_required=True,
+            report_banner='TEST_FIXTURE 主线识别不可用')
+        contexts = [None, failed, theme(rows, verified=False),
+                    theme(rows, verified=None), unavailable]
+        for ordinal, context in enumerate(contexts):
+            with self.subTest(context=ordinal):
+                result = presentation.render_premarket(core(rows), context,
+                    self.root / f'unknown-diagnostic-{ordinal}')
+                text, report, _ = self.read(result)
+                self.assertIn('原生关联：原生诊断关联未知', text)
+                self.assertNotIn('当前未列入活跃诊断候选', text)
+                self.assertEqual(report['groups'][0]['items'][0]['native_relations'], [])
+                if context is None or context['diagnostic'] is None or context['source_verified'] is not True:
+                    self.assertIsNone(report['theme_context']['category_counts'])
+        available = theme(rows)
+        for category in presentation.CATEGORIES:
+            available['diagnostic'][category] = []
+        result = presentation.render_premarket(core(rows), available,
+            self.root / 'verified-no-active-candidate')
+        text, report, _ = self.read(result)
+        self.assertIn('原生关联：当前未列入活跃诊断候选', text)
+        self.assertNotIn('原生诊断关联未知', text)
+        self.assertEqual(report['theme_context']['category_counts'],
+            {category: 0 for category in presentation.CATEGORIES})
+
+    def test_multiple_native_relations_label_each_original_theme_stage_and_risk(self):
+        rows = [item(34, 400000000)]
+        original = core(rows)
+        context = theme(rows)
+        second = deepcopy(context['source_context']['themes'][0])
+        second.update(theme_id='TEST_FIXTURE:concept', name='TEST_FIXTURE_第二题材',
+            theme_type='CONCEPT')
+        context['source_context']['themes'].append(second)
+        relation = deepcopy(context['diagnostic']['fermentation_watch'][0])
+        relation.update(theme_id=second['theme_id'], name=second['name'], stage='DIVERGENCE')
+        relation['high_risk'].update(flag=False, status='FAIL')
+        context['diagnostic']['active_divergence_mainlines'].append(relation)
+        before = deepcopy(context)
+        result = presentation.render_premarket(original, context, self.root / 'multiple-relations')
+        text, report, csv_text = self.read(result)
+        relations = report['groups'][0]['items'][0]['native_relations']
+        first_name = context['source_context']['themes'][0]['name']
+        self.assertIn(first_name + '：STRENGTHENING_PENDING·高风险', text)
+        self.assertIn(second['name'] + '：DIVERGENCE·本模型高风险未触发', text)
+        self.assertEqual([row['name'] for row in relations], [first_name, second['name']])
+        self.assertEqual([row['high_risk'] for row in relations],
+            [context['diagnostic']['fermentation_watch'][0]['high_risk'], relation['high_risk']])
+        self.assertEqual(text.count(rows[0]['instrument_id']), 1)
+        self.assertEqual(result['counts']['displayed'], 1)
+        self.assertEqual(report['groups'][0]['items'][0]['original_values'], rows[0])
+        self.assertIn(second['name'], csv_text)
+        self.assertEqual(context, before)
+        self.assertEqual(original, core(rows))
+
     def test_bad_or_missing_diagnostic_and_cross_run_rejected(self):
         rows = [item(41, 400000000)]
         for mutation, expected in ((lambda c: c['diagnostic'].pop('confirmed_mainlines'), 'CATEGORY_LISTS'),

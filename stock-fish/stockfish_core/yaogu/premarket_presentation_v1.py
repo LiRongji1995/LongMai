@@ -353,8 +353,11 @@ def render_premarket(core_run: dict, theme_context: dict | None, output_dir,
         lines.extend(['', group['name'] + '｜' + basis + '（' + str(len(group['items'])) + '）'])
         for item in group['items']:
             row = item['original_values']
-            model = '；'.join(str(rel['stage']) + '·' + _risk_label(rel['high_risk'])
-                             for rel in item['native_relations']) or '当前未列入活跃诊断候选'
+            model = '；'.join(str(rel['name']) + '：' + str(rel['stage']) + '·' +
+                             _risk_label(rel['high_risk']) for rel in item['native_relations'])
+            if not model:
+                model = ('原生诊断关联未知' if context['diagnostic_status'] == 'UNKNOWN'
+                         or context['report_banner_required'] is True else '当前未列入活跃诊断候选')
             repair = ('｜修复未确认' if row.get('repair_status') == 'UNCONFIRMED' else
                       '｜修复 ' + str(row.get('repair_status'))) if row.get('primary_stage') == 'FIRST_PULLBACK' else ''
             lines.append(row['name'] + ' ' + row['instrument_id'] + '｜' +

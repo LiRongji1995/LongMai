@@ -8,6 +8,8 @@
 
 显式[独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)将公开来源请求和JSON缓存索引、原生R2内存owner、真实SOURCES_V2/行业读取器/完整67日市场stream/V2日志、报道原件与纯展示层接为单命令。入口为 `scripts/stockfish.py premarket`，不依赖Codex应用、LLM、运行中的HTTP服务或新业务DB；默认主动SAM V2保持。文件索引只保存真实来源引用，保存JSON不能恢复活能力。旧run、五导出、完整RAW分母和未知保留；3亿元仅在最后展示层生效。完整行业/概念当前篮子仍不是完整经济题材或历史PIT，新闻不因共现变成股票归因。新执行profile分阶段限制实际返回读取，父进程另验真实退出、代码/来源/产物；发布及隔离测试不替代真实冷/暖启动、连续每日或投资验证。
 
+本次补齐真实V2来源终验回调、未知与多关联文本，并修复目录扫描节流且强制阶段入出完整资源检查，原限额和数学不变；73项隔离检查退出0。一次真实暖缓存命令已完成原R2、完整67会话及终验，外部退出2、封存为 `COMPLETED_WITH_UNKNOWNS`：原25只、3亿元展示17只，来源和经济方向未知保留；新冷启动、Windows和连续跨日可靠性仍未验收，记录见[独立入口检查](STANDALONE_PREMARKET_VALIDATION_V1.md)。
+
 Python Web/API、单写者SQLite、持久采集队列与调度是现有业务入口，Codex通过薄封装调用同一保存结果。服务地址和权威库每次实查，不能据旧健康/采集成功判定当日就绪。Go候选工具独立运行，生产未切换；Qlib、旧Alpha158、MiroFish及模型注册保留研究用途，不是规则入口前置。pyqlib使用0.9.7 wheel，上游许可及第三方通知保留。
 
 主动核心为[STAGE_AWARE_MOMENTUM_V2](STAGE_AWARE_MOMENTUM_V2.md)，按阶段分离事实、setup、确认、情境和反证，A/CLV不作统一硬门槛。DAILY_PRIMARY_FAST与RESEARCH_FULL分开，DAILY_V1另报可用性。[短线强势R1](SHORT_HORIZON_STRENGTH_R1.md)及[R2](SHORT_HORIZON_STRENGTH_R2.md)是显式版本，识别启动/延续/首次回撤；R2追加近期参与度和动态金额软参考。参数尚未验证，旧配置、source identity和run冻结，研究WATCH与正式FOCUS分别表达。

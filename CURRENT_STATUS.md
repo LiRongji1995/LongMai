@@ -1,12 +1,12 @@
 # 当前状态与待办
 
-更新：2026年10月13日。本文只保留当前能力、缺口和下一步，不再累加逐轮日志。详细命令、身份、失败及旧检查结果可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/CURRENT_STATUS.md)；必要私有原件和退休索引保留。
+更新：2026年10月16日（上海时间）。本文只保留当前能力、缺口和下一步，不再累加逐轮日志。详细命令、身份、失败及旧检查结果可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/CURRENT_STATUS.md)；必要私有原件和退休索引保留。
 
 ## 当前能力
 
 新增[独立终端盘前研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)，把显式R2采集、真实来源认证、67会话题材及成交额≥3亿元展示协调为 `python scripts/stockfish.py premarket`。它不依赖Codex/Web服务/LLM，不创建业务DB、不改变默认主动V2。核心、来源、题材、报道和展示分别记录状态，最终由实际子进程退出、代码/原件和产物终验封存。新入口的隔离工程测试、实际离线/网络、冷/暖启动与连续交易日可靠性各自验收；不能沿用私有旧脚本真实结果称新入口已通过整条线上链。
 
-本轮[检查记录](stock-fish/docs/STANDALONE_PREMARKET_VALIDATION_V1.md)登记最终66项新入口fixture、各轮有重叠补验和247项相关旧模块回归的实际退出0，并分列一份真实完整5226行行情的无请求缓存验证、两主页有界烟测及未执行范围。完整真实新命令冷/暖启动和连续交易日仍未验收。
+本轮[检查记录](stock-fish/docs/STANDALONE_PREMARKET_VALIDATION_V1.md)登记最终73项隔离检查退出0、76.363秒；此前247项相关旧模块回归单独保留。一次真实暖缓存命令已完成10月15日观察、10月16日目标的原R2、完整67会话及最终原件/代码/日志认证，实际外部退出2、封存为 `COMPLETED_WITH_UNKNOWNS`：原25只WATCH、FOCUS0，3亿元展示17只、方向未知13只；来源28个未知及当前成员回看边界保留，不能将四类主动诊断0说成全市场无主线。两次130中断不追认为完成；全新冷启动、Windows和连续交易日可靠性仍未验收。
 
 以[README](README.md)、[USER_GUIDE](USER_GUIDE.md)、[CURRENT_STRATEGY](CURRENT_STRATEGY.md)、[DEPLOYMENT](DEPLOYMENT.md)和[日常协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md)为入口，读取同一权威结果、详情及正式导出。主动核心为STAGE_AWARE_MOMENTUM_V2；DAILY_V1单独报告可用性。短线强势R1/R2是显式研究，旧公式、参数、run和来源身份冻结。系统不连接券商或下单。
 

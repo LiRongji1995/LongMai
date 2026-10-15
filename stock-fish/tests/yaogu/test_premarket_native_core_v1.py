@@ -376,6 +376,71 @@ class NativeBackendFixtureTests(unittest.TestCase):
         saved = json.loads(Path(result.artifacts['sources-manifest.json']['path']).read_bytes())
         self.assertEqual(len(saved['captures']), len(owner.source_records)+2)
 
+    def test_non_fixture_profile_uses_owned_physical_terminal_after_real_v2_joint(self):
+        """Production coverage control, entirely synthetic TEST_FIXTURE files."""
+        from stockfish_core.yaogu import provider_requests
+        from stockfish_core.yaogu.premarket_capture_cache_v1 import PRODUCERS
+        items, observed, target, cutoff = captures(self.root, sessions=67, history=True)
+        prior = json.loads(Path(items[0]['result']['path']).read_bytes())
+        # Keep the real native calendar event/visibility contract. This is an
+        # isolated producer-schema fixture, not a claim about captured markets.
+        items[0] = physical_source(self.root/'native-calendar-profile', 'calendar',
+            prior['rows'], datetime.fromisoformat(prior['first_seen_at']), day=target,
+            parameters=prior['parameters'], version='BAOSTOCK_00.9.30_R03_V1', include_result=True)
+        producers = [FixtureBudget().read(Path(provider_requests.__file__).with_name(name))[1]
+            for name in PRODUCERS]
+        for item in items:
+            result_path = Path(item['result']['path'])
+            result = json.loads(result_path.read_bytes())
+            result['implementation_source_hashes'] = {Path(ref['path']).name: ref['sha256'] for ref in producers}
+            result_path.write_text(json.dumps(result), encoding='utf-8')
+            item['producer_files'] = deepcopy(producers)
+            for role in ('raw','receipt','result'):
+                item[role] = FixtureBudget().read(item[role]['path'])[1]
+        budget = FixtureBudget()
+        owner = core.run_core(captures=items, observation_date=observed, target_session=target,
+            cutoff=cutoff, output_dir=self.root/'non-fixture-core', budget=budget,
+            coverage_type='RECONSTRUCTED_HISTORICAL')
+        self.assertEqual(owner.run['results'][core.STRATEGY]['research_selected_ids'], ['000001.SZ','600001.SH'])
+        symbol, seen = 'gn_TEST_FIXTURE_TERMINAL', cutoff-timedelta(minutes=1)
+        common = dict(provider='sina', version='TEST_FIXTURE_SINA_V1', include_result=True)
+        context_captures = [physical_source(self.root/'contexts', 'concept_list_sina',
+            [{'label': symbol, '板块': 'TEST_FIXTURE终验', '公司家数': 2}], seen, parameters={}, **common),
+            physical_source(self.root/'contexts', 'concept_members_sina',
+                [{'code':'600001','symbol':'sh600001','name':'TEST_FIXTURE'},
+                 {'code':'000001','symbol':'sz000001','name':'TEST_FIXTURE'}],
+                seen, parameters={'symbol':symbol}, **common)]
+        for item in context_captures:
+            result_path = Path(item['result']['path'])
+            result = json.loads(result_path.read_bytes())
+            result['implementation_source_hashes'] = {Path(ref['path']).name: ref['sha256'] for ref in producers}
+            result_path.write_text(json.dumps(result), encoding='utf-8')
+            item['producer_files'] = deepcopy(producers)
+            for role in ('raw','receipt','result'):
+                item[role] = budget.read(item[role]['path'])[1]
+        native, terminal_calls = themes.run_theme_evolution_stream, []
+        def observed_native(bundle, **kwargs):
+            self.assertNotEqual(bundle.coverage_type, 'TEST_FIXTURE')
+            terminal = kwargs.get('_source_terminal_validator')
+            self.assertTrue(callable(terminal))
+            def observed_terminal():
+                before = budget.metrics['returned_read_bytes']
+                value = terminal()  # Actual owner/registry/issuer; no True stub.
+                terminal_calls.append(budget.metrics['returned_read_bytes']-before)
+                return value
+            kwargs['_source_terminal_validator'] = observed_terminal
+            return native(bundle, **kwargs)
+        self.setattr(themes, 'run_theme_evolution_stream', observed_native)
+        context = themes.attach_theme_context(owner, context_cutoff=cutoff,
+            context_captures=context_captures, output_dir=self.root/'non-fixture-theme', budget=budget)
+        self.assertEqual(context.to_dict()['status'], 'AVAILABLE', context.to_dict().get('failure'))
+        self.assertEqual(len(terminal_calls), 1)
+        self.assertGreater(terminal_calls[0], 0)
+        parent = json.loads(gzip.decompress(Path(context.artifacts['native-theme-parent.json.gz']['path']).read_bytes()))
+        self.assertEqual(parent['coverage_type'], 'RECONSTRUCTED_HISTORICAL')
+        self.assertEqual(parent['execution_provenance']['source_terminal_callback_status'], 'LIVE_CALLBACK_COMPLETED')
+        self.assertTrue(context.validate())
+
 
     def test_real_v2_last67_theme_parent_uses_whole_market_and_preserves_selection(self):
         tmp_path = self.root

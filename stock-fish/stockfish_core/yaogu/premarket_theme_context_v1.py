@@ -218,7 +218,8 @@ def attach_theme_context(core_owner, *, context_captures=(), raw_receipt_sources
                 sessions=sessions, themes=scoped)
             parent = run_theme_evolution_stream(bundle, cutoff=decision, market_stream=stream,
                 evidence_directory=directory/'price-journal', membership_mode='CURRENT_COHORT_BACKVIEW',
-                output_history=True, history_scope='LATEST_67')
+                output_history=True, history_scope='LATEST_67',
+                _source_terminal_validator=validate_sources)
             if parent.get('computed_exchange_sessions') != list(sessions):
                 raise ValueError('PREMARKET_THEME_REQUESTED_67_SCOPE_CHANGED')
             audit = parent['execution_provenance']['audit_manifest']

@@ -77,15 +77,25 @@ def atomic_json(path, value):
 
 
 def directory_bytes(root):
+    """Follow an explicit root alias, counting files without child links."""
     total = 0
-    if not Path(root).exists():
+    try:
+        mode = os.stat(root).st_mode
+    except FileNotFoundError:
         return 0
-    for directory, children, files in os.walk(root, followlinks=False):
-        children[:] = [name for name in children if not Path(directory, name).is_symlink()]
-        for name in files:
-            path = Path(directory, name)
-            if not path.is_symlink():
-                total += path.stat().st_size
+    if not stat.S_ISDIR(mode):
+        return 0
+    pending = [os.fspath(root)]
+    while pending:
+        with os.scandir(pending.pop()) as entries:
+            for entry in entries:
+                info = entry.stat(follow_symlinks=False)
+                if stat.S_ISLNK(info.st_mode):
+                    continue
+                if stat.S_ISDIR(info.st_mode):
+                    pending.append(entry.path)
+                else:
+                    total += info.st_size
     return total
 
 
@@ -162,7 +172,7 @@ class Budget:
             self._fail('READ_LIMIT_EXCEEDED:' + phase)
         self.check(phase)
 
-    def check(self, stage):
+    def check(self, stage, *, force=False):
         if self._failures:
             raise BudgetExceeded(self._failures[0])
         now = time.monotonic()
@@ -195,9 +205,8 @@ class Budget:
                 self._fail('SELF_RSS_LIMIT_EXCEEDED')
         else:
             self._fail('SELF_RSS_OBSERVATION_UNAVAILABLE')
-        if now-self._last_check < .5:
+        if not force and now-self._last_check < .5:
             return
-        self._last_check = now
         if self.job_dir and directory_bytes(self.job_dir) > self.limits['output_bytes']:
             self._fail('OUTPUT_LIMIT_EXCEEDED')
         if self.cache_dir and self.phase_name == 'capture' \
@@ -206,6 +215,9 @@ class Budget:
         if self.job_dir and now-self._last_metrics >= 2:
             self._last_metrics = now
             atomic_json(self.job_dir/'metrics.json', self.metrics)
+        # A slow full-tree scan must not make the next read immediately scan
+        # again. Time/RSS/read/request guards above still run on every check.
+        self._last_check = time.monotonic()
 
     def read(self, path, expected=None, limit=None):
         target = Path(path).resolve(strict=True)
@@ -349,9 +361,20 @@ class Budget:
             raise ValueError('UNKNOWN_EXECUTION_PHASE')
         previous, self.phase_name = self.phase_name, name
         try:
-            self.check(name)
-            yield self
-            self.check(name)
+            self.check(name, force=True)
+            try:
+                yield self
+            except BaseException:
+                try:
+                    self.check(name, force=True)
+                except BaseException as error:
+                    # Preserve the primary exception while keeping a failed
+                    # exit check sticky, even for an unavailable filesystem.
+                    if not self._failures:
+                        self._failures.append('PHASE_EXIT_CHECK_FAILED:' + type(error).__name__)
+                raise
+            else:
+                self.check(name, force=True)
         finally:
             self.phase_name = previous
 

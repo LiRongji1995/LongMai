@@ -58,7 +58,7 @@ FOCUS 表示满足当前焦点条件，WATCH 表示继续观察，REJECTED 表�
 python scripts/stockfish.py premarket --theme-read-gib 12 --max-requests 768 --max-seconds 0
 ```
 
-命令自动确定真实观察日和下一交易日、验真缓存并补采、计算原R2及67会话题材、保存完整原导出，再生成成交额≥3亿元的TXT/JSON/CSV。当前行业/概念与经济主线分别标明，缺证据的单列未知。它不依赖网页服务、Codex或LLM；输出路径及最终状态在终端显示。首次采集可能数小时，零自动重试。配置模板、默认较小预算、退出码和恢复见[独立终端盘前研究](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)。默认主动V2不受此显式R2入口影响；真实新命令冷/暖启动和连续交易日可靠性仍独立验收。
+命令自动确定真实观察日和下一交易日、验真缓存并补采、计算原R2及67会话题材、保存完整原导出，再生成成交额≥3亿元的TXT/JSON/CSV。当前行业/概念与经济主线分别标明，缺证据的单列未知。它不依赖网页服务、Codex或LLM；输出路径及最终状态在终端显示。首次采集可能数小时，零自动重试。配置模板、默认较小预算、退出码和恢复见[独立终端盘前研究](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)。默认主动V2不受此显式R2入口影响。一次真实暖缓存执行已完成原R2、完整67会话和最终验收，退出2表示 `COMPLETED_WITH_UNKNOWNS`，仍须查看来源与研究未知；全新冷启动、Windows和连续交易日可靠性尚未验收。
 
 网页读取既有 Python 服务的保存结果，地址以实际配置为准。[部署维护](DEPLOYMENT.md)说明如何核对实例。
 
