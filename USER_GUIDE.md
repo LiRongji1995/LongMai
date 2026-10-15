@@ -52,6 +52,14 @@ FOCUS 表示满足当前焦点条件，WATCH 表示继续观察，REJECTED 表�
 
 ## 网页和终端
 
+已明确使用R2研究时，可以完全脱离Codex应用，在项目Python环境及 `stock-fish/` 目录执行：
+
+```sh
+python scripts/stockfish.py premarket --theme-read-gib 12 --max-requests 768 --max-seconds 0
+```
+
+命令自动确定真实观察日和下一交易日、验真缓存并补采、计算原R2及67会话题材、保存完整原导出，再生成成交额≥3亿元的TXT/JSON/CSV。当前行业/概念与经济主线分别标明，缺证据的单列未知。它不依赖网页服务、Codex或LLM；输出路径及最终状态在终端显示。首次采集可能数小时，零自动重试。配置模板、默认较小预算、退出码和恢复见[独立终端盘前研究](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)。默认主动V2不受此显式R2入口影响；真实新命令冷/暖启动和连续交易日可靠性仍独立验收。
+
 网页读取既有 Python 服务的保存结果，地址以实际配置为准。[部署维护](DEPLOYMENT.md)说明如何核对实例。
 
 Go 候选工具支持查询、解释、导出、比较和复盘。已有包与新候选包各有自己的身份和检查记录；使用你的明确配置和保存运行：

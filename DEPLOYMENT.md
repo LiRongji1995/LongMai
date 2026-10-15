@@ -27,6 +27,10 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 新Windows环境使用Python3.12、PowerShell7和项目锁文件；已有环境先核对，避免重复创建或升级。Docker是可选方式，维护入口为业务目录的 `Start-StockRecommendation-Docker.ps1` / `start-stockrecommendation-docker.sh`、`docker-compose.yml`；使用自己的私有 `.env.docker.local`，核对卷、地址及备份后部署。历史安装步骤可从[原操作手册的固定Git版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/README.md)追溯；其机器、依赖及步骤只适用于原日期，首次运行仍需按当前环境验证。
 
+## 独立本地盘前命令
+
+新增[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)：在已有项目Python环境、`stock-fish/`目录执行 `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
+
 ## Go候选工具
 
 Go工具目前绑定明确选择的已发布V2隔离库，生产未切换。查询和本地研究使用原生二进制；可选在线采集另需固定Python worker及独立预算。包内用户说明、身份、校验和与检查报告必须属于同一构建。

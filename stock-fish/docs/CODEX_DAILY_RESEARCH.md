@@ -43,6 +43,8 @@
 
 ## 调用入口
 
+用户已授权脱离Codex的单命令流程工程。[独立终端入口V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)为 `python scripts/stockfish.py premarket --theme-read-gib 12 --max-requests 768 --max-seconds 0`（业务目录及既有项目环境）。新命令不先查Web健康、不构造业务DB，直接认证原件缓存、按日历补缺、调用原R2、完整67日题材及最后3亿元展示；原选择和五导出保留，阶段失败与UNKNOWN分列。新profile各阶段预算显式登记，不从某次聊天授权继承，也不自动扩容/重试。它未替换现有服务的SAM V2、下表API或聊天heartbeat，真实新入口冷/暖启动与连续交付另验收。Codex可调用同一命令，不再需要在聊天中手工拼接私有日报脚本。
+
 [压缩证据日志V3](EVIDENCE_AUDIT_SPOOL_V3.md)和[主题执行原型V3](THEME_EVOLUTION_STREAMING_V3.md)目前仅用于显式工程诊断，未选作真实日报后端，也没有改接下表或完整流式交付V3命令。完整数学等价的同67会话夹具中，总实际返回反而由V2的1,620,240升至V3的1,910,591字节；压缩输出较小不能判资源就绪。真实完整来源、原run/input、五导出、完整日历及外层终验合同保持，资源上界未知时不自动真实重跑或扩大预算。
 
 Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装和既有API；参数以实际--help为准，地址从本次核验取得。全局--base-url/--env-file/--timeout放在子命令前。Key仅经既有私有配置传入，不放命令行或日志。

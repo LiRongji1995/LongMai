@@ -6,6 +6,8 @@
 
 ### 执行与维护
 
+- [独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)：单命令采集、原R2、67会话题材、报道和3亿元展示；不需要Codex或Web服务。
+
 - [CODEX_DAILY_RESEARCH.md](CODEX_DAILY_RESEARCH.md)
 - [PROJECT_OVERVIEW.md](PROJECT_OVERVIEW.md)
 - [REPRODUCE.md](REPRODUCE.md)
