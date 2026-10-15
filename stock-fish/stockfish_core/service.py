@@ -406,6 +406,10 @@ class ApplicationService:
         scheduler = getattr(self, 'candidate_scheduler', None) or getattr(candidates, 'scheduler', None)
         thread = getattr(scheduler, 'thread', None)
         scheduler_alive = bool(thread and thread.is_alive())
+        scheduler_health = (scheduler.health_snapshot() if scheduler is not None
+                            and callable(getattr(scheduler, 'health_snapshot', None)) else
+                            {'status': 'not_ready', 'reason_codes': ['SCHEDULER_PROGRESS_UNAVAILABLE'],
+                             'thread_alive': scheduler_alive})
         candidate_root = str(candidates.root) if candidates is not None else None
         checks = {
             "application": {"status": "ok"},
@@ -420,7 +424,7 @@ class ApplicationService:
                 "active_workers": jobs.get("active_workers"),
             },
             "scheduler": {
-                "status": "ok" if scheduler_alive else "not_ready",
+                **scheduler_health,
                 "thread_alive": scheduler_alive,
                 "thread_name": thread.name if thread else None,
             },
@@ -432,6 +436,7 @@ class ApplicationService:
             reason_codes.append("JOBS_NOT_READY")
         if not scheduler_alive:
             reason_codes.append("SCHEDULER_THREAD_NOT_ALIVE")
+        reason_codes.extend(code for code in scheduler_health.get('reason_codes', []) if code not in reason_codes)
         ready = not reason_codes
         return {"status": "ready" if ready else "not_ready", "ready": ready, "checks": checks,
                 "reason_codes": reason_codes, "health_contract": "readiness",

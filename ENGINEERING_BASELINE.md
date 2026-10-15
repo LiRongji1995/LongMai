@@ -25,4 +25,6 @@
 
 Go的构建与隔离运行见[Go说明](stock-fish-go/README.md)，架构与证据合同见[技术索引](stock-fish/docs/README.md)。正式独立oracle、竞态、vet与包外验证的实际结果见[当前交付报告](stock-fish-go/delivery/DELIVERY_REPORT.md)；原完整检查非零退出与定向补验保留各自结论。
 
+本轮[运行安全、短周期后验与性能第一阶段](stock-fish/docs/BASELINE_OUTCOME_PERFORMANCE_V1.md)记录独立 runtime doctor、调度进度、HTTP/长连接边界及相应隔离验收。运行诊断必须使用实际解释器；以另一现有环境承载测试不等于默认应用环境已修复。新索引和后验合同均按新版本登记，旧策略配置、run、原件和用户未提交改动受到保护。
+
 预算绑定各自任务；一次允许扩大容量或时间不授权后续自动扩大。系统不连接券商、不下单，外部消息、收费服务和部署切换按明确授权执行。保留[第三方通知](THIRD_PARTY_NOTICES.md)，MiroFish适用AGPL-3.0。

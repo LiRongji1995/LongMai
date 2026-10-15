@@ -4,6 +4,8 @@
 
 ## 当前能力
 
+本轮实施[运行安全、短周期后验与性能第一阶段](stock-fish/docs/BASELINE_OUTCOME_PERFORMANCE_V1.md)：增加实际依赖导入诊断、调度进度 readiness、统一健康接口鉴权、Research/Live 长连接容量及 Live 本机访问边界；未验证 HTTPS 的 Tushare 新凭据请求明确阻断。SQLite 追加查询索引并限定按 run 读取，R1/R2 后验以独立版本接入同一权威服务库。隔离工程检查、真实环境缺包、数据成熟度与投资结论分别记录；源码发布未切换服务或迁移真实库，冻结策略与旧 run 保持。
+
 新增[独立终端盘前研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)，把显式R2采集、真实来源认证、67会话题材及成交额≥3亿元展示协调为 `python scripts/stockfish.py premarket`。它不依赖Codex/Web服务/LLM，不创建业务DB、不改变默认主动V2。核心、来源、题材、报道和展示分别记录状态，最终由实际子进程退出、代码/原件和产物终验封存。新入口的隔离工程测试、实际离线/网络、冷/暖启动与连续交易日可靠性各自验收；不能沿用私有旧脚本真实结果称新入口已通过整条线上链。
 
 本轮[检查记录](stock-fish/docs/STANDALONE_PREMARKET_VALIDATION_V1.md)登记最终73项隔离检查退出0、76.363秒；此前247项相关旧模块回归单独保留。一次真实暖缓存命令已完成10月15日观察、10月16日目标的原R2、完整67会话及最终原件/代码/日志认证，实际外部退出2、封存为 `COMPLETED_WITH_UNKNOWNS`：原25只WATCH、FOCUS0，3亿元展示17只、方向未知13只；来源28个未知及当前成员回看边界保留，不能将四类主动诊断0说成全市场无主线。两次130中断不追认为完成；全新冷启动、Windows和连续交易日可靠性仍未验收。

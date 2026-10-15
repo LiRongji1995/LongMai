@@ -36,13 +36,21 @@ def create_app(service: ApplicationService | None = None) -> Flask:
     allowed_hosts = {"localhost", "127.0.0.1", "::1"} | set(filter(None, os.environ.get("STOCKFISH_ALLOWED_HOSTS", "").split(",")))
     visits: dict[str, deque] = defaultdict(deque)
     visit_lock = threading.Lock()
+    # Both supported WSGI entries have four request threads. Long-lived streams
+    # may occupy only two, leaving capacity for status, cancellation and health.
+    stream_slots = threading.BoundedSemaphore(2)
+
+    def diagnostic_request():
+        return request.path.startswith(("/api/", "/health/"))
 
     @app.before_request
     def security_gate():
         hostname = urlsplit(request.host_url).hostname
         if hostname not in allowed_hosts:
             return jsonify(error="HOST_NOT_ALLOWED"), 403
-        if not request.path.startswith("/api/"):
+        # Liveness is deliberately public and process-only. Other health aliases
+        # have exactly the same peer, bearer and Origin checks as the API.
+        if not diagnostic_request() or request.path == "/health/live":
             return None
         try:
             local = ipaddress.ip_address(request.remote_addr or "0.0.0.0").is_loopback
@@ -74,7 +82,7 @@ def create_app(service: ApplicationService | None = None) -> Flask:
         response.headers["Referrer-Policy"] = "same-origin"
         response.headers["X-Frame-Options"] = "DENY"
         response.headers["Content-Security-Policy"] = "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'self'; frame-ancestors 'none'; base-uri 'none'; form-action 'self'"
-        if request.path.startswith("/api/"):
+        if diagnostic_request():
             response.headers["Cache-Control"] = "no-store"
         return response
 
@@ -293,20 +301,43 @@ def create_app(service: ApplicationService | None = None) -> Flask:
     def job_stream(job_id):
         if core.jobs.get(job_id) is None:
             raise KeyError(job_id)
+        if not stream_slots.acquire(blocking=False):
+            return jsonify(error="STREAM_CAPACITY_EXCEEDED", retry_after_seconds=1), 429, {"Retry-After": "1"}
+        release_lock = threading.Lock()
+        released = False
+
+        def release_slot():
+            # Generator completion and WSGI close can both run; an unconsumed
+            # response (including HEAD) must release its admission as well.
+            nonlocal released
+            with release_lock:
+                if not released:
+                    released = True
+                    stream_slots.release()
+
         @stream_with_context
         def generate():
-            revision = None
-            deadline = time.monotonic() + 55
-            while time.monotonic() < deadline:
-                value = presented_job(core.jobs.get(job_id))
-                if value["revision"] != revision:
-                    yield "data: " + json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n\n"
-                    revision = value["revision"]
-                if value["state"] in TERMINAL_STATES:
-                    return
-                yield ": heartbeat\n\n"
-                time.sleep(0.5)
-        return Response(generate(), mimetype="text/event-stream", headers={"X-Accel-Buffering": "no"})
+            try:
+                revision = None
+                deadline = time.monotonic() + 55
+                while time.monotonic() < deadline:
+                    value = presented_job(core.jobs.get(job_id))
+                    if value["revision"] != revision:
+                        yield "data: " + json.dumps(value, ensure_ascii=False, allow_nan=False) + "\n\n"
+                        revision = value["revision"]
+                    if value["state"] in TERMINAL_STATES:
+                        return
+                    yield ": heartbeat\n\n"
+                    time.sleep(0.5)
+            finally:
+                release_slot()
+        try:
+            response = Response(generate(), mimetype="text/event-stream", headers={"X-Accel-Buffering": "no"})
+            response.call_on_close(release_slot)
+            return response
+        except BaseException:
+            release_slot()
+            raise
 
     @app.get("/api/recommendations/history")
     def history():

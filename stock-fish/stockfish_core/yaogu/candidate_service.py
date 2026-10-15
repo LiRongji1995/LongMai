@@ -1811,6 +1811,18 @@ class CandidateService(DailyResearchMixin):
         focus_matches = [row for row in focus.get('items', []) if row.get('instrument_id') == instrument_id]
         if not matches and not focus_matches:
             raise KeyError(instrument_id)
+        observation_state = {}
+        if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
+            products = {kind: self._short_horizon_product(run_id, kind) for kind in ('outcomes', 'tracking')}
+            outcomes = [row for row in products['outcomes']['items'] if row['instrument_id'] == instrument_id]
+            tracking = [row for row in products['tracking']['items'] if row['instrument_id'] == instrument_id]
+            observation_state = {'short_horizon_observation': {
+                kind: {key: product.get(key) for key in ('schema_version', 'status', 'capability_status',
+                    'revision_id', 'outcome_input_id', 'evaluated_at', 'reason_codes')}
+                for kind, product in products.items()}}
+        else:
+            outcomes = self._strategy_item_observations('strategy_trading_session_observations', run_id, instrument_id)
+            tracking = self._strategy_item_observations('research_episode_observations', run_id, instrument_id, latest=100)
         return {
             'run_id': run_id,
             'instrument_id': instrument_id,
@@ -1821,23 +1833,13 @@ class CandidateService(DailyResearchMixin):
             'research_observation_selection': next((row for row in
                 ((run.get('selection_results') or {}).get((run.get('strategy_id') or SHORT_HORIZON_IDS[0]) + '_OBSERVATION') or {}).get('items') or []
                 if row.get('instrument_id') == instrument_id), None),
-            'outcomes': self._strategy_item_observations('strategy_trading_session_observations', run_id, instrument_id),
-            'tracking': self._strategy_item_observations('research_episode_observations', run_id, instrument_id, latest=100),
+            'outcomes': outcomes, 'tracking': tracking, **observation_state,
             'market_edge': 'NOT_ESTABLISHED',
         }
 
     def _strategy_item_observations(self, namespace, run_id, instrument_id, *, latest=None):
-        # Filter before deserializing; unrelated historical labels never enter memory.
-        order = 'DESC' if latest is not None else 'ASC'
-        sql = ('SELECT * FROM documents WHERE namespace=? '
-               "AND json_extract(payload,'$.run_id')=? AND json_extract(payload,'$.instrument_id')=? "
-               f'ORDER BY created_at {order}, document_id {order}')
-        parameters = [namespace, run_id, instrument_id]
-        if latest is not None:
-            sql += ' LIMIT ?'
-            parameters.append(latest)
-        with self.store.transaction(write=False) as connection:
-            rows = [checked_payload(row) for row in connection.execute(sql, parameters)]
+        rows = self.store.documents_for_run(namespace, run_id, instrument_id=instrument_id,
+                                            limit=latest, descending=latest is not None)
         return list(reversed(rows)) if latest is not None else rows
 
     @staticmethod
@@ -2025,7 +2027,8 @@ class CandidateService(DailyResearchMixin):
     def submit_strategy_outcomes(self, run_id, input_id=None, *, horizons=None, job_id=None):
         run = self.strategy_experiment(run_id)
         if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-            raise UnavailableError('SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED', 'candidate')
+            return self._submit_short_horizon_observation('strategy_outcomes', run, input_id,
+                horizons=horizons, job_id=job_id)
         resolved, _ = self.strategy_input(input_id)
         horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
         if any(type(h) is not int or h <= 0 for h in horizons):
@@ -2038,6 +2041,8 @@ class CandidateService(DailyResearchMixin):
     def _strategy_outcome_job(self, ctx):
         payload = ctx.payload
         run = self.strategy_experiment(payload['run_id'])
+        if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
+            return self._short_horizon_observation_job(ctx, run)
         _, bundle = self.input(payload['input_id'])
         from .strategy_tracking import evaluate_strategy_experiment_outcomes, build_strategy_feedback_report
         from .recommendation_scoring import build_score_revision
@@ -2067,10 +2072,65 @@ class CandidateService(DailyResearchMixin):
     def strategy_outcomes(self, run_id):
         run = self.strategy_experiment(run_id)
         if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-            return {'run_id': run_id, 'status': 'NOT_IMPLEMENTED', 'items': [],
-                'returns': None, 'reason_codes': ['SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED'],
-                'market_edge': 'NOT_ESTABLISHED'}
-        return [v for v in self._all('strategy_trading_session_observations') if v.get('run_id') == run_id]
+            return self._short_horizon_product(run_id, 'outcomes')
+        return self.store.documents_for_run('strategy_trading_session_observations', run_id)
+
+    def _submit_short_horizon_observation(self, job_kind, run, input_id, *, horizons=None, job_id=None):
+        from .short_horizon_outcomes_v1 import VERSION, validated_horizons
+        horizons = validated_horizons(horizons)
+        # Explicit saved evidence only. Do not select a later unrelated input or
+        # add short-horizon work to the automatic collection/pending machinery.
+        if input_id is None:
+            raise ValueError('SHORT_HORIZON_REGISTERED_OUTCOME_INPUT_ID_REQUIRED')
+        resolved, _ = self.input(input_id)
+        self.input(run['input_id'])  # Authenticate the original service-owned input as well.
+        if run.get('input_hash') != run['input_id'].removeprefix('market_'):
+            raise ValueError('SHORT_HORIZON_SIGNAL_INPUT_IDENTITY_MISMATCH')
+        return self.jobs.submit(job_kind, {'run_id': run['run_id'], 'input_id': resolved,
+            'horizons': list(horizons), 'outcome_policy': VERSION,
+            'evaluated_at': utc_now().isoformat()}, job_id=job_id)
+
+    def _short_horizon_observation_job(self, ctx, run):
+        from .short_horizon_outcomes_v1 import VERSION, NAMESPACES, evaluate
+        if ctx.payload.get('outcome_policy') != VERSION:
+            raise ValueError('SHORT_HORIZON_OUTCOME_POLICY_REQUIRED')
+        _, original = self.input(run['input_id'])
+        _, bundle = self.input(ctx.payload['input_id'])
+        signal_day = date.fromisoformat(run['observation_date'])
+        prefix = tuple(day for day in original.sessions if day <= signal_day)
+        if signal_day in bundle.sessions and prefix and tuple(day for day in bundle.sessions
+                if prefix[0] <= day <= signal_day) != prefix:
+            raise ValueError('SHORT_HORIZON_SIGNAL_CALENDAR_PREFIX_CONFLICT')
+        products = evaluate(run, bundle, datetime.fromisoformat(ctx.payload['evaluated_at']),
+                            horizons=ctx.payload['horizons'], checkpoint=ctx.check_cancelled)
+        revision_id = products['outcomes']['revision_id']
+        def write(connection):
+            for kind, product in products.items():
+                existing = connection.execute('SELECT * FROM documents WHERE namespace=? AND document_id=?',
+                    (NAMESPACES[kind], revision_id)).fetchone()
+                if existing:
+                    saved = checked_payload(existing)
+                    if {k:v for k,v in saved.items() if k != 'evaluated_at'} != {
+                            k:v for k,v in product.items() if k != 'evaluated_at'}:
+                        raise ImmutableConflict('short-horizon revision identity collision')
+                    continue  # The first observation timestamp is immutable.
+                self.store._put_document(connection, NAMESPACES[kind], revision_id, product)
+        ctx.check_cancelled()
+        return ctx.complete({'run_id': run['run_id'], 'schema_version': VERSION,
+            'revision_id': revision_id, 'observations': len(products['outcomes']['items']),
+            'products': list(products), 'market_edge': 'NOT_ESTABLISHED'}, write)
+
+    def _short_horizon_product(self, run_id, kind):
+        from .short_horizon_outcomes_v1 import NAMESPACES, capability
+        revisions = self.store.documents_for_run(NAMESPACES[kind], run_id)
+        if not revisions:
+            return capability(run_id, kind)
+        latest = max(revisions, key=lambda value: (datetime.fromisoformat(value['evaluated_at']), value['revision_id']))
+        return {**latest, 'revision_count': len(revisions),
+            'revision_selection': 'LATEST_EVALUATION_CUTOFF_THEN_REVISION_ID',
+            'revisions': [{'revision_id': value['revision_id'], 'evaluated_at': value['evaluated_at'],
+                           'outcome_input_id': value['outcome_input_id'], 'horizons': value['horizons']}
+                          for value in revisions]}
 
     def recommendation_scores(self, *, limit=20, offset=0, tier=None, setup=None, horizon=None, evidence_type=None, validation_epoch_id=None):
         from .recommendation_scoring import flatten_score_documents, summarize_score_history, OFFICIAL_PROSPECTIVE
@@ -2141,7 +2201,8 @@ class CandidateService(DailyResearchMixin):
     def submit_strategy_tracking(self, run_id, input_id=None, *, horizons=None, job_id=None):
         run = self.strategy_experiment(run_id)
         if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-            raise UnavailableError('SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED', 'candidate')
+            return self._submit_short_horizon_observation('strategy_tracking', run, input_id,
+                horizons=horizons, job_id=job_id)
         resolved, _ = self.strategy_input(input_id)
         horizons = tuple(horizons or (1, 2, 3, 4, 5, 10, 20))
         if any(type(h) is not int or h <= 0 for h in horizons):
@@ -2154,6 +2215,8 @@ class CandidateService(DailyResearchMixin):
     def _strategy_tracking_job(self, ctx):
         payload = ctx.payload
         run = self.strategy_experiment(payload['run_id'])
+        if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
+            return self._short_horizon_observation_job(ctx, run)
         _, bundle = self.input(payload['input_id'])
         from .strategy_tracking import OutcomeContext, build_strategy_feedback_report, build_strategy_tracking
         from .recommendation_scoring import build_score_revision
@@ -2200,10 +2263,8 @@ class CandidateService(DailyResearchMixin):
     def strategy_tracking(self, run_id):
         run = self.strategy_experiment(run_id)
         if run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-            return {'run_id': run_id, 'status': 'NOT_IMPLEMENTED', 'items': [],
-                'reason_codes': ['SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED'],
-                'market_edge': 'NOT_ESTABLISHED'}
-        return [v for v in self._all('strategy_tracking_runs') if v.get('run_id') == run_id]
+            return self._short_horizon_product(run_id, 'tracking')
+        return self.store.documents_for_run('strategy_tracking_runs', run_id)
 
     def _write_research_review(self, connection, review):
         self.store._put_document(connection, 'strategy_research_reviews', review['review_id'], review)
@@ -2220,13 +2281,8 @@ class CandidateService(DailyResearchMixin):
         if projection is None:
             raise KeyError(run_id)
         if projection.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE':
-            return {'schema_version': 'SHORT_HORIZON_RESEARCH_REVIEW_R1', 'run_id': run_id,
-                'observation_date': projection.get('observation_date'), 'status': 'NOT_IMPLEMENTED',
-                'market_edge': 'NOT_ESTABLISHED', 'rolling_windows': {},
-                'counts': {'mature': None, 'outcome_observations': None},
-                'returns': None, 'reason_codes': ['SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED'],
-                'full_report_available': False}
-        indexes = [r for r in self._all('strategy_research_review_indexes') if r['run_id']==run_id]
+            return self._short_horizon_product(run_id, 'review')
+        indexes = self.store.documents_for_run('strategy_research_review_indexes', run_id)
         if indexes:
             latest = max(enumerate(indexes),key=lambda pair:(pair[1]['evaluated_at'],pair[0]))[1]
             namespace = 'strategy_research_reviews' if full else 'strategy_research_review_summaries'
@@ -2416,11 +2472,11 @@ class CandidateService(DailyResearchMixin):
 
     def outcomes(self, run_id):
         self.get_run(run_id)
-        return [v for v in self._all('trading_session_observations') if v['run_id'] == run_id]
+        return self.store.documents_for_run('trading_session_observations', run_id)
 
     def auction_reviews(self, run_id):
         self.get_run(run_id)
-        return [v for v in self._all('auction_reviews') if v['run_id'] == run_id]
+        return self.store.documents_for_run('auction_reviews', run_id)
 
     def _coverage_selection(self):
         activations=self._all('candidate_input_activations')

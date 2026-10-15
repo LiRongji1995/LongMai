@@ -13,6 +13,7 @@ from zoneinfo import ZoneInfo
 from ..common import utc_now, UnavailableError
 from ..jobs import JobConflict, JobCancelled
 from ..storage import ImmutableConflict
+from ..scheduler_health import SchedulerHealth
 from .contracts import digest
 from .candidate_service import CandidateRequest
 
@@ -64,6 +65,7 @@ class CandidateScheduler:
                  monotonic=elapsed_time.monotonic):
         self.service, self.clock, self.interval = service, clock, interval
         self.monotonic = monotonic
+        self._progress_health = SchedulerHealth(interval, monotonic=monotonic)
         self._tick_lock = threading.Lock()
         existing_scheduler = getattr(service, 'scheduler', None)
         if existing_scheduler and existing_scheduler.thread and existing_scheduler.thread.is_alive():
@@ -412,10 +414,9 @@ class CandidateScheduler:
         event = self.service.store.get_document('candidate_schedule_events', job_id) if job_id else None
         primary_run = self._latest_stage_aware_primary(signal_day) if signal_day else None
         cutoff = datetime.fromisoformat(primary['scheduled_at']) if primary.get('scheduled_at') else None
-        thread_alive = bool(self.thread and self.thread.is_alive())
-        readiness_blockers = []
-        if not thread_alive:
-            readiness_blockers.append('SCHEDULER_THREAD_NOT_ALIVE')
+        progress = self.health_snapshot()
+        thread_alive = progress['thread_alive']
+        readiness_blockers = list(progress['reason_codes'])
         if not job_id:
             readiness_blockers.append('PRIMARY_SCHEDULE_NOT_REGISTERED')
         validation_state = self.service.validation_state(primary.get('validation_epoch_id'))
@@ -434,6 +435,8 @@ class CandidateScheduler:
             status = 'JOB_' + job['state']
         elif not thread_alive and cutoff:
             status = 'PLANNED_BUT_NO_LIVE_SCHEDULER'
+        elif progress['status'] != 'ok':
+            status = 'SCHEDULER_NOT_READY'
         elif cutoff and now.astimezone(SH) < cutoff:
             status = 'READY_AND_RUNNING_WAITING_FOR_CUTOFF'
         elif cutoff:
@@ -441,10 +444,16 @@ class CandidateScheduler:
         else:
             status = primary.get('status', 'UNKNOWN')
         if status in {'PROSPECTIVE_PRIMARY_PERSISTED', 'MISSED_SERVICE_OFFLINE_NOT_BACKFILLED'}:
-            readiness_blockers = []
+            # A historical business outcome remains true even when today's
+            # scheduler is unhealthy; do not erase current runtime failures.
+            readiness_blockers = list(progress['reason_codes'])
         epoch = validation_state['epoch']
-        import psutil
-        process = psutil.Process()
+        process_created, process_error = None, None
+        try:
+            import psutil
+            process_created = datetime.fromtimestamp(psutil.Process().create_time(), SH).isoformat()
+        except Exception as exc:
+            process_error = type(exc).__name__
         return {
             'source': self.SCHEDULER_STATE_SOURCE,
             'observed_at': now.isoformat(),
@@ -452,13 +461,16 @@ class CandidateScheduler:
             'scheduler_class': type(self).__name__,
             'scheduler_started_at': self.started_at.isoformat(),
             'scheduler_thread_alive': thread_alive,
+            'scheduler_progress': progress,
             'readiness_blockers': readiness_blockers,
             'service_identity': {
                 'state_root': str(self.service.root),
                 'db_path': str(self.service.store.path),
                 'job_owner_id': self.service.jobs.owner_id,
                 'process_id': os.getpid(),
-                'process_creation_time': datetime.fromtimestamp(process.create_time(), SH).isoformat(),
+                'process_creation_time': process_created,
+                'process_identity_status': 'VERIFIED' if process_created else 'PARTIAL',
+                'process_identity_error_type': process_error,
                 'repo_root': str(Path(__file__).resolve().parents[3]),
                 'port': getattr(self.service, 'runtime_port', None),
                 'scheduler_thread_name': self.thread.name if self.thread else None,
@@ -497,7 +509,17 @@ class CandidateScheduler:
     def tick(self, now=None):
         # Manual status tools and the scheduler thread can tick concurrently.
         with self._tick_lock:
-            return self._tick(now)
+            self._progress_health.begin(self.clock())
+            try:
+                result = self._tick(now)
+            except BaseException as exc:
+                self._progress_health.failure(self.clock(), exc)
+                raise
+            self._progress_health.success(self.clock())
+            return result
+
+    def health_snapshot(self):
+        return self._progress_health.snapshot(thread_alive=bool(self.thread and self.thread.is_alive()))
 
     def _tick(self, now=None):
         now = now or self.clock()
@@ -944,7 +966,7 @@ class CandidateScheduler:
                     try:
                         self._event('schedule_error_' + digest(value), value)
                     except Exception:
-                        pass
+                        self._progress_health.diagnostic_failure()
                 self._stop.wait(self.interval)
         self.thread = threading.Thread(target=loop, name='stockfish-candidate-schedule', daemon=True)
         self.thread.start()

@@ -100,7 +100,7 @@ def saved_run(tmp_path, *, model=True, complete=True):
 def test_all_eleven_get_endpoints_are_live_read_only_and_explicit_fixture(tmp_path, endpoint):
     root, _ = saved_run(tmp_path)
     before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/"+endpoint)
     assert response.status_code == 200, response.text
     value = response.json()
@@ -116,7 +116,7 @@ def test_all_eleven_get_endpoints_are_live_read_only_and_explicit_fixture(tmp_pa
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_historical_as_of_cannot_return_future_actual_or_final_summary(tmp_path, endpoint):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/"+endpoint, params={"as_of": at().isoformat()})
     assert response.status_code == 200, response.text
     value = response.json()
@@ -134,7 +134,7 @@ def test_historical_as_of_cannot_return_future_actual_or_final_summary(tmp_path,
 @pytest.mark.parametrize("endpoint", ENDPOINTS)
 def test_every_endpoint_rejects_a_future_as_of(tmp_path, endpoint):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/"+endpoint, params={"as_of": at(47).isoformat()})
     assert response.status_code == 422
     assert response.json()["error"] == "FUTURE_ACCESS_DENIED"
@@ -143,14 +143,14 @@ def test_every_endpoint_rejects_a_future_as_of(tmp_path, endpoint):
 @pytest.mark.parametrize("as_of", ["2026-10-09T09:45:00", "not-a-date", "2026-99-09T09:45:00+08:00"])
 def test_naive_or_invalid_as_of_is_rejected(tmp_path, as_of):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/market", params={"as_of": as_of})
     assert response.status_code == 422 and response.json()["error"] == "INVALID_AS_OF"
 
 
 def test_forecast_history_deduplicates_immutable_prediction_and_exposes_mature_neighbors(tmp_path):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         history = client.get("/api/live/forecast/history").json()
         similar = client.get("/api/live/similar-states").json()
         assert client.get("/api/live/similar-states?limit=11").status_code == 422
@@ -163,7 +163,7 @@ def test_forecast_history_deduplicates_immutable_prediction_and_exposes_mature_n
 
 def test_phase1_run_remains_usable_but_never_fabricates_model_data(tmp_path):
     root, _ = saved_run(tmp_path, model=False)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         market = client.get("/api/live/market").json()
         forecast = client.get("/api/live/forecast").json()
         status = client.get("/api/live/status").json()
@@ -194,7 +194,7 @@ def test_archive_tampering_fails_closed(tmp_path, kind):
             value["snapshot_id"] = digest({key:item for key,item in value.items() if key!="snapshot_id"})
             write_summary(root, records)
         write_record(root, value)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/market")
     assert response.status_code == 503
     assert response.json()["error"] == "RUN_INTEGRITY_ERROR"
@@ -204,7 +204,7 @@ def test_no_query_or_asset_route_can_read_an_arbitrary_file(tmp_path):
     root, _ = saved_run(tmp_path)
     private = tmp_path / "private-secret.txt"
     private.write_text("TEST_FIXTURE_PRIVATE_DATA_MUST_NOT_LEAK")
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         ordinary = client.get("/api/live/market", params={"path":str(private), "run_dir":str(tmp_path)})
         assert ordinary.status_code == 200
         assert private.read_text() not in ordinary.text
@@ -230,21 +230,21 @@ def test_in_progress_and_failed_runs_are_distinct_and_read_only(tmp_path):
 
 def test_websocket_history_is_time_bounded_and_future_request_is_denied(tmp_path):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root, poll_interval=.05)) as client:
-        with client.websocket_connect("/ws/live?"+"as_of="+at().isoformat().replace("+", "%2B")) as socket:
+    with TestClient(create_app(root, poll_interval=.05), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
+        with client.websocket_connect("ws://127.0.0.1/ws/live?"+"as_of="+at().isoformat().replace("+", "%2B")) as socket:
             value = socket.receive_json()
             assert value["type"] == "snapshot"
             assert value["as_of"] == at().isoformat()
             assert len(value["actual_paths"]["000001.SH"]) == 1
             assert "1234" not in canonical_json(value)
-        with client.websocket_connect("/ws/live?"+"as_of="+at(47).isoformat().replace("+", "%2B")) as socket:
+        with client.websocket_connect("ws://127.0.0.1/ws/live?"+"as_of="+at(47).isoformat().replace("+", "%2B")) as socket:
             assert socket.receive_json()["error"] == "FUTURE_ACCESS_DENIED"
 
 
 def test_websocket_pushes_newly_saved_snapshot_without_restarting_service(tmp_path):
     root, _ = saved_run(tmp_path, complete=False)
-    with TestClient(create_app(root, poll_interval=.05)) as client:
-        with client.websocket_connect("/ws/live") as socket:
+    with TestClient(create_app(root, poll_interval=.05), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
+        with client.websocket_connect("ws://127.0.0.1/ws/live") as socket:
             assert socket.receive_json()["as_of"] == at(46).isoformat()
             write_record(root, record(47))
             socket.send_text("ping")
@@ -255,7 +255,7 @@ def test_websocket_pushes_newly_saved_snapshot_without_restarting_service(tmp_pa
 
 def test_dashboard_and_assets_are_local_and_display_research_boundaries(tmp_path):
     root, _ = saved_run(tmp_path)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/")
         assert response.status_code == 200
         assert "TEST_FIXTURE" in response.text
@@ -271,7 +271,7 @@ def test_dashboard_and_assets_are_local_and_display_research_boundaries(tmp_path
 
 def test_empty_missing_run_does_not_create_files(tmp_path):
     root = tmp_path / "TEST_FIXTURE_NOT_CREATED"
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/status")
     assert response.status_code == 503 and response.json()["error"] == "RUN_UNAVAILABLE"
     assert not root.exists()
@@ -364,7 +364,7 @@ def test_v2_preopen_index_metadata_without_bars_can_receive_first_actual_minute(
     opening["snapshot_id"] = digest({key:item for key,item in opening.items() if key!="snapshot_id"})
     write_record(root,opening)
     write_summary(root,[opening]+records)
-    with TestClient(create_app(root)) as client:
+    with TestClient(create_app(root), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         before = client.get("/api/live/market",params={"as_of":at(44).isoformat()})
         after = client.get("/api/live/market")
     assert before.status_code == after.status_code == 200

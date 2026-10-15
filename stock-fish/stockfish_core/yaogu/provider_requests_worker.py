@@ -9,6 +9,54 @@ from zoneinfo import ZoneInfo
 # The auth-failure envelope intentionally remains the older failure-only V1.
 TUSHARE_USABLE_FIELD_VERSION = 'TUSHARE_HTTP_PRO_R05_V2'
 
+# Official ordinary REST documentation (doc_id=40 and 130) still specifies HTTP.
+# The HTTPS MCP endpoint is a different protocol and does not establish HTTPS
+# support for this JSON-body REST contract. Do not send credentials to a guessed
+# endpoint. Enabling a verified endpoint requires a reviewed source change, not
+# an environment variable or request parameter. Existing complete checkpoints
+# remain readable. TEST_FIXTURE tests patch this constant only inside isolation.
+TUSHARE_VERIFIED_REST_ENDPOINT = None
+
+
+class TushareTransportPolicyError(RuntimeError):
+    pass
+
+
+def _tushare_rest_endpoint():
+    endpoint = TUSHARE_VERIFIED_REST_ENDPOINT
+    if endpoint is None:
+        raise TushareTransportPolicyError('TUSHARE_HTTPS_REST_NOT_VERIFIED')
+    if endpoint != 'https://api.tushare.pro/':
+        raise TushareTransportPolicyError('TUSHARE_HTTPS_REST_ENDPOINT_REJECTED')
+    return endpoint
+
+
+def _tushare_post(endpoint, payload):
+    import requests
+    if endpoint != _tushare_rest_endpoint():
+        raise TushareTransportPolicyError('TUSHARE_HTTPS_REST_ENDPOINT_REJECTED')
+    response = requests.post(endpoint, json=payload, timeout=(5,20),
+                             allow_redirects=False, verify=True)
+    # Never follow even a same-host redirect with credentials. A final response
+    # from another URI or a transport that already followed redirects is invalid.
+    if 300 <= response.status_code < 400 or response.history or response.url != endpoint:
+        response.close()
+        raise TushareTransportPolicyError('TUSHARE_HTTPS_REST_REDIRECT_OR_ORIGIN_REJECTED')
+    return response
+
+
+def _redact_tushare_token(value, token):
+    # Redact decoded values, including JSON keys; replacing encoded JSON misses
+    # tokens containing quotes, backslashes or non-ASCII characters.
+    if isinstance(value, str):
+        return value.replace(token, '[REDACTED]')
+    if isinstance(value, list):
+        return [_redact_tushare_token(item, token) for item in value]
+    if isinstance(value, dict):
+        return {_redact_tushare_token(key, token): _redact_tushare_token(item, token)
+                for key, item in value.items()}
+    return value
+
 
 def baostock_field_version(sdk):
     return 'BAOSTOCK_' + getattr(sdk, '__version__', 'unknown') + '_R03_V1'
@@ -585,7 +633,6 @@ def _compact_date(value):
 
 def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
     from .provider_requests import TUSHARE_ENDPOINTS
-    import requests
     definition=TUSHARE_ENDPOINTS[endpoint]
     token=os.environ.get('TUSHARE_TOKEN') or os.environ.get('TUSHARE_PRO_TOKEN')
     if not token or token.strip().lower() in {'your-tushare-token','changeme','test'}:
@@ -598,13 +645,23 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
     identity={'endpoint':endpoint,'parameters':clean_params,'limit':limit,'field_version':TUSHARE_USABLE_FIELD_VERSION}
     recovered=read_partial(partial_path)
     recovered_pages=0;pages=0
+    checkpoint_transport_diagnostics = None
     if recovered and recovered.get('checkpoint_identity')==identity:
         rows=list(recovered.get('rows',[]));offset=recovered.get('next_offset',0)
         field_names=recovered.get('coverage',{}).get('fields',[])
         recovered_pages=recovered.get('coverage',{}).get('pages_total',0)
         captured.extend(recovered.get('http_responses',[]))
+        prior_diagnostics = recovered.get('diagnostics') or {}
+        checkpoint_transport_diagnostics = dict(
+            prior_diagnostics.get('checkpoint_transport_diagnostics') or prior_diagnostics)
         if recovered.get('pagination_complete'):
             recovered['coverage'].update(http_requests=0,pages_this_run=0,recovered_pages=recovered_pages,cache_hit=True)
+            recovered['diagnostics'] = {
+                'transport': 'NOT_REQUESTED', 'transport_action': 'READ_ONLY_CHECKPOINT_REUSE',
+                'transport_policy': 'TUSHARE_HTTPS_ONLY_REVIEWED_ENDPOINT_V1',
+                'endpoint_verified': False,
+                'checkpoint_transport_diagnostics': checkpoint_transport_diagnostics,
+            }
             return recovered
     def checkpoint(complete=False):
         value=dict(status='COMPLETE' if complete else 'PARTIAL',rows=rows,pagination_complete=complete,
@@ -613,7 +670,12 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
             coverage={'auth_configured':True,'requested_endpoint':definition['api_name'],'api_name':definition['api_name'],
                 'returned_rows':len(rows),'fields':field_names,'http_requests':attempts,'limit':limit,
                 'pages_this_run':pages,'pages_total':recovered_pages+pages,'recovered_pages':recovered_pages,
-                'offset_exhausted':complete},gaps=[],diagnostics={'transport':'HTTP_POST','token_redacted':True})
+                'offset_exhausted':complete},gaps=[],diagnostics={
+                    'transport':'HTTPS_POST' if attempts else 'NOT_REQUESTED','token_redacted':True,
+                    'transport_policy':'TUSHARE_HTTPS_ONLY_REVIEWED_ENDPOINT_V1',
+                    'endpoint_verified':bool(attempts and TUSHARE_VERIFIED_REST_ENDPOINT == 'https://api.tushare.pro/'),
+                    **({'checkpoint_transport_diagnostics':checkpoint_transport_diagnostics}
+                       if checkpoint_transport_diagnostics is not None else {})})
         write_partial(partial_path,value)
         return value
     while True:
@@ -624,15 +686,16 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
         page_params={**clean_params,'limit':limit,'offset':offset}
         payload={'api_name':definition['api_name'],'token':token,'params':page_params,'fields':definition['fields']}
         try:
+            transport_url = _tushare_rest_endpoint()
             attempts+=1
-            response=requests.post('http://api.tushare.pro',json=payload,timeout=(5,20))
+            response=_tushare_post(transport_url,payload)
             try:
                 body=response.json()
             except ValueError:
                 body={'text_prefix':response.text[:200]}
             # Even an upstream error echo cannot persist the supplied secret.
-            body=json.loads(json.dumps(body,ensure_ascii=True).replace(token,'[REDACTED]'))
-            captured.append(dict(url='http://api.tushare.pro',parameters={k:v for k,v in page_params.items() if k!='token'},
+            body=_redact_tushare_token(body,token)
+            captured.append(dict(url=transport_url,parameters={k:v for k,v in page_params.items() if k!='token'},
                 body=body,status_code=response.status_code,received_at=datetime.now(timezone.utc).isoformat()))
             if response.status_code in (401,403,429):
                 first_error='HTTP_'+str(response.status_code);first_category='PERMISSION' if response.status_code in (401,403) else 'NETWORK'
@@ -655,6 +718,9 @@ def tushare_request(endpoint,params,captured,max_requests,partial_path=None):
             if not isinstance(fields,list) or not isinstance(items,list):
                 first_error='TUSHARE_RESPONSE_SCHEMA_OR_ENCODING';first_category='UPSTREAM_SCHEMA'
                 break
+        except TushareTransportPolicyError as exc:
+            first_category,first_error='IMPLEMENTATION',str(exc)
+            break
         except Exception as exc:
             first_category,first_error,_classes=classify_error(exc)
             break

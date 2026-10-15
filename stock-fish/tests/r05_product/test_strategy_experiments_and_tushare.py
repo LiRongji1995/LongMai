@@ -18,6 +18,8 @@ class Response:
         self.status_code = status_code
         self.text = json.dumps(payload)
         self.content = self.text.encode()
+        self.url = "https://api.tushare.pro/"
+        self.history = []
 
     def json(self):
         return self.payload
@@ -149,8 +151,12 @@ def test_tushare_request_contract_and_auth_required(monkeypatch):
 
 def test_tushare_http_pagination_redacts_token(monkeypatch):
     seen = []
+    # TEST_FIXTURE only: no ordinary HTTPS REST endpoint is production-verified.
+    monkeypatch.setattr("stockfish_core.yaogu.provider_requests_worker.TUSHARE_VERIFIED_REST_ENDPOINT",
+                        "https://api.tushare.pro/")
 
-    def fake_post(url, json, timeout):
+    def fake_post(url, json, timeout, allow_redirects, verify):
+        assert url == "https://api.tushare.pro/" and allow_redirects is False and verify is True
         seen.append(json)
         offset = json["params"]["offset"]
         fields = ["ts_code", "trade_date", "close"]

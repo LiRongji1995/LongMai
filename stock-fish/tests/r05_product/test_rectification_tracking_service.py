@@ -13,15 +13,16 @@ from stockfish_core.api import create_app
 def test_item_detail_filters_unrelated_labels_before_deserialization(tmp_path, monkeypatch):
     from types import SimpleNamespace
     from stockfish_core.yaogu import candidate_service as module
+    from stockfish_core import storage as storage_module
     store = SQLiteStore(tmp_path/'detail.sqlite3')
     with store.transaction() as connection:
         for i in range(503):
             value={'run_id':'WANTED' if i<3 else 'OTHER','instrument_id':'TEST000','observation_id':str(i)}
             store._put_document(connection,'strategy_trading_session_observations',str(i),value)
-    seen=[]; original=module.checked_payload
+    seen=[]; original=storage_module.checked_payload
     def checked(row):
         value=original(row); seen.append(value['run_id']); return value
-    monkeypatch.setattr(module,'checked_payload',checked)
+    monkeypatch.setattr(storage_module,'checked_payload',checked)
     rows=module.CandidateService._strategy_item_observations(SimpleNamespace(store=store),
         'strategy_trading_session_observations','WANTED','TEST000')
     assert {r['observation_id'] for r in rows}=={'0','1','2'}
@@ -171,12 +172,16 @@ def test_scheduler_drains_beyond_100_and_failed_attempt_retries_with_backoff(ser
         assert horizons==[1,61]
         submitted.append((run_id,job_id));jobs[job_id]={'job_id':job_id,'state':'SUCCEEDED'};return jobs[job_id]
     monkeypatch.setattr(s,'submit_strategy_tracking',submit)
-    scheduler=CandidateScheduler(s,clock=lambda:t)
-    for _ in range(21):scheduler.schedule_strategy_research(t)
+    # TEST_FIXTURE starts after the missed 20:30 primary capture. Background
+    # draining must exercise the real guard outside an outstanding primary.
+    background_start=t.replace(hour=21,minute=30)
+    scheduler=CandidateScheduler(s,clock=lambda:background_start)
+    assert not scheduler._primary_blocks_background(background_start)
+    for _ in range(21):scheduler.schedule_strategy_research(background_start)
     assert len(submitted)==105 and {r for r,_ in submitted}=={p['run_id'] for p in pending}
     first=submitted[0][1];jobs[first]['state']='FAILED'
-    assert not scheduler.schedule_strategy_research(t+timedelta(seconds=10))
-    retried=scheduler.schedule_strategy_research(t+timedelta(seconds=61))
+    assert not scheduler.schedule_strategy_research(background_start+timedelta(seconds=10))
+    retried=scheduler.schedule_strategy_research(background_start+timedelta(seconds=61))
     assert len(retried)==1 and retried[0]['attempt']==1
     assert retried[0]['run_id']=='OLD_000' and retried[0]['job_id'].endswith('_retry_1')
     assert len(s._all('candidate_schedule_events'))==106

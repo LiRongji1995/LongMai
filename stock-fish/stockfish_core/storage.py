@@ -105,7 +105,24 @@ CREATE TRIGGER job_events_no_update BEFORE UPDATE ON job_events BEGIN SELECT RAI
 CREATE TRIGGER job_events_no_delete BEFORE DELETE ON job_events BEGIN SELECT RAISE(ABORT, 'immutable job events'); END;
 """
 
-_MIGRATIONS = [(1, _SCHEMA)]
+_QUERY_INDEXES_V2 = """
+CREATE INDEX IF NOT EXISTS documents_namespace_created ON documents(namespace,created_at,document_id);
+CREATE INDEX IF NOT EXISTS job_events_job_order ON job_events(job_id,event_id);
+CREATE INDEX IF NOT EXISTS strategy_item_observation_lookup ON documents(namespace,json_extract(payload,'$.run_id'),json_extract(payload,'$.instrument_id'),created_at,document_id);
+"""
+
+# V1 is frozen. The existing CandidateService expression index is adopted under
+# its original name rather than building a duplicate over every document.
+_MIGRATIONS = [(1, _SCHEMA), (2, _QUERY_INDEXES_V2)]
+
+
+def _verify_query_indexes(connection):
+    for statement in _QUERY_INDEXES_V2.strip().splitlines():
+        expected = statement.replace(" IF NOT EXISTS", "").rstrip(";")
+        name = expected.split()[2]
+        row = connection.execute("SELECT sql FROM sqlite_master WHERE type='index' AND name=?", (name,)).fetchone()
+        if row is None or re.sub(r"\s+", " ", row[0].strip().rstrip(";")) != expected:
+            raise IntegrityError("database query index definition mismatch: " + name)
 
 
 def _hash_text(text: str) -> str:
@@ -188,6 +205,8 @@ class SQLiteStore:
                 if version in applied:
                     if applied[version] != checksum:
                         raise IntegrityError("database migration checksum mismatch")
+                    if version == 2:
+                        _verify_query_indexes(connection)
                     continue
                 # executescript commits implicitly; execute complete statements instead.
                 statement = ""
@@ -198,6 +217,8 @@ class SQLiteStore:
                         statement = ""
                 if statement.strip():
                     raise IntegrityError("incomplete migration statement")
+                if version == 2:
+                    _verify_query_indexes(connection)
                 connection.execute("INSERT INTO schema_migrations VALUES (?, ?, ?)",
                                    (version, checksum, utc_now().isoformat()))
             connection.commit()
@@ -242,6 +263,45 @@ class SQLiteStore:
             row = connection.execute("SELECT * FROM documents WHERE namespace=? AND document_id=?",
                                      (namespace, document_id)).fetchone()
             return checked_payload(row) if row else None
+
+    def documents_for_run(self, namespace: str, run_id: str, *, instrument_id: str | None = None,
+                          limit: int | None = None, descending: bool = False) -> list[dict]:
+        """Return checked revisions in one saved run, in stable order.
+
+        The lookup index only narrows candidates; current payload bytes still
+        pass the same hash/JSON check. No revision, status or maturity is inferred.
+        All revisions are returned unless the caller supplies an explicit limit.
+        Subclasses can supply a request-wide read transaction unchanged.
+        """
+        if not isinstance(namespace, str) or not namespace or not isinstance(run_id, str) or not run_id:
+            raise ValueError("namespace and run_id must be non-empty strings")
+        if instrument_id is not None and (not isinstance(instrument_id, str) or not instrument_id):
+            raise ValueError("instrument_id must be a non-empty string when supplied")
+        if limit is not None:
+            _validate_page(limit, 0)
+        if not isinstance(descending, bool):
+            raise ValueError("descending must be a boolean")
+        with self.transaction(write=False) as connection:
+            # Without this selection SQLite can prefer the namespace/time
+            # index to avoid sorting, then scan every historical run. The old
+            # read-only V1 format may not yet have the expression index.
+            indexed = connection.execute(
+                "SELECT 1 FROM sqlite_master WHERE type='index' AND name='strategy_item_observation_lookup'"
+            ).fetchone()
+            sql = "SELECT * FROM documents"
+            if indexed:
+                sql += " INDEXED BY strategy_item_observation_lookup"
+            sql += " WHERE namespace=? AND json_extract(payload,'$.run_id')=?"
+            parameters = [namespace, run_id]
+            if instrument_id is not None:
+                sql += " AND json_extract(payload,'$.instrument_id')=?"
+                parameters.append(instrument_id)
+            direction = 'DESC' if descending else 'ASC'
+            sql += f" ORDER BY created_at {direction},document_id {direction}"
+            if limit is not None:
+                sql += " LIMIT ?"
+                parameters.append(limit)
+            return [checked_payload(row) for row in connection.execute(sql, parameters)]
 
     def list_documents(self, namespace: str, *, limit: int = 100, offset: int = 0) -> list[dict]:
         _validate_page(limit, offset)

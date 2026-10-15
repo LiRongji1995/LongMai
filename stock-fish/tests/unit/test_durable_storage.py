@@ -22,7 +22,7 @@ def test_wal_migration_reopen_and_append_only(tmp_path):
     assert reopened.health()["journal_mode"] == "wal"
     assert reopened.health()["immutable_triggers"]
     with reopened.transaction(write=False) as connection:
-        assert connection.execute("SELECT COUNT(*) FROM schema_migrations").fetchone()[0] == 1
+        assert [row[0] for row in connection.execute("SELECT version FROM schema_migrations ORDER BY version")] == [1, 2]
 
 
 def test_transaction_rolls_back_all_documents(tmp_path):

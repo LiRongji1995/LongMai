@@ -12,6 +12,7 @@ from fastapi.responses import FileResponse, JSONResponse
 from ..common import LiveError
 from .. import __version__
 from .catalog import RunCatalog
+from .local_access import LocalAccessMiddleware, WebSocketCapacity
 
 
 FRONTEND = Path(__file__).resolve().parents[1] / "frontend"
@@ -22,13 +23,15 @@ INPUT_ERRORS = {"FUTURE_ACCESS_DENIED", "INVALID_AS_OF", "INVALID_INDEX", "INVAL
 
 
 def create_app(run_dir: str | Path, *, allow_in_progress: bool = True, poll_interval: float = .5,
-               now: Callable[[], datetime] | None = None) -> FastAPI:
+               now: Callable[[], datetime] | None = None, max_websocket_connections: int = 16) -> FastAPI:
     if not .05 <= poll_interval <= 60:
         raise ValueError("poll_interval must be between .05 and 60 seconds")
+    capacity = WebSocketCapacity(max_websocket_connections)
     catalog = RunCatalog(run_dir, allow_in_progress=allow_in_progress, now=now)
     app = FastAPI(title="StockFish Live", version=__version__, docs_url="/api/docs", redoc_url=None)
     app.state.run_view = catalog.single_view
     app.state.run_catalog = catalog
+    app.add_middleware(LocalAccessMiddleware, capacity=capacity)
 
     def invoke(method, date, as_of, *args, **kwargs):
         selection = catalog.select(date, as_of)
@@ -142,5 +145,10 @@ def create_app(run_dir: str | Path, *, allow_in_progress: bool = True, poll_inte
             await websocket.close(code=1008 if exc.code in INPUT_ERRORS else 1011)
         except WebSocketDisconnect:
             pass
+        except Exception:
+            # Never send internal paths or exception text over the socket.
+            await websocket.send_json({"type": "error", "error": "LIVE_VIEW_UNAVAILABLE",
+                                       "market_edge": "NOT_ESTABLISHED"})
+            await websocket.close(code=1011)
 
     return app

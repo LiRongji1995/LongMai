@@ -1,6 +1,7 @@
 """Independent after-close observation jobs: explicit TEST_FIXTURE input revisions."""
 from datetime import date,datetime,time,timedelta
 from decimal import Decimal,ROUND_HALF_UP
+import threading
 import pytest
 
 from stockfish_core.api import create_app
@@ -225,8 +226,17 @@ def test_started_scheduler_reports_ready_and_running_before_evening_cutoff(obser
     client,core,bundle,clock,saved,_=observer
     day=next_session(bundle);clock.current=datetime.combine(day,time(19),TZ)
     scheduler=CandidateScheduler(core.candidates,capture=lambda *a:pytest.fail('no evening capture before cutoff'),clock=clock,interval=1)
+    first_success=threading.Event()
+    original_tick=scheduler.tick
+    def successful_tick(*args,**kwargs):
+        result=original_tick(*args,**kwargs)
+        first_success.set()
+        return result
+    scheduler.tick=successful_tick
     try:
         scheduler.start()
+        assert first_success.wait(timeout=10),'scheduler did not complete its first successful tick'
+        assert scheduler.health_snapshot()['status']=='ok'
 
         state=scheduler.describe_state(clock.current)
 

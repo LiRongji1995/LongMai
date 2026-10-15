@@ -101,7 +101,7 @@ def test_each_date_selected_endpoint_preserves_original_time_cutoff(tmp_path, en
     root = tmp_path / "TEST_FIXTURE_RANGE"
     save_run(root / DAY.isoformat())
     save_run(root / "2026-10-05", date(2026, 10, 5))
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/"+endpoint, params={"date": DAY.isoformat(), "as_of": moment().isoformat()})
     assert result.status_code == 200, result.text
     assert result.json()["selected_date"] == DAY.isoformat()
@@ -120,7 +120,7 @@ def test_each_date_selected_endpoint_preserves_original_time_cutoff(tmp_path, en
 def test_invalid_out_of_range_and_missing_dates_fail_distinctly(tmp_path, selected, error):
     root = tmp_path / "TEST_FIXTURE_RANGE"
     save_run(root / DAY.isoformat())
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/status", params={"date": selected})
     assert result.status_code == 422
     assert result.json()["error"] == error
@@ -130,7 +130,7 @@ def test_invalid_out_of_range_and_missing_dates_fail_distinctly(tmp_path, select
 def test_date_and_observation_timestamp_must_agree(tmp_path, endpoint):
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root)
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/"+endpoint, params={
             "date": DAY.isoformat(), "as_of": moment(DAY - timedelta(days=1)).isoformat()})
     assert result.status_code == 422
@@ -143,7 +143,7 @@ def test_catalog_one_calendar_year_is_inclusive_and_uses_shanghai_clock(tmp_path
     now = datetime(2026, 10, 6, 23, 30, tzinfo=timezone.utc)
     for day in (date(2025, 10, 6), date(2025, 10, 7), DAY, date(2026, 10, 8)):
         save_run(root / day.isoformat(), day)
-    with TestClient(create_app(root, now=lambda: now)) as client:
+    with TestClient(create_app(root, now=lambda: now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         value = client.get("/api/live/dates").json()
         latest = client.get("/api/live/status").json()
     assert value == {"schema_version": "LIVE_DASHBOARD_DATES_V1", "min_date": "2025-10-07",
@@ -158,7 +158,7 @@ def test_closed_day_comparison_has_full_actual_and_original_saved_prediction(tmp
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root, full=True)
     before = {path: path.read_bytes() for path in root.rglob("*") if path.is_file()}
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         params = {"date": DAY.isoformat(), "as_of": moment().isoformat()}
         pit = client.get("/api/live/market", params=params).json()
         comparison = client.get("/api/live/comparison", params=params).json()
@@ -182,7 +182,7 @@ def test_a_finished_job_does_not_close_current_trading_session_or_expose_later_s
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root, full=True)
     now = lambda: moment(DAY, 9, 46)
-    with TestClient(create_app(root, now=now)) as client:
+    with TestClient(create_app(root, now=now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         status = client.get("/api/live/status", params={"date": DAY.isoformat()}).json()
         value = client.get("/api/live/comparison", params={"date": DAY.isoformat()}).json()
         future = client.get("/api/live/market", params={
@@ -199,7 +199,7 @@ def test_a_finished_job_does_not_close_current_trading_session_or_expose_later_s
 def test_today_before_first_snapshot_is_unavailable(tmp_path):
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root)
-    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 30))) as client:
+    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 30)), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/status", params={"date": DAY.isoformat()})
     assert result.status_code == 422 and result.json()["error"] == "DATE_NOT_AVAILABLE"
 
@@ -209,14 +209,14 @@ def test_unseen_today_does_not_hide_latest_available_past_date(tmp_path):
     save_run(root / DAY.isoformat())
     previous = DAY - timedelta(days=1)
     save_run(root / previous.isoformat(), previous)
-    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 30))) as client:
+    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 30)), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         catalog = client.get("/api/live/dates").json()
         latest = client.get("/api/live/status").json()
     assert catalog["available_dates"] == [previous.isoformat()]
     assert catalog["latest_date"] == previous.isoformat()
     assert latest["selected_date"] == previous.isoformat()
     # Once the same immutable first tick is visible, its date becomes available.
-    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 45))) as client:
+    with TestClient(create_app(root, now=lambda: moment(DAY, 9, 45)), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         catalog = client.get("/api/live/dates").json()
     assert catalog["latest_date"] == DAY.isoformat()
 
@@ -225,9 +225,9 @@ def test_delayed_close_bar_becomes_visible_after_receipt_without_changing_pit_sn
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root, full=True, late_close=True)
     params = {"date": DAY.isoformat(), "as_of": moment().isoformat()}
-    with TestClient(create_app(root, now=lambda: moment(DAY, 15, 0))) as client:
+    with TestClient(create_app(root, now=lambda: moment(DAY, 15, 0)), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         not_received = client.get("/api/live/comparison", params=params).json()
-    with TestClient(create_app(root, now=lambda: moment(DAY, 15, 1))) as client:
+    with TestClient(create_app(root, now=lambda: moment(DAY, 15, 1)), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         received = client.get("/api/live/comparison", params=params).json()
         pit = client.get("/api/live/market", params=params).json()
     assert not_received["session_closed"] is True
@@ -254,7 +254,7 @@ def test_partial_archives_never_claim_complete_even_with_session_end_bar(tmp_pat
         write_archive(root, DAY, records)
     if kind == "no_summary":
         (root / "summary.json").unlink()
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/comparison", params={"date": DAY.isoformat()})
     assert result.status_code == 200, result.text
     assert result.json()["archive_status"] == "PARTIAL"
@@ -264,7 +264,7 @@ def test_partial_archives_never_claim_complete_even_with_session_end_bar(tmp_pat
 def test_selected_index_actual_cutoff_cannot_borrow_another_index_close(tmp_path):
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root, full=True, second_index=True, model=False)
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         first = client.get("/api/live/comparison", params={"date": DAY.isoformat()}).json()
         other = client.get("/api/live/comparison", params={"date": DAY.isoformat(), "index": "399001.SZ"}).json()
     assert first["actual_as_of"] == moment(DAY, 15, 0).isoformat()
@@ -276,7 +276,7 @@ def test_selected_index_actual_cutoff_cannot_borrow_another_index_close(tmp_path
 def test_unknown_selected_index_has_no_actual_cutoff_or_complete_claim(tmp_path):
     root = tmp_path / "TEST_FIXTURE_RUN"
     save_run(root, full=True)
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/comparison", params={"date": DAY.isoformat(), "index": "399006.SZ"}).json()
     assert result["actual_as_of"] is None
     assert result["archive_status"] == "PARTIAL"
@@ -294,7 +294,7 @@ def test_extra_post_session_actual_bar_is_hidden_and_marks_archive_partial(tmp_p
     records[-1]["data_cutoff"] = extra["timestamp"]
     records[-1]["snapshot_id"] = digest({key: value for key, value in records[-1].items() if key != "snapshot_id"})
     write_archive(root, DAY, records)
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         result = client.get("/api/live/comparison", params={"date": DAY.isoformat()}).json()
     assert len(result["actual_paths"]["000001.SH"]) == 240
     assert result["actual_as_of"] == moment(DAY, 15, 0).isoformat()
@@ -338,7 +338,7 @@ def test_selected_archives_reject_identity_and_symlink_tampering(tmp_path, kind)
             forecast["horizons"][0]["target_at"] = moment(DAY + timedelta(days=1), 10, 15).isoformat()
             record["snapshot_id"] = digest({key: value for key, value in record.items() if key != "snapshot_id"})
         write_archive(day_root, DAY, records)
-    with TestClient(create_app(selected_root, now=fixed_now)) as client:
+    with TestClient(create_app(selected_root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         response = client.get("/api/live/status", params={"date": DAY.isoformat()})
     assert response.status_code == 503
     assert response.json()["error"] == "RUN_INTEGRITY_ERROR"
@@ -347,18 +347,18 @@ def test_selected_archives_reject_identity_and_symlink_tampering(tmp_path, kind)
 def test_websocket_date_selection_is_pit_and_input_errors_are_explicit(tmp_path):
     root = tmp_path / "TEST_FIXTURE_RANGE"
     save_run(root / DAY.isoformat())
-    with TestClient(create_app(root, now=fixed_now, poll_interval=.05)) as client:
-        with client.websocket_connect(f"/ws/live?date={DAY.isoformat()}&as_of={moment().isoformat().replace('+', '%2B')}") as socket:
+    with TestClient(create_app(root, now=fixed_now, poll_interval=.05), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
+        with client.websocket_connect(f"ws://127.0.0.1/ws/live?date={DAY.isoformat()}&as_of={moment().isoformat().replace('+', '%2B')}") as socket:
             value = socket.receive_json()
             assert value["selected_date"] == DAY.isoformat()
             assert "1234" not in canonical_json(value)
-        with client.websocket_connect("/ws/live?date=2026-10-08") as socket:
+        with client.websocket_connect("ws://127.0.0.1/ws/live?date=2026-10-08") as socket:
             assert socket.receive_json()["error"] == "DATE_OUT_OF_RANGE"
 
 
 def test_empty_catalog_never_creates_missing_run_or_fake_date(tmp_path):
     root = tmp_path / "TEST_FIXTURE_MISSING_RUN"
-    with TestClient(create_app(root, now=fixed_now)) as client:
+    with TestClient(create_app(root, now=fixed_now), base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
         catalog = client.get("/api/live/dates").json()
         missing = client.get("/api/live/comparison", params={"date": DAY.isoformat()})
     assert catalog["available_dates"] == [] and catalog["latest_date"] is None

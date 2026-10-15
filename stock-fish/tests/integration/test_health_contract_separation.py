@@ -39,6 +39,10 @@ def test_readiness_reports_ready_without_deep_storage_scan(tmp_path, monkeypatch
                               quant=Forbidden(), allow_test_fixture=True, data_dir=tmp_path / "NO_QLIB")
     scheduler = CandidateScheduler(core.candidates, capture=lambda *args: None, interval=60)
     core.candidate_scheduler = scheduler
+    # TEST_FIXTURE readiness requires a completed poll, not merely thread.start().
+    # Scheduling/provider semantics are covered separately from this health contract.
+    monkeypatch.setattr(scheduler, '_tick', lambda now=None: [])
+    scheduler.tick()
     scheduler.start()
     calls = {"deep": 0, "ready": 0}
     original_health = core.store.health
@@ -65,6 +69,7 @@ def test_readiness_reports_ready_without_deep_storage_scan(tmp_path, monkeypatch
     assert response.json["status"] == "ready"
     assert response.json["checks"]["database_connection"]["status"] == "ok"
     assert response.json["checks"]["scheduler"]["thread_alive"] is True
+    assert response.json["checks"]["scheduler"]["last_successful_tick_at"] is not None
     assert calls == {"deep": 0, "ready": 1}
 
 

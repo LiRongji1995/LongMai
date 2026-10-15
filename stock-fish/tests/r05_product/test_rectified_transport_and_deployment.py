@@ -58,12 +58,15 @@ def test_missing_token_queue_unblocks_when_credential_becomes_available(tmp_path
 
 def test_budget_error_retains_page_and_is_not_network(monkeypatch,tmp_path):
     monkeypatch.setenv('TUSHARE_TOKEN','TEST_FIXTURE_TOKEN_NOT_REAL')
+    monkeypatch.setattr(worker,'TUSHARE_VERIFIED_REST_ENDPOINT','https://api.tushare.pro/')
     monkeypatch.setattr(worker,'_transport',{})
     from stockfish_core.yaogu.provider_requests import TUSHARE_ENDPOINTS
     monkeypatch.setitem(TUSHARE_ENDPOINTS['tushare_daily'],'page_limit',2)
     calls=[]
     class R:
         status_code=200
+        url='https://api.tushare.pro/'
+        history=()
         def json(self):return {'code':0,'data':{'fields':['ts_code','trade_date'],'items':[['600000.SH','20260904'],['600001.SH','20260904']]}}
         def raise_for_status(self):pass
     monkeypatch.setattr('requests.post',lambda *a,**kw:(calls.append(kw['json']['params']['offset']) or R()))
@@ -89,8 +92,11 @@ import requests
 from stockfish_core.yaogu import provider_requests_worker as w
 from stockfish_core.yaogu.provider_requests import TUSHARE_ENDPOINTS
 TUSHARE_ENDPOINTS['tushare_daily']['page_limit']=2
+w.TUSHARE_VERIFIED_REST_ENDPOINT='https://api.tushare.pro/' # TEST_FIXTURE mocked transport only
 class R:
  status_code=200
+ url='https://api.tushare.pro/'
+ history=()
  def __init__(self,rows):self.rows=rows
  def json(self):return {'code':0,'data':{'fields':['ts_code','trade_date'],'items':self.rows}}
  def raise_for_status(self):pass

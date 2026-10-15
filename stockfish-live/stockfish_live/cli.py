@@ -479,6 +479,12 @@ def main(argv=None) -> int:
         elif args.command == "evaluate":
             result, code = evaluate(args, root)
         elif args.command == "serve":
+            from .api.local_access import is_loopback_host
+            if not is_loopback_host(args.host):
+                raise LiveError("REMOTE_LISTEN_REQUIRES_AUTHENTICATION")
+            # Do not let host-file/DNS resolution turn localhost into a remote
+            # listener. Literal loopback IPv4/IPv6 addresses need no lookup.
+            listen_host = "127.0.0.1" if args.host.lower() == "localhost" else args.host
             if not args.run_dir:
                 raise LiveError("RUN_DIRECTORY_REQUIRED")
             if not 1 <= args.port <= 65535:
@@ -487,7 +493,7 @@ def main(argv=None) -> int:
             import uvicorn
             app = create_app(args.run_dir)
             app.state.run_catalog.validate_startup()
-            uvicorn.run(app, host=args.host, port=args.port)
+            uvicorn.run(app, host=listen_host, port=args.port, proxy_headers=False)
             result, code = {"server": "STOPPED"}, 0
         else:
             raise LiveError("NOT_IMPLEMENTED_PHASE1")

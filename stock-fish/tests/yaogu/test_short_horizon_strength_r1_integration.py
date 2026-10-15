@@ -140,19 +140,22 @@ def test_same_bound_input_rule_identity_is_idempotent_without_overwriting_old_do
     assert len(core.candidates._all("strategy_experiment_runs")) == 1
 
 
-def test_unimplemented_research_outcomes_never_create_zero_returns_or_v2_labels(research_api):
+def test_versioned_research_outcomes_require_explicit_input_and_never_create_v2_labels(research_api):
     core, client, input_id = research_api
     run_id = launch(core, client, input_id)
     base = "/api/strategy-experiments/" + run_id
     for endpoint in ("outcomes", "tracking", "review"):
         response = client.get(base + "/" + endpoint)
         assert response.status_code == 200, response.get_data(as_text=True)
-        assert response.json["status"] == "NOT_IMPLEMENTED"
+        assert response.json["status"] == "PENDING"
+        assert response.json["schema_version"] == "SHORT_HORIZON_OUTCOME_V1"
         assert response.json.get("returns") is None
     for endpoint in ("outcomes", "tracking"):
         response = client.post(base + "/" + endpoint, json={})
-        assert response.status_code == 503
-        assert "SHORT_HORIZON_SETUP_OUTCOME_POLICY_NOT_IMPLEMENTED" in response.get_data(as_text=True)
+        assert response.status_code == 400
+        assert response.json['error'] == 'INVALID_REQUEST'
+    with pytest.raises(ValueError, match='SHORT_HORIZON_REGISTERED_OUTCOME_INPUT_ID_REQUIRED'):
+        core.candidates.submit_strategy_outcomes(run_id)
     assert core.candidates._all("strategy_research_pending") == []
     assert core.candidates._all("stage_aware_prospective_primary_runs") == []
     assert core.candidates.strategy_experiment(run_id)["results"][ID]["counts"]["focus"] == 0

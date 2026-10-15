@@ -170,9 +170,9 @@ def test_serve_reuses_the_app_view_after_prelisten_validation(tmp_path, monkeypa
         assert path == tmp_path
         events.append("create")
         return app
-    def run(actual_app, *, host, port):
+    def run(actual_app, *, host, port, proxy_headers):
         assert actual_app is app and events == ["create", "precheck"]
-        assert host == "127.0.0.1" and port == 8765
+        assert host == "127.0.0.1" and port == 8765 and proxy_headers is False
         events.append("listen")
     monkeypatch.setattr(api_module, "create_app", create_app)
     monkeypatch.setattr(uvicorn, "run", run)
@@ -204,11 +204,11 @@ def test_serve_range_directory_uses_same_validated_catalog_without_writing(tmp_p
         app = real_create_app(path, now=lambda: datetime(2026, 10, 8, 9, tzinfo=cli.SHANGHAI))
         applications.append(app)
         return app
-    def run(app, *, host, port):
+    def run(app, *, host, port, proxy_headers):
         assert applications == [app]
         assert app.state.run_catalog.is_range
-        assert host == "127.0.0.1" and port == 8765
-        with TestClient(app) as client:
+        assert host == "127.0.0.1" and port == 8765 and proxy_headers is False
+        with TestClient(app, base_url="http://127.0.0.1", client=("127.0.0.1", 50000)) as client:
             assert client.get("/api/live/dates").json()["available_dates"] == list(days)
             for day in days:
                 response = client.get("/api/live/market", params={"date": day})

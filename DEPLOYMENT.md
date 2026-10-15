@@ -6,6 +6,8 @@
 
 Python服务继续使用项目虚拟环境、既有DB/state和单个调度器。日常规则不要求账户、应用LLM或旧Alpha158模型。采用pyqlib 0.9.7 wheel，不改相邻Qlib源码为editable安装。
 
+启动前用明确选择的 Python 3.12 执行 `stock-fish/scripts/runtime_doctor.py --profile daily --json`（仓库根路径），或显式传 `--python` 检查目标解释器。规则、Qlib、审阅和 Live 可分别选对应 profile。工具只诊断，不自动修环境、迁库或启动应用；依赖导入失败时不要把旧健康记录当成新环境已通过。合同与实际缺口见[运行安全与后验第一阶段](stock-fish/docs/BASELINE_OUTCOME_PERFORMANCE_V1.md)。
+
 Mac/Linux已有Python环境从业务目录启动：
 
 ```sh
@@ -56,5 +58,7 @@ Go隔离库的备份、恢复、导出与回退按[隔离生命周期](stock-fis
 ## 运行后核对
 
 读取实际地址的 `/api/health`、覆盖与保存运行状态。健康仅表示服务可响应；采集成功不等于资料齐备，零焦点也不证明合法空推荐。观察日、资料截止、输入身份、全量/焦点数量和run_id需一致。
+
+`/health/live` 公开且仅检查进程响应；`/health/ready` 与 `/health/deep` 和各 API 别名使用同一鉴权边界。readiness 要求成功调度轮询，失败、停滞或未开始不会因线程尚存而通过。SSE 每个应用实例限两条，超额 429；Live 面板仅允许本机同源访问，默认限 16 条 WebSocket。Tushare 普通 REST 在 HTTPS 合同确认前禁止新凭据请求，完整旧 checkpoint 可只读复用；不要为恢复采集改回明文端点。上述源码发布不会自动重启已有实例。
 
 日常任务按已登记交易日历与实际配置执行，未来计划不等于已完成观察。新部署、在线成功、Windows原生运行与连续交易日稳定性各自验收，当前缺口见[当前状态](CURRENT_STATUS.md)。历次部署记录见[归档索引](stock-fish/docs/archive/README.md)。
