@@ -1,11 +1,15 @@
 """Isolated TEST_FIXTURE originals and DB; no real market or service access."""
 from copy import deepcopy
+from datetime import datetime, timezone
+from decimal import Decimal
 import gzip
 import hashlib
 import json
+import math
 from pathlib import Path
 import pickle
 import socket
+import sys
 from unittest.mock import patch
 
 import pytest
@@ -56,6 +60,100 @@ def test_native_archive_authenticates_without_selector_or_owner_restoration(arch
         pickle.dumps(cap)
     with pytest.raises(ValueError, match='AUTHENTICATION_REQUIRED'):
         bridge.ArchiveBridgeCapability()
+
+
+@pytest.mark.parametrize('value', [None, False, True, 0, -1, 2**255 - 1,
+    0.0, -0.0, 5e-324, 1e308, math.nextafter(1.0, 2.0),
+    {'z': '中文😀', 'a': '\"\\\b\f\n\r\t\x00\x1f\u2028\u2029'},
+    {'TEST_FIXTURE': [Decimal('1.0010'), datetime(2026, 10, 16, tzinfo=timezone.utc), (1, 2)]},
+    {1: 'one', 2: 'two'}, {None: 'null'}, {True: 'yes'}])
+def test_canonical_c_encoder_matches_frozen_bytes_and_hash(value):
+    from stockfish_core.yaogu.history_artifacts import digest_json_stream as reference
+    expected = ''.join(json.JSONEncoder(sort_keys=True, ensure_ascii=False, separators=(',', ':'),
+        default=str, allow_nan=False).iterencode(value)).encode('utf-8')
+    chunks = list(bridge._canonical_chunks(value))
+    assert b''.join(chunks) == expected
+    assert all(len(chunk) <= 1024**2 for chunk in chunks)
+    assert bridge.digest_json_stream(value) == reference(value) == hashlib.sha256(expected).hexdigest()
+
+
+def test_canonical_c_encoder_large_unicode_shared_values_and_mutation():
+    from stockfish_core.yaogu.history_artifacts import digest_json_stream as reference
+    shared = {'TEST_FIXTURE': ('😀中文\\\"\x00\n' * 30000)}
+    value = {'z': [shared, shared], 'a': {'nested': -0.0}}
+    chunks = list(bridge._canonical_chunks(value))
+    assert len(chunks) > 1 and max(map(len, chunks)) <= 1024**2
+    expected = canonical_json(value).encode('utf-8')
+    assert b''.join(chunks) == expected
+    before = bridge.digest_json_stream(value)
+    assert before == reference(value)
+    shared['TEST_FIXTURE'] = 'changed nested borrowed value'
+    assert bridge.digest_json_stream(value) == reference(value) != before
+
+
+def test_canonical_c_encoder_retains_reference_rejections_and_integer_limit():
+    from stockfish_core.yaogu.history_artifacts import digest_json_stream as reference
+    cyclic = []
+    cyclic.append(cyclic)
+    mapping = {}
+    mapping['TEST_FIXTURE'] = mapping
+    values = [float('nan'), float('inf'), -float('inf'), {'v': float('inf')},
+        '\ud800', {'long': 'x' * 300000 + '\udfff'}, {'a': 1, 2: 3}, cyclic, mapping]
+    before = sys.get_int_max_str_digits()
+    if before:
+        values.append(10**(before + 1))
+    for value in values:
+        with pytest.raises(Exception) as expected:
+            reference(value)
+        with pytest.raises(type(expected.value)):
+            bridge.digest_json_stream(value)
+    assert sys.get_int_max_str_digits() == before
+
+
+def test_canonical_c_encoder_checks_after_c_allocation_before_yield(monkeypatch):
+    original = json.JSONEncoder
+    allocated = False
+    failure = KeyboardInterrupt('TEST_FIXTURE_POST_C_ALLOCATION_CANCELLED')
+    class ObservedEncoder(original):
+        def iterencode(self, value, _one_shot=False):
+            nonlocal allocated
+            assert _one_shot is True
+            result = super().iterencode(value, _one_shot=_one_shot)
+            allocated = True
+            return result
+    def checkpoint():
+        if allocated:
+            raise failure
+    monkeypatch.setattr(bridge.json, 'JSONEncoder', ObservedEncoder)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        next(bridge._canonical_chunks({'TEST_FIXTURE': '😀' * 1000}, checkpoint=checkpoint))
+    assert caught.value is failure
+
+
+def test_canonical_c_encoder_partial_spool_cancel_rolls_back_and_closes(service, tmp_path, monkeypatch):
+    document = {'TEST_FIXTURE': '😀' * 600000}
+    expected = hashlib.sha256(canonical_json(document).encode()).hexdigest()
+    handles = []
+    original = bridge.tempfile.TemporaryFile
+    failure = KeyboardInterrupt('TEST_FIXTURE_PARTIAL_CANONICAL_SPOOL_CANCELLED')
+    def temporary(*args, **kwargs):
+        handle = original(*args, **kwargs)
+        handles.append(handle)
+        return handle
+    def checkpoint():
+        if handles and handles[0].tell() > 0:
+            raise failure
+    monkeypatch.setattr(bridge.tempfile, 'TemporaryFile', temporary)
+    session = bridge.ArchiveVerificationSession(checkpoint=checkpoint)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        with service.store.transaction() as connection:
+            service.store._put_document(connection, 'TEST_FIXTURE_spool', 'prior', {'TEST_FIXTURE': True})
+            bridge._put_archived_document(connection, 'TEST_FIXTURE_spool', 'next', expected, session,
+                document=document, temporary_dir=tmp_path)
+    assert caught.value is failure and handles and all(handle.closed for handle in handles)
+    assert service.store.get_document('TEST_FIXTURE_spool', 'prior') is None
+    assert service.store.get_document('TEST_FIXTURE_spool', 'next') is None
+    assert not list(tmp_path.glob('stockfish-verified-bridge-*'))
 
 
 def test_atomic_import_retains_original_run_input_and_is_idempotent(archive, service):
@@ -765,3 +863,792 @@ def test_immutable_reimport_validates_original_bytes_without_reexpanding_input(a
     monkeypatch.setattr(bridge, '_decompress', refuse_input)
     assert bridge.commit_bridge(service, cap) == cert
     assert bridge.require_verified_bridge(service, cert['run_id'], session=cap._session)['input_hash'] == cert['input_hash']
+
+
+def _reseal_fixture_input(archive, document=None, *, raw=None, rebind_hash=False):
+    """Corrupt a private fixture and reseal its refs, never real archive bytes.
+
+    Rebinding the declared hash chain makes the fresh reconstruction, rather
+    than an obsolete declared input hash, reject the changed saved content.
+    The old official exports remain untouched and can never authorize it.
+    """
+    path = Path(archive['artifacts']['input.json.gz']['path'])
+    path.write_bytes(gzip.compress(raw if raw is not None else json.dumps(document).encode(), mtime=0))
+    archive['artifacts']['input.json.gz'] = workflow._ref(path)
+    manifest = json.loads(Path(archive['artifacts']['manifest.json']['path']).read_bytes())
+    manifest['artifacts']['input.json.gz'] = archive['artifacts']['input.json.gz']
+    if rebind_hash:
+        run = deepcopy(archive['run'])
+        input_hash = bridge.digest_json_stream(document)
+        run['input_hash'] = run['results'][bridge.STRATEGY]['input_hash'] = input_hash
+        run['input_id'] = 'market_' + input_hash
+        fields = ('input_hash', 'observation_date', 'decision_cutoff', 'spec_hash', 'source_hash',
+            'implementation_version', 'universe_hash', 'execution_profile', 'feature_version', 'research_context_hash')
+        run['run_id'] = 'strategy_experiment_' + bridge.digest_json_stream({key: run[key] for key in fields})[:24]
+        run['content_hash'] = bridge.digest_json_stream({key: value for key, value in run.items() if key != 'content_hash'})
+        run_path = Path(archive['artifacts']['canonical-run.json.gz']['path'])
+        run_path.write_bytes(gzip.compress(json.dumps(run).encode(), mtime=0))
+        archive['artifacts']['canonical-run.json.gz'] = workflow._ref(run_path)
+        archive['run'] = run
+        archive['completion']['run_id'] = manifest['run_id'] = run['run_id']
+        manifest['input_hash'] = input_hash
+        manifest['canonical_content_hash'] = run['content_hash']
+        manifest['artifacts']['canonical-run.json.gz'] = archive['artifacts']['canonical-run.json.gz']
+    reseal(archive, manifest=manifest)
+
+
+@pytest.mark.parametrize('change', ['extra_root', 'extra_bar', 'missing_default', 'missing_required',
+    'decimal_number', 'boolean_number', 'timestamp_spelling', 'timestamp_naive',
+    'changed_price', 'reordered_bars', 'duplicate_bar'])
+def test_saved_input_full_canonical_identity_rejects_resealed_changes(archive, change, monkeypatch):
+    document = json.loads(gzip.decompress(Path(archive['artifacts']['input.json.gz']['path']).read_bytes()))
+    if change == 'extra_root':
+        document['TEST_FIXTURE_EXTRA'] = None
+    elif change == 'extra_bar':
+        document['bars'][0]['TEST_FIXTURE_EXTRA'] = None
+    elif change == 'missing_default':
+        del document['themes']
+    elif change == 'missing_required':
+        del document['universe']['snapshot_id']
+    elif change == 'decimal_number':
+        document['bars'][0]['close'] = float(document['bars'][0]['close'])
+    elif change == 'boolean_number':
+        document['universe']['complete'] = int(document['universe']['complete'])
+    elif change == 'timestamp_spelling':
+        from datetime import datetime, timezone
+        value = document['bars'][0]['event_time']
+        document['bars'][0]['event_time'] = datetime.fromisoformat(value).astimezone(timezone.utc).isoformat().replace('+00:00', 'Z')
+        assert document['bars'][0]['event_time'] != value
+        assert datetime.fromisoformat(document['bars'][0]['event_time']) == datetime.fromisoformat(value)
+    elif change == 'timestamp_naive':
+        document['bars'][0]['event_time'] = document['bars'][0]['event_time'][:19]
+    elif change == 'changed_price':
+        document['bars'][0]['close'] = '999.001'
+    elif change == 'reordered_bars':
+        document['bars'].reverse()
+    else:
+        document['bars'].append(deepcopy(document['bars'][0]))
+    _reseal_fixture_input(archive, document, rebind_hash=True)
+    monkeypatch.setattr(bridge, '_validate_run', lambda *a, **k: pytest.fail('MUST_REJECT_BEFORE_RUN_EXPORT_CHECKS'))
+    with pytest.raises(ValueError, match='FRESH_NORMALIZATION_DIFFERS_FROM_ORIGINAL_INPUT'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('change,reason', [
+    ('observation_date', 'ORIGINAL_SESSION_CALENDAR_MISMATCH'),
+    ('sessions', 'ORIGINAL_SESSION_CALENDAR_MISMATCH'),
+    ('missing_receipt', 'EXACT_CORE_RECEIPT_SET_REQUIRED'),
+    ('duplicate_receipt', 'FRESH_NORMALIZATION_DIFFERS_FROM_ORIGINAL_INPUT')])
+def test_saved_input_metadata_never_replaces_full_source_identity(archive, change, reason):
+    document = json.loads(gzip.decompress(Path(archive['artifacts']['input.json.gz']['path']).read_bytes()))
+    if change == 'observation_date':
+        document['observation_date'] = document['sessions'][-2]
+    elif change == 'sessions':
+        document['sessions'].pop(0)
+    elif change == 'missing_receipt':
+        document['receipts'].pop()
+    else:
+        document['receipts'].append(deepcopy(document['receipts'][0]))
+    _reseal_fixture_input(archive, document, rebind_hash=True)
+    with pytest.raises(ValueError, match=reason):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('prefix,reason', [
+    ('"observation_date":"TEST_FIXTURE_duplicate",', 'DUPLICATE_JSON_KEY'),
+    ('"TEST_FIXTURE_nested":{"same":0,"same":1},', 'DUPLICATE_JSON_KEY'),
+    ('"TEST_FIXTURE_nonfinite":NaN,', 'NONFINITE_JSON'),
+    ('"TEST_FIXTURE_nonfinite":Infinity,', 'NONFINITE_JSON'),
+    ('"TEST_FIXTURE_nonfinite":1e309,', 'Out of range float values')])
+def test_saved_input_still_uses_strict_json_and_finite_canonical_hash(archive, prefix, reason):
+    raw = gzip.decompress(Path(archive['artifacts']['input.json.gz']['path']).read_bytes())
+    _reseal_fixture_input(archive, raw=b'{' + prefix.encode() + raw[1:])
+    with pytest.raises(ValueError, match=reason):
+        authenticate(archive)
+
+
+def test_fresh_normalized_full_content_must_equal_saved_canonical_hash(archive, monkeypatch):
+    from decimal import Decimal
+    from stockfish_core.yaogu import provider_normalization
+    original = provider_normalization.normalize_capture_with_report
+    def changed(*args, **kwargs):
+        bundle, report = original(*args, **kwargs)
+        bars = (bundle.bars[0].model_copy(update={'close': Decimal('999.001')}), *bundle.bars[1:])
+        return bundle.model_copy(update={'bars': bars}), report
+    monkeypatch.setattr(provider_normalization, 'normalize_capture_with_report', changed)
+    with pytest.raises(ValueError, match='FRESH_NORMALIZATION_DIFFERS_FROM_ORIGINAL_INPUT'):
+        authenticate(archive)
+
+
+def test_saved_input_formatting_preserved_without_duplicate_typed_input(archive, monkeypatch):
+    import weakref
+    from stockfish_core.yaogu import provider_normalization
+    document = json.loads(gzip.decompress(Path(archive['artifacts']['input.json.gz']['path']).read_bytes()))
+    formatted = json.dumps(dict(reversed(tuple(document.items()))), ensure_ascii=True, indent=2).encode()
+    _reseal_fixture_input(archive, raw=formatted)
+    del document
+    input_sha = archive['artifacts']['input.json.gz']['sha256']
+    run_sha = archive['artifacts']['canonical-run.json.gz']['sha256']
+    original_decode, original_normalize, original_validate = bridge._decompress, provider_normalization.normalize_capture_with_report, bridge._validate_run
+    seen = {}
+    class WeakDocument(dict):
+        pass
+    def decoded(raw, session):
+        checksum = hashlib.sha256(raw).hexdigest()
+        if checksum == run_sha:
+            assert seen['saved_input']() is None, 'SAVED_FULL_INPUT_OVERLAPS_EXPANDED_RUN'
+        result = original_decode(raw, session)
+        if checksum == input_sha:
+            result = WeakDocument(result)
+            seen['saved_input'] = weakref.ref(result)
+        return result
+    def normalized(*args, **kwargs):
+        result = original_normalize(*args, **kwargs)
+        assert len(args[0]) == len(archive['items'])
+        seen['fresh_bundle'] = result[0]
+        return result
+    def validated(run, bundle, *args, **kwargs):
+        assert bundle is seen['fresh_bundle']
+        seen['run_checked'] = True
+        return original_validate(run, bundle, *args, **kwargs)
+    monkeypatch.setattr(bridge, '_decompress', decoded)
+    monkeypatch.setattr(bridge.MarketInput, 'model_validate',
+        classmethod(lambda cls, *a, **k: pytest.fail('DUPLICATE_SAVED_TYPED_INPUT')))
+    monkeypatch.setattr(provider_normalization, 'normalize_capture_with_report', normalized)
+    monkeypatch.setattr(bridge, '_validate_run', validated)
+    audit = authenticate(archive).audit()
+    assert seen['run_checked'] and audit['status'] == 'VERIFIED'
+    assert audit['input_hash'] == archive['run']['input_hash']
+    assert audit['verification_budget']['terminal_rereads'] == 1
+
+
+def test_retained_fresh_input_is_private_and_reused_after_cap_release(archive, service, monkeypatch):
+    import gc
+    import weakref
+    from stockfish_core.yaogu import provider_normalization
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    original = provider_normalization.normalize_capture_with_report
+    fresh = []
+    def normalized(*args, **kwargs):
+        result = original(*args, **kwargs)
+        fresh.append(result[0])
+        return result
+    monkeypatch.setattr(provider_normalization, 'normalize_capture_with_report', normalized)
+    session = bridge.ArchiveVerificationSession()
+    view = bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    assert set(view) == {'credential', 'run_metadata', 'input_metadata'}
+    assert len(fresh) == 1 and fresh[0]._history_store is None
+    json.dumps(view)  # No typed object or process-local proof is returned.
+    original_sessions = tuple(view['input_metadata']['sessions'])
+    view['input_metadata']['sessions'].clear()
+    before = (session.started, session.read_bytes, len(session.files), len(session.locators))
+    caps = [weakref.ref(cap) for cap in session.capabilities.values()]
+    session.release_cached_archives()
+    gc.collect()
+    assert caps and all(ref() is None for ref in caps)
+    assert before == (session.started, session.read_bytes, len(session.files), len(session.locators))
+    monkeypatch.setattr(bridge.MarketInput, 'model_validate_json',
+        classmethod(lambda cls, *a, **k: pytest.fail('RETAINED_INPUT_WAS_REPARSED')))
+    bundle = bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+    assert bundle is fresh[0] and tuple(map(str, bundle.sessions)) == original_sessions
+    assert bridge.digest_market_input(bundle) == cert['input_hash']
+    assert session.terminal()['borrowed_values'] == 1
+    assert session.terminal()['borrowed_values'] == 1
+
+
+@pytest.mark.parametrize('arguments', [{'run_id': 'TEST_FIXTURE_RUN', 'retain_input': True},
+    {'input_id': 'TEST_FIXTURE_INPUT', 'retain_input': 1},
+    {'input_id': 'TEST_FIXTURE_INPUT', 'retain_input': 'yes'}])
+def test_retained_input_requires_explicit_boolean_input_view(service, arguments):
+    with pytest.raises(ValueError, match='RETAIN_INPUT_REQUIRES_INPUT_VIEW'):
+        bridge.authenticated_bridge_view(service, session=bridge.ArchiveVerificationSession(), **arguments)
+
+
+def test_retained_input_cannot_upgrade_metadata_or_cap_cache_without_fresh_normalization(archive, service, monkeypatch):
+    from stockfish_core.yaogu import provider_normalization
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    original = provider_normalization.normalize_capture_with_report
+    calls = []
+    def normalized(*args, **kwargs):
+        calls.append(True)
+        return original(*args, **kwargs)
+    monkeypatch.setattr(provider_normalization, 'normalize_capture_with_report', normalized)
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    assert len(calls) == 1
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    assert len(calls) == 2
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    assert len(calls) == 2
+    assert {bridge._state(cap)['retained_input'] is not None for cap in session.capabilities.values()} == {False, True}
+    assert bridge.load_verified_bridge_input(service, cert['input_id'], session=session) is not None
+    session.terminal()
+
+
+@pytest.mark.parametrize('phase', ['before_load', 'after_load'])
+def test_retained_input_nested_mutation_is_rejected_before_use_or_at_atomic_terminal(archive, service, phase):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    proof = session._verified_views[(id(service.store), bridge.INPUT_BINDINGS, cert['input_id'])]
+    bundle = proof['retained_input']
+    if phase == 'after_load':
+        assert bridge.load_verified_bridge_input(service, cert['input_id'], session=session) is bundle
+    session.release_cached_archives()
+    bundle.receipts[0].parameters['TEST_FIXTURE_MUTATION'] = True
+    with pytest.raises(ValueError, match='BORROWED_VERIFIED_CONTENT_CHANGED'):
+        if phase == 'before_load':
+            bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+        else:
+            with service.store.transaction() as connection:
+                service.store._put_document(connection, 'TEST_FIXTURE_products', 'retained', {'TEST_FIXTURE': True})
+                session.terminal()
+    assert service.store.get_document('TEST_FIXTURE_products', 'retained') is None
+
+
+@pytest.mark.parametrize('phase', ['retain', 'load', 'terminal'])
+def test_retained_input_private_history_owner_is_rejected_even_with_unchanged_hash(archive, service, monkeypatch, phase):
+    from stockfish_core.yaogu import provider_normalization
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    original = provider_normalization.normalize_capture_with_report
+    if phase == 'retain':
+        def contaminated(*args, **kwargs):
+            bundle, report = original(*args, **kwargs)
+            before = bridge.digest_market_input(bundle)
+            bundle._history_store = object()
+            assert bridge.digest_market_input(bundle) == before
+            return bundle, report
+        monkeypatch.setattr(provider_normalization, 'normalize_capture_with_report', contaminated)
+    session = bridge.ArchiveVerificationSession()
+    if phase == 'retain':
+        with pytest.raises(ValueError, match='INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED'):
+            bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+        assert not session._verified_views and not session.capabilities
+        return
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    bundle = session._verified_views[(id(service.store), bridge.INPUT_BINDINGS, cert['input_id'])]['retained_input']
+    if phase == 'terminal':
+        assert bridge.load_verified_bridge_input(service, cert['input_id'], session=session) is bundle
+    before = bridge.digest_market_input(bundle)
+    bundle._history_store = object()
+    assert bridge.digest_market_input(bundle) == before
+    session.release_cached_archives()
+    with pytest.raises(ValueError, match='INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED'):
+        if phase == 'load':
+            bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+        else:
+            session.terminal()
+
+
+@pytest.mark.parametrize('field', ['history_artifact_ref', 'history_artifact_hash'])
+def test_retained_input_cannot_gain_historical_reference(archive, service, field):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    bundle = session._verified_views[(id(service.store), bridge.INPUT_BINDINGS, cert['input_id'])]['retained_input']
+    object.__setattr__(bundle, field, 'TEST_FIXTURE_UNTRUSTED_HISTORY')
+    with pytest.raises(ValueError, match='INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED'):
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+
+
+def test_retained_input_stays_bound_to_session_store_and_actual_database_bytes(archive, service, tmp_path):
+    from types import SimpleNamespace
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    view = bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    with pytest.raises(ValueError, match='GENUINE_SESSION_REQUIRED'):
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=view)
+    with pytest.raises(ValueError, match='VERIFIED_INPUT_VIEW_REQUIRED'):
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=bridge.ArchiveVerificationSession())
+    for store in (SQLiteStore(tmp_path / 'TEST_FIXTURE_OTHER.db'), SQLiteStore(service.store.path)):
+        with pytest.raises(ValueError, match='VERIFIED_INPUT_VIEW_REQUIRED'):
+            bridge.load_verified_bridge_input(SimpleNamespace(store=store), cert['input_id'], session=session)
+    saved = service.store.get_document('candidate_inputs', cert['input_id'])
+    saved['coverage_type'] = 'UNVERIFIABLE_AS_OF'
+    _offline_fixture_document(service, 'candidate_inputs', cert['input_id'], saved)
+    with pytest.raises(ValueError, match='BRIDGED_DATABASE_PARENT_CHANGED'):
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+
+
+@pytest.mark.parametrize('changed', ['binding', 'raw'])
+def test_retained_input_preserves_binding_and_original_terminal_guards(archive, service, changed):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    session.release_cached_archives()
+    if changed == 'binding':
+        binding = service.store.get_document(bridge.INPUT_BINDINGS, cert['input_id'])
+        binding['run_id'] = 'TEST_FIXTURE_OTHER_RUN'
+        _offline_fixture_document(service, bridge.INPUT_BINDINGS, cert['input_id'], binding)
+        with pytest.raises(ValueError, match='VERIFIED_VIEW_BINDING_CHANGED'):
+            bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+    else:
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+        path = Path(archive['items'][0]['raw']['path'])
+        path.write_bytes(path.read_bytes() + b' ')
+        with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+            with service.store.transaction() as connection:
+                service.store._put_document(connection, 'TEST_FIXTURE_products', 'late_raw', {'TEST_FIXTURE': True})
+                session.terminal()
+        assert service.store.get_document('TEST_FIXTURE_products', 'late_raw') is None
+
+
+@pytest.mark.parametrize('phase', ['load', 'terminal'])
+def test_retained_input_cancellation_preserves_original_exception_and_atomicity(archive, service, phase):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    if phase == 'terminal':
+        bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+    session.release_cached_archives()
+    failure = KeyboardInterrupt('TEST_FIXTURE_RETAINED_INPUT_CANCELLED')
+    def cancelled():
+        raise failure
+    session.checkpoint = cancelled
+    with pytest.raises(KeyboardInterrupt) as caught:
+        with service.store.transaction() as connection:
+            service.store._put_document(connection, 'TEST_FIXTURE_products', 'cancelled', {'TEST_FIXTURE': True})
+            if phase == 'load':
+                bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
+            else:
+                session.terminal()
+    assert caught.value is failure
+    assert service.store.get_document('TEST_FIXTURE_products', 'cancelled') is None
+
+
+def test_private_run_metadata_does_not_rehash_or_reexpand_but_checks_database(archive, service, monkeypatch):
+    cap = authenticate(archive)
+    cert = bridge.commit_bridge(service, cap)
+    assert bridge._state(cap)['run'] is None
+    session = cap._session
+    original = bridge._stored_matches
+    checked = []
+    def stored(connection, namespace, key, expected, verification=None):
+        checked.append((namespace, key))
+        return original(connection, namespace, key, expected, verification)
+    monkeypatch.setattr(bridge, '_stored_matches', stored)
+    monkeypatch.setattr(bridge, '_verified_run', lambda *a: pytest.fail('METADATA_REEXPANDED_OR_REHASHED_RUN'))
+    view = bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    assert view['run_metadata'] == {key: archive['run'].get(key) for key in bridge._RUN_METADATA_FIELDS}
+    assert ('strategy_experiment_runs', cert['run_id']) in checked
+    assert ('candidate_inputs', cert['input_id']) in checked
+    assert bridge._state(cap)['run'] is None
+    view['run_metadata']['observation_date'] = '1900-01-01'
+    audit = cap.audit()
+    audit['observation_date'] = '1900-01-01'
+    again = bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    assert again['run_metadata']['observation_date'] == archive['run']['observation_date']
+    assert bridge._state(cap)['run_metadata']['observation_date'] == archive['run']['observation_date']
+    session.terminal()
+
+
+def test_private_run_metadata_is_minted_after_all_original_checks(archive, monkeypatch):
+    original = bridge._validate_run
+    def invalid(*args, **kwargs):
+        original(*args, **kwargs)
+        raise ValueError('TEST_FIXTURE_LAST_RUN_CHECK_FAILED')
+    monkeypatch.setattr(bridge, '_validate_run', invalid)
+    session = bridge.ArchiveVerificationSession()
+    with pytest.raises(ValueError, match='LAST_RUN_CHECK_FAILED'):
+        authenticate(archive, session=session)
+    assert not session.capabilities and not session._verified_views
+
+
+@pytest.mark.parametrize('changed', ['run', 'binding', 'raw'])
+def test_private_run_metadata_never_authorizes_replaced_database_or_originals(archive, service, changed):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    session.release_cached_archives()
+    if changed == 'run':
+        saved = service.store.get_document('strategy_experiment_runs', cert['run_id'])
+        saved['observation_date'] = '1900-01-01'
+        _offline_fixture_document(service, 'strategy_experiment_runs', cert['run_id'], saved)
+        with pytest.raises(ValueError, match='BRIDGED_DATABASE_PARENT_CHANGED'):
+            bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    elif changed == 'binding':
+        saved = service.store.get_document(bridge.RUN_BINDINGS, cert['run_id'])
+        saved['input_id'] = 'TEST_FIXTURE_OTHER_INPUT'
+        _offline_fixture_document(service, bridge.RUN_BINDINGS, cert['run_id'], saved)
+        with pytest.raises(ValueError, match='VERIFIED_VIEW_BINDING_CHANGED'):
+            bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    else:
+        path = Path(archive['items'][0]['raw']['path'])
+        path.write_bytes(path.read_bytes() + b' ')
+        with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+            session.terminal()
+
+
+def test_private_run_metadata_retention_upgrade_keeps_existing_borrow_guard(archive, service):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    view = bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session, borrow_run=True)
+    borrowed = view['run']
+    assert session._borrowed_values[id(borrowed)][0] is borrowed
+    bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, retain_input=True)
+    session.release_cached_archives()
+    assert session._borrowed_values[id(borrowed)][0] is borrowed
+    borrowed['results'][bridge.STRATEGY]['counts']['TEST_FIXTURE_MUTATION'] = True
+    # Metadata still describes the original; it cannot make the mutation pass.
+    metadata = bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    assert metadata['run_metadata']['content_hash'] == cert['signal_content_hash']
+    with pytest.raises(ValueError, match='BORROWED_VERIFIED_CONTENT_CHANGED'):
+        session.terminal()
+
+
+def test_private_run_metadata_does_not_skip_new_borrow_complete_hash(archive, service):
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    session = bridge.ArchiveVerificationSession()
+    bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session)
+    # The private capability's expanded object is not the source of metadata.
+    cap = next(iter(session.capabilities.values()))
+    bridge._state(cap)['run']['results'][bridge.STRATEGY]['counts']['TEST_FIXTURE_MUTATION'] = 1
+    with pytest.raises(ValueError, match='VERIFIED_CAPABILITY_CONTENT_CHANGED|BORROWED_VERIFIED_CONTENT_CHANGED'):
+        # Use an uncached view binding so that the original _verified_run path
+        # must still validate any expanded object before it can be borrowed.
+        del session._verified_views[(id(service.store), bridge.RUN_BINDINGS, cert['run_id'])]
+        bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session, borrow_run=True)
+
+
+def _typed_adapter_fixture(count=129):
+    """Small explicit TEST_FIXTURE, with no source capability or real files."""
+    from datetime import date
+    from stockfish_core.yaogu.contracts import MarketInput, UniverseSnapshot, SecurityRecord, DailyBar
+    day = date(2026, 10, 16)
+    now = datetime(2026, 10, 16, 9, tzinfo=timezone.utc)
+    clocks = dict(event_time=now, source_published_at=now, first_seen_at=now, ingested_at=now)
+    securities = tuple(SecurityRecord(instrument_id='TEST_FIXTURE_' + str(i), exchange='SSE', board='MAIN',
+        security_type='A_COMMON', listed_on=date(2010, 1, 1), effective_from=day, st=False, suspended=False,
+        name='中文😀\\\"\x00\n\r\t\u2028\u2029', **clocks) for i in range(count))
+    bars = tuple(DailyBar(instrument_id='TEST_FIXTURE_' + str(i), session=day,
+        close=Decimal('10.0010'), turnover_fraction=-0.0, **clocks) for i in range(count))
+    return MarketInput(observation_date=day, sessions=(day,), coverage_type='TEST_FIXTURE', bars=bars,
+        universe=UniverseSnapshot(snapshot_id='TEST_FIXTURE', securities=securities, complete=True, **clocks),
+        funds=({'TEST_FIXTURE': {'price': '10.0', 'unicode': '中文😀\x00\n'}},))
+
+
+@pytest.mark.parametrize('count', [0, 1, 127, 128, 129, 257])
+def test_typed_adapter_batch_boundaries_match_frozen_canonical_bytes(count, monkeypatch):
+    from pydantic import TypeAdapter
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(count)
+    canonical = canonical_json(bundle.model_dump(mode='json')).encode('utf-8')
+    expected = reference(bundle)
+    assert expected == hashlib.sha256(canonical).hexdigest()
+    chunks = list(bridge._typed_canonical_chunks(bundle))
+    assert b''.join(chunks) == canonical and all(len(chunk) <= 1024**2 for chunk in chunks)
+    calls = []
+    original = TypeAdapter.dump_python
+    def dump(adapter, values, *args, **kwargs):
+        calls.append(len(values))
+        assert 1 <= len(values) <= 128 and kwargs.get('mode') == 'json'
+        return original(adapter, values, *args, **kwargs)
+    monkeypatch.setattr(TypeAdapter, 'dump_python', dump)
+    assert bridge.digest_market_input(bundle) == expected
+    assert calls == ([128] * (count // 128) + ([count % 128] if count % 128 else [])) * 2
+
+
+def test_typed_adapter_exact_rows_do_not_dump_python_or_expand_parent(monkeypatch):
+    from stockfish_core.yaogu.contracts import MarketInput, UniverseSnapshot, DailyBar, SecurityRecord
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture()
+    expected = reference(bundle)
+    input_dump, universe_dump = MarketInput.model_dump, UniverseSnapshot.model_dump
+    def input_envelope(value, *args, **kwargs):
+        assert kwargs.get('exclude') == {'bars', 'universe'}
+        return input_dump(value, *args, **kwargs)
+    def universe_envelope(value, *args, **kwargs):
+        assert kwargs.get('exclude') == {'securities'}
+        return universe_dump(value, *args, **kwargs)
+    monkeypatch.setattr(MarketInput, 'model_dump', input_envelope)
+    monkeypatch.setattr(UniverseSnapshot, 'model_dump', universe_envelope)
+    monkeypatch.setattr(DailyBar, 'model_dump', lambda *a, **k: pytest.fail('UNNECESSARY_PYTHON_BAR_DUMP'))
+    monkeypatch.setattr(SecurityRecord, 'model_dump', lambda *a, **k: pytest.fail('UNNECESSARY_PYTHON_SECURITY_DUMP'))
+    assert bridge.digest_market_input(bundle) == expected
+
+
+def test_typed_adapter_large_single_row_bounds_utf8_chunks_not_row_allocation():
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(1)
+    security = bundle.universe.securities[0].model_copy(update={'name': 'TEST_FIXTURE_' + '😀' * 300000})
+    bundle = bundle.model_copy(update={'universe': bundle.universe.model_copy(update={'securities': (security,)})})
+    chunks = list(bridge._typed_canonical_chunks(bundle))
+    expected = canonical_json(bundle.model_dump(mode='json')).encode()
+    assert len(expected) > 1024**2 and b''.join(chunks) == expected
+    assert max(map(len, chunks)) <= 1024**2
+    assert bridge.digest_market_input(bundle) == reference(bundle)
+
+
+@pytest.mark.parametrize('turnover', [-0.0, 5e-324, math.nextafter(1.0, 2.0), 1e308])
+def test_typed_adapter_precision_offsets_and_control_characters(turnover):
+    from datetime import timedelta
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(1)
+    row = bundle.bars[0].model_copy(update={
+        'event_time': datetime(2026, 10, 16, 15, tzinfo=timezone(timedelta(hours=8))),
+        'close': Decimal('1234567890123.000000000000001'), 'amount_cny': Decimal('1E+25'),
+        'volume_shares': None, 'turnover_fraction': turnover, 'comparable_basis': 'TEST_FIXTURE_中文😀\x00\n'})
+    changed = bundle.model_copy(update={'bars': (row,)})
+    assert bridge.digest_market_input(changed) == reference(changed)
+
+
+@pytest.mark.parametrize('number', [float('nan'), float('inf'), -float('inf')])
+@pytest.mark.parametrize('location', ['envelope', 'row'])
+def test_typed_adapter_nonfinite_retains_original_typed_behavior(number, location):
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(1)
+    if location == 'envelope':
+        bundle.funds[0]['TEST_FIXTURE']['price'] = number
+        assert bundle.model_dump(mode='json')['funds'][0]['TEST_FIXTURE']['price'] is None
+        assert bridge.digest_market_input(bundle) == reference(bundle)
+    else:
+        bundle = bundle.model_copy(update={'bars': (bundle.bars[0].model_copy(update={'turnover_fraction': number}),)})
+        with pytest.raises(ValueError):
+            reference(bundle)
+        with pytest.raises(ValueError):
+            bridge.digest_market_input(bundle)
+    # This preserves an already-typed serialization rule. Raw archive ingress
+    # continues to reject nonfinite tokens before any typed object is accepted.
+    with pytest.raises(ValueError):
+        bridge._json(b'{"TEST_FIXTURE":NaN}')
+
+
+def test_typed_adapter_row_subclasses_preserve_frozen_extra_field_dump():
+    from stockfish_core.yaogu.contracts import DailyBar, SecurityRecord
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    class ExtraBar(DailyBar):
+        test_fixture_extra: str = 'TEST_FIXTURE_BAR'
+    class ExtraSecurity(SecurityRecord):
+        test_fixture_extra: str = 'TEST_FIXTURE_SECURITY'
+    bundle = _typed_adapter_fixture(129)
+    bar = ExtraBar.model_validate(bundle.bars[-1].model_dump())
+    security = ExtraSecurity.model_validate(bundle.universe.securities[-1].model_dump())
+    changed = bundle.model_copy(update={'bars': bundle.bars[:-1] + (bar,), 'universe':
+        bundle.universe.model_copy(update={'securities': bundle.universe.securities[:-1] + (security,)})})
+    expected = reference(changed)
+    assert expected != hashlib.sha256(canonical_json(changed.model_dump(mode='json')).encode()).hexdigest()
+    assert bridge.digest_market_input(changed) == expected
+
+
+@pytest.mark.parametrize('kind', ['input_subclass', 'universe_subclass', 'mixed_dict_row'])
+def test_typed_adapter_nonexact_types_use_original_semantics(kind):
+    from stockfish_core.yaogu.contracts import MarketInput, UniverseSnapshot
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    class ExtraInput(MarketInput):
+        test_fixture_extra: str = 'TEST_FIXTURE_INPUT'
+    class ExtraUniverse(UniverseSnapshot):
+        test_fixture_extra: str = 'TEST_FIXTURE_UNIVERSE'
+    bundle = _typed_adapter_fixture(129)
+    if kind == 'input_subclass':
+        bundle = ExtraInput.model_validate(bundle.model_dump())
+    elif kind == 'universe_subclass':
+        bundle = bundle.model_copy(update={'universe': ExtraUniverse.model_validate(bundle.universe.model_dump())})
+    else:
+        bundle = bundle.model_copy(update={'bars': bundle.bars[:-1] + ({'TEST_FIXTURE_RAW_ROW': Decimal('1.0010')},)})
+    assert bridge.digest_market_input(bundle) == reference(bundle)
+
+
+@pytest.mark.parametrize('kind', ['missing_required', 'unknown_extra', 'row_unserializable',
+                                  'envelope_unserializable', 'raw_row_nonfinite', 'invalid_universe'])
+def test_typed_adapter_constructed_anomalies_match_reference_result_or_exception(kind):
+    from stockfish_core.yaogu.contracts import DailyBar
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(1)
+    if kind == 'missing_required':
+        bundle = bundle.model_copy(update={'bars': (DailyBar.model_construct(close=Decimal('10')), )})
+    elif kind == 'unknown_extra':
+        row = DailyBar.model_construct(**dict(bundle.bars[0].model_dump(), TEST_FIXTURE_UNDECLARED='value'))
+        bundle = bundle.model_copy(update={'bars': (row,)})
+    elif kind == 'row_unserializable':
+        bundle = bundle.model_copy(update={'bars': (bundle.bars[0].model_copy(update={'close': object()}),)})
+    elif kind == 'envelope_unserializable':
+        bundle = bundle.model_copy(update={'funds': ({'TEST_FIXTURE': object()},)})
+    elif kind == 'raw_row_nonfinite':
+        bundle = bundle.model_copy(update={'bars': ({'TEST_FIXTURE': float('nan')},)})
+    else:
+        bundle = bundle.model_copy(update={'universe': None})
+    try:
+        expected = reference(bundle)
+    except Exception as expected_error:
+        with pytest.raises(type(expected_error)):
+            bridge.digest_market_input(bundle)
+    else:
+        assert bridge.digest_market_input(bundle) == expected
+
+
+def test_typed_adapter_raw_validation_still_rejects_extra_and_missing_fields():
+    from pydantic import ValidationError
+    from stockfish_core.yaogu.contracts import DailyBar, SecurityRecord
+    bundle = _typed_adapter_fixture(1)
+    for model, row in ((DailyBar, bundle.bars[0]), (SecurityRecord, bundle.universe.securities[0])):
+        for malformed in (dict(row.model_dump(), TEST_FIXTURE_EXTRA=True),
+                          {k: v for k, v in row.model_dump().items() if k != 'instrument_id'}):
+            with pytest.raises(ValidationError):
+                model.model_validate(malformed)
+
+
+@pytest.mark.parametrize('kind', ['fast', 'fallback'])
+def test_typed_adapter_initial_cancellation_keeps_original_exception(kind):
+    from stockfish_core.yaogu.contracts import MarketInput
+    class ExtraInput(MarketInput):
+        test_fixture_extra: str = 'TEST_FIXTURE_INPUT'
+    bundle = _typed_adapter_fixture(129)
+    if kind == 'fallback':
+        bundle = ExtraInput.model_validate(bundle.model_dump())
+    failure = KeyboardInterrupt('TEST_FIXTURE_TYPED_CANCELLED')
+    def cancel():
+        raise failure
+    with pytest.raises(KeyboardInterrupt) as caught:
+        bridge.digest_market_input(bundle, checkpoint=cancel)
+    assert caught.value is failure
+
+
+def test_typed_adapter_cancellation_after_a_batch_propagates_before_next_batch(monkeypatch):
+    from pydantic import TypeAdapter
+    original = TypeAdapter.dump_python
+    batches = []
+    failure = RuntimeError('TEST_FIXTURE_TYPED_BATCH_CANCELLED')
+    def dump(adapter, values, *args, **kwargs):
+        result = original(adapter, values, *args, **kwargs)
+        batches.append(len(values))
+        return result
+    def checkpoint():
+        if batches:
+            raise failure
+    monkeypatch.setattr(TypeAdapter, 'dump_python', dump)
+    with pytest.raises(RuntimeError) as caught:
+        bridge.digest_market_input(_typed_adapter_fixture(257), checkpoint=checkpoint)
+    assert caught.value is failure and batches == [128]
+
+
+@pytest.mark.parametrize('change', ['nested', 'late_last_bar', 'private_owner', 'history_ref'])
+def test_typed_adapter_late_borrowed_change_still_rolls_back_terminal(service, change):
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(129)
+    expected = reference(bundle)
+    session = bridge.ArchiveVerificationSession()
+    # Explicit TEST_FIXTURE borrowed-value unit seam, never a minted archive
+    # proof; original integration cases above cover the actual loader path.
+    session._borrowed_values[id(bundle)] = (bundle, expected, True)
+    assert session.terminal()['borrowed_values'] == 1
+    session.release_cached_archives()
+    if change in ('nested', 'late_last_bar'):
+        if change == 'nested':
+            bundle.funds[0]['TEST_FIXTURE']['price'] = 'changed'
+        else:
+            object.__setattr__(bundle.bars[-1], 'close', Decimal('11.0010'))
+        reason = 'BORROWED_VERIFIED_CONTENT_CHANGED'
+    elif change == 'private_owner':
+        bundle._history_store = object()
+        assert bridge.digest_market_input(bundle) == expected
+        reason = 'INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED'
+    else:
+        object.__setattr__(bundle, 'history_artifact_ref', 'TEST_FIXTURE_LATE_REF')
+        reason = 'INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED'
+    with pytest.raises(ValueError, match=reason):
+        with service.store.transaction() as con:
+            service.store._put_document(con, 'TEST_FIXTURE_products', 'typed-late', {'TEST_FIXTURE': True})
+            session.terminal()
+    assert service.store.get_document('TEST_FIXTURE_products', 'typed-late') is None
+
+
+def test_typed_adapter_terminal_batch_cancellation_rolls_back(service, monkeypatch):
+    from pydantic import TypeAdapter
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    bundle = _typed_adapter_fixture(129)
+    expected = reference(bundle)
+    original = TypeAdapter.dump_python
+    batches = []
+    failure = KeyboardInterrupt('TEST_FIXTURE_TERMINAL_TYPED_BATCH_CANCELLED')
+    def dump(adapter, values, *args, **kwargs):
+        result = original(adapter, values, *args, **kwargs)
+        batches.append(len(values))
+        return result
+    def checkpoint():
+        if batches:
+            raise failure
+    session = bridge.ArchiveVerificationSession(checkpoint=checkpoint)
+    session._borrowed_values[id(bundle)] = (bundle, expected, True)
+    monkeypatch.setattr(TypeAdapter, 'dump_python', dump)
+    with pytest.raises(KeyboardInterrupt) as caught:
+        with service.store.transaction() as con:
+            service.store._put_document(con, 'TEST_FIXTURE_products', 'typed-cancelled', {'TEST_FIXTURE': True})
+            session.terminal()
+    assert caught.value is failure and batches == [128]
+    assert service.store.get_document('TEST_FIXTURE_products', 'typed-cancelled') is None
+
+
+def _typed_guard_side_effect_fixture(field, kind):
+    """Bypass validation only to exercise an already-borrowed object's guard."""
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    base = _typed_adapter_fixture(2)
+    expected = reference(base)
+    rows = base.bars if field == 'bars' else base.universe.securities
+    value_field = 'close' if field == 'bars' else 'name'
+    original_value = getattr(rows[0], value_field)
+    changed_value = Decimal('20') if field == 'bars' else 'TEST_FIXTURE_CHANGED_NAME'
+    if kind == 'row_subclass':
+        model_type = type(rows[0])
+        saved = {}
+        class SideEffectRow(model_type):
+            def model_dump(self, *args, **kwargs):
+                value = super().model_dump(*args, **kwargs)
+                if self.instrument_id == rows[0].instrument_id:
+                    saved['original'] = value[value_field]
+                    value[value_field] = str(changed_value)
+                    saved['first'] = value
+                else:
+                    # A batch that dumps both rows before encoding either one
+                    # would erase the first row's changed canonical content.
+                    saved['first'][value_field] = saved['original']
+                return value
+        replacement = tuple(SideEffectRow.model_validate(row.model_dump()) for row in rows)
+    else:
+        def values():
+            first = rows[0].model_copy(update={value_field: changed_value})
+            yield first
+            object.__setattr__(first, value_field, original_value)
+            yield rows[1]
+        class RepeatedRows:
+            def __iter__(self):
+                return values()
+        replacement = values() if kind == 'generator' else RepeatedRows()
+    if field == 'bars':
+        object.__setattr__(base, 'bars', replacement)
+    else:
+        object.__setattr__(base.universe, 'securities', replacement)
+    return expected, base
+
+
+@pytest.mark.parametrize('field', ['bars', 'securities'])
+@pytest.mark.parametrize('kind', ['generator', 'repeatable_iterator', 'row_subclass'])
+def test_typed_adapter_side_effect_fallback_keeps_reference_and_rejects_late_guard(field, kind):
+    from stockfish_core.yaogu.history_artifacts import digest_market_input as reference
+    expected, original_order = _typed_guard_side_effect_fixture(field, kind)
+    original_hash = reference(original_order)
+    assert original_hash != expected
+    expected_again, changed = _typed_guard_side_effect_fixture(field, kind)
+    assert expected_again == expected
+    assert bridge.digest_market_input(changed) == original_hash
+    _, chunks_input = _typed_guard_side_effect_fixture(field, kind)
+    assert hashlib.sha256(b''.join(bridge._typed_canonical_chunks(chunks_input))).hexdigest() == original_hash
+    expected_again, borrowed = _typed_guard_side_effect_fixture(field, kind)
+    session = bridge.ArchiveVerificationSession()
+    # This unit seam holds the original canonical identity of a normal tuple.
+    # No archive capability or provenance is minted by the malformed fixture.
+    session._borrowed_values[id(borrowed)] = (borrowed, expected_again, True)
+    for _ in range(2):
+        with pytest.raises(ValueError, match='BORROWED_VERIFIED_CONTENT_CHANGED'):
+            session.terminal()
+    assert session.terminal_count == 0
+
+
+def test_typed_adapter_side_effect_assignment_is_frozen_but_guard_must_handle_bypass():
+    from pydantic import ValidationError
+    bundle = _typed_adapter_fixture(2)
+    with pytest.raises(ValidationError) as caught:
+        bundle.bars = iter(bundle.bars)
+    assert caught.value.errors()[0]['type'] == 'frozen_instance'
+    with pytest.raises(ValidationError) as caught:
+        bundle.universe.securities = iter(bundle.universe.securities)
+    assert caught.value.errors()[0]['type'] == 'frozen_instance'

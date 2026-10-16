@@ -2009,8 +2009,17 @@ class CandidateService(DailyResearchMixin):
             strategy_id = strategy_id or 'PV_OBSERVATION_V1'
             original_result, items, ranked, _, focus_ids = self._strategy_export_rows(run, strategy_id, selection)
             source_content_hash = run.get('content_hash') or digest(run)
-            run = copy.deepcopy(run)
-            result = copy.deepcopy(original_result)
+            if strategy_id in SHORT_HORIZON_IDS:
+                # Preserve key positions and deep-copy isolation, but do not
+                # copy full pools or baselines that this export replaces below.
+                # The selected rows are still copied once before serialization.
+                run = copy.deepcopy({key: None if key == 'results' else value
+                    for key, value in run.items() if key not in {'evaluation_baselines', 'content_hash'}})
+                result = copy.deepcopy({key: None if key == 'items' else value
+                    for key, value in original_result.items() if key not in {'diagnostics', 'coverage_diagnostics'}})
+            else:
+                run = copy.deepcopy(run)
+                result = copy.deepcopy(original_result)
             if strategy_id in SHORT_HORIZON_IDS:
                 # Full eligible rows already carry every diagnostic in this view.
                 # Also normalize earlier immutable R1 runs that embedded a second

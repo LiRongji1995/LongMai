@@ -1,8 +1,12 @@
 # 当前状态与待办
 
-更新：2026年10月16日（上海时间）。本文只保留当前能力、缺口和下一步，不再累加逐轮日志。详细命令、身份、失败及旧检查结果可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/CURRENT_STATUS.md)；必要私有原件和退休索引保留。
+更新：2026年10月17日（上海时间；本轮观察日为10月16日）。本文只保留当前能力、缺口和下一步，不再累加逐轮日志。详细命令、身份、失败及旧检查结果可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/CURRENT_STATUS.md)；必要私有原件和退休索引保留。
 
 ## 当前能力
+
+本轮[当日可信输入、真实每日验收与性能改进](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)已完成10月16日观察、10月19日目标的 standalone 采集，来源与代码终验通过，退出 2、封存为 `COMPLETED_WITH_UNKNOWNS`，新闻 UNKNOWN 和题材 PARTIAL 保留。工程已补齐事务末终验、typed 输入复用及每批 128 行的 TypeAdapter 编码，并按独立反例收紧精确类型与容器边界；9 个 normalizer 依赖文件原字节保持。本轮交付源码已通过最终 275 项组合回归；详细失败与资源记录见主报告。
+
+最终真实验收的旧/当日两份归档导入通过，但每日 worker 失败；四份父文档不变，无新增后验文档或完成账本。同源码显式诊断重试确认在认证父文档时触发原 300 秒时间预算，尚未完成全部认证、借用和评估；诊断退出 0 仅表示记录成功，不反推原正式失败的精确内部原因。幂等、产品回读和独立 H1 审计均未运行，当日每日后验尚未完成，共享 300 秒/2 GiB 预算内的闭环资源瓶颈仍待解决。生产服务、活动库和调度未切换。
 
 继续推进[独立运行环境与 R2 每日闭环](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)：两个新建 macOS x86_64 / Python 3.12 环境的 58 包一致，`rules/daily/review` 及隔离应用验收通过。新增完整 standalone 归档鉴证、原 run/input 原样接入服务库和显式每日后验命令；精确来源、当日资料、全池全期限与未知均有独立校验。详细测试、真实归档验收与剩余缺口以该记录为准。原环境、活动库、调度和生产服务未切换；连续跨日稳定性和策略优势仍未成立。
 

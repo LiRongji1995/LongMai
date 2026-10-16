@@ -90,18 +90,28 @@ class ShortHorizonDailyClosure:
             raise ValueError('SHORT_HORIZON_CLOSURE_RUN_LIMIT_EXCEEDED_NO_TRUNCATION')
         return values
 
-    def _authenticated(self, run_ids, input_id, session, checkpoint=lambda: None, *, borrow_run=False):
+    def _authenticated(self, run_ids, input_id, session, checkpoint=lambda: None, *, borrow_run=False,
+                       retain_input=False):
         if not isinstance(input_id, str) or not input_id:
             raise ValueError('SHORT_HORIZON_REGISTERED_OUTCOME_INPUT_ID_REQUIRED')
         bridge = _bridge_module()
-        input_view = bridge.authenticated_bridge_view(self.service, input_id=input_id, session=session)
-        input_certificate = input_view['credential']
-        checkpoint()
-        if input_certificate.get('input_id') != input_id or not input_certificate.get('bridge_id'):
-            raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CERTIFICATE_MISMATCH')
-        bundle = _input_calendar(input_view, input_id)
-        session.release_cached_archives()
-        runs, credentials = [], []
+        def authenticate_input():
+            view = bridge.authenticated_bridge_view(self.service, input_id=input_id, session=session,
+                **({'retain_input': True} if retain_input else {}))
+            certificate = view['credential']
+            checkpoint()
+            if certificate.get('input_id') != input_id or not certificate.get('bridge_id'):
+                raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CERTIFICATE_MISMATCH')
+            calendar = _input_calendar(view, input_id)
+            session.release_cached_archives()
+            return certificate, calendar
+
+        # Retain only the last archive's freshly reconstructed typed input.
+        # Earlier run authentication must not overlap that large object. Plans
+        # keep their metadata-only path and never request typed retention.
+        if not retain_input:
+            input_certificate, bundle = authenticate_input()
+        runs, credentials, originals = [], [], []
         for run_id in run_ids:
             checkpoint()
             view = bridge.authenticated_bridge_view(self.service, run_id=run_id, session=session,
@@ -114,7 +124,13 @@ class ShortHorizonDailyClosure:
                     or certificate.get('signal_content_hash') != run.get('content_hash')
                     or certificate.get('input_id') != run.get('input_id')):
                 raise ValueError('SHORT_HORIZON_CLOSURE_TRUSTED_FROZEN_R2_REQUIRED')
-            original = _input_calendar(view, run['input_id'])
+            originals.append(_input_calendar(view, run['input_id']))
+            runs.append(run)
+            credentials.append(_credential_identity(certificate))
+            session.release_cached_archives()
+        if retain_input:
+            input_certificate, bundle = authenticate_input()
+        for run, original in zip(runs, originals):
             signal_day = date.fromisoformat(run['observation_date'])
             if signal_day in bundle.sessions and original.sessions:
                 # Daily archives retain rolling windows. Only their shared
@@ -124,9 +140,6 @@ class ShortHorizonDailyClosure:
                 current_prefix = tuple(day for day in bundle.sessions if start <= day <= signal_day)
                 if current_prefix != original_prefix:
                     raise ValueError('SHORT_HORIZON_SIGNAL_CALENDAR_PREFIX_CONFLICT')
-            runs.append(run)
-            credentials.append(_credential_identity(certificate))
-            session.release_cached_archives()
         return runs, bundle, {'runs': credentials, 'outcome_input': _credential_identity(input_certificate)}
 
     @staticmethod
@@ -436,7 +449,7 @@ class ShortHorizonDailyClosure:
             raise ValueError('SHORT_HORIZON_CLOSURE_FROZEN_REQUEST_INVALID')
         verification = _bridge_module().ArchiveVerificationSession(checkpoint=ctx.check_cancelled)
         runs, calendar, bindings = self._authenticated(request['run_ids'], request['input_id'], verification,
-                                                     checkpoint=ctx.check_cancelled, borrow_run=True)
+                                                     checkpoint=ctx.check_cancelled, retain_input=True)
         if bindings != request['bindings']:
             raise ValueError('SHORT_HORIZON_CLOSURE_BRIDGE_IDENTITY_CHANGED')
         if calendar.observation_date != session_day or not calendar.sessions or max(calendar.sessions) != session_day:
@@ -446,11 +459,23 @@ class ShortHorizonDailyClosure:
             raise ValueError('SHORT_HORIZON_EVALUATION_PRECEDES_SIGNAL')
         plans = self._schedule(runs, calendar, evaluated)
         ctx.check_cancelled()
-        # Full source authentication must finish before this large typed input
-        # overlaps the borrowed frozen runs. No second DB run/input decode.
+        # Authenticate every archive before loading the typed input. Delay the
+        # full run borrows until after its parser's temporary buffers are gone;
+        # the same session keeps the original source and store-bound proofs.
         bundle = _bridge_module().load_verified_bridge_input(self.service, request['input_id'], session=verification)
         if bundle.observation_date != calendar.observation_date or bundle.sessions != calendar.sessions:
             raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CHANGED_AFTER_AUTHENTICATION')
+        borrowed = []
+        for metadata, credential in zip(runs, bindings['runs']):
+            ctx.check_cancelled()
+            view = _bridge_module().authenticated_bridge_view(self.service, run_id=metadata['run_id'],
+                session=verification, borrow_run=True)
+            run = view['run']
+            if (view['run_metadata'] != metadata or _credential_identity(view['credential']) != credential
+                    or {key: run.get(key) for key in metadata} != metadata):
+                raise ValueError('SHORT_HORIZON_CLOSURE_BORROWED_RUN_IDENTITY_CHANGED')
+            borrowed.append(run)
+        runs = borrowed
         ctx.check_cancelled()
         products, records = [], []
         for run, planned in zip(runs, plans):
@@ -503,6 +528,10 @@ class ShortHorizonDailyClosure:
                         continue
                     self.service.store._put_document(connection, NAMESPACES[kind], revision_id, product)
             self.service.store._put_document(connection, LEDGERS, ctx.job_id, ledger)
+            # The ledger retains the successful prepublication audit snapshot.
+            # Recheck every original and borrowed value after all domain writes,
+            # while failure can still roll back the ledger and the whole batch.
+            verification.terminal()
 
         return ctx.complete({'schema_version': VERSION, 'ledger_id': ctx.job_id, 'status': ledger['status'],
                              'run_count': len(runs), 'revision_ids': [result['outcomes']['revision_id'] for result in products],

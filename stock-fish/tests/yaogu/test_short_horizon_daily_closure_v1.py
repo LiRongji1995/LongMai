@@ -83,7 +83,7 @@ def setup(tmp_path, monkeypatch):
         return {**require_input(svc, saved['input_id'], session=session), 'run_id': identifier,
                 'bridge_id': 'TEST_FIXTURE_RUN_CERT_' + identifier, 'signal_content_hash': saved['content_hash']}
 
-    def authenticated_view(svc, *, run_id=None, input_id=None, session, borrow_run=False):
+    def authenticated_view(svc, *, run_id=None, input_id=None, session, borrow_run=False, retain_input=False):
         session.checkpoint()
         saved = svc.store.get_document('strategy_experiment_runs', run_id) if run_id else None
         certificate = (require_run(svc, run_id, session=session) if run_id else
@@ -91,7 +91,11 @@ def setup(tmp_path, monkeypatch):
         identifier = certificate['input_id']
         original = svc.store.get_document('candidate_inputs', identifier)
         session.inputs.add(identifier)
-        verification['events'].append(('authenticate_run' if run_id else 'authenticate_input', id(session), run_id or input_id))
+        verification['events'].append(('borrow_run' if borrow_run else
+            'authenticate_run' if run_id else 'authenticate_input', id(session), run_id or input_id))
+        if retain_input:
+            assert input_id is not None and not borrow_run
+            verification['events'].append(('retain_input', id(session), input_id))
         result = {'credential': certificate, 'input_metadata': {
             'input_id': identifier, 'input_hash': certificate['input_hash'],
             'observation_date': original['observation_date'], 'sessions': original['sessions']},
@@ -137,6 +141,20 @@ def rows(fixture, namespace):
     return fixture.store.documents_for_run(namespace, fixture.run['run_id'])
 
 
+def capture_worker_errors(fixture, monkeypatch):
+    errors, actual = [], fixture.cycle._worker
+
+    def observed(ctx):
+        try:
+            return actual(ctx)
+        except ValueError as exc:
+            errors.append(str(exc))
+            raise
+
+    monkeypatch.setattr(fixture.cycle, '_worker', observed)
+    return errors
+
+
 def test_same_day_input_is_idempotent_and_first_cutoff_frozen(setup):
     original_bytes = setup.store.get_document_bytes('strategy_experiment_runs', setup.run['run_id'])
     first = setup.cycle.submit([setup.run['run_id']], setup.input_id)
@@ -155,7 +173,8 @@ def test_same_day_input_is_idempotent_and_first_cutoff_frozen(setup):
     assert [e['state'] for e in report['events']] == ['QUEUED', 'RUNNING', 'SUCCEEDED']
     assert all(len(rows(setup, namespace)) == 1 for namespace in NAMESPACES.values())
     assert setup.store.get_document_bytes('strategy_experiment_runs', setup.run['run_id']) == original_bytes
-    assert setup.verification['created'] == setup.verification['terminal'] == 3
+    assert setup.verification['created'] == 3
+    assert setup.verification['terminal'] == 4
 
 
 @pytest.mark.parametrize('clock,status', [
@@ -288,6 +307,7 @@ def test_plan_and_pending_use_authenticated_calendar_without_typed_input_decode(
         assert setup.cycle.plan([setup.run['run_id']], setup.input_id)['can_submit']
     assert setup.cycle.pending(setup.input_id)['actionable_total'] == 1
     assert all(event[0] != 'load_input' for event in setup.verification['events'])
+    assert all(event[0] != 'retain_input' for event in setup.verification['events'])
     assert setup.verification['borrowed'] == []
 
 
@@ -296,6 +316,7 @@ def test_worker_authenticates_all_runs_before_single_typed_input_and_reuses_borr
     actual_input, actual_evaluate, decoded, evaluated = setup.service.input, closure.evaluate, [], []
 
     def load(identifier, *args, **kwargs):
+        assert setup.verification['borrowed'] == [], 'TEST_FIXTURE_RUN_OVERLAPS_TYPED_INPUT_PARSER'
         decoded.append(identifier)
         return actual_input(identifier, *args, **kwargs)
 
@@ -319,7 +340,13 @@ def test_worker_authenticates_all_runs_before_single_typed_input_and_reuses_borr
     authenticated = [event[2] for event in events[:loaded[0]]
                      if event[0] == 'authenticate_run' and event[1] == worker_session]
     assert authenticated == identifiers
+    worker_events = [event for event in events[:loaded[0]] if event[1] == worker_session]
+    assert [event[0] for event in worker_events if event[0].startswith('authenticate')] == [
+        'authenticate_run', 'authenticate_run', 'authenticate_input']
+    assert [event[2] for event in worker_events if event[0] == 'retain_input'] == [setup.input_id]
     assert not any(event[0].startswith('authenticate') for event in events[loaded[0] + 1:])
+    assert [event[2] for event in events[loaded[0] + 1:] if event[0] == 'borrow_run'] == identifiers
+    assert all(event[1] == worker_session for event in events[loaded[0] + 1:] if event[0] == 'borrow_run')
 
 
 def test_second_run_authentication_failure_never_loads_today_input_or_publishes(setup, monkeypatch):
@@ -327,7 +354,8 @@ def test_second_run_authentication_failure_never_loads_today_input_or_publishes(
     actual = setup.bridge.authenticated_bridge_view
 
     def reject_worker_second(*args, **kwargs):
-        if kwargs.get('borrow_run') and kwargs.get('run_id') == second['run_id']:
+        if (setup.verification['created'] == 2 and not kwargs.get('borrow_run')
+                and kwargs.get('run_id') == second['run_id']):
             raise ValueError('TEST_FIXTURE_SECOND_RUN_AUTHENTICATION_FAILED')
         return actual(*args, **kwargs)
 
@@ -335,8 +363,76 @@ def test_second_run_authentication_failure_never_loads_today_input_or_publishes(
     job = finished(setup.service, setup.cycle.submit([setup.run['run_id'], second['run_id']], setup.input_id)['job_id'])
     assert job['state'] == 'FAILED'
     assert all(event[0] != 'load_input' for event in setup.verification['events'])
+    assert all(event[0] != 'retain_input' for event in setup.verification['events'])
     assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
     assert setup.cycle.status(job['job_id'])['ledger'] is None
+
+
+def test_current_input_authentication_failure_after_all_runs_never_borrows_or_publishes(setup, monkeypatch):
+    actual = setup.bridge.authenticated_bridge_view
+    errors = capture_worker_errors(setup, monkeypatch)
+
+    def reject_retention(*args, **kwargs):
+        if kwargs.get('retain_input'):
+            assert any(event[0] == 'authenticate_run' for event in setup.verification['events'])
+            raise ValueError('TEST_FIXTURE_CURRENT_ARCHIVE_AUTHENTICATION_FAILED')
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(setup.bridge, 'authenticated_bridge_view', reject_retention)
+    monkeypatch.setattr(closure, 'evaluate', lambda *args, **kwargs: pytest.fail('UNVERIFIED_INPUT_EVALUATED'))
+    job = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
+    assert job['state'] == 'FAILED'
+    assert errors == ['TEST_FIXTURE_CURRENT_ARCHIVE_AUTHENTICATION_FAILED']
+    assert not any(event[0] in {'load_input', 'borrow_run', 'retain_input'}
+                   for event in setup.verification['events'])
+    assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
+    assert setup.cycle.status(job['job_id'])['ledger'] is None
+
+
+def test_second_run_borrow_failure_after_input_load_never_evaluates_or_publishes(setup, monkeypatch):
+    second = extra_run(setup, '_TEST_FIXTURE_SECOND')
+    identifiers = sorted([setup.run['run_id'], second['run_id']])
+    actual = setup.bridge.authenticated_bridge_view
+    errors = capture_worker_errors(setup, monkeypatch)
+
+    def reject_last(*args, **kwargs):
+        if kwargs.get('borrow_run') and kwargs.get('run_id') == identifiers[-1]:
+            raise ValueError('TEST_FIXTURE_PINNED_RUN_CHANGED_AFTER_INPUT_LOAD')
+        return actual(*args, **kwargs)
+
+    monkeypatch.setattr(setup.bridge, 'authenticated_bridge_view', reject_last)
+    monkeypatch.setattr(closure, 'evaluate', lambda *args, **kwargs: pytest.fail('UNVERIFIED_BATCH_EVALUATED'))
+    job = finished(setup.service, setup.cycle.submit(identifiers, setup.input_id)['job_id'])
+    assert job['state'] == 'FAILED'
+    assert errors == ['TEST_FIXTURE_PINNED_RUN_CHANGED_AFTER_INPUT_LOAD']
+    assert job['error']['code'] == 'WORKER_FAILED' and job['error']['type'] == 'ValueError'
+    assert [event[2] for event in setup.verification['events'] if event[0] == 'load_input'] == [setup.input_id]
+    assert len(setup.verification['borrowed']) == 1
+    assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
+    assert setup.cycle.status(job['job_id'])['ledger'] is None
+
+
+@pytest.mark.parametrize('part', ['run_metadata', 'credential', 'run'])
+def test_deferred_borrow_must_match_authenticated_metadata_and_binding(setup, monkeypatch, part):
+    actual = setup.bridge.authenticated_bridge_view
+    before = setup.store.get_document_bytes('strategy_experiment_runs', setup.run['run_id'])
+    errors = capture_worker_errors(setup, monkeypatch)
+
+    def changed(*args, **kwargs):
+        view = actual(*args, **kwargs)
+        if kwargs.get('borrow_run'):
+            view[part]['input_id'] = 'market_TEST_FIXTURE_CHANGED_AFTER_METADATA'
+        return view
+
+    monkeypatch.setattr(setup.bridge, 'authenticated_bridge_view', changed)
+    monkeypatch.setattr(closure, 'evaluate', lambda *args, **kwargs: pytest.fail('CHANGED_BORROW_EVALUATED'))
+    job = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
+    assert job['state'] == 'FAILED'
+    assert errors == ['SHORT_HORIZON_CLOSURE_BORROWED_RUN_IDENTITY_CHANGED']
+    assert job['error']['code'] == 'WORKER_FAILED' and job['error']['type'] == 'ValueError'
+    assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
+    assert setup.cycle.status(job['job_id'])['ledger'] is None
+    assert setup.store.get_document_bytes('strategy_experiment_runs', setup.run['run_id']) == before
 
 
 def test_borrowed_run_mutation_after_evaluate_is_rejected_at_terminal(setup, monkeypatch):
@@ -488,6 +584,128 @@ def test_terminal_reverification_failure_rolls_back_batch(setup, monkeypatch):
     assert job['state'] == 'FAILED'
     assert all(rows(setup, namespace) == [] for namespace in NAMESPACES.values())
     assert setup.cycle.status(job['job_id'])['ledger'] is None
+
+
+@pytest.mark.parametrize('late_stage', ['all_products', 'ledger'])
+def test_raw_change_during_publication_rolls_back_every_run(setup, tmp_path, monkeypatch, late_stage):
+    from stockfish_core.yaogu.short_horizon_archive_bridge_v1 import ArchiveVerificationSession
+
+    original_path = tmp_path / 'TEST_FIXTURE_late_publication.raw.json'
+    original_path.write_bytes(b'{"coverage_type":"TEST_FIXTURE","rows":[]}')
+    parent_session = setup.bridge.ArchiveVerificationSession
+    verification_failures = []
+
+    class OriginalFileSession(parent_session):
+        def __init__(self, *, checkpoint=lambda: None):
+            super().__init__(checkpoint=checkpoint)
+            self.originals = ArchiveVerificationSession(checkpoint=checkpoint)
+            self.originals.read(original_path)
+
+        def terminal(self):
+            try:
+                result = super().terminal()
+                self.originals.terminal()
+                return result
+            except ValueError as exc:
+                verification_failures.append(str(exc))
+                raise
+
+    monkeypatch.setattr(setup.bridge, 'ArchiveVerificationSession', OriginalFileSession)
+    second = extra_run(setup, '_TEST_FIXTURE_LATE_RAW')
+    run_ids = [setup.run['run_id'], second['run_id']]
+    originals = {run_id: setup.store.get_document_bytes('strategy_experiment_runs', run_id) for run_id in run_ids}
+    put, written, changed = setup.store._put_document, [], []
+
+    def change_after_writes(connection, namespace, key, payload):
+        result = put(connection, namespace, key, payload)
+        if namespace in NAMESPACES.values():
+            written.append((namespace, key))
+        if not changed and ((late_stage == 'all_products' and len(written) == 6)
+                            or (late_stage == 'ledger' and namespace == closure.LEDGERS)):
+            assert connection.in_transaction and len(written) == 6
+            original_path.write_bytes(original_path.read_bytes() + b' TEST_FIXTURE_CHANGED_AFTER_WRITES')
+            changed.append(namespace)
+        return result
+
+    monkeypatch.setattr(setup.store, '_put_document', change_after_writes)
+    job = finished(setup.service, setup.cycle.submit(run_ids, setup.input_id)['job_id'])
+    assert changed and job['state'] == 'FAILED', job
+    assert job['error']['type'] == 'ValueError'
+    assert any('REGISTERED_FILE_CHANGED' in reason or 'PHYSICAL_IDENTITY' in reason for reason in verification_failures)
+    assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
+    assert setup.cycle.status(job['job_id'])['ledger'] is None
+    assert all(event['state'] != 'SUCCEEDED' for event in setup.service.jobs.events(job['job_id']))
+    assert {run_id: setup.store.get_document_bytes('strategy_experiment_runs', run_id) for run_id in run_ids} == originals
+
+
+def test_borrowed_run_change_after_ledger_rolls_back_every_run(setup, monkeypatch):
+    second = extra_run(setup, '_TEST_FIXTURE_LATE_BORROW')
+    run_ids = [setup.run['run_id'], second['run_id']]
+    originals = {run_id: setup.store.get_document_bytes('strategy_experiment_runs', run_id) for run_id in run_ids}
+    put, changed, verification_failures = setup.store._put_document, [], []
+    terminal = setup.bridge.ArchiveVerificationSession.terminal
+
+    def observed_terminal(session):
+        try:
+            return terminal(session)
+        except ValueError as exc:
+            verification_failures.append(str(exc))
+            raise
+
+    def change_after_ledger(connection, namespace, key, payload):
+        result = put(connection, namespace, key, payload)
+        if namespace == closure.LEDGERS:
+            assert connection.in_transaction
+            assert sum(connection.execute('SELECT COUNT(*) FROM documents WHERE namespace=?', (item,)).fetchone()[0]
+                       for item in NAMESPACES.values()) == 6
+            borrowed = setup.verification['borrowed'][0]
+            borrowed['results'][borrowed['strategy_id']]['items'][0]['comparable_basis'] = 'TEST_FIXTURE_LATE_MUTATION'
+            changed.append(key)
+        return result
+
+    monkeypatch.setattr(setup.store, '_put_document', change_after_ledger)
+    monkeypatch.setattr(setup.bridge.ArchiveVerificationSession, 'terminal', observed_terminal)
+    job = finished(setup.service, setup.cycle.submit(run_ids, setup.input_id)['job_id'])
+    assert changed == [job['job_id']] and job['state'] == 'FAILED', job
+    assert job['error']['type'] == 'ValueError'
+    assert any('BORROWED_RUN_CHANGED' in reason for reason in verification_failures)
+    assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
+    assert setup.cycle.status(job['job_id'])['ledger'] is None
+    assert all(event['state'] != 'SUCCEEDED' for event in setup.service.jobs.events(job['job_id']))
+    assert {run_id: setup.store.get_document_bytes('strategy_experiment_runs', run_id) for run_id in run_ids} == originals
+
+
+def test_success_receipt_keeps_prepublication_snapshot_and_checks_after_ledger(setup, monkeypatch):
+    terminal = setup.bridge.ArchiveVerificationSession.terminal
+    put = setup.store._put_document
+    events, write_connection = [], []
+
+    def observed_terminal(session):
+        result = terminal(session)
+        if write_connection:
+            connection = write_connection[0]
+            assert connection.in_transaction
+            assert connection.execute('SELECT COUNT(*) FROM documents WHERE namespace=?', (closure.LEDGERS,)).fetchone()[0] == 1
+            assert connection.execute('SELECT state FROM jobs WHERE kind=?', (closure.JOB_KIND,)).fetchone()[0] == 'RUNNING'
+        events.append('terminal')
+        return {**result, 'checks_completed': events.count('terminal')}
+
+    def observed_put(connection, namespace, key, payload):
+        result = put(connection, namespace, key, payload)
+        if namespace == closure.LEDGERS:
+            events.append('ledger')
+            write_connection.append(connection)
+        return result
+
+    monkeypatch.setattr(setup.bridge.ArchiveVerificationSession, 'terminal', observed_terminal)
+    monkeypatch.setattr(setup.store, '_put_document', observed_put)
+    job = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
+    assert job['state'] == 'SUCCEEDED', job
+    assert events == ['terminal', 'terminal', 'ledger', 'terminal']
+    report = setup.cycle.status(job['job_id'])
+    assert report['ledger']['archive_verification']['checks_completed'] == 2
+    assert [event['state'] for event in report['events']] == ['QUEUED', 'RUNNING', 'SUCCEEDED']
+    assert all(len(rows(setup, namespace)) == 1 for namespace in NAMESPACES.values())
 
 
 def extra_run(fixture, suffix, *, empty=False, legal_empty=False):

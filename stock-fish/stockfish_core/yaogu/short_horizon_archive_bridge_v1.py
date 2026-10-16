@@ -13,6 +13,7 @@ import gzip
 import gc
 import hashlib
 import io
+from itertools import islice
 import json
 import math
 import os
@@ -28,8 +29,10 @@ import tempfile
 import time
 import weakref
 
-from .contracts import MarketInput, SourceReceipt
-from .history_artifacts import digest_json_stream, digest_market_input
+from pydantic import TypeAdapter
+
+from .contracts import DailyBar, MarketInput, SecurityRecord, SourceReceipt, UniverseSnapshot
+from .history_artifacts import digest_market_input as _reference_digest_market_input
 from .visibility import stamp
 
 VERSION = 'SHORT_HORIZON_ARCHIVE_BRIDGE_V1'
@@ -48,6 +51,8 @@ _ARTIFACTS = frozenset({'canonical-run.json.gz', 'input.json.gz', 'manifest.json
 _EXPORTS = _ARTIFACTS - {'canonical-run.json.gz', 'input.json.gz', 'manifest.json'}
 _IDENTITY = ('implementation_version', 'spec_revision', 'feature_version', 'source_hash',
     'config_hash', 'spec_hash', 'selection_policy_hash', 'source_file_hashes')
+_RUN_METADATA_FIELDS = ('run_id', 'strategy_id', 'execution_profile', 'content_hash',
+    'input_id', 'observation_date', 'decision_cutoff', 'generated_at', 'coverage_type')
 # Only this unchanged current implementation may reproduce the saved inline
 # normalization. Archived Python is verified as bytes and NEVER executed.
 _NORMALIZER_FILES = tuple('stockfish_core/yaogu/' + name for name in (
@@ -59,6 +64,161 @@ _NORMALIZER_FILES = tuple('stockfish_core/yaogu/' + name for name in (
 def _require(value, reason):
     if not value:
         raise ValueError('R2_ARCHIVE_BRIDGE_' + reason)
+
+
+def _inline_typed_input(bundle):
+    # PrivateAttr is deliberately absent from the canonical JSON hash. A
+    # retained object must never acquire an unauthenticated history owner.
+    _require(type(bundle) is MarketInput and bundle.history_artifact_ref is None
+        and bundle.history_artifact_hash is None and bundle._history_store is None,
+        'INLINE_TYPED_INPUT_WITHOUT_HISTORY_OWNER_REQUIRED')
+
+
+def _canonical_chunks(value, *, checkpoint=None):
+    """Preserve the frozen JSON bytes using C encoding and bounded UTF-8 copies.
+
+    The C encoder materializes Unicode text; this is NOT a bounded-text encoder.
+    Its allocation and elapsed time remain subject to the invocation's existing
+    RSS/time checks. Only temporary UTF-8 copies are bounded to one MiB. Keep
+    exactly the frozen encoder options, including strict UTF-8 errors, and do
+    not cache hashes of borrowed mutable objects.
+    """
+    if checkpoint is not None:
+        checkpoint()
+    encoder = json.JSONEncoder(sort_keys=True, ensure_ascii=False, separators=(',', ':'),
+        default=str, allow_nan=False)
+    for text in encoder.iterencode(value, _one_shot=True):
+        for start in range(0, len(text), 256 * 1024):
+            if checkpoint is not None:
+                checkpoint()
+            yield text[start:start + 256 * 1024].encode('utf-8')
+    if checkpoint is not None:
+        checkpoint()
+
+
+def digest_json_stream(value, *, checkpoint=None):
+    """Bridge-local encoding of the unchanged full canonical JSON identity."""
+    digest = hashlib.sha256()
+    for chunk in _canonical_chunks(value, checkpoint=checkpoint):
+        digest.update(chunk)
+    return digest.hexdigest()
+
+
+_TYPED_BATCH_ROWS = 128
+_TYPED_BATCH_ADAPTERS = {
+    DailyBar: TypeAdapter(tuple[DailyBar, ...]),
+    SecurityRecord: TypeAdapter(tuple[SecurityRecord, ...]),
+}
+
+
+def _typed_batch_eligible(bundle):
+    return (type(bundle) is MarketInput and type(bundle.universe) is UniverseSnapshot
+        and type(bundle.bars) is tuple and type(bundle.universe.securities) is tuple
+        and all(type(row) is DailyBar for row in bundle.bars)
+        and all(type(row) is SecurityRecord for row in bundle.universe.securities))
+
+
+def _typed_canonical_chunks(bundle, *, checkpoint=None):
+    """Keep the frozen row-wise identity with fixed-size model row batches.
+
+    The row count is bounded, not each row's size or the remaining envelope.
+    Only exact validated containers and row types use the Rust serializer;
+    other inputs retain immediate per-row dump/encoding order.
+    No full input dump or mutable-object hash cache is introduced.
+    """
+    check = checkpoint or (lambda: None)
+    use_batches = _typed_batch_eligible(bundle)
+
+    def encoded(value):
+        yield from _canonical_chunks(value, checkpoint=checkpoint)
+
+    def rows(values, model_type):
+        yield b'['
+        if not use_batches:
+            for index, row in enumerate(values):
+                check()
+                if index:
+                    yield b','
+                dumped = row.model_dump(mode='json') if hasattr(row, 'model_dump') else row
+                yield from encoded(dumped)
+            yield b']'
+            return
+        source, emitted = iter(values), False
+        while True:
+            check()
+            batch = tuple(islice(source, _TYPED_BATCH_ROWS))
+            if not batch:
+                break
+            if all(type(row) is model_type for row in batch):
+                dumped = _TYPED_BATCH_ADAPTERS[model_type].dump_python(batch, mode='json')
+            else:
+                dumped = [row.model_dump(mode='json') if hasattr(row, 'model_dump') else row
+                          for row in batch]
+            check()
+            text = json.dumps(dumped, sort_keys=True, ensure_ascii=False, separators=(',', ':'),
+                              default=str, allow_nan=False)
+            check()
+            if emitted:
+                yield b','
+            # Strip only the batch array's delimiters, without a whole-text
+            # slice or UTF-8 copy; the surrounding array preserves row order.
+            end = len(text) - 1
+            for start in range(1, end, 256 * 1024):
+                check()
+                yield text[start:min(start + 256 * 1024, end)].encode('utf-8')
+            check()
+            del batch, dumped, text
+            emitted = True
+        yield b']'
+
+    check()
+    envelope = bundle.model_dump(mode='json', exclude={'bars', 'universe'})
+    check()
+    universe = bundle.universe.model_dump(mode='json', exclude={'securities'})
+    check()
+    yield b'{'
+    for index, key in enumerate(sorted((*envelope, 'bars', 'universe'))):
+        if index:
+            yield b','
+        yield from encoded(key)
+        yield b':'
+        if key == 'bars':
+            yield from rows(bundle.bars, DailyBar)
+        elif key == 'universe':
+            yield b'{'
+            for position, field in enumerate(sorted((*universe, 'securities'))):
+                if position:
+                    yield b','
+                yield from encoded(field)
+                yield b':'
+                if field == 'securities':
+                    yield from rows(bundle.universe.securities, SecurityRecord)
+                else:
+                    yield from encoded(universe[field])
+            yield b'}'
+        else:
+            yield from encoded(envelope[key])
+    yield b'}'
+    check()
+
+
+def digest_market_input(bundle, *, checkpoint=None):
+    """Bridge-local equivalent of the unchanged normalizer identity helper."""
+    if checkpoint is not None:
+        checkpoint()
+    if not _typed_batch_eligible(bundle):
+        # Iterators and custom row serializers may have Python side effects.
+        # Preserve the reference's immediate per-row dump/encode order for
+        # anything outside the exact immutable containers of validated input.
+        result = _reference_digest_market_input(bundle)
+    else:
+        digest = hashlib.sha256()
+        for chunk in _typed_canonical_chunks(bundle, checkpoint=checkpoint):
+            digest.update(chunk)
+        result = digest.hexdigest()
+    if checkpoint is not None:
+        checkpoint()
+    return result
 
 
 def _json(raw):
@@ -192,7 +352,9 @@ class ArchiveVerificationSession:
             locator.validate()
         for value, expected, typed in self._borrowed_values.values():
             self.check()
-            actual = digest_market_input(value) if typed else digest_json_stream(value)
+            if typed:
+                _inline_typed_input(value)
+            actual = digest_market_input(value, checkpoint=self.check) if typed else digest_json_stream(value, checkpoint=self.check)
             _require(actual == expected, 'BORROWED_VERIFIED_CONTENT_CHANGED')
             self.check()
         self.terminal_count += 1
@@ -363,7 +525,8 @@ def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff)
 
 def _validate_run(run, bundle, manifest, artifacts, session, input_hash):
     from .candidate_service import CandidateService
-    _require(digest_json_stream({k: v for k, v in run.items() if k != 'content_hash'}) == run.get('content_hash'), 'RUN_CONTENT_HASH_MISMATCH')
+    _require(digest_json_stream({k: v for k, v in run.items() if k != 'content_hash'},
+        checkpoint=session.check) == run.get('content_hash'), 'RUN_CONTENT_HASH_MISMATCH')
     _require(set(run.get('results', {})) == {STRATEGY}, 'SINGLE_NATIVE_R2_REQUIRED')
     result = run['results'][STRATEGY]
     _require(result.get('strategy_id') == STRATEGY and result.get('full_eligible_pool_retained') is True,
@@ -471,13 +634,13 @@ def _verified_run(state):
     if run is None:
         ref = state['run_reference']
         run = _decompress(state['session'].read(ref['path'], ref), state['session'])
-    _require(digest_json_stream(run) == state['run_hash'], 'VERIFIED_CAPABILITY_CONTENT_CHANGED')
+    _require(digest_json_stream(run, checkpoint=state['session'].check) == state['run_hash'], 'VERIFIED_CAPABILITY_CONTENT_CHANGED')
     state['session'].check()
     return run
 
 
 def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=None,
-                         allow_test_fixture=False, session=None):
+                         allow_test_fixture=False, session=None, retain_input=False):
     """Authenticate originals read-only; never write a DB, run a selector or fetch.
 
     ``source_overrides`` maps registered relative source paths to explicit old
@@ -485,16 +648,19 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     """
     session = session or ArchiveVerificationSession()
     _require(type(session) is ArchiveVerificationSession, 'VERIFICATION_SESSION_REQUIRED')
+    _require(type(retain_input) is bool, 'RETAIN_INPUT_BOOL_REQUIRED')
     session.check()
     initial_identity = _bridge_identity(session)
     job = Path(job_dir).resolve(strict=True)
     _require(job.is_dir(), 'ORIGINAL_JOB_DIRECTORY_REQUIRED')
     checksum = _sha(expected_final_sha256)
     overrides = dict(source_overrides or {})
-    cache_key = (str(job), checksum, digest_json_stream(overrides), bool(allow_test_fixture))
+    cache_key = (str(job), checksum, digest_json_stream(overrides), bool(allow_test_fixture), retain_input)
     if cache_key in session.capabilities:
         cap = session.capabilities[cache_key]
         _require(_state(cap)['identity'] == initial_identity, 'VERIFIER_IMPLEMENTATION_CHANGED')
+        if retain_input:
+            _inline_typed_input(_state(cap)['retained_input'])
         return cap
     final_raw = session.read(job / 'final-control.json', checksum, limit=64 * 1024)
     final = _json(final_raw)
@@ -524,24 +690,31 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
         and manifest.get('artifacts') == {k: v for k, v in artifacts.items() if k != 'manifest.json'}
         and manifest.get('source_capability_serialized') is False and manifest.get('source_database_written') is False,
         'NATIVE_MANIFEST_MISMATCH')
-    run = _decompress(session.read(artifacts['canonical-run.json.gz']['path'], artifacts['canonical-run.json.gz']), session)
     input_document = _decompress(session.read(artifacts['input.json.gz']['path'], artifacts['input.json.gz']), session)
-    bundle = MarketInput.model_validate(input_document)
-    _require(bundle.history_artifact_ref is None and bundle.history_artifact_hash is None
-        and not any(row.historical_time_proof is not None for row in bundle.receipts),
+    _require(isinstance(input_document, dict) and isinstance(input_document.get('receipts'), list)
+        and all(isinstance(row, dict) for row in input_document['receipts']), 'INLINE_RECEIPT_LIST_REQUIRED')
+    _require(input_document.get('history_artifact_ref') is None and input_document.get('history_artifact_hash') is None
+        and not any(row.get('historical_time_proof') is not None for row in input_document['receipts']),
         'INLINE_INPUT_WITHOUT_HISTORICAL_OWNER_REQUIRED')
-    _require(bundle.coverage_type in {'PROSPECTIVE_CAPTURED', 'RECONSTRUCTED_HISTORICAL'} or
-        (allow_test_fixture is True and bundle.coverage_type == 'TEST_FIXTURE'), 'PROSPECTIVE_CAPTURED_OR_EXPLICIT_FIXTURE_REQUIRED')
-    input_hash = digest_market_input(bundle)
-    _require(digest_json_stream(input_document) == input_hash, 'CANONICAL_TYPED_INLINE_INPUT_REQUIRED')
-    # Keep no duplicate full document while a typed input exists. The original
-    # compressed file remains physically pinned and is reread only at commit.
+    coverage_type = input_document['coverage_type']
+    _require(isinstance(coverage_type, str) and (coverage_type in {'PROSPECTIVE_CAPTURED', 'RECONSTRUCTED_HISTORICAL'} or
+        (allow_test_fixture is True and coverage_type == 'TEST_FIXTURE')), 'PROSPECTIVE_CAPTURED_OR_EXPLICIT_FIXTURE_REQUIRED')
+    input_hash = digest_json_stream(input_document, checkpoint=session.check)
+    observation_date = date.fromisoformat(input_document['observation_date'])
+    original_sessions = tuple(date.fromisoformat(day) for day in input_document['sessions'])
+    saved_receipts = tuple(SourceReceipt.model_validate(row) for row in input_document['receipts'])
+    # Hash every original JSON field before releasing the full document. The
+    # fresh, unchanged normalizer below supplies the sole typed MarketInput;
+    # its complete canonical hash must equal this original hash. Coercions,
+    # omitted defaults, extra fields and altered rows therefore cannot pass by
+    # sharing just the small envelope retained here. Original bytes stay pinned.
     del input_document
     gc.collect()
+    run = _decompress(session.read(artifacts['canonical-run.json.gz']['path'], artifacts['canonical-run.json.gz']), session)
+    _require(input_hash == run.get('input_hash') == manifest.get('input_hash'), 'CANONICAL_TYPED_INLINE_INPUT_REQUIRED')
     _require(run.get('content_hash') == manifest.get('canonical_content_hash')
         and run.get('run_id') == completion.get('run_id') and run.get('observation_date') == completion.get('observation_date')
         and run.get('target_session') == completion.get('target_session'), 'COMPLETION_CORE_IDENTITY_MISMATCH')
-    _validate_run(run, bundle, manifest, artifacts, session, input_hash)
     root, source_registry, source_proofs = _source_map(session, controls['code_registry'], overrides, run)
     cutoff = stamp(run['decision_cutoff'])
     _require(cutoff <= stamp(run['generated_at']) <= stamp(completion['completed_at']), 'ORIGINAL_RUN_TIME_ORDER_INVALID')
@@ -558,10 +731,8 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     _require(isinstance(items, list) and 0 < len(items) <= 1024, 'CORE_CAPTURE_COUNT_INVALID')
     typed = [SourceReceipt.model_validate(value) for value in manifest['source_receipts']]
     receipts = {value.receipt_id: value for value in typed}
-    _require(len(receipts) == len(typed) == len(items) and receipts == {r.receipt_id: r for r in bundle.receipts}, 'EXACT_CORE_RECEIPT_SET_REQUIRED')
-    observation_date, original_sessions, coverage_type = bundle.observation_date, bundle.sessions, bundle.coverage_type
-    del bundle
-    gc.collect()
+    _require(len(receipts) == len(typed) == len(items) and receipts == {r.receipt_id: r for r in saved_receipts}, 'EXACT_CORE_RECEIPT_SET_REQUIRED')
+    del saved_receipts
     results, raw_paths, used, evidence = [], {}, set(), []
     for item in items:
         session.check()
@@ -584,21 +755,25 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     normalized, normalization_report = normalize_capture_with_report(results, observation_date, cutoff,
         sessions, coverage_type=coverage_type)
     session.check()
-    _require(digest_market_input(normalized) == run['input_hash']
+    _require(digest_market_input(normalized, checkpoint=session.check) == input_hash == run['input_hash']
         and normalization_report == manifest['normalization_report'], 'FRESH_NORMALIZATION_DIFFERS_FROM_ORIGINAL_INPUT')
+    if retain_input:
+        _inline_typed_input(normalized)
     del results
+    _validate_run(run, normalized, manifest, artifacts, session, input_hash)
     class Reader(SourceArtifactReader):
         def __call__(self, receipt_id):
             return session.read(raw_paths[receipt_id], receipts[receipt_id].content_hash)
     reader = Reader(tuple(receipts.values()), raw_paths)
     reader.validate_target_calendar_context(run['target_calendar_evidence'], bundle=normalized, cutoff=cutoff)
+    retained_input = normalized if retain_input else None
     del normalized
     gc.collect()
     identity = _bridge_identity(session)
     _require(identity == initial_identity, 'VERIFIER_IMPLEMENTATION_CHANGED')
     bridge_id = 'r2_archive_bridge_' + digest_json_stream(dict(version=VERSION, archive_final_sha256=checksum,
         signal_content_hash=run['content_hash'], input_hash=run['input_hash'], verifier_source_hash=identity['source_hash']))
-    run_hash = digest_json_stream(run)
+    run_hash = digest_json_stream(run, checkpoint=session.check)
     session.check()
     audit = dict(schema_version=VERSION, status='VERIFIED', bridge_id=bridge_id, run_id=run['run_id'],
         signal_content_hash=run['content_hash'], run_document_hash=run_hash,
@@ -618,10 +793,16 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
         excluded_scope=['THEME_PRESENTATION', 'NEWS_PRESENTATION', 'ACCOUNT_COST_EXECUTION_PORTFOLIO'],
         market_edge='NOT_ESTABLISHED', source_database_written=False)
     session.terminal()
+    if retained_input is not None:
+        _inline_typed_input(retained_input)
     capability = ArchiveBridgeCapability(_MINT, session)
     # The weak-key registry must not retain session -> cached cap as a global
     # strong path. The only strong cycle is session <-> cap and is collectable.
-    _CAPABILITIES[capability] = dict(session_ref=weakref.ref(session), run=run,
+    _CAPABILITIES[capability] = dict(session_ref=weakref.ref(session), run=run, retained_input=retained_input,
+        # Mint only after the original run's full hashes, every archive check,
+        # and the source terminal. This private copy describes those originals;
+        # it is never reconstructed from a serialized audit or caller metadata.
+        run_metadata={name: deepcopy(run.get(name)) for name in _RUN_METADATA_FIELDS},
         run_reference=deepcopy(artifacts['canonical-run.json.gz']),
         input_reference=deepcopy(artifacts['input.json.gz']),
         input_index=dict(input_id=run['input_id'], observation_date=run['observation_date'],
@@ -660,7 +841,7 @@ def _stored_matches(connection, namespace, document_id, expected_hash, session=N
 
 def _put_archived_document(connection, namespace, document_id, expected_hash, session,
                            *, reference=None, document=None, temporary_dir=None):
-    """Write authenticated canonical TEXT without whole-string encoding copies.
+    """Write authenticated canonical TEXT without a whole UTF-8 encoding copy.
 
     The original gzip is not canonical JSON. Encode the validated object to a
     private temporary file, verify every canonical byte, then release a newly
@@ -674,31 +855,15 @@ def _put_archived_document(connection, namespace, document_id, expected_hash, se
     if reference is not None:
         document = _decompress(session.read(reference['path'], reference), session)
     _require(isinstance(document, dict), 'ARCHIVED_DOCUMENT_OBJECT_REQUIRED')
-    encoder = json.JSONEncoder(sort_keys=True, ensure_ascii=False, separators=(',', ':'),
-        default=str, allow_nan=False)
     with tempfile.TemporaryFile(prefix='stockfish-verified-bridge-', dir=temporary_dir) as spool:
-        digest, pieces, size, total = hashlib.sha256(), [], 0, 0
-        for piece in encoder.iterencode(document):
-            raw = piece.encode('utf-8')
-            pieces.append(raw)
-            size += len(raw)
-            if size >= 1024**2:
-                session.check()
-                block = b''.join(pieces)
-                total += len(block)
-                _require(total <= 256 * 1024**2, 'CANONICAL_DOCUMENT_BUDGET_EXCEEDED')
-                digest.update(block)
-                spool.write(block)
-                pieces.clear()
-                size = 0
-                del block
-        block = b''.join(pieces)
-        total += len(block)
-        _require(total <= 256 * 1024**2, 'CANONICAL_DOCUMENT_BUDGET_EXCEEDED')
-        digest.update(block)
-        spool.write(block)
+        digest, total = hashlib.sha256(), 0
+        for block in _canonical_chunks(document, checkpoint=session.check):
+            total += len(block)
+            _require(total <= 256 * 1024**2, 'CANONICAL_DOCUMENT_BUDGET_EXCEEDED')
+            digest.update(block)
+            spool.write(block)
         _require(digest.hexdigest() == expected_hash, 'VERIFIED_CAPABILITY_CONTENT_CHANGED')
-        del document, encoder, pieces, piece, raw, block
+        del document, block
         gc.collect()
         session.check()
         spool.flush()
@@ -908,7 +1073,7 @@ def saved_csv_export(service, run, strategy_id, selection):
         return by_selection[selected]
 
 
-def _verified(service, namespace, document_id, session, *, return_state=False):
+def _verified(service, namespace, document_id, session, *, return_state=False, retain_input=False):
     owned_session = session is None
     session = session or ArchiveVerificationSession()
     binding = service.store.get_document(namespace, document_id)
@@ -923,7 +1088,7 @@ def _verified(service, namespace, document_id, session, *, return_state=False):
     capability = authenticate_archive(certificate['archive_job'],
         expected_final_sha256=certificate['archive_final_sha256'],
         source_overrides=certificate['source_overrides'],
-        allow_test_fixture=service.allow_test_fixture, session=session)
+        allow_test_fixture=service.allow_test_fixture, session=session, retain_input=retain_input)
     state = _state(capability)
     for key in ('bridge_id', 'run_id', 'input_id', 'input_hash', 'signal_content_hash', 'run_document_hash', 'archive_final_sha256'):
         _require(certificate.get(key) == state['audit'][key], 'BRIDGE_REAUTHENTICATION_MISMATCH')
@@ -973,39 +1138,51 @@ def _check_verified_view(service, proof, session):
         _require(service.store.get_document(SOURCES, document_id) == expected, 'BRIDGED_SOURCE_REGISTRATION_CHANGED')
 
 
-def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, borrow_run=False):
+def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, borrow_run=False,
+                              retain_input=False):
     """Return small authenticated metadata, optionally lending one frozen run.
 
     Returned metadata is descriptive, never a serializable import capability.
     The session retains private store-bound provenance and terminal hash guards
     for any borrowed mutable object. A plain view cannot authorize the loader.
+    Only an explicit input view may retain the fresh normalizer's typed input;
+    it remains private and the loader still checks its complete canonical hash.
     """
     _require(isinstance(session, ArchiveVerificationSession), 'GENUINE_SESSION_REQUIRED')
     _require((run_id is None) != (input_id is None) and type(borrow_run) is bool,
         'ONE_VERIFIED_VIEW_KEY_REQUIRED')
+    _require(type(retain_input) is bool and (not retain_input or input_id is not None),
+        'RETAIN_INPUT_REQUIRES_INPUT_VIEW')
     namespace, document_id = (RUN_BINDINGS, run_id) if run_id is not None else (INPUT_BINDINGS, input_id)
     _require(isinstance(document_id, str) and document_id, 'VERIFIED_VIEW_KEY_REQUIRED')
     key = (id(service.store), namespace, document_id)
     proof = session._verified_views.get(key)
     run = None
-    if proof is None:
-        credential, state = _verified(service, namespace, document_id, session, return_state=True)
-        run = _verified_run(state)
+    if proof is not None:
+        _check_verified_view(service, proof, session)
+    if proof is None or (retain_input and proof.get('retained_input') is None
+                         and proof.get('borrowed_input') is None):
+        # A prior metadata-only proof cannot synthesize a fresh typed object.
+        # Reauthenticate with the explicit retention mode in the same budget.
+        credential, state = _verified(service, namespace, document_id, session, return_state=True,
+                                      retain_input=retain_input)
+        run = _verified_run(state) if borrow_run else None
         proof = dict(store=service.store, store_identity=_view_store_identity(service),
             namespace=namespace, document_id=document_id, credential=deepcopy(credential),
             certificate=service.store.get_document(CERTIFICATES, credential['bridge_id']),
             binding=service.store.get_document(namespace, document_id),
             run_hash=state['run_hash'], input_hash=state['input_hash'],
             run_reference=deepcopy(state['run_reference']), input_reference=deepcopy(state['input_reference']),
-            run_metadata={name: deepcopy(run.get(name)) for name in ('run_id', 'strategy_id',
-                'execution_profile', 'content_hash', 'input_id', 'observation_date',
-                'decision_cutoff', 'generated_at', 'coverage_type')},
+            run_metadata=deepcopy(state['run_metadata']),
             input_metadata=dict(input_id=credential['input_id'], input_hash=state['input_hash'],
                 observation_date=state['input_index']['observation_date'],
                 coverage_type=state['input_index']['coverage_type'], sessions=list(state['input_sessions'])),
             source_rows=[(credential['bridge_id'] + ':' + item['receipt_id'],
                 dict(schema_version=VERSION, bridge_id=credential['bridge_id'], run_id=credential['run_id'],
                     input_id=credential['input_id'], **deepcopy(item))) for item in state['evidence']])
+        if retain_input:
+            _inline_typed_input(state['retained_input'])
+            proof['retained_input'] = state['retained_input']
         _require(proof['binding'] == dict(schema_version=VERSION, **credential)
             and isinstance(proof['certificate'], dict)
             and all(proof['certificate'].get(name) == value for name, value in credential.items()),
@@ -1020,15 +1197,16 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         if other_binding == dict(schema_version=VERSION, **credential):
             session._verified_views[(id(service.store), other_namespace, other_id)] = dict(proof,
                 namespace=other_namespace, document_id=other_id, binding=other_binding)
-    else:
-        _check_verified_view(service, proof, session)
+    if retain_input:
+        retained = proof.get('borrowed_input')
+        _inline_typed_input(proof.get('retained_input') if retained is None else retained)
     result = {name: deepcopy(proof[name]) for name in ('credential', 'run_metadata', 'input_metadata')}
     if borrow_run:
         run = proof.get('borrowed_run') or run
         if run is None:
             ref = proof['run_reference']
             run = _decompress(session.read(ref['path'], ref), session)
-        _require(digest_json_stream(run) == proof['run_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
+        _require(digest_json_stream(run, checkpoint=session.check) == proof['run_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
         proof['borrowed_run'] = run
         session._borrowed_values[id(run)] = (run, proof['run_hash'], False)
         result['run'] = run
@@ -1042,9 +1220,12 @@ def load_verified_bridge_input(service, input_id, *, session):
     proofs = [proof for proof in session._verified_views.values()
         if proof['store'] is service.store and proof['credential']['input_id'] == input_id]
     _require(bool(proofs), 'VERIFIED_INPUT_VIEW_REQUIRED')
-    proof = proofs[0]
+    proof = next((value for value in proofs if value.get('borrowed_input') is not None
+                  or value.get('retained_input') is not None), proofs[0])
     _check_verified_view(service, proof, session)
     bundle = proof.get('borrowed_input')
+    if bundle is None:
+        bundle = proof.get('retained_input')
     if bundle is None:
         ref = proof['input_reference']
         # Duplicate keys and the complete original object were already checked
@@ -1054,7 +1235,8 @@ def load_verified_bridge_input(service, input_id, *, session):
         bundle = MarketInput.model_validate_json(raw)
         del raw
         gc.collect()
-    _require(digest_market_input(bundle) == proof['input_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
+    _inline_typed_input(bundle)
+    _require(digest_market_input(bundle, checkpoint=session.check) == proof['input_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
     proof['borrowed_input'] = bundle
     session._borrowed_values[id(bundle)] = (bundle, proof['input_hash'], True)
     session.check()

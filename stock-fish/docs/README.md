@@ -7,6 +7,7 @@
 ### 执行与维护
 
 - [独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)：归档鉴证、服务库衔接、每日后验的操作、验收及剩余缺口。
+- [当日可信输入、每日验收与性能](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)：10月16日采集封存退出 2、UNKNOWN 保留；最终两归档导入通过，但每日 worker 失败、无后验产品或完成账本。显式诊断重试在认证阶段触时间预算，当日后验及幂等/回读/H1 验收未完成；本轮交付源码已通过 275 项工程组合回归、待按约定提交，生产未切换。
 - [独立 daily/review 环境](ISOLATED_DAILY_RUNTIME_V1.md)：新目录、官方工件哈希锁、原生平台范围和实际运行检查。
 
 - [独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)：单命令采集、原R2、67会话题材、报道和3亿元展示；不需要Codex或Web服务。
