@@ -1,8 +1,10 @@
 # 部署与维护
 
-先核对实际运行目录、Python或二进制身份、配置、数据库、状态文件、端口及在途任务。代码所在目录、发布检出和运行实例可能不同；切换路径不会自动迁移数据。本轮文档整理没有启动、停止或切换服务。
+先核对实际运行目录、Python或二进制身份、配置、数据库、状态文件、端口及在途任务。代码所在目录、发布检出和运行实例可能不同；切换路径不会自动迁移数据。本轮工程交付没有启动、停止或切换已有服务。
 
 ## 已有部署优先
+
+新增[独立 daily/review 环境](stock-fish/docs/ISOLATED_DAILY_RUNTIME_V1.md)采用官方 PyPI 工件及完整哈希锁，在新目录创建并验收原生 macOS x86_64、CPython 3.12 环境。两个独立目录的 58 包安装、三个 doctor profile 和隔离应用烟测已通过；旧虚拟环境、盘前 locator、Qlib 和运行服务未切换。其他平台须另行锁定验收，不能直接套用本锁。
 
 Python服务继续使用项目虚拟环境、既有DB/state和单个调度器。日常规则不要求账户、应用LLM或旧Alpha158模型。采用pyqlib 0.9.7 wheel，不改相邻Qlib源码为editable安装。
 
@@ -32,6 +34,12 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 ## 独立本地盘前命令
 
 新增[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)：在已有项目Python环境、`stock-fish/`目录执行 `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
+
+## R2 归档衔接与每日后验
+
+使用[本轮统一操作与交付记录](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)中的显式本地命令，先鉴证 standalone 封存任务的完整来源、原代码字节、原 run/input 和五份正式导出，再向同一明确选择的服务库追加桥接凭证。原 run 与输入保持，不执行选股。只有完整 inline 原生归档在本版本范围内，保留原 `PROSPECTIVE_CAPTURED` 或 `RECONSTRUCTED_HISTORICAL` 覆盖类型；普通 JSON、历史 owner、时间证明或缺失原件不恢复来源能力，历史下载不抬升为过去可见。
+
+命令要求已有当前结构数据库和 state，遇旧结构或活动服务锁立即拒绝，不自动迁库、回收其他任务或停启服务。每日后验必须使用已鉴证的精确当日 input、明确 run 列表、交易日收盘后实际截止；计划、待办和状态查询只读。默认每批最多 5 个 run，超限拒绝而不截断；失败重试需显式调用。没有新建定时任务或扩大采集预算。本轮真实与夹具验收范围及尚未完成的连续每日交付分别见交付记录。
 
 ## Go候选工具
 

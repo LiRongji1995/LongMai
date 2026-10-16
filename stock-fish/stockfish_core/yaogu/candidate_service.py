@@ -1879,6 +1879,20 @@ class CandidateService(DailyResearchMixin):
 
     def export_strategy_experiment_csv(self, run_id, *, strategy_id=None, selection=None):
         run = self.strategy_experiment(run_id)
+        if run.get('run_id') != run_id:
+            raise ValueError('STRATEGY_EXPERIMENT_RUN_ID_MISMATCH')
+        # The existing native archive Encoder supplies a run without a store.
+        # It only formats that run; this path grants no bridge authority.
+        # A regular service needs its store to load the run above.
+        if hasattr(self, 'store'):
+            from .short_horizon_archive_bridge_v1 import saved_csv_export
+            saved = saved_csv_export(self, run, strategy_id, selection)
+            if saved is not None:
+                return saved
+        return self._format_strategy_experiment_csv(run, strategy_id=strategy_id, selection=selection)
+
+    def _format_strategy_experiment_csv(self, run, *, strategy_id=None, selection=None):
+        run_id = run['run_id']
         strategy_id = strategy_id or 'PV_OBSERVATION_V1'
         result, items, _, focus, focus_ids = self._strategy_export_rows(run, strategy_id, selection)
         focus_by_id = {row['instrument_id']: row for row in focus.get('items', [])}

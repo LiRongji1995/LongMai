@@ -4,6 +4,8 @@
 
 ## 当前能力
 
+继续推进[独立运行环境与 R2 每日闭环](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)：两个新建 macOS x86_64 / Python 3.12 环境的 58 包一致，`rules/daily/review` 及隔离应用验收通过。新增完整 standalone 归档鉴证、原 run/input 原样接入服务库和显式每日后验命令；精确来源、当日资料、全池全期限与未知均有独立校验。详细测试、真实归档验收与剩余缺口以该记录为准。原环境、活动库、调度和生产服务未切换；连续跨日稳定性和策略优势仍未成立。
+
 本轮实施[运行安全、短周期后验与性能第一阶段](stock-fish/docs/BASELINE_OUTCOME_PERFORMANCE_V1.md)：增加实际依赖导入诊断、调度进度 readiness、统一健康接口鉴权、Research/Live 长连接容量及 Live 本机访问边界；未验证 HTTPS 的 Tushare 新凭据请求明确阻断。SQLite 追加查询索引并限定按 run 读取，R1/R2 后验以独立版本接入同一权威服务库。隔离工程检查、真实环境缺包、数据成熟度与投资结论分别记录；源码发布未切换服务或迁移真实库，冻结策略与旧 run 保持。
 
 新增[独立终端盘前研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)，把显式R2采集、真实来源认证、67会话题材及成交额≥3亿元展示协调为 `python scripts/stockfish.py premarket`。它不依赖Codex/Web服务/LLM，不创建业务DB、不改变默认主动V2。核心、来源、题材、报道和展示分别记录状态，最终由实际子进程退出、代码/原件和产物终验封存。新入口的隔离工程测试、实际离线/网络、冷/暖启动与连续交易日可靠性各自验收；不能沿用私有旧脚本真实结果称新入口已通过整条线上链。

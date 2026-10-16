@@ -6,6 +6,9 @@
 
 ### 执行与维护
 
+- [独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)：归档鉴证、服务库衔接、每日后验的操作、验收及剩余缺口。
+- [独立 daily/review 环境](ISOLATED_DAILY_RUNTIME_V1.md)：新目录、官方工件哈希锁、原生平台范围和实际运行检查。
+
 - [独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)：单命令采集、原R2、67会话题材、报道和3亿元展示；不需要Codex或Web服务。
 
 - [CODEX_DAILY_RESEARCH.md](CODEX_DAILY_RESEARCH.md)

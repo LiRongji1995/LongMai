@@ -27,4 +27,6 @@ Go的构建与隔离运行见[Go说明](stock-fish-go/README.md)，架构与证�
 
 本轮[运行安全、短周期后验与性能第一阶段](stock-fish/docs/BASELINE_OUTCOME_PERFORMANCE_V1.md)记录独立 runtime doctor、调度进度、HTTP/长连接边界及相应隔离验收。运行诊断必须使用实际解释器；以另一现有环境承载测试不等于默认应用环境已修复。新索引和后验合同均按新版本登记，旧策略配置、run、原件和用户未提交改动受到保护。
 
+后续[独立环境与 R2 闭环交付](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)使用两个新建的完整哈希锁环境验收。工程测试经 `run_isolated_tests.py` 在所选 venv 中执行，禁止混入其他环境的 site-packages；真实归档衔接另在新建隔离服务库验收。桥接凭证不能代替原件、供应商签名或历史 PIT；每日作业与逐项成熟度分别报告。只读入口不初始化业务配置或作业恢复，写入口先持有数据库作业锁，批次产品和完成账本同事务提交。冻结策略及旧结果不因后验工程变动而重算。
+
 预算绑定各自任务；一次允许扩大容量或时间不授权后续自动扩大。系统不连接券商、不下单，外部消息、收费服务和部署切换按明确授权执行。保留[第三方通知](THIRD_PARTY_NOTICES.md)，MiroFish适用AGPL-3.0。

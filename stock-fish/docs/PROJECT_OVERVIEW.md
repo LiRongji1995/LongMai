@@ -6,7 +6,9 @@
 
 ## 当前系统
 
-新增[运行安全、短周期后验与性能第一阶段](BASELINE_OUTCOME_PERFORMANCE_V1.md)。运行身份由独立 doctor 实际导入诊断，调度 readiness 使用成功轮询与停滞状态；Research 健康别名鉴权和 SSE、Live 本机访问与 WebSocket 均有容量边界。SQLite 追加版本化查询索引，单 run 读取仍核原内容 hash；正式运行库未迁移。R1/R2 的新后验版本在同一权威服务库追加逐交易会话观察、跟踪与复盘，不改保存名单，不套用 SAM episode 或账户成交语义，也不恢复普通归档 JSON 的来源能力。环境缺包、独立盘前归档衔接、真实连续后验和全链性能仍分别验收。
+[独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)补充新的哈希锁运行环境、standalone 原生归档的完整来源鉴证和同库追加桥接，以及明确当日输入的每日后验作业。桥接保留原 run/input、五导出和实际新导入时间；不执行策略，不恢复已失去的内存 owner，不授予历史 PIT。每日待办与成熟度分开，作业批次的产品和账本原子提交；旧配置、策略与调度保持，运行部署和连续真实观察仍单独验收。
+
+新增[运行安全、短周期后验与性能第一阶段](BASELINE_OUTCOME_PERFORMANCE_V1.md)。运行身份由独立 doctor 实际导入诊断，调度 readiness 使用成功轮询与停滞状态；Research 健康别名鉴权和 SSE、Live 本机访问与 WebSocket 均有容量边界。SQLite 追加版本化查询索引，单 run 读取仍核原内容 hash；正式运行库未迁移。R1/R2 的新后验版本在同一权威服务库追加逐交易会话观察、跟踪与复盘，不改保存名单，不套用 SAM episode 或账户成交语义，也不恢复普通归档 JSON 的来源能力。原默认环境与本轮新独立环境分开报告；真实连续后验和全链性能仍需验证。
 
 显式[独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)将公开来源请求和JSON缓存索引、原生R2内存owner、真实SOURCES_V2/行业读取器/完整67日市场stream/V2日志、报道原件与纯展示层接为单命令。入口为 `scripts/stockfish.py premarket`，不依赖Codex应用、LLM、运行中的HTTP服务或新业务DB；默认主动SAM V2保持。文件索引只保存真实来源引用，保存JSON不能恢复活能力。旧run、五导出、完整RAW分母和未知保留；3亿元仅在最后展示层生效。完整行业/概念当前篮子仍不是完整经济题材或历史PIT，新闻不因共现变成股票归因。新执行profile分阶段限制实际返回读取，父进程另验真实退出、代码/来源/产物；发布及隔离测试不替代真实冷/暖启动、连续每日或投资验证。
 
