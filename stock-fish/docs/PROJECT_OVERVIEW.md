@@ -6,11 +6,13 @@
 
 ## 当前系统
 
-最新10月20日盘前仅有目录、当日日线缓存 COMPLETE；一次获准重采因一个复权 PARTIAL 缺 RAW 首见钟而在核心前失败，未生成可信10月21日名单。新增[独立源码 bundle V2](PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)为未来全新 CaptureCache attempt 保留真实 checkpoint 时钟，正式路径32项隔离测试与独立源码快照的离线入口/身份校验通过；工具显式且未启用，没有新真实 bundle 采集，不恢复旧 checkpoint 或迁移旧 producer 引用。
+最新[10月21日盘前尝试](PREMARKET_BOUNDED_RETRY_20261021.md)已按单独授权从[独立源码 bundle V2](PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)运行：3个官方目录COMPLETE且分页完整，随后采集读取计量触限退出4，capture余额为0，实际超限60,837字节。核心、题材及展示未运行，没有新run或可信名单，DAILY_V1仍为UNKNOWN_NOT_EXECUTED；本次未运行真实每日后验或双run。归档校验退出0只核失败封存字节。此前缺RAW首见钟的PARTIAL及旧run保持；本次未进入复权factor分支，不构成该修复的真实验收，也未切换服务或运行配置。
+
+本轮另完成10项隔离内存候选检查及两次旧归档只读认证，均退出0。提前释放候选在本次测量中降低局部RSS和累计峰值，但认证耗时99.214→100.751秒、CPU83.565→88.717秒，未证明提速，故未安装；新身份未写入旧库。双run的300秒缺口仍在，详见[本轮诊断](PREMARKET_BOUNDED_RETRY_20261021.md)。
 
 [独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)补充新的哈希锁运行环境、standalone 原生归档的完整来源鉴证和同库追加桥接，以及明确当日输入的每日后验作业。桥接保留原 run/input、五导出和实际新导入时间；不执行策略，不恢复已失去的内存 owner，不授予历史 PIT。每日待办与成熟度分开，作业批次的产品和账本原子提交；旧配置、策略与调度保持，运行部署和连续真实观察仍单独验收。
 
-本轮[历史闭环部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)对应16个源码/测试文件及676项组合回归。工程保持完整来源、双父实际全文、冻结公式和事务末终验，以线程内短读连接、显式1024行 typed 编码、同次私有 proof 的二次解码减少实现开销；`AUTHENTICATED_NONEMPTY_V1` 仅在全5期限 PENDING、无 DUE/UNKNOWN 且已鉴证非空时避免未借出 run 的展开。9个 normalizer 文件、精确类型回退和空池完整检查保持。
+此前[历史闭环部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)对应16个源码/测试文件及676项组合回归。工程保持完整来源、双父实际全文、冻结公式和事务末终验，以线程内短读连接、显式1024行 typed 编码、同次私有 proof 的二次解码减少实现开销；`AUTHENTICATED_NONEMPTY_V1` 仅在全5期限 PENDING、无 DUE/UNKNOWN 且已鉴证非空时避免未借出 run 的展开。9个 normalizer 文件、精确类型回退和空池完整检查保持。
 
 历史10月16日单 run 在相同源码的隔离克隆中显式重试成功，worker 292.136秒，随后幂等、三产品回读和独立 H1（全池3041、研究集合25）通过。原当日及正式失败记录不改判；closed-session replay 的历史资料截止不改变系统/作业实际时钟。双 run 两次均在原300秒内未完成、无新产品，只测试了一条到期加一条 PENDING，不能外推两个成熟 run、默认5条容量或连续每日可靠性。原始尝试见[当日执行记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)，各阶段证据见新的部分验收记录。
 

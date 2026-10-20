@@ -1,6 +1,6 @@
 # 盘前因子 checkpoint 与独立源码 bundle V2
 
-本工具通过新的显式脚本[build_premarket_source_bundle_v2.py](../scripts/build_premarket_source_bundle_v2.py)创建和校验独立源码目录，只为未来获准采集准备。它未启用到现有运行入口，不切换服务、locator或默认配置。正式路径32项TEST_FIXTURE检查通过；另已创建独立源码快照并完成离线入口/身份校验，未执行其真实采集。实际10月20日盘前仍因原始首见钟缺失而失败，见[部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)。
+本工具通过显式脚本[build_premarket_source_bundle_v2.py](../scripts/build_premarket_source_bundle_v2.py)创建和校验独立源码目录，不自动切换服务、locator或默认配置。既有32项TEST_FIXTURE检查与源码快照离线校验通过后，已按单独授权从快照执行一次[10月21日盘前尝试](PREMARKET_BOUNDED_RETRY_20261021.md)：3个官方目录完成，随后采集读取计量触限，退出4；没有新run或名单，factor分支未执行。此前10月20日缺首见钟的失败仍保留，见[部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)。
 
 ## 要解决的边界
 
@@ -43,13 +43,13 @@
 
 私有候选阶段另一次32项通过与正式结果分别保留；首次临时目录物理身份拒绝也保留，原因未被证明，不归咎于某个同步程序或放宽七字段断言。正式搬移只改脚本/测试位置与导入边界，原断言保持。
 
-实际源码快照创建命令1.008秒、退出0；之后对同一bundle重新初验、分别从原源和bundle执行离线烟测、末验均退出0，续验共5.345秒。快照166件含manifest、源码3,466,049 B；离线核对18个产品模块均来自bundle，R2/delivery身份与原源一致，无额外`__pycache__`，原源与受保护文件SHA/物理身份保持。此范围是源码快照和离线入口，没有网络、业务DB、selector、真实capture或服务切换，采集进程树尚未验收。
+实际源码快照创建命令1.008秒、退出0；之后对同一bundle重新初验、分别从原源和bundle执行离线烟测、末验均退出0，续验共5.345秒。快照166件含manifest、源码3,466,049 B；离线核对18个产品模块均来自bundle，R2/delivery身份与原源一致，无额外`__pycache__`，原源与受保护文件SHA/物理身份保持。该次检查范围仅为源码快照和离线入口，没有网络、业务DB、selector、真实capture或服务切换；不据此证明完整采集进程树。
 
 首次私有烟测在60秒限制内未完成，失败保留；新label将监测器先匹配受禁函数名以减少无关调用开销，仍按原60秒限制和全部禁用边界通过。同期存在另一解码micro，不能归因于唯一原因或将首次改判。脱敏定位为`source-bundle-real-01-result.json`和`source-bundle-real-02-result.json`，不发布实际本机运行路径。
 
-未来使用必须显式选择新bundle和已有合格解释器，复核实际模块均来自该目录、依赖可用、旧producer引用仍可读，再按新授权及剩余原预算执行。当前离线测试不授权网络重试，不证明冷启动、真实盘前可交付、连续交易日稳定或投资优势。现有worker/request/budget及运行服务保持。
+后续使用仍须显式选择已校验bundle和合格解释器，核对来源身份、依赖、旧producer引用及独立授权。10月21日尝试的142项代码登记引用均位于bundle且匹配manifest；这是登记闭包及实际命令的来源绑定，不是所有运行时导入模块的逐项跟踪。执行后bundle完整校验退出0且无额外pycache，原worker/request/budget及服务保持。本次没有factor请求或SDK调用，未验证真实partial-checkpoint分支；不证明冷启动、完整盘前交付、连续交易日稳定或投资优势。采集读取余额已为0，不自动再次重试。
 
-未来另获网络授权后的启动模板如下；本轮没有执行此命令：
+后续另获网络授权并完成预算核对时可使用如下模板；本次实际执行结果及失败边界见[10月21日记录](PREMARKET_BOUNDED_RETRY_20261021.md)：
 
 ```sh
 env PYTHONDONTWRITEBYTECODE=1 "$RUNTIME_PYTHON" -I -B \

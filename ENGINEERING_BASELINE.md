@@ -29,10 +29,14 @@ Go的构建与隔离运行见[Go说明](stock-fish-go/README.md)，架构与证�
 
 后续[独立环境与 R2 闭环交付](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)使用两个新建的完整哈希锁环境验收。工程测试经 `run_isolated_tests.py` 在所选 venv 中执行，禁止混入其他环境的 site-packages；真实归档衔接另在新建隔离服务库验收。桥接凭证不能代替原件、供应商签名或历史 PIT；每日作业与逐项成熟度分别报告。只读入口不初始化业务配置或作业恢复，写入口先持有数据库作业锁，批次产品和完成账本同事务提交。冻结策略及旧结果不因后验工程变动而重算。
 
-[当日验收原记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)与[历史闭环部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)要求优化保持全部 canonical 字节、行序、嵌套迟变、私有 owner、取消、完整来源和整批回滚。显式1024行 profile、同 store/session 私有 proof 的二次解码、全 PENDING 非空投影均有独立身份；默认与异常输入的参考路径保持。取消和状态查询可复用线程内空闲读连接，每次仍开启短事务，校验结构/索引/迁移及最新取消状态；不跨 sleep 持有快照。9个 normalizer 文件原字节保持。本轮16文件在发布目录的23个测试文件组合中676项通过，pytest 742.24秒、外层743.588秒、退出0；不是全仓或投资验证。
+[当日验收原记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)与[历史闭环部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)要求优化保持全部 canonical 字节、行序、嵌套迟变、私有 owner、取消、完整来源和整批回滚。显式1024行 profile、同 store/session 私有 proof 的二次解码、全 PENDING 非空投影均有独立身份；默认与异常输入的参考路径保持。取消和状态查询可复用线程内空闲读连接，每次仍开启短事务，校验结构/索引/迁移及最新取消状态；不跨 sleep 持有快照。9个 normalizer 文件原字节保持。此前16文件在发布目录的23个测试文件组合中676项通过，pytest 742.24秒、外层743.588秒、退出0；不是全仓或投资验证。
 
 工程检查、真实数据、每日作业和投资结论分别报告。原正式失败保留；相同源码、隔离克隆的显式重试完成历史10月16日单 run，后续幂等、三产品实际 BLOB/API 回读与独立 H1 通过。双 run 正式尝试和显式诊断重试仍超过原300秒，无新文档；诊断退出0仅表示记录完成，其 worker 仍为 FAILED。10月20日另一次已授权盘前重采因复权 PARTIAL 缺少原始首见钟而在核心前拒绝，未生成新 run，不补钟、不填零或沿用旧名单。
 
-新增[盘前源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)仅追加工具与TEST_FIXTURE测试，正式路径32项通过（8.22秒，外层9.917秒，退出0）；与676项是两次独立命令，不能合称一次708项全套。它未启用真实运行，不迁移旧 checkpoint 或来源。现有完整来源/旧资料保护检查覆盖1934个文件、319项非本轮 dirty，保护通过；此数值属于对应检查快照，不代表之后任意工作区变化已获授权。
+新增[盘前源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)仅追加工具与TEST_FIXTURE测试，正式路径32项通过（8.22秒，外层9.917秒，退出0）；与676项是两次独立命令，不能合称一次708项全套。这两次既有工程检查没有在本次盘前尝试中重跑；工具不迁移旧 checkpoint 或来源。现有完整来源/旧资料保护检查覆盖1934个文件、319项非本轮 dirty，保护通过；此数值属于对应检查快照，不代表之后任意工作区变化已获授权。
+
+新增[10月21日盘前事实记录](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)：独立bundle的一次显式真实调用退出4、98.244秒，3个官方目录COMPLETE，采集计量585,914,048字节，超本次额度60,837字节后停止，capture余额归零。原21项受保护文件SHA及七字段物理身份、1151项旧缓存物理身份分别保持；142项代码登记引用均绑定bundle。失败归档校验退出0只证明封存字节，不将失败改为成功；本次无核心run、名单、每日后验或真实factor分支验收。以上是本次实际调用及只读核对，不新增测试通过项数或投资结论。
+
+本轮另完成10项隔离内存候选检查及两次旧归档只读认证，均退出0。提前释放候选在本次测量中降低局部RSS和累计峰值，但认证耗时99.214→100.751秒、CPU83.565→88.717秒，未证明提速，故未安装；新身份未写入旧库。双run的300秒缺口仍在，详见[本轮诊断](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)。
 
 预算绑定各自任务；一次允许扩大容量或时间不授权后续自动扩大。系统不连接券商、不下单，外部消息、收费服务和部署切换按明确授权执行。保留[第三方通知](THIRD_PARTY_NOTICES.md)，MiroFish适用AGPL-3.0。

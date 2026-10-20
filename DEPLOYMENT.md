@@ -33,7 +33,7 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 ## 独立本地盘前命令
 
-[独立源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)是新增的显式离线构建/校验工具：只创建新目录，不修改原 worker、request、budget，不自动更新 locator 或服务。正式路径32项隔离测试通过，另已构建独立源码快照并完成离线入口/身份校验；没有开展其真实采集或启用到现有部署。未来使用仍须另行核对解释器、来源身份与网络授权；旧 cache 引用的三个 producer 原路径须继续保留，不能以副本替换旧物理身份。
+[独立源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)提供显式离线构建/校验工具：只创建新目录，不修改原 worker、request、budget，不自动更新 locator 或服务。既有32项隔离检查与源码快照离线校验分别保留。其后已按单独授权从该快照执行[10月21日盘前尝试](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)：3个官方目录完成后触采集读取限额，capture余额为0，退出4；没有核心run、名单或后验，未切换部署。继续采集不能仅凭其余请求/时间余额启动，须另行处理预算与授权。旧 cache 引用的三个 producer 原路径须继续保留，不能以副本替换旧物理身份。
 
 新增[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)：在已有项目Python环境、`stock-fish/`目录执行 `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
 
@@ -45,7 +45,7 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 命令要求已有当前结构数据库和 state，遇旧结构或活动服务锁立即拒绝，不自动迁库、回收其他任务或停启服务。每日后验必须使用已鉴证的精确当日 input、明确 run 列表、交易日收盘后实际截止；计划、待办和状态查询只读。默认每批最多 5 个 run，超限拒绝而不截断；失败重试需显式调用。没有新建定时任务或扩大采集预算。本轮真实与夹具验收范围及尚未完成的连续每日交付分别见交付记录。
 
-大归档的[原执行记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)及[后续部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)保留同次鉴证内 typed 复用、数据库双父全文 hash、全部来源及事务末终验。默认128行编码与显式闭环1024行 profile 分别绑定身份；快速路径仍限精确模型、tuple和精确行类型，其他整输入走原参考。仅全5期限 PENDING、无 DUE/UNKNOWN 且私有鉴证证明池非空时避免展开未借出的 run，空池继续原完整检查。9个 normalizer 文件不变。本轮16文件对应676项组合回归通过，行批次与完整 C Unicode 编码不保证恒定内存。
+大归档的[原执行记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)及[后续部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)保留同次鉴证内 typed 复用、数据库双父全文 hash、全部来源及事务末终验。默认128行编码与显式闭环1024行 profile 分别绑定身份；快速路径仍限精确模型、tuple和精确行类型，其他整输入走原参考。仅全5期限 PENDING、无 DUE/UNKNOWN 且私有鉴证证明池非空时避免展开未借出的 run，空池继续原完整检查。9个 normalizer 文件不变。此前16文件对应676项组合回归通过，行批次与完整 C Unicode 编码不保证恒定内存。
 
 历史10月16日单 run 在相同源码的隔离克隆中显式重试成功，随后幂等、三产品回读和独立 H1 通过；原正式失败不改判。双 run 两次仍触及300秒且无新产品/ledger。每次完整鉴证共享300秒、RSS 2 GiB、唯一原件4 GiB、实际读取8 GiB和4096文件上限；外层等待或子进程 watchdog 不扩大这些额度。默认5条或显式1–100上限不构成容量承诺，不能据单次通过切换生产。事务末终验在同一写事务内持锁完成，并发写与锁等待尚未经过生产负载验收。
 
