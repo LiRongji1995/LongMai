@@ -6,11 +6,13 @@
 
 ## 当前系统
 
+最新10月20日盘前仅有目录、当日日线缓存 COMPLETE；一次获准重采因一个复权 PARTIAL 缺 RAW 首见钟而在核心前失败，未生成可信10月21日名单。新增[独立源码 bundle V2](PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)为未来全新 CaptureCache attempt 保留真实 checkpoint 时钟，正式路径32项隔离测试与独立源码快照的离线入口/身份校验通过；工具显式且未启用，没有新真实 bundle 采集，不恢复旧 checkpoint 或迁移旧 producer 引用。
+
 [独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)补充新的哈希锁运行环境、standalone 原生归档的完整来源鉴证和同库追加桥接，以及明确当日输入的每日后验作业。桥接保留原 run/input、五导出和实际新导入时间；不执行策略，不恢复已失去的内存 owner，不授予历史 PIT。每日待办与成熟度分开，作业批次的产品和账本原子提交；旧配置、策略与调度保持，运行部署和连续真实观察仍单独验收。
 
-本轮[当日可信输入、每日验收与性能](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)补齐事务末来源与借用对象终验，减少 JSON 编码、官方导出复制及同次鉴证内 typed 对象的重复持有。128 行 TypeAdapter 路径限定精确模型、tuple 容器及精确行类型，其余整输入走原参考 hash；9 个 normalizer 依赖文件、数据库父全文、来源时钟、历史 owner 拒绝与 UNKNOWN/PENDING 语义保持。本轮交付源码已通过最终 275 项组合回归。
+本轮[历史闭环部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)对应16个源码/测试文件及676项组合回归。工程保持完整来源、双父实际全文、冻结公式和事务末终验，以线程内短读连接、显式1024行 typed 编码、同次私有 proof 的二次解码减少实现开销；`AUTHENTICATED_NONEMPTY_V1` 仅在全5期限 PENDING、无 DUE/UNKNOWN 且已鉴证非空时避免未借出 run 的展开。9个 normalizer 文件、精确类型回退和空池完整检查保持。
 
-10月16日观察、10月19日目标的 standalone 已封存并退出 2，新闻 UNKNOWN、题材 PARTIAL 保留。最终两份真实归档导入通过，但每日 worker 失败，无新增后验文档或完成账本；显式诊断重试在父文档认证阶段触发原时间预算，尚未完成全部认证、借用和评估，不能用诊断结果反推正式脱敏失败原因。幂等、产品回读和独立 H1 审计未运行，当日后验未完成，原共享 300 秒/2 GiB 内的闭环资源瓶颈仍待解决。生产未切换，连续每日可靠性及投资优势未成立；详细尝试与资源实测归入主报告。
+历史10月16日单 run 在相同源码的隔离克隆中显式重试成功，worker 292.136秒，随后幂等、三产品回读和独立 H1（全池3041、研究集合25）通过。原当日及正式失败记录不改判；closed-session replay 的历史资料截止不改变系统/作业实际时钟。双 run 两次均在原300秒内未完成、无新产品，只测试了一条到期加一条 PENDING，不能外推两个成熟 run、默认5条容量或连续每日可靠性。原始尝试见[当日执行记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)，各阶段证据见新的部分验收记录。
 
 新增[运行安全、短周期后验与性能第一阶段](BASELINE_OUTCOME_PERFORMANCE_V1.md)。运行身份由独立 doctor 实际导入诊断，调度 readiness 使用成功轮询与停滞状态；Research 健康别名鉴权和 SSE、Live 本机访问与 WebSocket 均有容量边界。SQLite 追加版本化查询索引，单 run 读取仍核原内容 hash；正式运行库未迁移。R1/R2 的新后验版本在同一权威服务库追加逐交易会话观察、跟踪与复盘，不改保存名单，不套用 SAM episode 或账户成交语义，也不恢复普通归档 JSON 的来源能力。原默认环境与本轮新独立环境分开报告；真实连续后验和全链性能仍需验证。
 

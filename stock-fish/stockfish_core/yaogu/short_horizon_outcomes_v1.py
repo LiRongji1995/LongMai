@@ -14,8 +14,10 @@ import hashlib
 import json
 
 from .contracts import digest
-from .history_artifacts import digest_json_stream, digest_market_input, history_resolver, iter_history_securities
+from .history_artifacts import digest_market_input as _reference_digest_market_input
+from .history_artifacts import history_resolver, iter_history_securities
 from .outcomes import _bar_map, _price_valid
+from .short_horizon_archive_bridge_v1 import digest_json_stream, digest_market_input, validate_encoding_profile
 from .visibility import stamp
 
 VERSION = 'SHORT_HORIZON_OUTCOME_V1'
@@ -30,6 +32,20 @@ NAMESPACES = {
     'review': 'short_horizon_review_revisions_v1',
 }
 SH = ZoneInfo('Asia/Shanghai')
+
+
+def _outcome_input_hash(bundle, *, checkpoint, encoding_profile=None):
+    # This optimization is for inline inputs. Historical storage keeps its
+    # original digest and owner/resolver behavior, including fail-closed reads.
+    if encoding_profile is not None:
+        validate_encoding_profile(encoding_profile)
+    if bundle.history_artifact_ref or bundle.history_artifact_hash or bundle._history_store is not None:
+        checkpoint()
+        value = _reference_digest_market_input(bundle)
+        checkpoint()
+        return value
+    options = {'encoding_profile': encoding_profile} if encoding_profile is not None else {}
+    return digest_market_input(bundle, checkpoint=checkpoint, **options)
 
 
 def validated_horizons(horizons=None):
@@ -121,7 +137,7 @@ def _daily_price_parent_reason(bar, session, resolver):
     return None
 
 
-def evaluate(run, bundle, evaluated_at: datetime, *, horizons=None, checkpoint=None):
+def evaluate(run, bundle, evaluated_at: datetime, *, horizons=None, checkpoint=None, encoding_profile=None):
     """Return three immutable products sharing a content-derived revision ID.
 
     The identity excludes wall-clock evaluation time: repeated evaluation with
@@ -131,6 +147,8 @@ def evaluate(run, bundle, evaluated_at: datetime, *, horizons=None, checkpoint=N
     horizons = validated_horizons(horizons)
     checkpoint = checkpoint or (lambda: None)
     checkpoint()
+    if encoding_profile is not None:
+        validate_encoding_profile(encoding_profile)
     evaluated_at = stamp(evaluated_at)
     if bundle.coverage_type not in {'TEST_FIXTURE', 'PROSPECTIVE_CAPTURED', 'RECONSTRUCTED_HISTORICAL'}:
         raise ValueError('SHORT_HORIZON_UNVERIFIABLE_OUTCOME_COVERAGE')
@@ -139,7 +157,7 @@ def evaluate(run, bundle, evaluated_at: datetime, *, horizons=None, checkpoint=N
         raise ValueError('SHORT_HORIZON_FROZEN_RUN_REQUIRED')
     if run.get('coverage_type') not in {'TEST_FIXTURE', 'PROSPECTIVE_CAPTURED', 'RECONSTRUCTED_HISTORICAL'}:
         raise ValueError('SHORT_HORIZON_UNVERIFIABLE_SIGNAL_COVERAGE')
-    frozen_hash = digest_json_stream({k: v for k, v in run.items() if k != 'content_hash'})
+    frozen_hash = digest_json_stream({k: v for k, v in run.items() if k != 'content_hash'}, checkpoint=checkpoint)
     if run.get('content_hash') != frozen_hash:
         raise ValueError('SHORT_HORIZON_RUN_CONTENT_HASH_MISMATCH')
     if evaluated_at < max(stamp(run['decision_cutoff']), stamp(run.get('generated_at', run['decision_cutoff']))):
@@ -265,18 +283,21 @@ def evaluate(run, bundle, evaluated_at: datetime, *, horizons=None, checkpoint=N
             'observed_sessions', 'pending_sessions', 'unknown_sessions', 'required_sessions', 'reason_codes')}
             for r in rows[-len(horizons):]]
     checkpoint()
+    encoding_options = {'encoding_profile': encoding_profile} if encoding_profile is not None else {}
     identity = {'schema_version': VERSION, 'run_id': run['run_id'], 'signal_content_hash': frozen_hash,
-        'signal_input_id': run['input_id'], 'outcome_input_id': 'market_' + digest_market_input(bundle),
+        'signal_input_id': run['input_id'], 'outcome_input_id': 'market_' + _outcome_input_hash(
+            bundle, checkpoint=checkpoint, **encoding_options),
         'horizons': list(horizons), 'calendar_hash': digest(bundle.sessions),
         'calendar_evidence': calendar_evidence,
         'evaluator_source_hash': hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
         'dependency_source_hashes': {name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-            for name in ('outcomes.py', 'visibility.py', 'history_artifacts.py', 'contracts.py')},
+            for name in ('outcomes.py', 'visibility.py', 'history_artifacts.py', 'contracts.py',
+                         'short_horizon_archive_bridge_v1.py')},
         'calendar_implementation_hashes': {name: hashlib.sha256((Path(__file__).resolve().parents[1] / name).read_bytes()).hexdigest()
             for name in ('observed_data.py', 'data.py')},
         'effective_evidence': resolver.effective_dependencies(),
         'rows': rows}
-    revision_id = 'short_outcome_' + digest_json_stream(identity)
+    revision_id = 'short_outcome_' + digest_json_stream(identity, checkpoint=checkpoint)
     common = {k: v for k, v in identity.items() if k != 'rows'}
     common.update(revision_id=revision_id, evaluated_at=evaluated_at.isoformat(),
         observation_date=str(signal_day), strategy_id=run['strategy_id'],

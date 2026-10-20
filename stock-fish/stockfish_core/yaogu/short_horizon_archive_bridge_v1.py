@@ -105,10 +105,23 @@ def digest_json_stream(value, *, checkpoint=None):
 
 
 _TYPED_BATCH_ROWS = 128
+DEFAULT_ENCODING_PROFILE = 'TYPED_ROWS_128_V1'
+CLOSURE_ENCODING_PROFILE = 'TYPED_ROWS_1024_V1'
+_ENCODING_PROFILE_ROWS = {
+    DEFAULT_ENCODING_PROFILE: _TYPED_BATCH_ROWS,
+    CLOSURE_ENCODING_PROFILE: 1024,
+}
 _TYPED_BATCH_ADAPTERS = {
     DailyBar: TypeAdapter(tuple[DailyBar, ...]),
     SecurityRecord: TypeAdapter(tuple[SecurityRecord, ...]),
 }
+
+
+def validate_encoding_profile(profile):
+    """Select an explicit fixed row-batch policy, never a resource-budget override."""
+    _require(type(profile) is str and profile in _ENCODING_PROFILE_ROWS,
+        'ENCODING_PROFILE_INVALID')
+    return profile
 
 
 def _typed_batch_eligible(bundle):
@@ -118,14 +131,17 @@ def _typed_batch_eligible(bundle):
         and all(type(row) is SecurityRecord for row in bundle.universe.securities))
 
 
-def _typed_canonical_chunks(bundle, *, checkpoint=None):
+def _typed_canonical_chunks(bundle, *, checkpoint=None, encoding_profile=DEFAULT_ENCODING_PROFILE):
     """Keep the frozen row-wise identity with fixed-size model row batches.
 
     The row count is bounded, not each row's size or the remaining envelope.
     Only exact validated containers and row types use the Rust serializer;
     other inputs retain immediate per-row dump/encoding order.
     No full input dump or mutable-object hash cache is introduced.
+    The explicit closure profile changes row-count/checkpoint granularity only;
+    complete fields, byte identity, UTF-8 copies, and caller budgets remain.
     """
+    batch_rows = _ENCODING_PROFILE_ROWS[validate_encoding_profile(encoding_profile)]
     check = checkpoint or (lambda: None)
     use_batches = _typed_batch_eligible(bundle)
 
@@ -146,7 +162,7 @@ def _typed_canonical_chunks(bundle, *, checkpoint=None):
         source, emitted = iter(values), False
         while True:
             check()
-            batch = tuple(islice(source, _TYPED_BATCH_ROWS))
+            batch = tuple(islice(source, batch_rows))
             if not batch:
                 break
             if all(type(row) is model_type for row in batch):
@@ -202,8 +218,9 @@ def _typed_canonical_chunks(bundle, *, checkpoint=None):
     check()
 
 
-def digest_market_input(bundle, *, checkpoint=None):
+def digest_market_input(bundle, *, checkpoint=None, encoding_profile=DEFAULT_ENCODING_PROFILE):
     """Bridge-local equivalent of the unchanged normalizer identity helper."""
+    validate_encoding_profile(encoding_profile)
     if checkpoint is not None:
         checkpoint()
     if not _typed_batch_eligible(bundle):
@@ -213,7 +230,7 @@ def digest_market_input(bundle, *, checkpoint=None):
         result = _reference_digest_market_input(bundle)
     else:
         digest = hashlib.sha256()
-        for chunk in _typed_canonical_chunks(bundle, checkpoint=checkpoint):
+        for chunk in _typed_canonical_chunks(bundle, checkpoint=checkpoint, encoding_profile=encoding_profile):
             digest.update(chunk)
         result = digest.hexdigest()
     if checkpoint is not None:
@@ -221,16 +238,20 @@ def digest_market_input(bundle, *, checkpoint=None):
     return result
 
 
+def _nonfinite_json(_):
+    raise ValueError('R2_ARCHIVE_BRIDGE_NONFINITE_JSON')
+
+
 def _json(raw):
     def pairs(items):
-        result = {}
-        for key, value in items:
-            _require(key not in result, 'DUPLICATE_JSON_KEY')
-            result[key] = value
+        # The JSON decoder supplies a complete list of string-key pairs.
+        # Building the dict in C and comparing cardinalities still checks
+        # every key (including escaped-equivalent names), without one Python
+        # function call per field in the full market input and frozen run.
+        result = dict(items)
+        _require(len(result) == len(items), 'DUPLICATE_JSON_KEY')
         return result
-    def invalid(_):
-        raise ValueError('R2_ARCHIVE_BRIDGE_NONFINITE_JSON')
-    return json.loads(raw, object_pairs_hook=pairs, parse_constant=invalid)
+    return json.loads(raw, object_pairs_hook=pairs, parse_constant=_nonfinite_json)
 
 
 def _sha(value):
@@ -270,7 +291,9 @@ class ArchiveVerificationSession:
     """
     def __init__(self, *, checkpoint=None, max_total_read_bytes=8 * 1024**3,
                  max_unique_bytes=4 * 1024**3, max_files=4096,
-                 max_seconds=300, max_rss_bytes=2 * 1024**3):
+                 max_seconds=300, max_rss_bytes=2 * 1024**3,
+                 encoding_profile=DEFAULT_ENCODING_PROFILE):
+        self.encoding_profile = validate_encoding_profile(encoding_profile)
         for value in (max_total_read_bytes, max_unique_bytes, max_files, max_rss_bytes):
             _require(type(value) is int and value > 0,
                 'POSITIVE_SESSION_BUDGET_REQUIRED')
@@ -282,6 +305,8 @@ class ArchiveVerificationSession:
         self.started = time.monotonic()
         self.files, self.capabilities, self.locators = {}, {}, []
         self._verified_views, self._borrowed_values = {}, {}
+        self._pending_run_projections, self._borrowed_identities = {}, {}
+        self._projection_audit_enabled = False
         self.read_bytes = self.unique_bytes = self.terminal_count = 0
         self.check()
 
@@ -354,7 +379,8 @@ class ArchiveVerificationSession:
             self.check()
             if typed:
                 _inline_typed_input(value)
-            actual = digest_market_input(value, checkpoint=self.check) if typed else digest_json_stream(value, checkpoint=self.check)
+            actual = digest_market_input(value, checkpoint=self.check,
+                encoding_profile=self.encoding_profile) if typed else digest_json_stream(value, checkpoint=self.check)
             _require(actual == expected, 'BORROWED_VERIFIED_CONTENT_CHANGED')
             self.check()
         self.terminal_count += 1
@@ -368,12 +394,25 @@ class ArchiveVerificationSession:
         self.check()
 
     def audit(self):
-        return dict(files=len(self.files), unique_bytes=self.unique_bytes, actual_read_bytes=self.read_bytes,
+        result = dict(files=len(self.files), unique_bytes=self.unique_bytes, actual_read_bytes=self.read_bytes,
             elapsed_seconds=round(time.monotonic() - self.started, 6), terminal_rereads=self.terminal_count,
             borrowed_values=len(self._borrowed_values), verified_views=len(self._verified_views),
             peak_rss_bytes=_rss(),
             limits=dict(total_read_bytes=self.max_total_read_bytes, unique_bytes=self.max_unique_bytes,
                 files=self.max_files, seconds=self.max_seconds, rss_bytes=self.max_rss_bytes))
+        # Preserve the legacy default audit shape. Explicit profiles are
+        # observable without changing the strategy or input canonical identity.
+        if self.encoding_profile != DEFAULT_ENCODING_PROFILE:
+            result.update(encoding_profile=self.encoding_profile,
+                batch_rows=_ENCODING_PROFILE_ROWS[validate_encoding_profile(self.encoding_profile)])
+        if self._projection_audit_enabled:
+            _require(set(self._borrowed_identities) == set(self._borrowed_values),
+                'BORROWED_IDENTITY_AUDIT_INCOMPLETE')
+            result['pending_run_projections'] = deepcopy(sorted(self._pending_run_projections.values(),
+                key=lambda row: (row['run_id'], row['bridge_id'])))
+            result['borrowed_value_identities'] = deepcopy(sorted(self._borrowed_identities.values(),
+                key=lambda row: (row['kind'], row['document_id'], row['bridge_id'], row['content_hash'])))
+        return result
 
     def __enter__(self):
         return self
@@ -755,7 +794,8 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     normalized, normalization_report = normalize_capture_with_report(results, observation_date, cutoff,
         sessions, coverage_type=coverage_type)
     session.check()
-    _require(digest_market_input(normalized, checkpoint=session.check) == input_hash == run['input_hash']
+    _require(digest_market_input(normalized, checkpoint=session.check,
+        encoding_profile=session.encoding_profile) == input_hash == run['input_hash']
         and normalization_report == manifest['normalization_report'], 'FRESH_NORMALIZATION_DIFFERS_FROM_ORIGINAL_INPUT')
     if retain_input:
         _inline_typed_input(normalized)
@@ -803,6 +843,7 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
         # and the source terminal. This private copy describes those originals;
         # it is never reconstructed from a serialized audit or caller metadata.
         run_metadata={name: deepcopy(run.get(name)) for name in _RUN_METADATA_FIELDS},
+        pool_nonempty=bool(run['results'][STRATEGY]['items']),
         run_reference=deepcopy(artifacts['canonical-run.json.gz']),
         input_reference=deepcopy(artifacts['input.json.gz']),
         input_index=dict(input_id=run['input_id'], observation_date=run['observation_date'],
@@ -1125,6 +1166,9 @@ def _view_store_identity(service):
 def _check_verified_view(service, proof, session):
     """A small invocation proof is bound to this actual store and originals."""
     session.check()
+    _require(proof.get('session_ref', lambda: None)() is session
+        and any(value is proof for value in session._verified_views.values()),
+        'GENUINE_INVOCATION_VIEW_REQUIRED')
     _require(proof['store'] is service.store and proof['store_identity'] == _view_store_identity(service),
         'VERIFIED_VIEW_STORE_MISMATCH')
     _require(service.store.get_document(proof['namespace'], proof['document_id']) == proof['binding']
@@ -1138,8 +1182,44 @@ def _check_verified_view(service, proof, session):
         _require(service.store.get_document(SOURCES, document_id) == expected, 'BRIDGED_SOURCE_REGISTRATION_CHANGED')
 
 
+def _verified_second_run_decode(proof, session):
+    """Decode the exact run bytes already strictly parsed in this invocation.
+
+    The registered reference hashes the compressed original, including its
+    seven physical identity fields. The bounded gzip decoder is unchanged.
+    Only duplicate-key detection is omitted on this second stdlib parse: the
+    identical original already passed it before the private proof was minted.
+    This helper neither creates authority nor replaces the caller's store and
+    full canonical checks or the terminal guard on the borrowed mutable run.
+    """
+    _require(type(session) is ArchiveVerificationSession
+        and any(value is proof for value in session._verified_views.values())
+        and proof.get('session_ref', lambda: None)() is session,
+        'GENUINE_INVOCATION_VIEW_REQUIRED')
+    ref = _ref(proof['run_reference'])
+    _require(session.files.get(ref['path']) == ref, 'STRICTLY_AUTHENTICATED_RUN_REFERENCE_REQUIRED')
+    session.check()
+    raw = _decompressed_bytes(session.read(ref['path'], ref), session)
+    session.check()
+    run = json.loads(raw, parse_constant=_nonfinite_json)
+    del raw
+    session.check()
+    return run
+
+
+def _record_borrowed_identity(session, proof, value, *, typed):
+    credential = proof['credential']
+    identity = dict(kind='input' if typed else 'run',
+        document_id=credential['input_id' if typed else 'run_id'],
+        content_hash=proof['input_hash' if typed else 'run_hash'],
+        bridge_id=credential['bridge_id'], run_id=credential['run_id'], input_id=credential['input_id'])
+    previous = session._borrowed_identities.get(id(value))
+    _require(previous is None or previous == identity, 'BORROWED_IDENTITY_CHANGED')
+    session._borrowed_identities[id(value)] = identity
+
+
 def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, borrow_run=False,
-                              retain_input=False):
+                              retain_input=False, include_archive_seal=False, borrow_if_empty=False):
     """Return small authenticated metadata, optionally lending one frozen run.
 
     Returned metadata is descriptive, never a serializable import capability.
@@ -1147,12 +1227,19 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
     for any borrowed mutable object. A plain view cannot authorize the loader.
     Only an explicit input view may retain the fresh normalizer's typed input;
     it remains private and the loader still checks its complete canonical hash.
+    The opt-in nonempty projection is only a fact about the fully authenticated
+    original pool. The caller must independently establish all-PENDING horizons.
+    Empty pools still borrow the complete original for the existing empty-pool
+    contract; a projection never turns missing evidence into a legal empty run.
     """
     _require(isinstance(session, ArchiveVerificationSession), 'GENUINE_SESSION_REQUIRED')
     _require((run_id is None) != (input_id is None) and type(borrow_run) is bool,
         'ONE_VERIFIED_VIEW_KEY_REQUIRED')
     _require(type(retain_input) is bool and (not retain_input or input_id is not None),
         'RETAIN_INPUT_REQUIRES_INPUT_VIEW')
+    _require(type(include_archive_seal) is bool, 'INCLUDE_ARCHIVE_SEAL_BOOL_REQUIRED')
+    _require(type(borrow_if_empty) is bool and (not borrow_if_empty or
+        run_id is not None and not borrow_run), 'BORROW_IF_EMPTY_REQUIRES_EXCLUSIVE_RUN_VIEW')
     namespace, document_id = (RUN_BINDINGS, run_id) if run_id is not None else (INPUT_BINDINGS, input_id)
     _require(isinstance(document_id, str) and document_id, 'VERIFIED_VIEW_KEY_REQUIRED')
     key = (id(service.store), namespace, document_id)
@@ -1167,13 +1254,15 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         credential, state = _verified(service, namespace, document_id, session, return_state=True,
                                       retain_input=retain_input)
         run = _verified_run(state) if borrow_run else None
-        proof = dict(store=service.store, store_identity=_view_store_identity(service),
+        proof = dict(session_ref=weakref.ref(session), store=service.store, store_identity=_view_store_identity(service),
             namespace=namespace, document_id=document_id, credential=deepcopy(credential),
             certificate=service.store.get_document(CERTIFICATES, credential['bridge_id']),
             binding=service.store.get_document(namespace, document_id),
             run_hash=state['run_hash'], input_hash=state['input_hash'],
             run_reference=deepcopy(state['run_reference']), input_reference=deepcopy(state['input_reference']),
             run_metadata=deepcopy(state['run_metadata']),
+            pool_nonempty=state['pool_nonempty'],
+            archive_sealed_at=state['audit']['original_final_sealed_at'],
             input_metadata=dict(input_id=credential['input_id'], input_hash=state['input_hash'],
                 observation_date=state['input_index']['observation_date'],
                 coverage_type=state['input_index']['coverage_type'], sessions=list(state['input_sessions'])),
@@ -1201,14 +1290,26 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         retained = proof.get('borrowed_input')
         _inline_typed_input(proof.get('retained_input') if retained is None else retained)
     result = {name: deepcopy(proof[name]) for name in ('credential', 'run_metadata', 'input_metadata')}
-    if borrow_run:
+    if include_archive_seal:
+        result['archive_sealed_at'] = proof['archive_sealed_at']
+    if borrow_if_empty:
+        _require(type(proof.get('pool_nonempty')) is bool, 'AUTHENTICATED_POOL_PROJECTION_REQUIRED')
+        result.update(pool_nonempty=proof['pool_nonempty'], run=None)
+        session._projection_audit_enabled = True
+        if proof['pool_nonempty']:
+            credential = proof['credential']
+            projection = {name: credential[name] for name in
+                ('run_id', 'bridge_id', 'input_id', 'input_hash', 'signal_content_hash')}
+            projection.update(run_document_hash=proof['run_hash'], pool_nonempty=True)
+            session._pending_run_projections[(credential['run_id'], credential['bridge_id'])] = projection
+    if borrow_run or borrow_if_empty and not proof['pool_nonempty']:
         run = proof.get('borrowed_run') or run
         if run is None:
-            ref = proof['run_reference']
-            run = _decompress(session.read(ref['path'], ref), session)
+            run = _verified_second_run_decode(proof, session)
         _require(digest_json_stream(run, checkpoint=session.check) == proof['run_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
         proof['borrowed_run'] = run
         session._borrowed_values[id(run)] = (run, proof['run_hash'], False)
+        _record_borrowed_identity(session, proof, run, typed=False)
         result['run'] = run
     session.check()
     return result
@@ -1236,8 +1337,10 @@ def load_verified_bridge_input(service, input_id, *, session):
         del raw
         gc.collect()
     _inline_typed_input(bundle)
-    _require(digest_market_input(bundle, checkpoint=session.check) == proof['input_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
+    _require(digest_market_input(bundle, checkpoint=session.check,
+        encoding_profile=session.encoding_profile) == proof['input_hash'], 'BORROWED_VERIFIED_CONTENT_CHANGED')
     proof['borrowed_input'] = bundle
     session._borrowed_values[id(bundle)] = (bundle, proof['input_hash'], True)
+    _record_borrowed_identity(session, proof, bundle, typed=True)
     session.check()
     return bundle

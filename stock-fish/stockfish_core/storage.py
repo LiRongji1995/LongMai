@@ -1,7 +1,8 @@
 """Transactional local storage. Immutable facts and mutable job state are separate.
 
 SQLite is the durable source of truth; Python objects and caches are expendable.
-Connections are short lived and never shared between worker threads.
+Connections are never shared between worker threads. An explicit worker scope
+may reuse an idle read connection while every transaction remains short lived.
 """
 from __future__ import annotations
 
@@ -12,7 +13,8 @@ import os
 import re
 from pathlib import Path
 import sqlite3
-from threading import RLock
+import stat
+from threading import RLock, get_ident, local
 from typing import Any, Iterator
 
 from .common import canonical_json, utc_now, UnavailableError
@@ -139,6 +141,84 @@ def checked_payload(row: sqlite3.Row | dict) -> dict:
     return value
 
 
+_READ_CONNECTION_SCOPES = local()
+
+
+class _ReadConnectionScope:
+    def __init__(self, store):
+        self.store, self.path, self.thread_id = store, store.path, get_ident()
+        self.connection, self.in_use = None, False
+        self.active_depth, self.closed = 0, False
+        physical = self.path.lstat()
+        if not stat.S_ISREG(physical.st_mode):
+            raise StorageError('scoped read connection requires a regular database')
+        self.identity = physical.st_dev, physical.st_ino
+
+    def validate(self):
+        if self.closed or get_ident() != self.thread_id or self.store.path != self.path:
+            raise StorageError('scoped read connection ownership changed')
+        try:
+            physical = self.path.lstat()
+        except OSError as exc:
+            raise StorageError('scoped database identity unavailable') from exc
+        if (not stat.S_ISREG(physical.st_mode)
+                or (physical.st_dev, physical.st_ino) != self.identity):
+            raise StorageError('scoped database physical identity changed')
+
+    def acquire(self):
+        self.validate()
+        self.in_use = True
+        if self.connection is not None:
+            if self.connection.in_transaction:
+                raise StorageError('scoped read connection has an unfinished transaction')
+            self.connection.row_factory = sqlite3.Row
+            self.connection.text_factory = str
+            # A reusable cancellation reader must never resolve a shadow jobs
+            # table or keep an attached database from another operation.
+            if (self.connection.execute('SELECT 1 FROM sqlite_temp_master LIMIT 1').fetchone()
+                    or any(row[1] not in {'main', 'temp'} for row in
+                           self.connection.execute('PRAGMA database_list'))):
+                self.close()
+        if self.connection is None:
+            self.connection = self.store._connect()
+        self.connection.row_factory = sqlite3.Row
+        self.connection.text_factory = str
+        self.connection.isolation_level = None
+        # Read every required setting on every borrow. Unconditional setting
+        # can invalidate otherwise reusable prepared statements even when the
+        # connection already has the required value. Never cache acceptance.
+        for name, expected in (('foreign_keys', 1),
+                ('busy_timeout', int(self.store.timeout * 1000)),
+                ('synchronous', 2), ('recursive_triggers', 1), ('query_only', 1)):
+            current = self.connection.execute('PRAGMA ' + name).fetchone()
+            if current is None:
+                raise StorageError('scoped read connection setting unavailable')
+            if current[0] != expected:
+                self.connection.execute(f'PRAGMA {name}={expected}')
+        self.validate()
+        return self.connection
+
+    @contextmanager
+    def activate(self):
+        """Opt in only around a known read, not all work in the outer scope."""
+        self.validate()
+        self.active_depth += 1
+        try:
+            yield
+        finally:
+            self.active_depth -= 1
+
+    def release(self, *, failed):
+        self.in_use = False
+        if failed:
+            self.close()
+
+    def close(self):
+        connection, self.connection = self.connection, None
+        if connection is not None:
+            connection.close()
+
+
 class SQLiteStore:
     """WAL/FULL synchronous, schema-versioned, thread-safe by connection isolation."""
 
@@ -169,13 +249,46 @@ class SQLiteStore:
         return connection
 
     @contextmanager
+    def read_connection_scope(self):
+        """Own this thread's optional reader; activate only known safe reads.
+
+        Transaction entry points and subclass validation remain unchanged.
+        Writes and nested reads use separate connections. Cancellation reads
+        therefore see committed external changes even during atomic publication.
+        """
+        scopes = getattr(_READ_CONNECTION_SCOPES, 'values', None)
+        if scopes is None:
+            scopes = _READ_CONNECTION_SCOPES.values = {}
+        if self in scopes:
+            scopes[self].validate()
+            yield scopes[self]
+            return
+        scope = scopes[self] = _ReadConnectionScope(self)
+        try:
+            yield scope
+        finally:
+            del scopes[self]
+            try:
+                scope.close()
+            finally:
+                scope.closed = True
+
+    @contextmanager
     def transaction(self, *, write: bool = True) -> Iterator[sqlite3.Connection]:
         connection = None
+        scope = getattr(_READ_CONNECTION_SCOPES, 'values', {}).get(self)
+        reused = scope is not None and scope.active_depth > 0 and not write and not scope.in_use
+        failed = True
         try:
-            connection = self._connect()
+            if scope is not None:
+                scope.validate()
+            connection = scope.acquire() if reused else self._connect()
             connection.execute("BEGIN IMMEDIATE" if write else "BEGIN")
             yield connection
+            if scope is not None:
+                scope.validate()
             connection.commit()
+            failed = False
         except sqlite3.Error as exc:
             if connection:
                 connection.rollback()
@@ -185,7 +298,9 @@ class SQLiteStore:
                 connection.rollback()
             raise
         finally:
-            if connection:
+            if reused:
+                scope.release(failed=failed)
+            elif connection:
                 connection.close()
 
     def _migrate(self) -> None:

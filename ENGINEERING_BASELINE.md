@@ -29,8 +29,10 @@ Go的构建与隔离运行见[Go说明](stock-fish-go/README.md)，架构与证�
 
 后续[独立环境与 R2 闭环交付](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)使用两个新建的完整哈希锁环境验收。工程测试经 `run_isolated_tests.py` 在所选 venv 中执行，禁止混入其他环境的 site-packages；真实归档衔接另在新建隔离服务库验收。桥接凭证不能代替原件、供应商签名或历史 PIT；每日作业与逐项成熟度分别报告。只读入口不初始化业务配置或作业恢复，写入口先持有数据库作业锁，批次产品和完成账本同事务提交。冻结策略及旧结果不因后验工程变动而重算。
 
-[当日验收与性能改进](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)要求大对象优化保持原字节、完整 canonical hash、行序、嵌套迟变、私有 owner、取消与整批回滚；来源终验覆盖最后一笔领域写入后的提交窗口，proof 只属于本次 invocation。128 行 TypeAdapter 快速路径限定精确输入模型、tuple 容器及全部精确行类型，其余整输入走原参考 hash 路径，9 个 normalizer 依赖文件原字节保持。本轮交付源码的最终四组组合回归已通过：185 项 bridge、47 项 daily、20 项 CLI 和 23 项导出，共 275 项，pytest 耗时 415.84 秒、退出 0；工程通过不替代真实每日验收。
+[当日验收原记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)与[历史闭环部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)要求优化保持全部 canonical 字节、行序、嵌套迟变、私有 owner、取消、完整来源和整批回滚。显式1024行 profile、同 store/session 私有 proof 的二次解码、全 PENDING 非空投影均有独立身份；默认与异常输入的参考路径保持。取消和状态查询可复用线程内空闲读连接，每次仍开启短事务，校验结构/索引/迁移及最新取消状态；不跨 sleep 持有快照。9个 normalizer 文件原字节保持。本轮16文件在发布目录的23个测试文件组合中676项通过，pytest 742.24秒、外层743.588秒、退出0；不是全仓或投资验证。
 
-工程检查、真实数据、每日作业和投资结论分别报告。10月16日采集封存退出 2，最终两份真实归档导入通过，但正式每日 worker 失败；事后核对四份父文档不变、新增文档为空、ledger 为 null，幂等/产品回读/独立 H1 审计未运行。同源码显式诊断重试在 `candidate_inputs` 父文档认证阶段报 `R2_ARCHIVE_BRIDGE_SESSION_TIME_BUDGET_EXCEEDED`，全部认证、借用和评估尚未完成；诊断外层退出 0 仅表示异常记录完成，不反推原正式失败的精确原因，也不能认为全链只差几秒。原共享 300 秒/2 GiB 内的闭环资源瓶颈仍待解决，详细尝试与身份留在主报告，不把单项通过表述为当日后验完成。
+工程检查、真实数据、每日作业和投资结论分别报告。原正式失败保留；相同源码、隔离克隆的显式重试完成历史10月16日单 run，后续幂等、三产品实际 BLOB/API 回读与独立 H1 通过。双 run 正式尝试和显式诊断重试仍超过原300秒，无新文档；诊断退出0仅表示记录完成，其 worker 仍为 FAILED。10月20日另一次已授权盘前重采因复权 PARTIAL 缺少原始首见钟而在核心前拒绝，未生成新 run，不补钟、不填零或沿用旧名单。
+
+新增[盘前源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)仅追加工具与TEST_FIXTURE测试，正式路径32项通过（8.22秒，外层9.917秒，退出0）；与676项是两次独立命令，不能合称一次708项全套。它未启用真实运行，不迁移旧 checkpoint 或来源。现有完整来源/旧资料保护检查覆盖1934个文件、319项非本轮 dirty，保护通过；此数值属于对应检查快照，不代表之后任意工作区变化已获授权。
 
 预算绑定各自任务；一次允许扩大容量或时间不授权后续自动扩大。系统不连接券商、不下单，外部消息、收费服务和部署切换按明确授权执行。保留[第三方通知](THIRD_PARTY_NOTICES.md)，MiroFish适用AGPL-3.0。

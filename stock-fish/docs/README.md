@@ -7,7 +7,9 @@
 ### 执行与维护
 
 - [独立环境与 R2 闭环交付](RUNTIME_R2_CLOSURE_DELIVERY_V1.md)：归档鉴证、服务库衔接、每日后验的操作、验收及剩余缺口。
-- [当日可信输入、每日验收与性能](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)：10月16日采集封存退出 2、UNKNOWN 保留；最终两归档导入通过，但每日 worker 失败、无后验产品或完成账本。显式诊断重试在认证阶段触时间预算，当日后验及幂等/回读/H1 验收未完成；本轮交付源码已通过 275 项工程组合回归、待按约定提交，生产未切换。
+- [历史闭环部分验收（2026-10-20）](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)：16文件/676项工程检查；同源码隔离克隆的历史单 run 显式重试、幂等、三产品回读和独立 H1 已通过，原正式失败保持。双 run 两次超300秒、无新增；10月20日重采缺原始首见钟，未产新 run。
+- [盘前因子 checkpoint 与独立源码 bundle V2](PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)：新增显式离线工具，正式路径32项测试及独立源码快照离线核验通过，尚未用于真实采集；不补旧钟或替换原 producer 路径。
+- [当日可信输入、每日验收与性能原记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)：保留10月16日链路的采集、导入、失败与275项工程记录；后续历史重放结论另见上项，不改写原失败。
 - [独立 daily/review 环境](ISOLATED_DAILY_RUNTIME_V1.md)：新目录、官方工件哈希锁、原生平台范围和实际运行检查。
 
 - [独立终端盘前研究V1](STANDALONE_PREMARKET_WORKFLOW_V1.md)：单命令采集、原R2、67会话题材、报道和3亿元展示；不需要Codex或Web服务。

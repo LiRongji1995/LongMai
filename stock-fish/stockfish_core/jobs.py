@@ -61,6 +61,7 @@ class JobContext:
     def __init__(self, service: "JobService", job_id: str):
         self.service = service
         self.job_id = job_id
+        self._cancellation_read_scope = None
 
     @property
     def payload(self) -> dict:
@@ -68,7 +69,14 @@ class JobContext:
 
     @property
     def cancelled(self) -> bool:
-        job = self.service.get(self.job_id)
+        scope = self._cancellation_read_scope
+        if scope is None:
+            job = self.service.get(self.job_id)
+        else:
+            if scope.store is not self.service.store:
+                raise StorageError('job cancellation store changed during worker scope')
+            with scope.activate():
+                job = self.service.get(self.job_id)
         return bool(job["cancel_requested"] or job["state"] in {"CANCELLED", "INTERRUPTED"})
 
     def check_cancelled(self) -> None:
@@ -232,8 +240,13 @@ class JobService:
                                    (now, now, self.owner_id, job_id))
                 self._event(connection, job_id, "RUNNING", row["progress"], {})
             context = JobContext(self, job_id)
-            context.check_cancelled()
-            result = handler(context)
+            with self.store.read_connection_scope() as scope:
+                context._cancellation_read_scope = scope
+                try:
+                    context.check_cancelled()
+                    result = handler(context)
+                finally:
+                    context._cancellation_read_scope = None
             if self.get(job_id)["state"] in TERMINAL_STATES:
                 return  # ctx.complete/ctx.fail already committed the outcome.
             # A returned failure object cannot accidentally become SUCCEEDED.

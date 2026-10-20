@@ -17,6 +17,7 @@ from ..jobs import JobConflict, JobService
 from ..observed_data import exchange_calendar_2026
 from ..storage import ImmutableConflict, checked_payload
 from .contracts import digest
+from .short_horizon_archive_bridge_v1 import CLOSURE_ENCODING_PROFILE, INPUT_BINDINGS
 from .short_horizon_outcomes_v1 import HORIZONS, NAMESPACES, VERSION as OUTCOME_VERSION, SH, evaluate
 from .visibility import stamp
 
@@ -26,6 +27,23 @@ JOB_KIND = 'short_horizon_daily_closure_v1'
 LEDGERS = 'short_horizon_daily_closure_ledgers_v1'
 MAX_ATTEMPTS = 3
 MAX_DISCOVERY_RECORDS = 10000
+REPLAY_VERSION = 'SHORT_HORIZON_CLOSED_SESSION_REPLAY_V1'
+REPLAY_JOB_KIND = 'short_horizon_closed_session_replay_v1'
+REPLAY_LEDGERS = 'short_horizon_closed_session_replay_ledgers_v1'
+REPLAY_MODE = 'EXPLICIT_CLOSED_SESSION_REPLAY'
+PENDING_RUN_MATERIALIZATION = 'AUTHENTICATED_NONEMPTY_V1'
+
+
+def _closed_archive_seal(view, cutoff):
+    # This field must come from this invocation's authenticated private proof,
+    # never from a CLI timestamp, a saved index, or an ordinary JSON receipt.
+    raw = view.get('archive_sealed_at')
+    if raw is None:
+        raise ValueError('SHORT_HORIZON_REPLAY_AUTHENTICATED_ARCHIVE_SEAL_REQUIRED')
+    sealed = stamp(raw).astimezone(timezone.utc)
+    if sealed > cutoff:
+        raise ValueError('SHORT_HORIZON_REPLAY_ARCHIVE_SEALED_AFTER_CUTOFF')
+    return sealed.isoformat()
 
 
 def _policy_identity():
@@ -36,6 +54,8 @@ def _policy_identity():
         'history_artifacts.py', 'contracts.py')]
     paths += [directory.parent / name for name in ('observed_data.py', 'data.py', 'exchange_calendar_2026.json')]
     return {'version': VERSION, 'outcome_policy': OUTCOME_VERSION,
+            'worker_encoding_profile': CLOSURE_ENCODING_PROFILE,
+            'pending_run_materialization': PENDING_RUN_MATERIALIZATION,
             'source_hashes': {path.name: hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}}
 
 
@@ -75,6 +95,37 @@ def _input_calendar(view, input_id):
 class ShortHorizonDailyClosure:
     """Local-admin orchestration; construction, plan and status are read-only."""
 
+
+    version = VERSION
+    job_kind = JOB_KIND
+    ledgers = LEDGERS
+    job_prefix = 'short_daily_'
+
+    def _policy_identity(self):
+        return _policy_identity()
+
+    def _request_identity(self, request):
+        return {key: request[key] for key in ('policy', 'run_ids', 'input_id', 'evaluation_session', 'bindings')}
+
+    def _sealed_cutoff(self, request, evaluated):
+        return None
+
+    def _execution_context(self, request, started_at):
+        return {}
+
+    def _validated_evaluation(self, request):
+        identity = self._request_identity(request)
+        evaluated = stamp(request['evaluated_at'])
+        session_day = evaluated.astimezone(SH).date()
+        if (request['root_job_id'] != self.job_prefix + digest(identity)
+                or request['horizons'] != list(HORIZONS)
+                or request['evaluation_session'] != str(session_day)
+                or session_day not in exchange_calendar_2026().sessions
+                or evaluated.astimezone(SH).time().replace(tzinfo=None) < time(15)
+                or evaluated > stamp(self.clock())):
+            raise ValueError('SHORT_HORIZON_CLOSURE_FROZEN_REQUEST_INVALID')
+        return evaluated, session_day
+
     def __init__(self, service, *, clock=utc_now, max_runs=5):
         if type(max_runs) is not int or not 1 <= max_runs <= 100:
             raise ValueError('SHORT_HORIZON_CLOSURE_MAX_RUNS_REQUIRES_1_TO_100')
@@ -91,14 +142,24 @@ class ShortHorizonDailyClosure:
         return values
 
     def _authenticated(self, run_ids, input_id, session, checkpoint=lambda: None, *, borrow_run=False,
-                       retain_input=False):
+                       retain_input=False, sealed_cutoff=None):
         if not isinstance(input_id, str) or not input_id:
             raise ValueError('SHORT_HORIZON_REGISTERED_OUTCOME_INPUT_ID_REQUIRED')
         bridge = _bridge_module()
+        sealed_archives = {}
+        seal_options = {'include_archive_seal': True} if sealed_cutoff is not None else {}
+        def check_seal(view):
+            if sealed_cutoff is not None:
+                value = _closed_archive_seal(view, sealed_cutoff)
+                key = view['credential']['bridge_id']
+                if key in sealed_archives and sealed_archives[key] != value:
+                    raise ValueError('SHORT_HORIZON_REPLAY_ARCHIVE_SEAL_CONFLICT')
+                sealed_archives[key] = value
         def authenticate_input():
             view = bridge.authenticated_bridge_view(self.service, input_id=input_id, session=session,
-                **({'retain_input': True} if retain_input else {}))
+                **({'retain_input': True} if retain_input else {}), **seal_options)
             certificate = view['credential']
+            check_seal(view)
             checkpoint()
             if certificate.get('input_id') != input_id or not certificate.get('bridge_id'):
                 raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CERTIFICATE_MISMATCH')
@@ -111,12 +172,22 @@ class ShortHorizonDailyClosure:
         # keep their metadata-only path and never request typed retention.
         if not retain_input:
             input_certificate, bundle = authenticate_input()
-        runs, credentials, originals = [], [], []
-        for run_id in run_ids:
+        # A saved input binding is only a scheduling hint. Every requested run
+        # still passes authenticated_bridge_view. Delaying its owning run lets
+        # this invocation reuse the input's fully verified private proof rather
+        # than normalizing that same archive a third time in a multi-run batch.
+        hint, deferred = None, None
+        if retain_input and len(run_ids) > 1:
+            hint = self.service.store.get_document(INPUT_BINDINGS, input_id)
+            if isinstance(hint, dict) and hint.get('run_id') in run_ids:
+                deferred = hint['run_id']
+
+        def authenticate_run(run_id):
             checkpoint()
             view = bridge.authenticated_bridge_view(self.service, run_id=run_id, session=session,
-                                                    borrow_run=borrow_run)
+                                                    borrow_run=borrow_run, **seal_options)
             certificate = view['credential']
+            check_seal(view)
             run = view['run'] if borrow_run else view['run_metadata']
             if (run.get('execution_profile') != 'SHORT_HORIZON_RESEARCH_SINGLE'
                     or run.get('strategy_id') != 'SHORT_HORIZON_STRENGTH_R2'
@@ -124,12 +195,29 @@ class ShortHorizonDailyClosure:
                     or certificate.get('signal_content_hash') != run.get('content_hash')
                     or certificate.get('input_id') != run.get('input_id')):
                 raise ValueError('SHORT_HORIZON_CLOSURE_TRUSTED_FROZEN_R2_REQUIRED')
-            originals.append(_input_calendar(view, run['input_id']))
-            runs.append(run)
-            credentials.append(_credential_identity(certificate))
+            original = _input_calendar(view, run['input_id'])
             session.release_cached_archives()
+            return run, _credential_identity(certificate), original
+
+        authenticated = {}
+        for run_id in run_ids:
+            if run_id != deferred:
+                authenticated[run_id] = authenticate_run(run_id)
         if retain_input:
             input_certificate, bundle = authenticate_input()
+        if deferred is not None:
+            # Neither a stale hint nor an input view grants run authority. The
+            # run-specific API below rechecks its actual binding, certificate,
+            # source registrations and parent bytes under the same store proof.
+            if (input_certificate.get('run_id') != deferred
+                    or any(hint.get(key) != value for key, value in input_certificate.items())
+                    or self.service.store.get_document(INPUT_BINDINGS, input_id) != hint):
+                raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_RUN_HINT_CHANGED')
+            authenticated[deferred] = authenticate_run(deferred)
+        ordered = [authenticated[run_id] for run_id in run_ids]
+        runs = [value[0] for value in ordered]
+        credentials = [value[1] for value in ordered]
+        originals = [value[2] for value in ordered]
         for run, original in zip(runs, originals):
             signal_day = date.fromisoformat(run['observation_date'])
             if signal_day in bundle.sessions and original.sessions:
@@ -140,7 +228,10 @@ class ShortHorizonDailyClosure:
                 current_prefix = tuple(day for day in bundle.sessions if start <= day <= signal_day)
                 if current_prefix != original_prefix:
                     raise ValueError('SHORT_HORIZON_SIGNAL_CALENDAR_PREFIX_CONFLICT')
-        return runs, bundle, {'runs': credentials, 'outcome_input': _credential_identity(input_certificate)}
+        bindings = {'runs': credentials, 'outcome_input': _credential_identity(input_certificate)}
+        if sealed_cutoff is not None:
+            bindings['archive_seals'] = sealed_archives
+        return runs, bundle, bindings
 
     @staticmethod
     def _schedule(runs, bundle, evaluated_at):
@@ -190,19 +281,28 @@ class ShortHorizonDailyClosure:
             reasons.append('EVALUATION_PRECEDES_FROZEN_SIGNAL')
         plans = self._schedule(runs, bundle, evaluated)
         authentication = verification.terminal()
-        policy = _policy_identity()
+        policy = self._policy_identity()
         identity = {'policy': policy, 'run_ids': run_ids, 'input_id': input_id,
                     'evaluation_session': str(session_day), 'bindings': bindings}
-        job_id = 'short_daily_' + digest(identity)
+        job_id = self.job_prefix + digest(identity)
         request = {**identity, 'root_job_id': job_id, 'evaluated_at': evaluated.isoformat(),
                    'horizons': list(HORIZONS)}
-        return {'schema_version': VERSION, 'job_id': job_id, 'status': reasons[0] if reasons else 'READY',
+        return {'schema_version': self.version, 'job_id': job_id, 'status': reasons[0] if reasons else 'READY',
                 'can_submit': not reasons, 'reason_codes': reasons, 'request': request, 'runs': plans,
                 'run_count': len(run_ids), 'max_runs': self.max_runs, 'collection': 'NOT_REQUESTED',
                 'outcome_input_observation_date': str(bundle.observation_date),
                 'outcome_input_latest_session': str(latest_input_session) if latest_input_session else None,
                 'archive_verification': authentication,
                 'market_edge': 'NOT_ESTABLISHED'}
+
+    @staticmethod
+    def _all_horizons_pending(planned):
+        rows = planned.get('horizons')
+        return (planned.get('due_horizons') == [] and planned.get('unknown_horizons') == []
+            and type(rows) is list and len(rows) == len(HORIZONS)
+            and all(type(row) is dict and type(row.get('horizon')) is int
+                    and row['horizon'] == horizon and row.get('maturity_state') == 'PENDING'
+                    for row, horizon in zip(rows, HORIZONS)))
 
     @staticmethod
     def _legal_empty(run):
@@ -303,7 +403,7 @@ class ShortHorizonDailyClosure:
                 break
         authentication = verification.terminal()
         inventory.sort(key=lambda row: (row['observation_date'], row['run_id']))
-        return {'schema_version': VERSION, 'status': gate, 'input_id': input_id,
+        return {'schema_version': self.version, 'status': gate, 'input_id': input_id,
             'outcome_input_observation_date': str(bundle.observation_date),
             'outcome_input_latest_session': str(latest_session) if latest_session else None,
             'evaluation_session': str(day), 'total': len(inventory), 'indexed_run_total': scanned,
@@ -318,23 +418,26 @@ class ShortHorizonDailyClosure:
 
     def submit(self, run_ids, input_id, *, evaluated_at=None):
         plan = self.plan(run_ids, input_id, evaluated_at=evaluated_at)
+        return self._submit_plan(plan)
+
+    def _submit_plan(self, plan):
         if not plan['can_submit']:
             raise ValueError('SHORT_HORIZON_CLOSURE_' + plan['status'])
         self._write_jobs()
-        self.service.jobs.register(JOB_KIND, self._worker)
+        self.service.jobs.register(self.job_kind, self._worker)
         existing = self.service.jobs.get(plan['job_id'])
         if existing is not None:
             # One day's first accepted cutoff is immutable. A later command
             # with the same input returns it, including FAILED/CANCELLED state.
-            if existing['kind'] != JOB_KIND or self._stable_request(existing['payload']) != self._stable_request(plan['request']):
+            if existing['kind'] != self.job_kind or self._stable_request(existing['payload']) != self._stable_request(plan['request']):
                 raise JobConflict('daily closure job identity collision')
             return self._latest_attempt(existing)
         try:
-            return self.service.jobs.submit(JOB_KIND, plan['request'], job_id=plan['job_id'])
+            return self.service.jobs.submit(self.job_kind, plan['request'], job_id=plan['job_id'])
         except JobConflict:
             # Another caller can freeze the first cutoff between get/create.
             existing = self.service.jobs.get(plan['job_id'])
-            if (existing is None or existing['kind'] != JOB_KIND
+            if (existing is None or existing['kind'] != self.job_kind
                     or self._stable_request(existing['payload']) != self._stable_request(plan['request'])):
                 raise
             return self._latest_attempt(existing)
@@ -349,7 +452,7 @@ class ShortHorizonDailyClosure:
             candidate = self.service.jobs.get(original['payload']['root_job_id'] + '_attempt_' + str(attempt))
             if candidate is None:
                 break
-            if (candidate['kind'] != JOB_KIND or candidate['payload'] != original['payload']
+            if (candidate['kind'] != self.job_kind or candidate['payload'] != original['payload']
                     or candidate['retry_of'] != latest['job_id']):
                 raise JobConflict('daily closure retry identity collision')
             latest = candidate
@@ -359,14 +462,14 @@ class ShortHorizonDailyClosure:
         job = self.service.jobs.get(job_id)
         if job is None:
             raise KeyError(job_id)
-        if job['kind'] != JOB_KIND:
+        if job['kind'] != self.job_kind:
             raise ValueError('SHORT_HORIZON_CLOSURE_JOB_REQUIRED')
         return job
 
     def status(self, job_id):
         job = self._job(job_id)
-        return {'schema_version': VERSION, 'job': job,
-                'ledger': self.service.store.get_document(LEDGERS, job_id),
+        return {'schema_version': self.version, 'job': job,
+                'ledger': self.service.store.get_document(self.ledgers, job_id),
                 'events': self.service.jobs.events(job_id)}
 
     def cancel(self, job_id):
@@ -391,9 +494,9 @@ class ShortHorizonDailyClosure:
             previous = self._recover_target(job_id)
         if previous['state'] not in {'FAILED', 'INTERRUPTED', 'CANCELLED'}:
             raise JobConflict('only failed, interrupted or cancelled closure jobs may be retried')
-        self.service.jobs.register(JOB_KIND, self._worker)
+        self.service.jobs.register(self.job_kind, self._worker)
         next_id = previous['payload']['root_job_id'] + '_attempt_' + str(previous['attempt'] + 1)
-        job = self.service.jobs.create(JOB_KIND, previous['payload'], job_id=next_id, retry_of=job_id)
+        job = self.service.jobs.create(self.job_kind, previous['payload'], job_id=next_id, retry_of=job_id)
         if job['state'] == 'QUEUED':
             self.service.jobs.start(next_id)
         return self.service.jobs.get(next_id)
@@ -408,7 +511,7 @@ class ShortHorizonDailyClosure:
             with self.service.store.transaction() as connection:
                 row = connection.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone()
                 previous = jobs._decode(row)
-                if previous['kind'] != JOB_KIND:
+                if previous['kind'] != self.job_kind:
                     raise JobConflict('target recovery requires a closure job')
                 if previous['state'] not in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'}:
                     return previous
@@ -432,24 +535,22 @@ class ShortHorizonDailyClosure:
 
     def _worker(self, ctx):
         request = ctx.payload
+        execution_started_at = utc_now()
         ctx.check_cancelled()
-        if request['policy'] != _policy_identity():
+        if request['policy'] != self._policy_identity():
             raise ValueError('SHORT_HORIZON_CLOSURE_POLICY_CHANGED_AFTER_SUBMISSION')
         if self._run_ids(request['run_ids']) != request['run_ids']:
             raise ValueError('SHORT_HORIZON_CLOSURE_CANONICAL_RUN_SET_REQUIRED')
-        identity = {key: request[key] for key in ('policy', 'run_ids', 'input_id', 'evaluation_session', 'bindings')}
-        evaluated = stamp(request['evaluated_at'])
-        session_day = evaluated.astimezone(SH).date()
-        if (request['root_job_id'] != 'short_daily_' + digest(identity)
-                or request['horizons'] != list(HORIZONS)
-                or request['evaluation_session'] != str(session_day)
-                or session_day not in exchange_calendar_2026().sessions
-                or evaluated.astimezone(SH).time().replace(tzinfo=None) < time(15)
-                or evaluated > stamp(self.clock())):
-            raise ValueError('SHORT_HORIZON_CLOSURE_FROZEN_REQUEST_INVALID')
-        verification = _bridge_module().ArchiveVerificationSession(checkpoint=ctx.check_cancelled)
+        evaluated, session_day = self._validated_evaluation(request)
+        # The strict policy equality above binds this optional execution choice.
+        # Policies without the field retain the original default call contract.
+        encoding_options = ({'encoding_profile': request['policy']['worker_encoding_profile']}
+                            if 'worker_encoding_profile' in request['policy'] else {})
+        verification = _bridge_module().ArchiveVerificationSession(checkpoint=ctx.check_cancelled,
+                                                                   **encoding_options)
         runs, calendar, bindings = self._authenticated(request['run_ids'], request['input_id'], verification,
-                                                     checkpoint=ctx.check_cancelled, retain_input=True)
+                                                     checkpoint=ctx.check_cancelled, retain_input=True,
+                                                     sealed_cutoff=self._sealed_cutoff(request, evaluated))
         if bindings != request['bindings']:
             raise ValueError('SHORT_HORIZON_CLOSURE_BRIDGE_IDENTITY_CHANGED')
         if calendar.observation_date != session_day or not calendar.sessions or max(calendar.sessions) != session_day:
@@ -465,21 +566,60 @@ class ShortHorizonDailyClosure:
         bundle = _bridge_module().load_verified_bridge_input(self.service, request['input_id'], session=verification)
         if bundle.observation_date != calendar.observation_date or bundle.sessions != calendar.sessions:
             raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CHANGED_AFTER_AUTHENTICATION')
-        borrowed = []
-        for metadata, credential in zip(runs, bindings['runs']):
+        borrowed, pending_nonempty = [], set()
+        seal_options = ({'include_archive_seal': True}
+                        if self._sealed_cutoff(request, evaluated) is not None else {})
+        use_pending_projection = (request['policy'].get('pending_run_materialization')
+                                  == PENDING_RUN_MATERIALIZATION)
+        def checked_run_view(metadata, credential, **borrow_options):
             ctx.check_cancelled()
             view = _bridge_module().authenticated_bridge_view(self.service, run_id=metadata['run_id'],
-                session=verification, borrow_run=True)
-            run = view['run']
-            if (view['run_metadata'] != metadata or _credential_identity(view['credential']) != credential
-                    or {key: run.get(key) for key in metadata} != metadata):
+                session=verification, **borrow_options, **seal_options)
+            if self._sealed_cutoff(request, evaluated) is not None:
+                sealed = _closed_archive_seal(view, evaluated)
+                if sealed != bindings['archive_seals'].get(view['credential']['bridge_id']):
+                    raise ValueError('SHORT_HORIZON_REPLAY_ARCHIVE_SEAL_CONFLICT')
+            if view['run_metadata'] != metadata or _credential_identity(view['credential']) != credential:
                 raise ValueError('SHORT_HORIZON_CLOSURE_BORROWED_RUN_IDENTITY_CHANGED')
+            return view
+
+        for index, (metadata, credential, planned) in enumerate(zip(runs, bindings['runs'], plans)):
+            projected = use_pending_projection and self._all_horizons_pending(planned)
+            view = checked_run_view(metadata, credential,
+                                    **({'borrow_if_empty': True} if projected else {'borrow_run': True}))
+            if projected and 'pool_nonempty' not in view:
+                # Older injected verifier boundaries have no authenticated
+                # projection. Missing evidence always retains full borrowing.
+                view = checked_run_view(metadata, credential, borrow_run=True)
+                projected = False
+            if projected:
+                nonempty = view['pool_nonempty']
+                if type(nonempty) is not bool:
+                    raise ValueError('SHORT_HORIZON_CLOSURE_PENDING_POOL_PROJECTION_INVALID')
+                if nonempty:
+                    if view.get('run') is not None:
+                        raise ValueError('SHORT_HORIZON_CLOSURE_PENDING_POOL_PROJECTION_INVALID')
+                    # Every archive and both stored parent bytes were verified
+                    # by this invocation. The private proof only establishes
+                    # nonemptiness; scheduling still comes from _schedule.
+                    pending_nonempty.add(index)
+                    borrowed.append(metadata)
+                    continue
+            run = view['run']
+            if {key: run.get(key) for key in metadata} != metadata:
+                raise ValueError('SHORT_HORIZON_CLOSURE_BORROWED_RUN_IDENTITY_CHANGED')
+            if projected and run['results'][run['strategy_id']].get('items'):
+                raise ValueError('SHORT_HORIZON_CLOSURE_PENDING_POOL_PROJECTION_INVALID')
             borrowed.append(run)
         runs = borrowed
         ctx.check_cancelled()
         products, records = [], []
-        for run, planned in zip(runs, plans):
+        for index, (run, planned) in enumerate(zip(runs, plans)):
             ctx.check_cancelled()
+            if index in pending_nonempty:
+                records.append({**planned, 'status': 'PENDING', 'revision_id': None,
+                                'counts': {}, 'product_revision_available': False})
+                continue
             if not run['results'][run['strategy_id']].get('items'):
                 legal_empty = self._legal_empty(run)
                 records.append({**planned, 'status': 'LEGAL_EMPTY_POOL' if legal_empty else 'UNKNOWN_EMPTY_POOL_PROOF_REQUIRED',
@@ -491,7 +631,8 @@ class ShortHorizonDailyClosure:
                 records.append({**planned, 'status': 'UNKNOWN' if planned['unknown_horizons'] else 'PENDING',
                                 'revision_id': None, 'counts': {}, 'product_revision_available': False})
                 continue
-            result = evaluate(run, bundle, evaluated, horizons=horizons, checkpoint=ctx.check_cancelled)
+            result = evaluate(run, bundle, evaluated, horizons=horizons, checkpoint=ctx.check_cancelled,
+                              **encoding_options)
             products.append(result)
             counts = result['outcomes']['counts']
             records.append({**planned, 'status': 'COMPLETED_WITH_UNKNOWNS' if counts.get('UNKNOWN') else 'OBSERVED',
@@ -502,7 +643,7 @@ class ShortHorizonDailyClosure:
                           or record['unknown_horizons'] for record in records)
         has_pending = any(row['maturity_state'] == 'PENDING' for record in records
                           if record['status'] != 'LEGAL_EMPTY_POOL' for row in record['horizons'])
-        ledger = {'schema_version': VERSION, 'job_id': ctx.job_id, 'root_job_id': request['root_job_id'],
+        ledger = {'schema_version': self.version, 'job_id': ctx.job_id, 'root_job_id': request['root_job_id'],
             'evaluation_session': request['evaluation_session'], 'evaluated_at': request['evaluated_at'],
             'input_id': request['input_id'], 'run_ids': request['run_ids'], 'run_count': len(runs),
             'policy': request['policy'], 'bindings': bindings, 'runs': records,
@@ -513,6 +654,7 @@ class ShortHorizonDailyClosure:
             'outcome_policy': OUTCOME_VERSION, 'collection': 'NOT_REQUESTED',
             'signal_policy_mutated': False, 'market_edge': 'NOT_ESTABLISHED',
             'execution_status': 'NOT_VERIFIED', 'returns': None}
+        ledger.update(self._execution_context(request, execution_started_at))
 
         def write(connection):
             for result in products:
@@ -527,12 +669,135 @@ class ShortHorizonDailyClosure:
                             raise ImmutableConflict('short-horizon revision identity collision')
                         continue
                     self.service.store._put_document(connection, NAMESPACES[kind], revision_id, product)
-            self.service.store._put_document(connection, LEDGERS, ctx.job_id, ledger)
+            self.service.store._put_document(connection, self.ledgers, ctx.job_id, ledger)
             # The ledger retains the successful prepublication audit snapshot.
             # Recheck every original and borrowed value after all domain writes,
             # while failure can still roll back the ledger and the whole batch.
             verification.terminal()
 
-        return ctx.complete({'schema_version': VERSION, 'ledger_id': ctx.job_id, 'status': ledger['status'],
+        return ctx.complete({'schema_version': self.version, 'ledger_id': ctx.job_id, 'status': ledger['status'],
                              'run_count': len(runs), 'revision_ids': [result['outcomes']['revision_id'] for result in products],
                              'market_edge': 'NOT_ESTABLISHED'}, write)
+
+
+class ClosedSessionClosure(ShortHorizonDailyClosure):
+    """Explicit historical evidence cutoff, with actual present execution time.
+
+    No current-day admission rule is overridden. This separate job contract
+    reuses the exact evaluator, archive verification and atomic writer above.
+    """
+    version = REPLAY_VERSION
+    job_kind = REPLAY_JOB_KIND
+    ledgers = REPLAY_LEDGERS
+    job_prefix = 'short_replay_'
+
+    def __init__(self, service, *, clock=utc_now, max_runs=5):
+        if clock is not utc_now and getattr(service, 'allow_test_fixture', False) is not True:
+            raise ValueError('SHORT_HORIZON_REPLAY_REAL_CLOCK_REQUIRED')
+        super().__init__(service, clock=clock, max_runs=max_runs)
+
+    def _policy_identity(self):
+        return {**_policy_identity(), 'version': self.version, 'execution_mode': REPLAY_MODE}
+
+    def _request_identity(self, request):
+        return {**super()._request_identity(request), **{key: request[key] for key in
+            ('execution_mode', 'business_session', 'evaluated_at')}}
+
+    @staticmethod
+    def _stable_request(request):
+        # A changed historical cutoff is a different request, even when it
+        # produces the same visible rows and the same outcome revision.
+        return dict(request)
+
+    def _sealed_cutoff(self, request, evaluated):
+        return evaluated
+
+    def _execution_context(self, request, started_at):
+        return {'execution_mode': REPLAY_MODE, 'business_session': request['business_session'],
+                'knowledge_cutoff': request['evaluated_at'],
+                'execution_started_at': stamp(started_at).astimezone(timezone.utc).isoformat(),
+                'receipt_created_at': utc_now().isoformat(), 'current_session_acceptance': False,
+                'original_failed_job_rewritten': False,
+                'evaluated_at_semantics': 'HISTORICAL_KNOWLEDGE_CUTOFF_NOT_EXECUTION_TIME'}
+
+    @staticmethod
+    def _business_session(value):
+        if type(value) is str:
+            parsed = date.fromisoformat(value)
+            if parsed.isoformat() != value:
+                raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_ISO_BUSINESS_SESSION_REQUIRED')
+            return parsed
+        if type(value) is not date:
+            raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_BUSINESS_SESSION_REQUIRED')
+        return value
+
+    def _replay_reasons(self, business_session, evaluated, now):
+        reasons = []
+        if evaluated > now:
+            reasons.append('FUTURE_EVALUATION_CUTOFF')
+        if evaluated.astimezone(SH).date() != business_session:
+            reasons.append('REPLAY_CUTOFF_BUSINESS_SESSION_MISMATCH')
+        if business_session not in exchange_calendar_2026().sessions:
+            reasons.append('NO_SESSION')
+        elif evaluated < datetime.combine(business_session, time(15), SH):
+            reasons.append('BEFORE_SESSION_CLOSE')
+        return reasons
+
+    def _validated_evaluation(self, request):
+        evaluated, day = super()._validated_evaluation(request)
+        business = self._business_session(request['business_session'])
+        if (request.get('execution_mode') != REPLAY_MODE or business != day
+                or request['evaluated_at'] != evaluated.astimezone(timezone.utc).isoformat()
+                or self._replay_reasons(business, evaluated, stamp(self.clock()))):
+            raise ValueError('SHORT_HORIZON_REPLAY_FROZEN_REQUEST_INVALID')
+        return evaluated, day
+
+    def plan(self, *args, **kwargs):
+        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_PLAN_REPLAY_REQUIRED')
+
+    def submit(self, *args, **kwargs):
+        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_SUBMIT_REPLAY_REQUIRED')
+
+    def pending(self, *args, **kwargs):
+        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_RUN_IDS_REQUIRED')
+
+    def plan_replay(self, run_ids, input_id, *, business_session, evaluated_at):
+        run_ids = self._run_ids(run_ids)
+        business = self._business_session(business_session)
+        evaluated = stamp(evaluated_at).astimezone(timezone.utc)
+        reasons = self._replay_reasons(business, evaluated, stamp(self.clock()))
+        if reasons:
+            return {'schema_version': self.version, 'execution_mode': REPLAY_MODE,
+                'business_session': str(business), 'job_id': None, 'status': reasons[0],
+                'can_submit': False, 'reason_codes': reasons, 'request': None, 'runs': [],
+                'run_count': len(run_ids), 'max_runs': self.max_runs,
+                'collection': 'NOT_REQUESTED', 'archive_verification': None,
+                'current_session_acceptance': False, 'market_edge': 'NOT_ESTABLISHED'}
+        verification = _bridge_module().ArchiveVerificationSession()
+        runs, bundle, bindings = self._authenticated(run_ids, input_id, verification, sealed_cutoff=evaluated)
+        latest = max(bundle.sessions) if bundle.sessions else None
+        if bundle.observation_date != business or latest != business:
+            reasons.append('REPLAY_INPUT_BUSINESS_SESSION_MISMATCH')
+        if any(evaluated < max(stamp(run['decision_cutoff']), stamp(run.get('generated_at', run['decision_cutoff'])))
+               for run in runs):
+            reasons.append('EVALUATION_PRECEDES_FROZEN_SIGNAL')
+        plans = self._schedule(runs, bundle, evaluated)
+        authentication = verification.terminal()
+        identity = {'policy': self._policy_identity(), 'run_ids': run_ids, 'input_id': input_id,
+            'evaluation_session': str(business), 'bindings': bindings, 'execution_mode': REPLAY_MODE,
+            'business_session': str(business), 'evaluated_at': evaluated.isoformat()}
+        job_id = self.job_prefix + digest(identity)
+        request = {**identity, 'root_job_id': job_id, 'horizons': list(HORIZONS)}
+        return {'schema_version': self.version, 'execution_mode': REPLAY_MODE,
+            'business_session': str(business), 'job_id': job_id,
+            'status': reasons[0] if reasons else 'READY', 'can_submit': not reasons,
+            'reason_codes': reasons, 'request': request, 'runs': plans, 'run_count': len(run_ids),
+            'max_runs': self.max_runs, 'collection': 'NOT_REQUESTED',
+            'outcome_input_observation_date': str(bundle.observation_date),
+            'outcome_input_latest_session': str(latest) if latest else None,
+            'archive_verification': authentication, 'current_session_acceptance': False,
+            'market_edge': 'NOT_ESTABLISHED'}
+
+    def submit_replay(self, run_ids, input_id, *, business_session, evaluated_at):
+        return self._submit_plan(self.plan_replay(run_ids, input_id,
+            business_session=business_session, evaluated_at=evaluated_at))

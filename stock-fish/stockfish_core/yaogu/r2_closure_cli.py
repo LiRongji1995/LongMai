@@ -6,7 +6,8 @@ of unrelated work. Read commands never construct a writable service.
 from __future__ import annotations
 
 import argparse
-from contextlib import contextmanager
+from contextlib import ExitStack, contextmanager
+from datetime import date
 import json
 from pathlib import Path
 import re
@@ -19,7 +20,9 @@ from ..storage import SQLiteStore
 
 
 ARCHIVE_COMMANDS = frozenset({'r2-archive-verify', 'r2-archive-import', 'r2-daily-cycle'})
-COMMANDS = ARCHIVE_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
+REPLAY_COMMANDS = frozenset({'r2-closed-session-plan', 'r2-closed-session-run',
+    'r2-closed-session-status', 'r2-closed-session-retry'})
+COMMANDS = ARCHIVE_COMMANDS | REPLAY_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
     'r2-daily-run', 'r2-daily-status', 'r2-daily-retry'})
 
 
@@ -37,18 +40,26 @@ def parser():
         if name != 'r2-archive-verify':
             command.add_argument('--db', type=Path, required=True, help='Existing explicitly selected service database')
             command.add_argument('--state', type=Path, required=True, help='Existing corresponding service state directory')
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle'}:
+        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle',
+                    'r2-closed-session-plan', 'r2-closed-session-run'}:
             command.add_argument('--run-id', action='append', required=True)
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle', 'r2-daily-retry'}:
+        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle', 'r2-daily-retry',
+                    'r2-closed-session-plan', 'r2-closed-session-run', 'r2-closed-session-retry'}:
             command.add_argument('--max-runs', type=int, default=5)
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-pending'}:
+        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-pending',
+                    'r2-closed-session-plan', 'r2-closed-session-run'}:
             command.add_argument('--input-id', required=True, help='Exact newly authenticated archive input ID')
+        if name in {'r2-closed-session-plan', 'r2-closed-session-run'}:
+            command.add_argument('--business-session', type=date.fromisoformat, required=True)
+            command.add_argument('--knowledge-cutoff', required=True,
+                help='Explicit timezone-aware evidence cutoff; never changes the execution clock')
         if name == 'r2-daily-pending':
             command.add_argument('--limit', type=int, default=100)
             command.add_argument('--offset', type=int, default=0)
-        if name in {'r2-daily-status', 'r2-daily-retry'}:
+        if name in {'r2-daily-status', 'r2-daily-retry', 'r2-closed-session-status', 'r2-closed-session-retry'}:
             command.add_argument('job_id')
-        if name in {'r2-daily-run', 'r2-daily-retry', 'r2-daily-cycle'}:
+        if name in {'r2-daily-run', 'r2-daily-retry', 'r2-daily-cycle',
+                    'r2-closed-session-run', 'r2-closed-session-retry'}:
             command.add_argument('--wait-seconds', type=float, default=120,
                 help='Wait budget, 1..3600 seconds; expiry cancels only newly started work')
         command.add_argument('--allow-test-fixture', action='store_true',
@@ -218,14 +229,17 @@ def service_context(args, *, writable=False):
         jobs.shutdown(wait=True, cancel_pending=False)
 
 
-def _wait(closure, job, seconds, *, cancel_owned):
+def _wait(closure, job, seconds, *, cancel_owned, status_reader=None):
     from ..jobs import TERMINAL_STATES
     if not 1 <= seconds <= 3600:
         raise ValueError('WAIT_SECONDS_MUST_BE_1_TO_3600')
     deadline = time.monotonic() + seconds
+    def read_status():
+        return (status_reader(job['job_id']) if status_reader is not None
+                else closure.status(job['job_id']))
     try:
         while True:
-            result = closure.status(job['job_id'])
+            result = read_status()
             state = result.get('state') or (result.get('job') or {}).get('state')
             if state in TERMINAL_STATES:
                 return (0 if state == 'SUCCEEDED' else 3), result
@@ -233,7 +247,7 @@ def _wait(closure, job, seconds, *, cancel_owned):
                 if cancel_owned:
                     closure.cancel(job['job_id'])
                 return 4, {'status': 'WAIT_BUDGET_EXCEEDED', 'job_id': job['job_id'],
-                    'cancel_requested': bool(cancel_owned), 'result': closure.status(job['job_id'])}
+                    'cancel_requested': bool(cancel_owned), 'result': read_status()}
             time.sleep(min(.1, max(0, deadline - time.monotonic())))
     except KeyboardInterrupt:
         if cancel_owned:
@@ -244,7 +258,21 @@ def _wait(closure, job, seconds, *, cancel_owned):
 def _job_wait(service, closure, job, seconds):
     owned = (job['job_id'] in service.jobs._futures
              or job.get('owner_id') == service.jobs.owner_id)
-    return _wait(closure, job, seconds, cancel_owned=owned)
+    # Main-thread status polling has its own idle readers. Activation covers
+    # only status reads; cancellation writes and sleeps remain outside it.
+    # Each actual query still opens a fresh, fully validated transaction.
+    stores = []
+    for store in (service.store, service.jobs.store):
+        if not any(store is existing for existing in stores):
+            stores.append(store)
+    with ExitStack() as lifetime:
+        scopes = [lifetime.enter_context(store.read_connection_scope()) for store in stores]
+        def read_status(job_id):
+            with ExitStack() as activation:
+                for scope in scopes:
+                    activation.enter_context(scope.activate())
+                return closure.status(job_id)
+        return _wait(closure, job, seconds, cancel_owned=owned, status_reader=read_status)
 
 
 def _safe_error(exc):
@@ -292,17 +320,25 @@ def execute(args):
             except Exception as exc:
                 return 3, {'status': 'ARCHIVE_IMPORTED_CLOSURE_FAILED', 'bridge': imported,
                     **_safe_error(exc)}
-    from .short_horizon_daily_closure_v1 import ShortHorizonDailyClosure
-    write = args.command in {'r2-daily-run', 'r2-daily-retry'}
+    from .short_horizon_daily_closure_v1 import ShortHorizonDailyClosure, ClosedSessionClosure
+    write = args.command in {'r2-daily-run', 'r2-daily-retry',
+        'r2-closed-session-run', 'r2-closed-session-retry'}
     with service_context(args, writable=write) as service:
-        closure = ShortHorizonDailyClosure(service, max_runs=getattr(args, 'max_runs', 5))
+        closure_type = ClosedSessionClosure if args.command in REPLAY_COMMANDS else ShortHorizonDailyClosure
+        closure = closure_type(service, max_runs=getattr(args, 'max_runs', 5))
+        if args.command in {'r2-closed-session-plan', 'r2-closed-session-run'}:
+            arguments = dict(business_session=args.business_session, evaluated_at=args.knowledge_cutoff)
+            if args.command == 'r2-closed-session-plan':
+                return 0, closure.plan_replay(args.run_id, args.input_id, **arguments)
+            job = closure.submit_replay(args.run_id, args.input_id, **arguments)
+            return _job_wait(service, closure, job, args.wait_seconds)
         if args.command == 'r2-daily-plan':
             return 0, closure.plan(args.run_id, args.input_id)
         if args.command == 'r2-daily-pending':
             return 0, closure.pending(args.input_id, limit=args.limit, offset=args.offset)
-        if args.command == 'r2-daily-status':
+        if args.command in {'r2-daily-status', 'r2-closed-session-status'}:
             return 0, closure.status(args.job_id)
-        if args.command == 'r2-daily-retry':
+        if args.command in {'r2-daily-retry', 'r2-closed-session-retry'}:
             job = closure.retry(args.job_id)
         else:
             job = closure.submit(args.run_id, args.input_id)

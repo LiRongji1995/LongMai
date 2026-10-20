@@ -1652,3 +1652,51 @@ def test_typed_adapter_side_effect_assignment_is_frozen_but_guard_must_handle_by
     with pytest.raises(ValidationError) as caught:
         bundle.universe.securities = iter(bundle.universe.securities)
     assert caught.value.errors()[0]['type'] == 'frozen_instance'
+
+
+@pytest.mark.parametrize('raw', [
+    b'{"a":1,"a":2}', b'{"a":1,"\\u0061":2}',
+    b'{"TEST_FIXTURE":[{"nested":0,"nested":1}]}',
+    b'{"TEST_FIXTURE":{"":0,"":1}}',
+    '{"中文":1,"\\u4e2d\\u6587":2}'.encode(),
+])
+def test_strict_decoder_rejects_every_duplicate_spelling(raw):
+    with pytest.raises(ValueError, match='DUPLICATE_JSON_KEY'):
+        bridge._json(raw)
+
+
+@pytest.mark.parametrize('raw', [
+    b'{"TEST_FIXTURE":NaN}', b'{"TEST_FIXTURE":Infinity}',
+    b'{"TEST_FIXTURE":-Infinity}', b'[{"nested":[NaN]}]',
+])
+def test_strict_decoder_keeps_nonfinite_rejection(raw):
+    with pytest.raises(ValueError, match='NONFINITE_JSON'):
+        bridge._json(raw)
+
+
+def test_strict_decoder_distinct_keys_and_nested_order():
+    raw = '{"TEST_FIXTURE":{"a":1,"A":2,"中文":3,"":4},"a":5}'
+    assert bridge._json(raw) == json.loads(raw)
+    assert list(bridge._json(raw)['TEST_FIXTURE']) == ['a', 'A', '中文', '']
+
+
+def test_view_seal_clock_comes_from_private_fresh_authentication(archive, service):
+    cap = authenticate(archive)
+    cert = bridge.commit_bridge(service, cap)
+    session = cap._session
+    expected = bridge._state(cap)['audit']['original_final_sealed_at']
+    view = bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session, include_archive_seal=True)
+    assert view['archive_sealed_at'] == expected
+    view['archive_sealed_at'] = '1900-01-01T00:00:00Z'
+    public_audit = cap.audit()
+    public_audit['original_final_sealed_at'] = view['archive_sealed_at']
+    again = bridge.authenticated_bridge_view(service, input_id=cert['input_id'], session=session, include_archive_seal=True)
+    assert again['archive_sealed_at'] == expected
+    session.terminal()
+
+
+@pytest.mark.parametrize('option', [1, 'true', None, []])
+def test_seal_metadata_requires_explicit_boolean_opt_in(option):
+    with pytest.raises(ValueError, match='INCLUDE_ARCHIVE_SEAL_BOOL_REQUIRED'):
+        bridge.authenticated_bridge_view(None, run_id='TEST_FIXTURE',
+            session=bridge.ArchiveVerificationSession(), include_archive_seal=option)

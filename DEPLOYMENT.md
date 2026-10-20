@@ -33,17 +33,21 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 ## 独立本地盘前命令
 
+[独立源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)是新增的显式离线构建/校验工具：只创建新目录，不修改原 worker、request、budget，不自动更新 locator 或服务。正式路径32项隔离测试通过，另已构建独立源码快照并完成离线入口/身份校验；没有开展其真实采集或启用到现有部署。未来使用仍须另行核对解释器、来源身份与网络授权；旧 cache 引用的三个 producer 原路径须继续保留，不能以副本替换旧物理身份。
+
 新增[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)：在已有项目Python环境、`stock-fish/`目录执行 `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
 
 ## R2 归档衔接与每日后验
+
+新增[历史闭环部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)区分当天准入与显式 `r2-closed-session-*` 历史重放。后者使用明确业务会话和历史资料截止，系统与作业的实际时钟不回拨，evaluator 显式以该历史截止判断可见性和成熟度；不能把历史重放改称当天交付。
 
 使用[本轮统一操作与交付记录](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)中的显式本地命令，先鉴证 standalone 封存任务的完整来源、原代码字节、原 run/input 和五份正式导出，再向同一明确选择的服务库追加桥接凭证。原 run 与输入保持，不执行选股。只有完整 inline 原生归档在本版本范围内，保留原 `PROSPECTIVE_CAPTURED` 或 `RECONSTRUCTED_HISTORICAL` 覆盖类型；普通 JSON、历史 owner、时间证明或缺失原件不恢复来源能力，历史下载不抬升为过去可见。
 
 命令要求已有当前结构数据库和 state，遇旧结构或活动服务锁立即拒绝，不自动迁库、回收其他任务或停启服务。每日后验必须使用已鉴证的精确当日 input、明确 run 列表、交易日收盘后实际截止；计划、待办和状态查询只读。默认每批最多 5 个 run，超限拒绝而不截断；失败重试需显式调用。没有新建定时任务或扩大采集预算。本轮真实与夹具验收范围及尚未完成的连续每日交付分别见交付记录。
 
-大归档的[本轮实测与限制](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)保留同次鉴证内的 typed 复用、数据库父全文 hash、全部来源及事务末终验。128 行 TypeAdapter 编码仅用于精确输入模型、tuple 容器和精确行类型，其余整输入走原参考 hash 路径；9 个 normalizer 依赖文件保持。128 是行数边界，不保证整个输入内存上界；共享 300 秒/2 GiB 仍按合作式检查执行。默认每批 5 个 run 或显式 1–100 上限均不是容量承诺，不得自动扩额或省略认证；升级前保留归档引用的精确源码副本。本轮交付源码已通过最终 275 项组合回归。
+大归档的[原执行记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)及[后续部分验收](stock-fish/docs/CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)保留同次鉴证内 typed 复用、数据库双父全文 hash、全部来源及事务末终验。默认128行编码与显式闭环1024行 profile 分别绑定身份；快速路径仍限精确模型、tuple和精确行类型，其他整输入走原参考。仅全5期限 PENDING、无 DUE/UNKNOWN 且私有鉴证证明池非空时避免展开未借出的 run，空池继续原完整检查。9个 normalizer 文件不变。本轮16文件对应676项组合回归通过，行批次与完整 C Unicode 编码不保证恒定内存。
 
-10月16日采集已封存并退出 2，未知资料保留；最终真实验收中两份归档导入通过，但每日 worker 失败，四份父文档不变、无新增后验文档或完成账本。显式诊断重试在认证父文档阶段触发时间预算，仍未完成全部认证、借用和评估；退出 0 只表示诊断记录完成，不改写原脱敏失败原因。幂等、产品回读和 H1 审计未运行，当日后验尚未完成，闭环资源瓶颈仍待解决。不能据采集或导入通过切换生产服务、活动库或调度。
+历史10月16日单 run 在相同源码的隔离克隆中显式重试成功，随后幂等、三产品回读和独立 H1 通过；原正式失败不改判。双 run 两次仍触及300秒且无新产品/ledger。每次完整鉴证共享300秒、RSS 2 GiB、唯一原件4 GiB、实际读取8 GiB和4096文件上限；外层等待或子进程 watchdog 不扩大这些额度。默认5条或显式1–100上限不构成容量承诺，不能据单次通过切换生产。事务末终验在同一写事务内持锁完成，并发写与锁等待尚未经过生产负载验收。
 
 ## Go候选工具
 
