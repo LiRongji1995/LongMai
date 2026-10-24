@@ -19,10 +19,15 @@ from pathlib import Path
 import re
 import stat
 import sys
+import tempfile
+from threading import local
 import time
 from urllib.parse import urlsplit
 
 VERSION = 'PREMARKET_EXECUTION_PROFILE_V1'
+ATOMIC_CONTROL_PUBLICATION_VERSION = 'PREMARKET_ATOMIC_CONTROL_PUBLICATION_V2'
+CONTROL_LOCK_WAIT_SECONDS = 30
+CONTROL_LOCK_POLL_SECONDS = 0.05
 GIB = 1024 ** 3
 MIB = 1024 ** 2
 FP_KEYS = ('st_dev', 'st_ino', 'st_mode', 'st_size', 'st_mtime_ns',
@@ -34,6 +39,7 @@ DEFAULT_LIMITS = dict(capture_read_bytes=4*GIB, core_read_bytes=4*GIB,
     max_seconds=None, self_rss_bytes=int(2.5*GIB), tree_rss_bytes=3*GIB,
     output_bytes=1024*MIB, cache_bytes=8*GIB)
 _ACTIVE_METER = None
+_CONTROL_LOCKS = local()
 
 
 def utc_now():
@@ -65,15 +71,195 @@ def json_bytes(value):
                       allow_nan=False, separators=(',', ':')).encode('utf-8')
 
 
+def _control_cleanup_error(primary, phase, error):
+    if primary is None:
+        raise error
+    primary.add_note('ATOMIC_CONTROL_' + phase + ': ' + repr(error))
+    errors = getattr(primary, 'atomic_control_cleanup_errors', ())
+    primary.atomic_control_cleanup_errors = (*errors, (phase, error))
+
+
+class ControlPublicationLockTimeout(TimeoutError):
+    pass
+
+
+@contextmanager
+def _windows_control_mutex(name):
+    """A cross-process mutex; no lock files are added to existing state/cache."""
+    import ctypes
+    from ctypes import wintypes
+    kernel = ctypes.WinDLL('kernel32', use_last_error=True)
+    create, wait = kernel.CreateMutexW, kernel.WaitForSingleObject
+    release, close = kernel.ReleaseMutex, kernel.CloseHandle
+    create.argtypes, create.restype = (ctypes.c_void_p, wintypes.BOOL, wintypes.LPCWSTR), wintypes.HANDLE
+    wait.argtypes, wait.restype = (wintypes.HANDLE, wintypes.DWORD), wintypes.DWORD
+    release.argtypes, release.restype = (wintypes.HANDLE,), wintypes.BOOL
+    close.argtypes, close.restype = (wintypes.HANDLE,), wintypes.BOOL
+    handle = create(None, False, 'Global\\StockFishAtomicControlV2-' + name)
+    if not handle:
+        raise ctypes.WinError(ctypes.get_last_error())
+    primary, acquired = None, False
+    try:
+        deadline = time.monotonic() + CONTROL_LOCK_WAIT_SECONDS
+        while True:
+            remaining = deadline - time.monotonic()
+            if remaining <= 0:
+                raise ControlPublicationLockTimeout('ATOMIC_CONTROL_LOCK_WAIT_TIMEOUT')
+            result = wait(handle, max(1, min(50, int(remaining * 1000))))
+            if result in (0, 0x80):
+                break
+            if result != 0x102:  # WAIT_TIMEOUT is a bounded poll, never success.
+                raise OSError('ATOMIC_CONTROL_MUTEX_WAIT_FAILED:' + str(result))
+        # WAIT_ABANDONED grants the mutex; it never proves a prior write succeeded.
+        acquired = True
+        yield
+    except BaseException as error:
+        primary = error
+        raise
+    finally:
+        errors = []
+        if acquired and not release(handle):
+            errors.append(('MUTEX_RELEASE', ctypes.WinError(ctypes.get_last_error())))
+        if not close(handle):
+            errors.append(('MUTEX_CLOSE', ctypes.WinError(ctypes.get_last_error())))
+        for phase, error in errors:
+            if primary is None:
+                primary = error
+            else:
+                _control_cleanup_error(primary, phase, error)
+        if errors and primary is errors[0][1]:
+            raise primary
+
+
+@contextmanager
+def _control_directory_lock(directory, *, exclusive):
+    """Coordinate only control publication and one directory's metadata scan.
+
+    Computing, source reads, recursive traversal and whole jobs are not locked.
+    POSIX locks the directory inode itself. Windows uses a named mutex and
+    retains its existing file-fsync + replace durability level.
+    """
+    directory = Path(directory).resolve(strict=True)
+    before = directory.stat()
+    if not stat.S_ISDIR(before.st_mode):
+        raise NotADirectoryError(str(directory))
+    identity = (before.st_dev, before.st_ino, before.st_mode)
+    key = (os.path.normcase(str(directory)), *identity)
+    owner_pid = os.getpid()
+    active_key = (owner_pid, *key)
+    active = getattr(_CONTROL_LOCKS, 'active', None)
+    if active is None:
+        active = _CONTROL_LOCKS.active = {}
+    prior = active.get(active_key)
+    if prior is not None:
+        if exclusive and not prior['exclusive']:
+            raise RuntimeError('ATOMIC_CONTROL_LOCK_UPGRADE_FORBIDDEN')
+        yield prior['descriptor']
+        return
+    descriptor, primary, acquired = None, None, False
+    if os.name == 'posix':
+        import fcntl
+        flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
+        descriptor = os.open(directory, flags)
+        try:
+            deadline = time.monotonic() + CONTROL_LOCK_WAIT_SECONDS
+            operation = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
+            while True:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0:
+                    raise ControlPublicationLockTimeout('ATOMIC_CONTROL_LOCK_WAIT_TIMEOUT')
+                try:
+                    fcntl.flock(descriptor, operation)
+                    acquired = True
+                    break
+                except BlockingIOError:
+                    time.sleep(min(CONTROL_LOCK_POLL_SECONDS, remaining))
+            opened = os.fstat(descriptor)
+            current = directory.stat()
+            if any((v.st_dev, v.st_ino, v.st_mode) != identity for v in (opened, current)):
+                raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
+            active[active_key] = dict(descriptor=descriptor, exclusive=exclusive)
+            yield descriptor
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            active.pop(active_key, None)
+            operations = [('DIRECTORY_CLOSE', lambda: os.close(descriptor))]
+            if acquired and os.getpid() == owner_pid:
+                operations.insert(0, ('DIRECTORY_UNLOCK', lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)))
+            for phase, operation in operations:
+                try:
+                    operation()
+                except BaseException as error:
+                    if primary is None:
+                        primary = error
+                    else:
+                        _control_cleanup_error(primary, phase, error)
+            if primary is not None and sys.exc_info()[0] is None:
+                raise primary
+    elif os.name == 'nt':
+        name = hashlib.sha256(json_bytes(key)).hexdigest()
+        with _windows_control_mutex(name):
+            current = directory.stat()
+            if (current.st_dev, current.st_ino, current.st_mode) != identity:
+                raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
+            active[active_key] = dict(descriptor=None, exclusive=exclusive)
+            try:
+                yield None
+            finally:
+                active.pop(active_key, None)
+    else:
+        raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_LOCK_UNAVAILABLE')
+
+
 def atomic_json(path, value):
-    """Replace only an owned control; callers use fresh directories for outputs."""
-    target = Path(path)
-    temporary = target.with_name(target.name + '.writing')
-    with temporary.open('xb') as handle:
-        handle.write(json_bytes(value))
-        handle.flush()
-        os.fsync(handle.fileno())
-    os.replace(temporary, target)
+    """Publish an owned control; never remove another writer's temporary file."""
+    raw = json_bytes(value)
+    path = Path(path)
+    directory = path.parent.resolve(strict=True)
+    target = directory / path.name
+    temporary, owned_identity, primary = None, None, None
+    with _control_directory_lock(directory, exclusive=True) as directory_fd:
+        try:
+            descriptor, name = tempfile.mkstemp(prefix='.' + target.name + '.writing-', dir=directory)
+            temporary = Path(name)
+            try:
+                opened = os.fstat(descriptor)
+                owned_identity = (opened.st_dev, opened.st_ino, opened.st_mode)
+                handle = os.fdopen(descriptor, 'wb')
+            except BaseException:
+                os.close(descriptor)
+                raise
+            with handle:
+                if handle.write(raw) != len(raw):
+                    raise OSError('ATOMIC_CONTROL_SHORT_WRITE')
+                handle.flush()
+                os.fsync(handle.fileno())
+                completed = os.fstat(handle.fileno())
+            actual = temporary.lstat()
+            if (not stat.S_ISREG(actual.st_mode) or actual.st_nlink != 1
+                    or {key: getattr(actual, key, 0) for key in FP_KEYS}
+                    != {key: getattr(completed, key, 0) for key in FP_KEYS}
+                    or actual.st_size != len(raw)):
+                raise RuntimeError('ATOMIC_CONTROL_TEMPORARY_IDENTITY_CHANGED')
+            os.replace(temporary, target)
+            temporary = None
+            if directory_fd is not None:
+                os.fsync(directory_fd)
+        except BaseException as error:
+            primary = error
+            raise
+        finally:
+            if temporary is not None:
+                try:
+                    current = temporary.lstat()
+                    if (current.st_dev, current.st_ino, current.st_mode) == owned_identity:
+                        temporary.unlink()
+                except FileNotFoundError:
+                    pass  # Only this invocation's now-absent temporary is eligible.
+                except BaseException as error:
+                    _control_cleanup_error(primary, 'TEMPORARY_CLEANUP', error)
 
 
 def directory_bytes(root):
@@ -87,15 +273,17 @@ def directory_bytes(root):
         return 0
     pending = [os.fspath(root)]
     while pending:
-        with os.scandir(pending.pop()) as entries:
-            for entry in entries:
-                info = entry.stat(follow_symlinks=False)
-                if stat.S_ISLNK(info.st_mode):
-                    continue
-                if stat.S_ISDIR(info.st_mode):
-                    pending.append(entry.path)
-                else:
-                    total += info.st_size
+        directory = Path(pending.pop()).resolve(strict=True)
+        with _control_directory_lock(directory, exclusive=False):
+            with os.scandir(directory) as entries:
+                for entry in entries:
+                    info = entry.stat(follow_symlinks=False)
+                    if stat.S_ISLNK(info.st_mode):
+                        continue
+                    if stat.S_ISDIR(info.st_mode):
+                        pending.append(entry.path)
+                    else:
+                        total += info.st_size
     return total
 
 
@@ -145,6 +333,9 @@ class Budget:
             if calls[prefix + '_actual_unknown_requests']:
                 calls[prefix + '_actual'] = None
         return dict(schema_version=VERSION, phase=self.phase_name,
+            control_publication_version=ATOMIC_CONTROL_PUBLICATION_VERSION,
+            control_parent_directory_fsync=os.name == 'posix',
+            control_lock_wait_seconds=CONTROL_LOCK_WAIT_SECONDS,
             elapsed_seconds=round(time.monotonic()-self.started, 3),
             returned_read_bytes=dict(self._read), calls=calls,
             failures=list(self._failures), pending_request_results=len(self._pending_requests),

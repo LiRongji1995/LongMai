@@ -1,6 +1,10 @@
 # 部署与维护
 
-先核对实际运行目录、Python或二进制身份、配置、数据库、状态文件、端口及在途任务。代码所在目录、发布检出和运行实例可能不同；切换路径不会自动迁移数据。本轮工程交付没有启动、停止或切换已有服务。
+本轮继续采用独立运行环境、明确源码身份与新owned DB/state/artifact；生产服务、默认入口、权威库及调度未切换。源码提交不等于实例已升级。显式本地复制协议只支持封存RESULT的同字节不同路径复制件，RAW/receipt/producer/locator及完整终验仍严格；原物理身份和历史PIT没有恢复。
+
+900秒late-completed新库14步已闭合，默认300秒实验使用两个独立owner/inode快照，继承900产品不能算300验收。V1因侧文件存在拒绝，V2另按空WAL、原样钉住SHM和完整源组合同准入；只复制主库，未删除/checkpoint侧文件，也未打开源SQL。V2初始化通过后单/双run均时间门禁失败，均无新增产品/ledger。等待时长、外层watchdog、磁盘余量和认证预算相互独立，不能调大等待冒充300达标。
+
+运行与故障细节见[本轮交付](stock-fish/docs/CONTINUATION_DELIVERY_20261023.md)和[性能记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)。以下历史部署步骤保留，不构成自动切服授权。
 
 ## 已有部署优先
 

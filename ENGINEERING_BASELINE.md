@@ -1,6 +1,10 @@
 # 工程维护约定
 
-用户入口为[项目首页](README.md)；现状见[当前状态](CURRENT_STATUS.md)，运行维护见[部署说明](DEPLOYMENT.md)。历次工程记录移入[历史归档](stock-fish/docs/archive/README.md)，具体检查结论按各自日期、源码与二进制身份理解。
+本轮工程检查分开记录：SOURCE04未过滤28文件925项通过；SOURCE05只窄改runtime及对应测试，关联92项和27个子进程断言、根独立46项和27个子进程断言通过，未声称SOURCE05重跑925。真实900秒14步闭合、默认300秒单/双run失败、后验全部UNKNOWN/null分别报告，不累加不同来源测试为一次全仓验收。
+
+冻结策略、九个normalizer、旧run、原producer及用户WIP不覆盖。测试仅使用独立TEST_FIXTURE；不删除失败记录、跳断言、缩池或降低资源门槛求通过。SOURCE06/07 resolver候选与不等价JSON替换均未采用，发布范围仍是显式42文件。
+
+最终数据保护已通过，56份历史文件完整字节与7FP、25复制件及源900/源码/闭合控制链分别有末验收据；原25物理身份仍LOST。最终提交前继续核对精确范围、远端main与dirty；源码发布以Git历史和私有交付收据为准；检查通过后按精确42文件范围更新main，不在本文嵌入自身提交SHA，也不预写推送或远端核验成功。许可与[第三方通知](THIRD_PARTY_NOTICES.md)保持，MiroFish适用AGPL-3.0。实测边界见[交付记录](stock-fish/docs/CONTINUATION_DELIVERY_20261023.md)。
 
 ## 维护边界
 

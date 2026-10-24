@@ -1,6 +1,8 @@
 # 盘前因子 checkpoint 与独立源码 bundle V2
 
-本工具通过显式脚本[build_premarket_source_bundle_v2.py](../scripts/build_premarket_source_bundle_v2.py)创建和校验独立源码目录，不自动切换服务、locator或默认配置。既有32项TEST_FIXTURE检查与源码快照离线校验通过后，已按单独授权从快照执行一次[10月21日盘前尝试](PREMARKET_BOUNDED_RETRY_20261021.md)：3个官方目录完成，随后采集读取计量触限，退出4；没有新run或名单，factor分支未执行。此前10月20日缺首见钟的失败仍保留，见[部分验收](CLOSED_SESSION_PARTIAL_ACCEPTANCE_20261020.md)。
+SOURCE05的B05运行闭包共172件（171登记文件及manifest），源码身份、6项source_identity、7项R2 CLI help及全文件保护通过；这些source-only检查禁网络与SQLite，完整真实采集尚未验收。原B165物理清单一致不等于运行闭包完整，旧缺文档失败与采集06的原子指标竞态失败均保留。
+
+SOURCE05用唯一临时文件、协作扫描/发布锁和有界30秒等待窄修runtime竞态；未改策略、九个normalizer或原producer。不得以source-only检查宣称原名单、DAILY或真实性能通过。实际900工程闭环与默认300失败见[交付记录](CONTINUATION_DELIVERY_20261023.md)。以下保留原checkpoint合同与历史构建记录。
 
 ## 要解决的边界
 

@@ -22,6 +22,292 @@ from stockfish_core.yaogu import premarket_workflow_v1 as workflow
 from tests.support.short_horizon_archive_fixture import fixture_archive, reseal
 
 
+def _fixture_failed_empty_news_http(archive, *, receipt_updates=None, metadata_updates=None,
+                                    news_updates=None, empty_updates=None, outside_path=False):
+    """Synthetic real-shaped failed HTTP attachment; never real news or network."""
+    job = archive['job']
+    root = job / 'news'
+    root.mkdir()
+    raw_path = (job.parent / 'TEST_FIXTURE-unregistered-empty.html') if outside_path else root / 'http-01.html'
+    raw_path.write_bytes(b'')
+    raw = workflow._ref(raw_path)
+    if empty_updates:
+        raw.update(deepcopy(empty_updates))
+    clock = datetime.now(timezone.utc).isoformat()
+    receipt = dict(schema_version='PREMARKET_REPORTED_NEWS_V1_HTTP_CAPTURE', method='GET',
+        original_requested_url='https://www.stcn.com/', requested_url='https://www.stcn.com/',
+        http_status=None, request_started_at=clock, first_seen_at=clock, ingested_at=clock,
+        status='FETCH_FAILED', error_type='URLError', error='TEST_FIXTURE TLS timeout',
+        raw_capture_complete=False, archived_prefix_only=False, actual_body_bytes_returned=0,
+        source_published_at=None, publication_not_inferred_from_capture=True,
+        raw=deepcopy(raw), integrity_scope='LOCAL_SHA256_NOT_PUBLISHER_AUTHENTICATION',
+        receipt_is_not_SOURCE_or_EVENT_capability=True)
+    receipt.update(deepcopy(receipt_updates or {}))
+    receipt_path = root / 'http-01.receipt.json'
+    receipt_path.write_text(json.dumps(receipt), encoding='utf-8')
+    receipt_ref = workflow._ref(receipt_path)
+    summary = dict(status='UNKNOWN_NO_PARSED_REPORTED_MATERIAL', acquisition_complete=False,
+        source_coverage='UNKNOWN', economic_attribution='UNKNOWN', EVENT_confirmation='UNKNOWN_NOT_ISSUED',
+        HTTP_GET_attempts=1)
+    metadata = dict(schema_version='PREMARKET_REPORTED_NEWS_V1', run_id=archive['run']['run_id'],
+        observation_date=archive['run']['observation_date'], target_session=archive['run']['target_session'],
+        actual_generated_at=datetime.now(timezone.utc).isoformat(), summary=summary,
+        original_HTTP_captures=[dict(raw=deepcopy(raw), receipt=receipt_ref, capture=deepcopy(receipt))],
+        raw_and_receipt_initial_terminal_SHA7FP_verified=True, no_SOURCE_or_EVENT_capability_issued=True,
+        no_direction_mapping_or_company_business_guess=True)
+    metadata.update(deepcopy(metadata_updates or {}))
+    metadata_path = root / 'reported-materials.json'
+    metadata_path.write_text(json.dumps(metadata), encoding='utf-8')
+    metadata_ref = workflow._ref(metadata_path)
+    refs = [raw, receipt_ref, metadata_ref]
+    completion = deepcopy(archive['completion'])
+    completion.update(news=dict(metadata=metadata_ref, summary=deepcopy(metadata['summary']),
+        validation_references=deepcopy(refs)), completed_at=datetime.now(timezone.utc).isoformat())
+    completion['phases']['news'] = 'PARTIAL'
+    completion['news'].update(deepcopy(news_updates or {}))
+    completion['validation_references'] += deepcopy(refs)
+    reseal(archive, completion=completion, final=dict(source_reference_count=len(completion['validation_references']),
+        final_sealed_at=datetime.now(timezone.utc).isoformat()))
+    return dict(raw=raw, receipt=receipt_ref, metadata=metadata_ref, receipt_value=receipt, metadata_value=metadata)
+
+
+def test_sealed_failed_empty_news_http_is_opaque_and_every_terminal_reads_eof(archive, service, monkeypatch):
+    attachment = _fixture_failed_empty_news_http(archive)
+    before = {ref['path']: Path(ref['path']).read_bytes() for ref in archive['artifacts'].values()}
+    reads = []
+    original = bridge._read_empty_news_http
+    def observed(session, expected):
+        reads.append((session.terminal_count, deepcopy(expected)))
+        return original(session, expected)
+    monkeypatch.setattr(bridge, '_read_empty_news_http', observed)
+    session = bridge.ArchiveVerificationSession()
+    cap = authenticate(archive, session=session)
+    audit = cap.audit()
+    contract = audit['non_authoritative_news_http_attachments']
+    assert contract['schema_version'] == bridge.NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_VERSION
+    assert contract['archive_final_sha256'] == archive['final_sha256']
+    assert contract['empty_http_attachments'][0]['raw_reference'] == attachment['raw']
+    assert contract['authority'] == 'OPAQUE_FAILED_HTTP_ATTACHMENT_INTEGRITY_ONLY'
+    assert contract['SOURCE_or_EVENT_capability_issued'] is contract['news_presentation_authenticated'] is False
+    assert contract['news_acquisition_complete'] is False and contract['EVENT_confirmation'] == 'UNKNOWN_NOT_ISSUED'
+    assert audit['verifier_identity']['non_authoritative_attachment_contract_version'] == contract['schema_version']
+    assert 'NEWS_PRESENTATION' in audit['excluded_scope'] and audit['market_edge'] == 'NOT_ESTABLISHED'
+    assert session.files[attachment['raw']['path']] == attachment['raw']
+    assert session.unique_bytes == sum(ref['bytes'] for ref in session.files.values())
+    assert session.audit()['files'] == len(session.files)
+    assert session.audit()['non_authoritative_news_http_attachments'] == [contract]
+    assert len(reads) == 2
+    cert = bridge.commit_bridge(service, cap)
+    assert cert['non_authoritative_news_http_attachments'] == contract and len(reads) == 4
+    credential = bridge.require_verified_bridge(service, cert['run_id'])
+    assert credential['bridge_id'] == cert['bridge_id'] and len(reads) >= 7
+    assert before == {p: Path(p).read_bytes() for p in before}
+
+
+def test_real_shaped_prospective_empty_news_attachment_fixture_never_upgrades_authority(tmp_path, monkeypatch):
+    monkeypatch.setattr(socket.socket, 'connect', lambda *a, **k: pytest.fail('TEST_FIXTURE_NETWORK'))
+    archive = fixture_archive(tmp_path/'TEST_FIXTURE_NONFIXTURE_COVERAGE', observation_date='2026-10-23',
+        coverage_type='PROSPECTIVE_CAPTURED')
+    attachment = _fixture_failed_empty_news_http(archive)
+    audit = authenticate(archive).audit()
+    assert audit['coverage_type'] == 'PROSPECTIVE_CAPTURED'
+    assert audit['non_authoritative_news_http_attachments']['empty_http_attachments'][0]['raw_reference'] == attachment['raw']
+    assert archive['completion']['phases']['news'] == 'PARTIAL'
+    assert audit['historical_owner_restored'] is audit['native_core_owner_restored'] is False
+
+
+def test_generic_reference_and_reader_keep_nonempty_requirement_for_news_body(archive):
+    attachment = _fixture_failed_empty_news_http(archive)
+    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY_REQUIRED'):
+        bridge._ref(attachment['raw'])
+    session = bridge.ArchiveVerificationSession()
+    with pytest.raises(ValueError, match='FILE_SIZE_BUDGET_EXCEEDED'):
+        session.read(attachment['raw']['path'], attachment['raw'])
+    with pytest.raises(ValueError, match='SEALED_NEWS_HTTP_REGISTRATION_REQUIRED'):
+        bridge._read_empty_news_http(session, attachment['raw'])
+
+
+@pytest.mark.parametrize('field,value', [('status','COMPLETE_HTTP_BODY'),('http_status',200),
+    ('raw_capture_complete',True),('actual_body_bytes_returned',False),('archived_prefix_only',True),
+    ('source_published_at','2026-01-01T00:00:00+00:00'),('receipt_is_not_SOURCE_or_EVENT_capability',False),
+    ('publication_not_inferred_from_capture',False),('requested_url','https://TEST_FIXTURE.invalid/'),
+    ('method','POST')])
+def test_empty_news_http_receipt_cannot_forge_success_or_authority(archive,field,value):
+    _fixture_failed_empty_news_http(archive,receipt_updates={field:value})
+    with pytest.raises(ValueError,match='NEWS_'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('field,value', [('no_SOURCE_or_EVENT_capability_issued',False),
+    ('no_direction_mapping_or_company_business_guess',False),('raw_and_receipt_initial_terminal_SHA7FP_verified',False),
+    ('run_id','TEST_FIXTURE_OTHER_RUN'),('schema_version','TEST_FIXTURE_UNKNOWN_NEWS_VERSION'),
+    ('original_HTTP_captures',[])])
+def test_empty_news_http_requires_exact_non_authoritative_metadata(archive,field,value):
+    _fixture_failed_empty_news_http(archive,metadata_updates={field:value})
+    with pytest.raises(ValueError,match='NEWS_'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('field,value',[('acquisition_complete',True),('source_coverage','COMPLETE'),
+    ('economic_attribution','CONFIRMED'),('EVENT_confirmation','CONFIRMED'),('HTTP_GET_attempts',True)])
+def test_empty_news_http_summary_never_upgrades_unknown(archive,field,value):
+    summary=dict(acquisition_complete=False,source_coverage='UNKNOWN',economic_attribution='UNKNOWN',
+        EVENT_confirmation='UNKNOWN_NOT_ISSUED',HTTP_GET_attempts=1)
+    summary[field]=value
+    _fixture_failed_empty_news_http(archive,metadata_updates={'summary':summary})
+    with pytest.raises(ValueError,match='NEWS_'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('scope',['missing_news','missing_metadata_binding','unpaired_receipt','unsealed_raw',
+    'duplicate_flat_ref','changed_capture_payload','raw_false_zero_equivalence','outside_job'])
+def test_empty_news_http_unbound_or_ambiguous_references_rejected(archive,scope):
+    attachment=_fixture_failed_empty_news_http(archive,outside_path=scope=='outside_job')
+    completion=deepcopy(archive['completion'])
+    if scope=='missing_news':completion.pop('news')
+    elif scope=='missing_metadata_binding':completion['news']['validation_references'].pop()
+    elif scope=='unpaired_receipt':completion['news']['validation_references'][1]=deepcopy(attachment['metadata'])
+    elif scope=='unsealed_raw':completion['validation_references']=[r for r in completion['validation_references'] if r!=attachment['raw']]
+    elif scope=='duplicate_flat_ref':completion['validation_references'].append(deepcopy(attachment['raw']))
+    elif scope in {'changed_capture_payload','raw_false_zero_equivalence'}:
+        metadata=deepcopy(attachment['metadata_value'])
+        if scope=='changed_capture_payload':metadata['original_HTTP_captures'][0]['capture']['error']='TEST_FIXTURE forged metadata'
+        else:metadata['original_HTTP_captures'][0]['capture']['raw']['bytes']=False
+        path=Path(attachment['metadata']['path']);path.write_text(json.dumps(metadata),encoding='utf-8')
+        ref=workflow._ref(path)
+        completion['news']['metadata']=ref
+        completion['news']['validation_references'][-1]=ref
+        completion['validation_references']=[ref if r['path']==ref['path'] else r for r in completion['validation_references']]
+    reseal(archive,completion=completion,final={'source_reference_count':len(completion['validation_references'])})
+    with pytest.raises(ValueError,match='NEWS_|PHYSICAL_IDENTITY|FILE_SHA'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('field',['input.json.gz','canonical-run.json.gz','manifest.json','all.csv'])
+def test_news_contract_cannot_authorize_empty_core_artifact(archive,field):
+    _fixture_failed_empty_news_http(archive)
+    path=Path(archive['artifacts'][field]['path']);path.write_bytes(b'')
+    archive['artifacts'][field]=workflow._ref(path)
+    reseal(archive)
+    with pytest.raises(ValueError,match='PHYSICAL_IDENTITY_REQUIRED'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('scope',['code','configuration','raw','receipt','result','news_receipt','news_metadata'])
+def test_news_contract_never_authorizes_other_empty_source_roles(archive,scope):
+    attachment=_fixture_failed_empty_news_http(archive)
+    if scope=='code':
+        path=Path(archive['registry'][0]['path']);path.write_bytes(b'')
+        archive['registry'][0]=workflow._ref(path)
+        registry_path=Path(archive['final']['code_registry']['path'])
+        registry_path.write_text(json.dumps(archive['registry']),encoding='utf-8')
+        reseal(archive,final={'code_registry':workflow._ref(registry_path)})
+    elif scope=='configuration':
+        path=Path(archive['final']['configuration']['path']);path.write_bytes(b'')
+        reseal(archive,final={'configuration':workflow._ref(path)})
+    elif scope in {'raw','receipt','result'}:
+        path=Path(archive['items'][0][scope]['path']);path.write_bytes(b'')
+    else:
+        path=Path(attachment['receipt' if scope=='news_receipt' else 'metadata']['path']);path.write_bytes(b'')
+    with pytest.raises(ValueError,match='PHYSICAL_IDENTITY|FILE_SIZE|FILE_SHA|NEWS_'):
+        authenticate(archive)
+
+
+@pytest.mark.parametrize('target',['empty_body','same_bytes_new_inode','metadata','receipt'])
+def test_empty_news_http_terminal_tamper_prevents_atomic_import(archive,service,target):
+    attachment=_fixture_failed_empty_news_http(archive)
+    cap=authenticate(archive)
+    if target in {'empty_body','same_bytes_new_inode'}:
+        path=Path(attachment['raw']['path'])
+        if target=='empty_body':path.write_bytes(b'X')
+        else:
+            replacement=path.with_name('TEST_FIXTURE-empty-replacement')
+            replacement.write_bytes(b'');replacement.replace(path)
+    else:Path(attachment[target]['path']).write_bytes(b'TEST_FIXTURE changed positive attachment binding')
+    with pytest.raises(ValueError,match='IDENTITY|REGISTERED_FILE_CHANGED'):
+        bridge.commit_bridge(service,cap)
+    assert not service.store.list_documents(bridge.CERTIFICATES)
+    assert not service.store.list_documents('strategy_experiment_runs')
+
+
+def test_empty_news_http_capability_descriptor_and_csv_certificate_are_immutable(archive,service):
+    _fixture_failed_empty_news_http(archive)
+    cap=authenticate(archive)
+    cert=bridge.commit_bridge(service,cap)
+    stripped=deepcopy(cert);stripped.pop('non_authoritative_news_http_attachments')
+    with pytest.raises(ValueError,match='BRIDGE_IDENTITY_MISMATCH'):
+        bridge._check_certificate_protocol(stripped)
+    forged=deepcopy(cert);forged['non_authoritative_news_http_attachments']['news_acquisition_complete']=True
+    with pytest.raises(ValueError,match='NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENT_DESCRIPTOR_REQUIRED'):
+        bridge._check_certificate_protocol(forged)
+    cap._session._news_http_attachment_contracts[cert['archive_final_sha256']]['EVENT_confirmation']='CONFIRMED'
+    with pytest.raises(ValueError,match='CAPABILITY_NEWS_HTTP_ATTACHMENT_CONTRACT_CHANGED'):
+        cap.audit()
+
+
+@pytest.mark.parametrize('replacement',['symlink','fifo','open_inode_swap'])
+def test_empty_news_http_reader_refuses_nonregular_or_open_race(archive,monkeypatch,replacement):
+    import os
+    attachment=_fixture_failed_empty_news_http(archive)
+    cap=authenticate(archive)
+    session=cap._session
+    path=Path(attachment['raw']['path'])
+    if replacement=='symlink':
+        target=path.with_name('TEST_FIXTURE-empty-symlink-target');target.write_bytes(b'')
+        path.unlink();path.symlink_to(target)
+    elif replacement=='fifo':
+        if not hasattr(os,'mkfifo'):
+            pytest.fail('TEST_FIXTURE_FIFO_PLATFORM_REQUIRED')
+        path.unlink();os.mkfifo(path)
+    else:
+        real_open=bridge.os.open
+        def swapped(file,flags,*args,**kwargs):
+            if Path(file)==path:
+                new=path.with_name('TEST_FIXTURE-open-race-empty');new.write_bytes(b'');new.replace(path)
+            return real_open(file,flags,*args,**kwargs)
+        monkeypatch.setattr(bridge.os,'open',swapped)
+    with pytest.raises(ValueError,match='NEWS_HTTP_ORIGINAL_PATH_REQUIRED|REGULAR_FILE_REQUIRED|OPENED_FILE_IDENTITY_CHANGED'):
+        bridge._read_empty_news_http(session,attachment['raw'])
+
+
+def test_empty_news_http_file_count_and_positive_binding_read_budgets_are_enforced(archive):
+    attachment=_fixture_failed_empty_news_http(archive)
+    cap=authenticate(archive);session=cap._session
+    session.files.pop(attachment['raw']['path'])
+    session.max_files=len(session.files)
+    with pytest.raises(ValueError,match='SESSION_UNIQUE_FILE_BUDGET_EXCEEDED'):
+        bridge._read_empty_news_http(session,attachment['raw'])
+    session.max_files+=1
+    bridge._read_empty_news_http(session,attachment['raw'])
+    session.max_total_read_bytes=session.read_bytes
+    with pytest.raises(ValueError,match='SESSION_TOTAL_READ_BUDGET_EXCEEDED'):
+        session.terminal()
+
+
+def test_empty_news_http_transaction_terminal_failure_rolls_back_every_publication(archive,service,monkeypatch):
+    attachment=_fixture_failed_empty_news_http(archive)
+    cap=authenticate(archive)
+    original=bridge._read_empty_news_http
+    calls=0
+    def mutate_on_transaction_terminal(session,ref):
+        nonlocal calls
+        calls+=1
+        # First commit terminal precedes writes; second is inside the transaction.
+        if session is cap._session and calls==2:Path(attachment['raw']['path']).write_bytes(b'TEST_FIXTURE_CHANGED')
+        return original(session,ref)
+    monkeypatch.setattr(bridge,'_read_empty_news_http',mutate_on_transaction_terminal)
+    with pytest.raises(ValueError,match='NEWS_HTTP_PHYSICAL_IDENTITY_CHANGED'):
+        bridge.commit_bridge(service,cap)
+    assert calls==2
+    assert not service.store.list_documents(bridge.CERTIFICATES)
+    assert not service.store.list_documents('strategy_experiment_runs')
+    assert not service.store.list_documents('candidate_inputs')
+    assert not service.store.list_documents(bridge.RUN_BINDINGS)
+    assert not service.store.list_documents(bridge.INPUT_BINDINGS)
+    assert not service.store.list_documents(bridge.SOURCES)
+    assert not service.store.list_documents(bridge.CSV_EXPORTS)
+
+
 @pytest.fixture
 def archive(tmp_path, monkeypatch):
     monkeypatch.setattr(socket.socket, 'connect', lambda *a, **k: pytest.fail('TEST_FIXTURE_NETWORK'))

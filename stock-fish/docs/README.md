@@ -1,6 +1,8 @@
 # 技术资料索引
 
-日常先看根目录[使用说明](../../USER_GUIDE.md)、[当前状态](../../CURRENT_STATUS.md)、[当前策略](../../CURRENT_STRATEGY.md)和[部署维护](../../DEPLOYMENT.md)。本目录保留当前协议、冻结规则、证据/存储合同和复现资料；历史成绩不再混在常用入口。
+本轮优先查看[继续交付与蓝图](CONTINUATION_DELIVERY_20261023.md)、[当前状态](../../CURRENT_STATUS.md)与[真实后验性能记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)。显式900秒14步已闭合；默认300秒单/双run均真实超时，数值后验仍UNKNOWN/null，生产未切换。
+
+三份来源/执行协议各有独立语义：[同路径字节恢复](SEALED_RESULT_BYTES_RESTORED_V1.md)、[不同路径本地复制](SEALED_RESULT_LOCAL_COPY_V1.md)、[迟到完成会话](LATE_COMPLETED_SESSION_CLOSURE_V1.md)。协议与测试准备不代替真实验收，历史记录按各自当时状态保留。
 
 ## 当前参考
 

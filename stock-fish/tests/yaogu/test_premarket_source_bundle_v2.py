@@ -404,10 +404,21 @@ def test_bundle_late_mutation_is_rejected(sandbox, mutation):
 
 
 def test_bundle_offline_entry_and_frozen_strategy_identity(prepared, sandbox):
-    from stockfish_core.yaogu import short_horizon_participation, saved_r2_delivery
+    from stockfish_core.yaogu import (short_horizon_participation, saved_r2_delivery,
+        saved_r2_sources_v2, saved_r2_stream_delivery_v3, industry_sina_context_v1,
+        theme_evolution_streaming_v2)
     expected_r2 = short_horizon_participation.short_horizon_source_identity()
     expected_delivery = saved_r2_delivery.source_identity()
+    expected_sources = saved_r2_sources_v2.source_identity()
+    expected_stream_delivery = saved_r2_stream_delivery_v3.source_identity()
+    expected_stream = theme_evolution_streaming_v2.source_identity()
+    expected_industry = industry_sina_context_v1.source_identity()
     runtime = prepared[0] / "runtime"
+    # The worker is the builder's sole authorized source patch. Industry source
+    # identity includes that producer; no other runtime identity may drift.
+    expected_industry['source_file_hashes'][bundle_tool.WORKER] = prepared[1]['verification']['worker_sha256']
+    expected_industry['source_hash'] = industry_sina_context_v1._digest(
+        {key: value for key, value in expected_industry.items() if key != 'source_hash'})
     # Child isolation prevents an already imported original package from hiding
     # a missing resource. It denies network/DB before importing product modules.
     code = r'''
@@ -424,19 +435,70 @@ with contextlib.redirect_stdout(text):
     try: runpy.run_path(str(root/"scripts/stockfish.py"),run_name="__main__")
     except SystemExit as error: assert error.code==0
 assert "premarket" in text.getvalue()
-from stockfish_core.yaogu import short_horizon_participation,saved_r2_delivery
+from stockfish_core.yaogu import (short_horizon_participation,saved_r2_delivery,
+    saved_r2_sources_v2,saved_r2_stream_delivery_v3,industry_sina_context_v1,
+    theme_evolution_streaming_v2)
+identities={"r2":short_horizon_participation.short_horizon_source_identity(),
+    "delivery":saved_r2_delivery.source_identity(),
+    "sources":saved_r2_sources_v2.source_identity(),
+    "stream_delivery":saved_r2_stream_delivery_v3.source_identity(),
+    "industry":industry_sina_context_v1.source_identity(),
+    "theme_stream":theme_evolution_streaming_v2.source_identity()}
+manifest=json.loads((root/"source-bundle-manifest.json").read_bytes())
+for identity in identities.values():
+    for name,sha in identity['source_file_hashes'].items():
+        assert manifest['files'][name]['sha256']==sha
 for name,module in tuple(sys.modules.items()):
     if name=="stockfish_core" or name.startswith("stockfish_core."):
         if getattr(module,"__file__",None): assert Path(module.__file__).resolve().is_relative_to(root)
-print(json.dumps({"r2":short_horizon_participation.short_horizon_source_identity(),
-                  "delivery":saved_r2_delivery.source_identity()}))
+print(json.dumps(identities))
 '''
     result = subprocess.run([sys.executable, "-I", "-B", "-c", code, str(runtime)],
                             cwd=sandbox, capture_output=True, text=True, timeout=30)
     assert result.returncode == 0, result.stderr
     actual = json.loads(result.stdout)
-    assert actual == dict(r2=expected_r2, delivery=expected_delivery)
+    assert actual == dict(r2=expected_r2, delivery=expected_delivery,
+        sources=expected_sources, stream_delivery=expected_stream_delivery,
+        industry=expected_industry, theme_stream=expected_stream)
     assert list(sandbox.iterdir()) == []
+
+
+@pytest.mark.parametrize('resource,module', [
+    ('SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md', 'saved_r2_sources_v2'),
+    ('SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md', 'saved_r2_stream_delivery_v3'),
+    ('INDUSTRY_SINA_CONTEXT_V1.md', 'industry_sina_context_v1'),
+    ('THEME_EVOLUTION_STREAMING_V2.md', 'theme_evolution_streaming_v2'),
+])
+def test_native_theme_identity_requires_each_runtime_specification(sandbox, resource, module):
+    # Reproduce the original omission only in a fresh owned TEST_FIXTURE tree.
+    # A passing --help or import cannot replace this actual identity operation.
+    runtime = sandbox / 'runtime'
+    created = bundle_tool.create(SOURCE, runtime)
+    target = runtime / 'docs' / resource
+    assert target.read_bytes() == (SOURCE / 'docs' / resource).read_bytes()
+    target.unlink()
+    with pytest.raises(ValueError, match='UNREGISTERED_OR_MISSING_BUNDLE_FILE'):
+        bundle_tool.verify(runtime, created['manifest']['sha256'])
+    code = r'''
+import importlib,socket,sqlite3,sys
+from pathlib import Path
+root=Path(sys.argv[1]).resolve()
+def denied(*args,**kwargs): raise AssertionError('TEST_FIXTURE_NETWORK_OR_DB_FORBIDDEN')
+socket.socket.connect=socket.socket.connect_ex=socket.create_connection=socket.getaddrinfo=denied
+sqlite3.connect=denied
+sys.path.insert(0,str(root))
+module=importlib.import_module('stockfish_core.yaogu.'+sys.argv[2])
+assert Path(module.__file__).resolve().is_relative_to(root)
+try:
+    module.source_identity()
+except FileNotFoundError as error:
+    assert Path(error.filename)==root/'docs'/sys.argv[3]
+else:
+    raise AssertionError('MISSING_RUNTIME_SPEC_WAS_ACCEPTED')
+'''
+    result = subprocess.run([sys.executable, '-I', '-B', '-c', code, str(runtime), module, resource],
+        cwd=sandbox, capture_output=True, text=True, timeout=30)
+    assert result.returncode == 0, result.stderr
 
 
 @pytest.mark.parametrize("known_clock", [False, True])

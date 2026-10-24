@@ -28,6 +28,7 @@ import sys
 import tempfile
 import time
 import weakref
+from urllib.parse import urlsplit
 
 from pydantic import TypeAdapter
 
@@ -36,6 +37,7 @@ from .history_artifacts import digest_market_input as _reference_digest_market_i
 from .visibility import stamp
 
 VERSION = 'SHORT_HORIZON_ARCHIVE_BRIDGE_V1'
+NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_VERSION = 'SEALED_NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_V1'
 STRATEGY = 'SHORT_HORIZON_STRENGTH_R2'
 CERTIFICATES = 'short_horizon_archive_bridge_certificates_v1'
 RUN_BINDINGS = 'short_horizon_archive_run_bindings_v1'
@@ -292,7 +294,8 @@ class ArchiveVerificationSession:
     def __init__(self, *, checkpoint=None, max_total_read_bytes=8 * 1024**3,
                  max_unique_bytes=4 * 1024**3, max_files=4096,
                  max_seconds=300, max_rss_bytes=2 * 1024**3,
-                 encoding_profile=DEFAULT_ENCODING_PROFILE):
+                 encoding_profile=DEFAULT_ENCODING_PROFILE, restoration_manifest_ref=None, local_copy_manifest_ref=None):
+        _require(restoration_manifest_ref is None or local_copy_manifest_ref is None, 'SOURCE_PROTOCOL_ARGUMENTS_MUTUALLY_EXCLUSIVE')
         self.encoding_profile = validate_encoding_profile(encoding_profile)
         for value in (max_total_read_bytes, max_unique_bytes, max_files, max_rss_bytes):
             _require(type(value) is int and value > 0,
@@ -308,7 +311,32 @@ class ArchiveVerificationSession:
         self._pending_run_projections, self._borrowed_identities = {}, {}
         self._projection_audit_enabled = False
         self.read_bytes = self.unique_bytes = self.terminal_count = 0
+        self._restoration = None
+        self._restoration_reference = deepcopy(restoration_manifest_ref)
+        self._local_copy_reference = deepcopy(local_copy_manifest_ref)
+        self._result_restorations = {}
+        self._empty_news_http_files = {}
+        self._news_http_attachment_contracts = {}
         self.check()
+        if restoration_manifest_ref is not None:
+            from .sealed_result_restoration_v1 import RestorationManifest
+            self._restoration = RestorationManifest(self, restoration_manifest_ref)
+        elif local_copy_manifest_ref is not None:
+            from .sealed_result_local_copy_v1 import LocalCopyManifest
+            self._restoration = LocalCopyManifest(self, local_copy_manifest_ref)
+
+    def source_protocol(self):
+        if self._restoration is None:
+            _require(self._restoration_reference is None and self._local_copy_reference is None, 'SOURCE_PROTOCOL_CHANGED')
+            return None
+        self._restoration.check()
+        _require(self._restoration_reference is None or self._local_copy_reference is None, 'SOURCE_PROTOCOL_CHANGED')
+        selected = self._local_copy_reference if self._local_copy_reference is not None else self._restoration_reference
+        _require(self._restoration.identity['manifest_reference'] == selected,
+                 'SOURCE_PROTOCOL_CHANGED')
+        _require((self._local_copy_reference is not None) ==
+                 (self._restoration.identity['profile'] == 'SEALED_RESULT_LOCAL_COPY_V1'), 'SOURCE_PROTOCOL_CHANGED')
+        return deepcopy(self._restoration.identity)
 
     def check(self):
         self.checkpoint()
@@ -369,9 +397,21 @@ class ArchiveVerificationSession:
         return b''.join(pieces) if retain else None
 
     def terminal(self):
+        self.source_protocol()
         self.check()
+        expected_empty = {}
+        for contract in self._news_http_attachment_contracts.values():
+            for item in contract['empty_http_attachments']:
+                ref = item['raw_reference']
+                _require(ref['path'] not in expected_empty or expected_empty[ref['path']] == ref,
+                    'NEWS_EMPTY_HTTP_REFERENCE_CONFLICT')
+                expected_empty[ref['path']] = ref
+        _require(expected_empty == self._empty_news_http_files, 'NEWS_EMPTY_HTTP_REGISTRY_CHANGED')
         for expected in tuple(self.files.values()):
-            self.read(expected['path'], expected, retain=False, force=True)
+            if expected['path'] in expected_empty:
+                _read_empty_news_http(self, expected)
+            else:
+                self.read(expected['path'], expected, retain=False, force=True)
         for locator in self.locators:
             self.check()
             locator.validate()
@@ -383,6 +423,7 @@ class ArchiveVerificationSession:
                 encoding_profile=self.encoding_profile) if typed else digest_json_stream(value, checkpoint=self.check)
             _require(actual == expected, 'BORROWED_VERIFIED_CONTENT_CHANGED')
             self.check()
+        self.source_protocol()
         self.terminal_count += 1
         return self.audit()
 
@@ -412,6 +453,13 @@ class ArchiveVerificationSession:
                 key=lambda row: (row['run_id'], row['bridge_id'])))
             result['borrowed_value_identities'] = deepcopy(sorted(self._borrowed_identities.values(),
                 key=lambda row: (row['kind'], row['document_id'], row['bridge_id'], row['content_hash'])))
+        if self.source_protocol() is not None:
+            result['source_protocol'] = self.source_protocol()
+            key = 'result_local_copies' if self._local_copy_reference is not None else 'result_restorations'
+            result[key] = deepcopy(list(self._result_restorations.values()))
+        if self._news_http_attachment_contracts:
+            result['non_authoritative_news_http_attachments'] = deepcopy([
+                self._news_http_attachment_contracts[key] for key in sorted(self._news_http_attachment_contracts)])
         return result
 
     def __enter__(self):
@@ -419,6 +467,171 @@ class ArchiveVerificationSession:
 
     def __exit__(self, *args):
         return False
+
+
+def _empty_news_http_ref(value):
+    """A private attachment shape, never a general ref4 or market-data EMPTY."""
+    _require(isinstance(value, dict) and set(value) == {'path', 'sha256', 'bytes', 'fp'}
+        and isinstance(value['path'], str) and Path(value['path']).is_absolute()
+        and type(value['bytes']) is int and value['bytes'] == 0
+        and value['sha256'] == hashlib.sha256(b'').hexdigest()
+        and isinstance(value['fp'], dict) and set(value['fp']) == set(_FP)
+        and all(type(v) is int for v in value['fp'].values()) and value['fp']['st_size'] == 0,
+        'SEALED_EMPTY_NEWS_HTTP_REF_REQUIRED')
+    return value
+
+
+def _read_empty_news_http(session, expected):
+    """Read an already sealed/registered failed-news body to EOF, including terminal.
+
+    The generic _ref and read remain strictly nonempty. No caller opt-in can
+    authorize an arbitrary empty file; only the sealed news binder registers it.
+    """
+    _empty_news_http_ref(expected)
+    _require(session._empty_news_http_files.get(expected['path']) == expected,
+        'SEALED_NEWS_HTTP_REGISTRATION_REQUIRED')
+    session.check()
+    original = Path(expected['path'])
+    path = original.resolve(strict=True)
+    _require(str(path) == expected['path'] and not original.is_symlink(), 'NEWS_HTTP_ORIGINAL_PATH_REQUIRED')
+    before = _fp(path)
+    _require(before == expected['fp'] and before['st_size'] == 0, 'NEWS_HTTP_PHYSICAL_IDENTITY_CHANGED')
+    prior = session.files.get(str(path))
+    _require(prior is None or prior == expected, 'REGISTERED_FILE_CHANGED')
+    if prior is None:
+        _require(len(session.files) < session.max_files, 'SESSION_UNIQUE_FILE_BUDGET_EXCEEDED')
+    descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
+    with os.fdopen(descriptor, 'rb') as handle:
+        opened = os.fstat(handle.fileno())
+        _require(stat.S_ISREG(opened.st_mode) and
+            {key: getattr(opened, key, 0) for key in _FP} == before, 'OPENED_FILE_IDENTITY_CHANGED')
+        session.check()
+        chunk = handle.read(1)
+        session.read_bytes += len(chunk)
+        _require(session.read_bytes <= session.max_total_read_bytes, 'SESSION_TOTAL_READ_BUDGET_EXCEEDED')
+        _require(chunk == b'' and hashlib.sha256(chunk).hexdigest() == expected['sha256'],
+            'NEWS_HTTP_EMPTY_EOF_REQUIRED')
+    _require(_fp(path) == before and original.resolve(strict=True) == path, 'FILE_CHANGED_DURING_READ')
+    session.files[str(path)] = deepcopy(expected)
+    session.check()
+
+
+def _news_primary_url(value):
+    try:
+        parsed = urlsplit(value)
+        if (parsed.scheme != 'https' or parsed.hostname not in {'www.cls.cn', 'cls.cn', 'www.stcn.com', 'stcn.com'}
+                or parsed.port not in (None, 443) or parsed.username is not None or parsed.password is not None
+                or parsed.query or parsed.fragment):
+            return False
+        article = (r'/detail/[1-9][0-9]*/?' if parsed.hostname.endswith('cls.cn')
+            else r'/article/detail/[1-9][0-9]*\.html')
+        return parsed.path in ('', '/') or bool(re.fullmatch(article, parsed.path))
+    except (TypeError, ValueError, AttributeError):
+        return False
+
+
+def _sealed_news_http_attachments(session, job, checksum, final, completion):
+    """Authenticate a narrow opaque failed-HTTP attachment contract, not news.
+
+    Only zero-byte refs already in the sealed completion can enter this path.
+    Positive controls, metadata and receipts use unchanged normal read/ref checks.
+    Every declared raw/receipt must match both the metadata and flat sealed set.
+    """
+    validation = completion.get('validation_references', ())
+    zero = [ref for ref in validation if isinstance(ref, dict) and type(ref.get('bytes')) is int
+        and ref['bytes'] == 0]
+    news = completion.get('news')
+    declared_news = news.get('validation_references', ()) if isinstance(news, dict) else ()
+    declared_zero = [ref for ref in declared_news if isinstance(ref, dict) and type(ref.get('bytes')) is int
+        and ref['bytes'] == 0] if isinstance(declared_news, (list, tuple)) else []
+    if not zero and not declared_zero:
+        return None
+    _require(isinstance(news, dict) and set(news) == {'metadata', 'summary', 'validation_references'},
+        'SEALED_NEWS_METADATA_BINDING_REQUIRED')
+    metadata_ref = _ref(news['metadata'])
+    news_root = job / 'news'
+    _require(Path(metadata_ref['path']) == news_root / 'reported-materials.json', 'SEALED_NEWS_METADATA_PATH_REQUIRED')
+    metadata = _json(session.read(metadata_ref['path'], metadata_ref, limit=16 * 1024**2))
+    _require(metadata.get('schema_version') == 'PREMARKET_REPORTED_NEWS_V1'
+        and all(metadata.get(key) == completion.get(key) for key in ('run_id', 'observation_date', 'target_session'))
+        and digest_json_stream(metadata.get('summary')) == digest_json_stream(news.get('summary'))
+        and metadata.get('no_SOURCE_or_EVENT_capability_issued') is True
+        and metadata.get('no_direction_mapping_or_company_business_guess') is True
+        and metadata.get('raw_and_receipt_initial_terminal_SHA7FP_verified') is True,
+        'SEALED_NEWS_IDENTITY_OR_NONAUTHORITY_REQUIRED')
+    summary = metadata['summary']
+    _require(isinstance(summary, dict) and summary.get('acquisition_complete') is False
+        and summary.get('source_coverage') == summary.get('economic_attribution') == 'UNKNOWN'
+        and summary.get('EVENT_confirmation') == 'UNKNOWN_NOT_ISSUED'
+        and (completion.get('phases') or {}).get('news') == 'PARTIAL',
+        'FAILED_NEWS_MUST_REMAIN_PARTIAL_UNKNOWN')
+    captures = metadata.get('original_HTTP_captures')
+    _require(isinstance(captures, list) and 0 < len(captures) <= 10
+        and type(summary.get('HTTP_GET_attempts')) is int and summary['HTTP_GET_attempts'] == len(captures),
+        'BOUNDED_ORIGINAL_NEWS_HTTP_CAPTURES_REQUIRED')
+    expected_news, empty_items = [], []
+    for ordinal, item in enumerate(captures, 1):
+        session.check()
+        _require(isinstance(item, dict) and {'raw', 'receipt', 'capture'} <= set(item)
+            and set(item) <= {'raw', 'receipt', 'capture', 'redirect_status'}, 'SEALED_NEWS_CAPTURE_SHAPE_REQUIRED')
+        raw, receipt_ref = item['raw'], _ref(item['receipt'])
+        is_empty = isinstance(raw, dict) and type(raw.get('bytes')) is int and raw['bytes'] == 0
+        (_empty_news_http_ref if is_empty else _ref)(raw)
+        _require(Path(raw['path']) == news_root / f'http-{ordinal:02d}.html'
+            and Path(receipt_ref['path']) == news_root / f'http-{ordinal:02d}.receipt.json',
+            'SEALED_NEWS_PAIRED_HTTP_PATHS_REQUIRED')
+        receipt = _json(session.read(receipt_ref['path'], receipt_ref, limit=1024**2))
+        _require(digest_json_stream(receipt) == digest_json_stream(item['capture'])
+            and receipt.get('schema_version') == 'PREMARKET_REPORTED_NEWS_V1_HTTP_CAPTURE'
+            and digest_json_stream(receipt.get('raw')) == digest_json_stream(raw) and receipt.get('method') == 'GET'
+            and receipt.get('integrity_scope') == 'LOCAL_SHA256_NOT_PUBLISHER_AUTHENTICATION'
+            and receipt.get('receipt_is_not_SOURCE_or_EVENT_capability') is True
+            and receipt.get('publication_not_inferred_from_capture') is True
+            and receipt.get('source_published_at') is None
+            and _news_primary_url(receipt.get('original_requested_url'))
+            and _news_primary_url(receipt.get('requested_url')),
+            'SEALED_NEWS_HTTP_RECEIPT_BINDING_REQUIRED')
+        _require(stamp(receipt['request_started_at']) <= stamp(receipt['first_seen_at'])
+            <= stamp(receipt['ingested_at']) <= stamp(metadata['actual_generated_at'])
+            <= stamp(completion['completed_at']) <= stamp(final['final_sealed_at']),
+            'SEALED_NEWS_HTTP_CLOCK_ORDER_REQUIRED')
+        if is_empty:
+            _require(receipt.get('status') == 'FETCH_FAILED' and receipt.get('http_status') is None
+                and receipt.get('raw_capture_complete') is False and receipt.get('archived_prefix_only') is False
+                and type(receipt.get('actual_body_bytes_returned')) is int
+                and receipt['actual_body_bytes_returned'] == 0
+                and isinstance(receipt.get('error_type'), str) and bool(receipt['error_type'])
+                and isinstance(receipt.get('error'), str), 'ONLY_FAILED_EMPTY_NEWS_HTTP_ATTACHMENT_ALLOWED')
+            empty_items.append(dict(raw_reference=deepcopy(raw), receipt_reference=deepcopy(receipt_ref),
+                metadata_capture_index=ordinal - 1, status='FETCH_FAILED', http_status=None,
+                source_published_at=None, SOURCE_or_EVENT_capability_issued=False))
+        else:
+            session.read(raw['path'], raw, limit=2 * 1024**2, retain=False)
+        expected_news.extend((raw, receipt_ref))
+    expected_news.append(metadata_ref)
+    validation_counts = Counter(digest_json_stream(ref) for ref in validation)
+    _require(digest_json_stream(news['validation_references']) == digest_json_stream(expected_news)
+        and all(validation_counts[digest_json_stream(expected)] == 1 for expected in expected_news)
+        and Counter(digest_json_stream(ref) for ref in zero)
+            == Counter(digest_json_stream(v['raw_reference']) for v in empty_items),
+        'EXACT_SEALED_NEWS_ATTACHMENT_REFERENCE_SET_REQUIRED')
+    _require(empty_items, 'SEALED_EMPTY_NEWS_HTTP_ATTACHMENT_REQUIRED')
+    contract = dict(schema_version=NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_VERSION,
+        archive_final_sha256=checksum, completion_reference=deepcopy(final['completion']),
+        news_metadata_reference=deepcopy(metadata_ref), empty_http_attachments=empty_items,
+        authority='OPAQUE_FAILED_HTTP_ATTACHMENT_INTEGRITY_ONLY',
+        news_acquisition_complete=False, EVENT_confirmation='UNKNOWN_NOT_ISSUED',
+        SOURCE_or_EVENT_capability_issued=False, news_presentation_authenticated=False)
+    prior = session._news_http_attachment_contracts.get(checksum)
+    _require(prior is None or prior == contract, 'NEWS_HTTP_ATTACHMENT_CONTRACT_CHANGED')
+    session._news_http_attachment_contracts[checksum] = deepcopy(contract)
+    for item in empty_items:
+        ref = item['raw_reference']
+        previous = session._empty_news_http_files.get(ref['path'])
+        _require(previous is None or previous == ref, 'NEWS_EMPTY_HTTP_REFERENCE_CONFLICT')
+        session._empty_news_http_files[ref['path']] = deepcopy(ref)
+        _read_empty_news_http(session, ref)
+    return contract
 
 
 def _decompressed_bytes(raw, session):
@@ -493,7 +706,7 @@ def _source_map(session, registry, overrides, run):
     return root, by_name, proofs
 
 
-def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff):
+def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff, *, restoration_context=None):
     """Whole original-trio checks, with every read charged to this session.
 
     Same receipt preimage/request/RAW checks as historical_replay.verify_capture;
@@ -504,7 +717,15 @@ def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff)
     for role in ('result', 'raw', 'receipt'):
         reference = _ref(item[role])
         _require(sealed_refs.get(reference['path']) == reference, 'UNSEALED_CORE_' + role.upper())
-        documents[role] = _json(session.read(reference['path'], reference))
+        if role == 'result' and restoration_context is not None:
+            seal, allowed, used, proofs = restoration_context
+            raw, restoration = session._restoration.read_result(session, seal, reference, allowed, used)
+            if restoration is not None:
+                proofs[reference['path']] = restoration
+                session._result_restorations[(seal, reference['path'])] = restoration
+            documents[role] = _json(raw)
+        else:
+            documents[role] = _json(session.read(reference['path'], reference))
     result, raw, physical = (documents[k] for k in ('result', 'raw', 'receipt'))
     rid = result['request_receipt_id']
     _require(rid in receipts, 'UNREGISTERED_CORE_RECEIPT')
@@ -638,7 +859,8 @@ def _bridge_identity(session):
     for path in sorted(paths):
         session.read(path, limit=16 * 1024**2, retain=False)
         files[path.relative_to(root).as_posix()] = session.files[str(path.resolve())]['sha256']
-    return dict(schema_version=VERSION, source_file_hashes=files, source_hash=digest_json_stream(files))
+    return dict(schema_version=VERSION, source_file_hashes=files, source_hash=digest_json_stream(files),
+        non_authoritative_attachment_contract_version=NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_VERSION)
 
 
 class ArchiveBridgeCapability:
@@ -664,6 +886,13 @@ def _state(capability):
     state = _CAPABILITIES[capability]
     session = state['session_ref']()
     _require(session is not None and capability._session is session, 'CAPABILITY_SESSION_CHANGED')
+    _require(state.get('source_protocol_context') == session.source_protocol(), 'CAPABILITY_SOURCE_PROTOCOL_CONTEXT_CHANGED')
+    expected_protocol = state['audit'].get('source_protocol')
+    _require(expected_protocol is None or session.source_protocol() == expected_protocol,
+             'CAPABILITY_SOURCE_PROTOCOL_CHANGED')
+    attachment_contract = state['audit'].get('non_authoritative_news_http_attachments')
+    _require(attachment_contract == session._news_http_attachment_contracts.get(state['audit']['archive_final_sha256']),
+        'CAPABILITY_NEWS_HTTP_ATTACHMENT_CONTRACT_CHANGED')
     return dict(state, session=session)
 
 
@@ -694,7 +923,8 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     _require(job.is_dir(), 'ORIGINAL_JOB_DIRECTORY_REQUIRED')
     checksum = _sha(expected_final_sha256)
     overrides = dict(source_overrides or {})
-    cache_key = (str(job), checksum, digest_json_stream(overrides), bool(allow_test_fixture), retain_input)
+    cache_key = (str(job), checksum, digest_json_stream(overrides), bool(allow_test_fixture), retain_input,
+                 digest_json_stream(session.source_protocol()))
     if cache_key in session.capabilities:
         cap = session.capabilities[cache_key]
         _require(_state(cap)['identity'] == initial_identity, 'VERIFIER_IMPLEMENTATION_CHANGED')
@@ -757,9 +987,13 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     root, source_registry, source_proofs = _source_map(session, controls['code_registry'], overrides, run)
     cutoff = stamp(run['decision_cutoff'])
     _require(cutoff <= stamp(run['generated_at']) <= stamp(completion['completed_at']), 'ORIGINAL_RUN_TIME_ORDER_INVALID')
+    news_http_attachments = _sealed_news_http_attachments(session, job, checksum, final, completion)
     sealed_refs = {}
     for ref in completion.get('validation_references', ()):
-        _ref(ref)
+        if isinstance(ref, dict) and session._empty_news_http_files.get(ref.get('path')) == ref:
+            _empty_news_http_ref(ref)
+        else:
+            _ref(ref)
         _require(ref['path'] not in sealed_refs or sealed_refs[ref['path']] == ref, 'SEALED_SOURCE_REFERENCE_CONFLICT')
         sealed_refs[ref['path']] = ref
     _require(final.get('source_reference_count') == len(completion['validation_references']), 'SEALED_SOURCE_COUNT_MISMATCH')
@@ -773,9 +1007,15 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     _require(len(receipts) == len(typed) == len(items) and receipts == {r.receipt_id: r for r in saved_receipts}, 'EXACT_CORE_RECEIPT_SET_REQUIRED')
     del saved_receipts
     results, raw_paths, used, evidence = [], {}, set(), []
+    restoration_context = None
+    restoration_proofs, restored_used = {}, set()
+    if session._restoration is not None:
+        allowed_restorations = session._restoration.validate_scope(checksum, items, sealed_refs)
+        restoration_context = (checksum, allowed_restorations, restored_used, restoration_proofs)
     for item in items:
         session.check()
-        result, receipt, raw_path = _trio(session, item, sealed_refs, receipts, source_proofs, coverage_type, cutoff)
+        result, receipt, raw_path = _trio(session, item, sealed_refs, receipts, source_proofs, coverage_type, cutoff,
+            **({'restoration_context': restoration_context} if restoration_context is not None else {}))
         _require(receipt.receipt_id not in used, 'DUPLICATE_CORE_CAPTURE')
         used.add(receipt.receipt_id)
         results.append(result)
@@ -784,6 +1024,11 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
             originals={k: deepcopy(item[k]) for k in ('raw', 'receipt', 'result')},
             producer_files=deepcopy(item.get('producer_files', [])),
             original_integrity_scope='LOCAL_SHA256_NOT_VENDOR_AUTHENTICATION'))
+        if item['result']['path'] in restoration_proofs:
+            key = 'result_local_copy' if session._local_copy_reference is not None else 'result_restoration'
+            evidence[-1][key] = deepcopy(restoration_proofs[item['result']['path']])
+    if restoration_context is not None:
+        _require(restored_used == allowed_restorations, 'RESULT_RESTORATION_SCOPE_BIJECTION_REQUIRED')
     _require(used == set(receipts), 'CORE_CAPTURE_RECEIPT_OMISSION')
     from .premarket_native_core_v1 import _calendar_sessions
     from .provider_normalization import normalize_capture_with_report
@@ -811,8 +1056,14 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     gc.collect()
     identity = _bridge_identity(session)
     _require(identity == initial_identity, 'VERIFIER_IMPLEMENTATION_CHANGED')
-    bridge_id = 'r2_archive_bridge_' + digest_json_stream(dict(version=VERSION, archive_final_sha256=checksum,
-        signal_content_hash=run['content_hash'], input_hash=run['input_hash'], verifier_source_hash=identity['source_hash']))
+    source_protocol = session.source_protocol() if restoration_proofs else None
+    bridge_identity = dict(version=VERSION, archive_final_sha256=checksum,
+        signal_content_hash=run['content_hash'], input_hash=run['input_hash'], verifier_source_hash=identity['source_hash'])
+    if source_protocol is not None:
+        bridge_identity['source_protocol'] = source_protocol
+    if news_http_attachments is not None:
+        bridge_identity['non_authoritative_news_http_attachments'] = news_http_attachments
+    bridge_id = 'r2_archive_bridge_' + digest_json_stream(bridge_identity)
     run_hash = digest_json_stream(run, checkpoint=session.check)
     session.check()
     audit = dict(schema_version=VERSION, status='VERIFIED', bridge_id=bridge_id, run_id=run['run_id'],
@@ -832,13 +1083,19 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
         scope='ORIGINAL_NATIVE_R2_CORE_INPUT_RUN_AND_FIVE_EXPORTS_ONLY',
         excluded_scope=['THEME_PRESENTATION', 'NEWS_PRESENTATION', 'ACCOUNT_COST_EXECUTION_PORTFOLIO'],
         market_edge='NOT_ESTABLISHED', source_database_written=False)
+    if source_protocol is not None:
+        audit['source_protocol'] = source_protocol
+        audit['original_result_physical_ownership'] = 'LOST_NOT_RESTORED'
+    if news_http_attachments is not None:
+        audit['non_authoritative_news_http_attachments'] = deepcopy(news_http_attachments)
     session.terminal()
     if retained_input is not None:
         _inline_typed_input(retained_input)
     capability = ArchiveBridgeCapability(_MINT, session)
     # The weak-key registry must not retain session -> cached cap as a global
     # strong path. The only strong cycle is session <-> cap and is collectable.
-    _CAPABILITIES[capability] = dict(session_ref=weakref.ref(session), run=run, retained_input=retained_input,
+    _CAPABILITIES[capability] = dict(source_protocol_context=session.source_protocol(),
+        session_ref=weakref.ref(session), run=run, retained_input=retained_input,
         # Mint only after the original run's full hashes, every archive check,
         # and the source terminal. This private copy describes those originals;
         # it is never reconstructed from a serialized audit or caller metadata.
@@ -959,13 +1216,26 @@ def _put_archived_document(connection, namespace, document_id, expected_hash, se
             'BRIDGED_DATABASE_PARENT_CHANGED')
 
 
-def commit_bridge(service, capability):
+def commit_bridge(service, capability, *, restoration_manifest_ref=None, local_copy_manifest_ref=None):
     """Atomically append frozen input/run and separate provenance; no activation.
 
     Caller must own the existing service job lock before opening a writable DB.
     There is no timestamp argument: imported_at is the actual current UTC time.
     """
     state = _state(capability)
+    _require(restoration_manifest_ref is None or local_copy_manifest_ref is None, 'SOURCE_PROTOCOL_ARGUMENTS_MUTUALLY_EXCLUSIVE')
+    if state['audit'].get('source_protocol') is not None:
+        if state['audit']['source_protocol']['profile'] == 'SEALED_RESULT_LOCAL_COPY_V1':
+            _require(local_copy_manifest_ref is not None and restoration_manifest_ref is None, 'EXPLICIT_RESULT_LOCAL_COPY_COMMIT_REQUIRED')
+            configure_local_copy_source_protocol(service, local_copy_manifest_ref)
+        else:
+            _require(restoration_manifest_ref is not None and local_copy_manifest_ref is None, 'EXPLICIT_RESULT_RESTORATION_COMMIT_REQUIRED')
+            configure_restored_source_protocol(service, restoration_manifest_ref)
+        _require(_service_source_protocol(service) == state['audit']['source_protocol'], 'COMMIT_SOURCE_PROTOCOL_MISMATCH')
+    elif restoration_manifest_ref is not None:
+        configure_restored_source_protocol(service, restoration_manifest_ref)
+    elif local_copy_manifest_ref is not None:
+        configure_local_copy_source_protocol(service, local_copy_manifest_ref)
     session, run = state['session'], _verified_run(state)
     _require(_bridge_identity(session) == state['identity'], 'VERIFIED_CAPABILITY_CONTENT_CHANGED')
     _require(state['audit']['coverage_type'] != 'TEST_FIXTURE' or service.allow_test_fixture is True, 'ISOLATED_FIXTURE_SERVICE_REQUIRED')
@@ -977,6 +1247,7 @@ def commit_bridge(service, capability):
     certificate = dict(capability.audit(), imported_at=datetime.now(timezone.utc).isoformat(),
         source_database_written=True, original_run_mutated=False, original_input_mutated=False,
         active_input_changed=False)
+    _check_certificate_protocol(certificate, session=session)
     bridge_id, run_id, input_id = (certificate[k] for k in ('bridge_id', 'run_id', 'input_id'))
     # SQLite must parse the complete input to enforce its JSON indexes. Do not
     # retain an unrelated expanded signal run during that high-water operation.
@@ -997,6 +1268,11 @@ def commit_bridge(service, capability):
             _require(all(certificate.get(k) == state['audit'][k] for k in
                 ('bridge_id', 'run_id', 'input_id', 'input_hash', 'signal_content_hash', 'run_document_hash', 'archive_final_sha256')),
                 'EXISTING_CERTIFICATE_IDENTITY_CONFLICT')
+            _require(certificate.get('source_protocol') == state['audit'].get('source_protocol'),
+                     'EXISTING_CERTIFICATE_SOURCE_PROTOCOL_CONFLICT')
+            _require(certificate.get('non_authoritative_news_http_attachments')
+                == state['audit'].get('non_authoritative_news_http_attachments'),
+                'EXISTING_CERTIFICATE_NEWS_HTTP_ATTACHMENT_CONFLICT')
         put = service.store._put_document
         _put_archived_document(connection, 'candidate_inputs', input_id, state['input_hash'], session,
             reference=state['input_reference'], temporary_dir=service.store.path.parent)
@@ -1020,9 +1296,10 @@ def commit_bridge(service, capability):
                 input_id=input_id, input_hash=state['input_hash'], archive_final_sha256=certificate['archive_final_sha256'],
                 original_reference=deepcopy(ref), csv_sha256=ref['sha256'], csv_bytes=ref['bytes'],
                 csv_text=raw.decode('utf-8'))
+            if certificate.get('source_protocol') is not None:
+                export['source_protocol'] = deepcopy(certificate['source_protocol'])
             put(connection, CSV_EXPORTS, run_id + ':' + selection, export)
-        binding = {k: certificate[k] for k in ('bridge_id', 'run_id', 'signal_content_hash', 'input_id',
-            'input_hash', 'archive_final_sha256', 'imported_at')}
+        binding = _certificate_credential(certificate)
         put(connection, RUN_BINDINGS, run_id, dict(schema_version=VERSION, **binding))
         input_binding = connection.execute('SELECT * FROM documents WHERE namespace=? AND document_id=?',
             (INPUT_BINDINGS, input_id)).fetchone()
@@ -1031,6 +1308,8 @@ def commit_bridge(service, capability):
             saved = checked_payload(input_binding)
             _require(saved.get('input_id') == input_id and saved.get('input_hash') == certificate['input_hash'],
                 'EXISTING_INPUT_BRIDGE_IDENTITY_CONFLICT')
+            _require(saved.get('source_protocol') == binding.get('source_protocol'),
+                     'EXISTING_INPUT_SOURCE_PROTOCOL_CONFLICT')
         else:
             put(connection, INPUT_BINDINGS, input_id, dict(schema_version=VERSION, **binding))
         session.terminal()
@@ -1080,6 +1359,7 @@ def saved_csv_export(service, run, strategy_id, selection):
             'CSV_CERTIFICATE_REQUIRED')
         _require(all(certificate.get(key) == value for key, value in binding.items()),
             'CSV_CERTIFICATE_BINDING_MISMATCH')
+        _check_certificate_protocol(certificate, service=service)
         run_hash = _sha(certificate.get('run_document_hash'))
         _require(run.get('strategy_id') == STRATEGY and run.get('execution_profile') == 'SHORT_HORIZON_RESEARCH_SINGLE'
             and certificate.get('run_id') == run_id and run.get('content_hash') == certificate.get('signal_content_hash')
@@ -1098,6 +1378,7 @@ def saved_csv_export(service, run, strategy_id, selection):
                 bridge_id=binding['bridge_id'], run_id=run_id, strategy_id=STRATEGY, selection=selected,
                 run_document_hash=run_hash, signal_content_hash=run['content_hash'],
                 input_id=run['input_id'], input_hash=run['input_hash'], archive_final_sha256=certificate['archive_final_sha256'])
+            _require(export.get('source_protocol') == certificate.get('source_protocol'), 'CSV_SOURCE_PROTOCOL_MISMATCH')
             _require(all(export.get(name) == value for name, value in expected.items()), 'CSV_PARENT_IDENTITY_MISMATCH')
             ref = _ref((certificate.get('core_artifacts') or {}).get(selected + '.csv'))
             _require(export.get('original_reference') == ref and export.get('csv_sha256') == ref['sha256']
@@ -1126,6 +1407,7 @@ def _verified(service, namespace, document_id, session, *, return_state=False, r
         'VERIFIED_BRIDGE_CERTIFICATE_REQUIRED')
     for key, value in binding.items():
         _require(certificate.get(key) == value, 'BRIDGE_CERTIFICATE_BINDING_MISMATCH')
+    _check_certificate_protocol(certificate, session=session)
     capability = authenticate_archive(certificate['archive_job'],
         expected_final_sha256=certificate['archive_final_sha256'],
         source_overrides=certificate['source_overrides'],
@@ -1133,6 +1415,10 @@ def _verified(service, namespace, document_id, session, *, return_state=False, r
     state = _state(capability)
     for key in ('bridge_id', 'run_id', 'input_id', 'input_hash', 'signal_content_hash', 'run_document_hash', 'archive_final_sha256'):
         _require(certificate.get(key) == state['audit'][key], 'BRIDGE_REAUTHENTICATION_MISMATCH')
+    _require(certificate.get('source_protocol') == state['audit'].get('source_protocol'), 'BRIDGE_REAUTHENTICATION_SOURCE_PROTOCOL_MISMATCH')
+    _require(certificate.get('non_authoritative_news_http_attachments')
+        == state['audit'].get('non_authoritative_news_http_attachments'),
+        'BRIDGE_REAUTHENTICATION_NEWS_HTTP_ATTACHMENT_MISMATCH')
     with service.store.transaction(write=False) as connection:
         _require(_stored_matches(connection, 'strategy_experiment_runs', binding['run_id'], state['run_hash'], session)
             and _stored_matches(connection, 'candidate_inputs', binding['input_id'], state['input_hash'], session),
@@ -1144,8 +1430,7 @@ def _verified(service, namespace, document_id, session, *, return_state=False, r
             'BRIDGED_SOURCE_REGISTRATION_CHANGED')
     if owned_session:
         session.terminal()
-    credential = {k: certificate[k] for k in ('bridge_id', 'run_id', 'signal_content_hash', 'input_id',
-        'input_hash', 'archive_final_sha256', 'imported_at')}
+    credential = _certificate_credential(certificate)
     return (credential, state) if return_state else credential
 
 
@@ -1166,6 +1451,7 @@ def _view_store_identity(service):
 def _check_verified_view(service, proof, session):
     """A small invocation proof is bound to this actual store and originals."""
     session.check()
+    _require(proof.get('source_protocol_context') == session.source_protocol(), 'VERIFIED_VIEW_SOURCE_PROTOCOL_CHANGED')
     _require(proof.get('session_ref', lambda: None)() is session
         and any(value is proof for value in session._verified_views.values()),
         'GENUINE_INVOCATION_VIEW_REQUIRED')
@@ -1196,6 +1482,7 @@ def _verified_second_run_decode(proof, session):
         and any(value is proof for value in session._verified_views.values())
         and proof.get('session_ref', lambda: None)() is session,
         'GENUINE_INVOCATION_VIEW_REQUIRED')
+    _require(proof.get('source_protocol_context') == session.source_protocol(), 'VERIFIED_VIEW_SOURCE_PROTOCOL_CHANGED')
     ref = _ref(proof['run_reference'])
     _require(session.files.get(ref['path']) == ref, 'STRICTLY_AUTHENTICATED_RUN_REFERENCE_REQUIRED')
     session.check()
@@ -1213,6 +1500,8 @@ def _record_borrowed_identity(session, proof, value, *, typed):
         document_id=credential['input_id' if typed else 'run_id'],
         content_hash=proof['input_hash' if typed else 'run_hash'],
         bridge_id=credential['bridge_id'], run_id=credential['run_id'], input_id=credential['input_id'])
+    if session.source_protocol() is not None:
+        identity['source_protocol_context'] = session.source_protocol()
     previous = session._borrowed_identities.get(id(value))
     _require(previous is None or previous == identity, 'BORROWED_IDENTITY_CHANGED')
     session._borrowed_identities[id(value)] = identity
@@ -1242,7 +1531,7 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         run_id is not None and not borrow_run), 'BORROW_IF_EMPTY_REQUIRES_EXCLUSIVE_RUN_VIEW')
     namespace, document_id = (RUN_BINDINGS, run_id) if run_id is not None else (INPUT_BINDINGS, input_id)
     _require(isinstance(document_id, str) and document_id, 'VERIFIED_VIEW_KEY_REQUIRED')
-    key = (id(service.store), namespace, document_id)
+    key = _verified_view_key(service, namespace, document_id, session)
     proof = session._verified_views.get(key)
     run = None
     if proof is not None:
@@ -1254,7 +1543,8 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         credential, state = _verified(service, namespace, document_id, session, return_state=True,
                                       retain_input=retain_input)
         run = _verified_run(state) if borrow_run else None
-        proof = dict(session_ref=weakref.ref(session), store=service.store, store_identity=_view_store_identity(service),
+        proof = dict(source_protocol_context=session.source_protocol(),
+            session_ref=weakref.ref(session), store=service.store, store_identity=_view_store_identity(service),
             namespace=namespace, document_id=document_id, credential=deepcopy(credential),
             certificate=service.store.get_document(CERTIFICATES, credential['bridge_id']),
             binding=service.store.get_document(namespace, document_id),
@@ -1284,7 +1574,7 @@ def authenticated_bridge_view(service, *, run_id=None, input_id=None, session, b
         other_id = credential['input_id' if other_namespace == INPUT_BINDINGS else 'run_id']
         other_binding = service.store.get_document(other_namespace, other_id)
         if other_binding == dict(schema_version=VERSION, **credential):
-            session._verified_views[(id(service.store), other_namespace, other_id)] = dict(proof,
+            session._verified_views[_verified_view_key(service, other_namespace, other_id, session)] = dict(proof,
                 namespace=other_namespace, document_id=other_id, binding=other_binding)
     if retain_input:
         retained = proof.get('borrowed_input')
@@ -1344,3 +1634,96 @@ def load_verified_bridge_input(service, input_id, *, session):
     _record_borrowed_identity(session, proof, bundle, typed=True)
     session.check()
     return bundle
+
+
+def _certificate_credential(certificate):
+    value = {k: certificate[k] for k in ('bridge_id', 'run_id', 'signal_content_hash', 'input_id',
+        'input_hash', 'archive_final_sha256', 'imported_at')}
+    if certificate.get('source_protocol') is not None:
+        value['source_protocol'] = deepcopy(certificate['source_protocol'])
+    return value
+
+
+def configure_restored_source_protocol(service, restoration_manifest_ref):
+    """Explicit process-local opt-in; never inferred from stored certificates."""
+    session = ArchiveVerificationSession(restoration_manifest_ref=restoration_manifest_ref)
+    protocol = session.source_protocol()
+    session.terminal()
+    previous = getattr(service, '_explicit_archive_source_protocol', None)
+    _require(previous is None or previous == protocol, 'SERVICE_SOURCE_PROTOCOL_CONFLICT')
+    service._explicit_archive_source_protocol = deepcopy(protocol)
+    return protocol
+
+
+def _service_source_protocol(service):
+    protocol = getattr(service, '_explicit_archive_source_protocol', None)
+    if protocol is not None:
+        _validate_source_protocol(protocol)
+    return protocol
+
+
+def _check_certificate_protocol(certificate, *, session=None, service=None):
+    protocol = certificate.get('source_protocol')
+    if protocol is None:
+        _require('original_result_physical_ownership' not in certificate,
+                 'CSV_RESTORED_SOURCE_PROTOCOL_CANNOT_BE_REMOVED')
+    else:
+        _validate_source_protocol(protocol)
+    identity = dict(version=VERSION, archive_final_sha256=_sha(certificate.get('archive_final_sha256')),
+        signal_content_hash=_sha(certificate.get('signal_content_hash')),
+        input_hash=_sha(certificate.get('input_hash')),
+        verifier_source_hash=_sha((certificate.get('verifier_identity') or {}).get('source_hash')))
+    if protocol is not None:
+        identity['source_protocol'] = protocol
+    attachments = certificate.get('non_authoritative_news_http_attachments')
+    if attachments is not None:
+        _require(isinstance(attachments, dict)
+            and attachments.get('schema_version') == NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENTS_VERSION
+            and attachments.get('archive_final_sha256') == identity['archive_final_sha256']
+            and attachments.get('authority') == 'OPAQUE_FAILED_HTTP_ATTACHMENT_INTEGRITY_ONLY'
+            and attachments.get('SOURCE_or_EVENT_capability_issued') is False
+            and attachments.get('news_acquisition_complete') is False
+            and attachments.get('EVENT_confirmation') == 'UNKNOWN_NOT_ISSUED'
+            and attachments.get('news_presentation_authenticated') is False,
+            'NONAUTHORITATIVE_NEWS_HTTP_ATTACHMENT_DESCRIPTOR_REQUIRED')
+        identity['non_authoritative_news_http_attachments'] = attachments
+    _require(certificate.get('bridge_id') == 'r2_archive_bridge_' + digest_json_stream(identity),
+             'CSV_SOURCE_PROTOCOL_BRIDGE_IDENTITY_MISMATCH')
+    if protocol is None:
+        return
+    _require(certificate.get('original_result_physical_ownership') == 'LOST_NOT_RESTORED',
+             'RESTORED_ORIGINAL_PHYSICAL_LOSS_MUST_BE_RECORDED')
+    selected = session.source_protocol() if session is not None else _service_source_protocol(service)
+    if session is None and selected is not None:
+        key = 'local_copy_manifest_ref' if selected['profile'] == 'SEALED_RESULT_LOCAL_COPY_V1' else 'restoration_manifest_ref'
+        current = ArchiveVerificationSession(**{key: selected['manifest_reference']})
+        _require(current.source_protocol() == selected, 'CSV_SOURCE_PROTOCOL_CHANGED')
+        if key == 'local_copy_manifest_ref':
+            current.terminal()
+    error = ('EXPLICIT_MATCHING_RESULT_LOCAL_COPY_PROTOCOL_REQUIRED' if protocol['profile'] == 'SEALED_RESULT_LOCAL_COPY_V1'
+             else 'EXPLICIT_MATCHING_RESULT_RESTORATION_PROTOCOL_REQUIRED')
+    _require(selected == protocol, error)
+
+
+def _validate_source_protocol(protocol):
+    if isinstance(protocol, dict) and protocol.get('profile') == 'SEALED_RESULT_LOCAL_COPY_V1':
+        from .sealed_result_local_copy_v1 import validate_protocol
+    else:
+        from .sealed_result_restoration_v1 import validate_protocol
+    return validate_protocol(protocol)
+
+
+def configure_local_copy_source_protocol(service, local_copy_manifest_ref):
+    """Explicit process-local choice; never inferred from a stored certificate."""
+    session = ArchiveVerificationSession(local_copy_manifest_ref=local_copy_manifest_ref)
+    protocol = session.source_protocol()
+    session.terminal()
+    previous = getattr(service, '_explicit_archive_source_protocol', None)
+    _require(previous is None or previous == protocol, 'SERVICE_SOURCE_PROTOCOL_CONFLICT')
+    service._explicit_archive_source_protocol = deepcopy(protocol)
+    return protocol
+
+
+def _verified_view_key(service, namespace, document_id, session):
+    legacy = (id(service.store), namespace, document_id)
+    return legacy if session.source_protocol() is None else legacy + (digest_json_stream(session.source_protocol()),)

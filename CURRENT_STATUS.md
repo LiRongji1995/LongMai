@@ -1,10 +1,29 @@
 # 当前状态与待办
 
-更新：2026年10月21日（上海时间）。历史10月16日后验与最新10月21日盘前尝试分别报告。本文只保留当前能力、缺口和下一步，不再累加逐轮日志。详细命令、身份、失败及旧检查结果可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/CURRENT_STATUS.md)；必要私有原件和退休索引保留。
+## 2026年10月24日本轮验收状态
+
+| 层次 | 已确认结果 | 仍未完成或不可外推 |
+|---|---|---|
+| 运行基线 | 隔离运行环境、来源身份、CLI和安全检查通过 | 未切换生产服务；不承诺连续每日交付 |
+| 可信输入 | 原05封存：观察23日、目标26日；全池3045、原WATCH64、3亿元展示49、FOCUS0 | 主题FAILED、新闻PARTIAL、DAILY_V1=UNKNOWN_NOT_EXECUTED |
+| 来源恢复 | 25份不同路径本地复制件完整字节/当前身份通过，显式SEALED_RESULT_LOCAL_COPY_V1 | 25旧物理身份LOST_NOT_RESTORED；历史PIT、原owner未恢复 |
+| 900秒真实工程链 | 新库14步闭合：归档接入、陈旧拒绝、单/双run、幂等、三产品回查、两套独立H1 | late_processing=true、current_session_acceptance=false；不等于默认300 |
+| 原生默认300秒 | 新独立快照的单/双run计划分别180.575/288.576秒通过 | 两worker均300秒时间门禁失败，无新增产品或ledger；目标未达标 |
+| 数值后验 | 全池与观察集合逐项核对，单12164/双24332期限行全部UNKNOWN，收益null | 历史身份、可比价格及逐日资格尚有缺口，无已知收益或投资优势 |
+| 采集与修复 | SOURCE05窄修指标原子发布竞态，关联检查通过；B05源码闭包检查通过 | 采集06真实FAILED、缺completion；B05完整采集未验收 |
+| 性能候选 | 两轮局部resolver候选及直接Rust JSON替换未采用 | 不以功能夹具或较低失败峰值RSS宣称提速 |
+
+最终数据保护已实际通过：56份历史受保护文件合7337750602字节完整SHA与双端7FP保持；25份本地复制件合67200798字节完整SHA/7FP、0400、UF_IMMUTABLE及单链接保持，25旧原路径全missing，原物理身份仍LOST。源900主库/空WAL/不解释内容的SHM完整字节与7FP、lsof，558源码及NOTICE、闭合控制链和44路径OS非云位置检查通过；未打开源SQL、联网或改写源。 源码发布以Git历史和私有交付收据为准；检查通过后按精确42文件范围更新main，不在本文嵌入自身提交SHA，也不预写推送或远端核验成功。[完整事实和改进蓝图](stock-fish/docs/CONTINUATION_DELIVERY_20261023.md)与[性能记录](stock-fish/docs/REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)集中说明实际耗时、失败及后续门禁。以下保留此前状态与轮次记录；涉及旧“待验收”均按原轮次理解，不覆盖上表。
 
 ## 当前能力
 
-最新[10月21日盘前显式重试](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)从已校验的独立源码 bundle V2 运行，实际上海05:46启动；3个官方目录请求 COMPLETE 且分页完整，随后采集读取计量触限，退出4。已计585,914,048字节，比本次585,853,211字节额度超60,837字节，capture余额归零；守卫在读取返回后计量并停止，不能称严格未超字节。核心、题材和展示均未运行，没有新 run 或可信10月21日名单，DAILY_V1为UNKNOWN_NOT_EXECUTED，也未执行本次真实每日后验或双run。失败归档字节校验退出0，不恢复当前性或来源权威。此前10月20日缺首见钟的失败和旧名单保持；本次未进入factor分支，不能据此宣称复权checkpoint修复已通过真实验收。
+观察日为2026年10月23日，目标交易日为10月26日；已封存原R2的全池为3,045只，原研究观察64只，成交额至少3亿元仅作展示过滤为49只，正式FOCUS为0。64只均为WATCH、formal_status为UNKNOWN且执行未确认，排序不代表投资优先级。原覆盖为RECONSTRUCTED_HISTORICAL，历史PIT和MARKET_EDGE仍未建立。 该清单来自原run及原导出，未改变策略或重新排序。
+
+显式SEALED_RESULT_LOCAL_COPY_V1仅允许封存核心RESULT使用同SHA/尺寸、不同路径且当前物理身份已钉住的本地不可变副本；原25件的旧物理身份保持LOST_NOT_RESTORED。RAW、receipt、producer、locator、控制和核心原件、归一化与策略仍逐项校验，默认V1与原同路径恢复协议不能自动接受新合同。
+
+显式FULL_ARCHIVE_900S_V1独立新库14步实际检查已闭合：四归档接入与陈旧输入拒绝、单run及幂等/三产品回查/独立H1、双run及幂等/三产品回查/第二套独立H1。这是10月23日业务、上海10月24日实际执行的late-completed闭环，current-session acceptance仍为false；不追认原当日盘前、历史PIT、数值后验有效性或默认300达标。 原25件路径物理身份保持LOST_NOT_RESTORED；25件不可变非云本地副本只证明同字节与当前身份，不恢复原所有权或历史PIT。SEALED_RESULT_LOCAL_COPY_V1仅对封存RESULT显式适配，RAW、receipt、producer、locator与末验不放松，默认路径仍拒绝混用。 生产服务、默认入口、权威库和调度未切换；工程检查、真实来源闭环、数值可用性和投资效果分别报告。参数仍尚未验证，MARKET_EDGE=NOT_ESTABLISHED。
+
+历史[10月21日盘前显式重试](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)从已校验的独立源码 bundle V2 运行，实际上海05:46启动；3个官方目录请求 COMPLETE 且分页完整，随后采集读取计量触限，退出4。已计585,914,048字节，比本次585,853,211字节额度超60,837字节，capture余额归零；守卫在读取返回后计量并停止，不能称严格未超字节。核心、题材和展示均未运行，没有新 run 或可信10月21日名单，DAILY_V1为UNKNOWN_NOT_EXECUTED，也未执行本次真实每日后验或双run。失败归档字节校验退出0，不恢复当前性或来源权威。此前10月20日缺首见钟的失败和旧名单保持；本次未进入factor分支，不能据此宣称复权checkpoint修复已通过真实验收。
 
 本轮另完成10项隔离内存候选检查及两次旧归档只读认证，均退出0。提前释放候选在本次测量中降低局部RSS和累计峰值，但认证耗时99.214→100.751秒、CPU83.565→88.717秒，未证明提速，故未安装；新身份未写入旧库。双run的300秒缺口仍在，详见[本轮诊断](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)。
 

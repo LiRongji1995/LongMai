@@ -1,8 +1,8 @@
 # 项目综述与规则参考
 
-用户入口为[README](../../README.md)、[USER_GUIDE](../../USER_GUIDE.md)、[CURRENT_STATUS](../../CURRENT_STATUS.md)、[CURRENT_STRATEGY](../../CURRENT_STRATEGY.md)和[DEPLOYMENT](../../DEPLOYMENT.md)。本综述解释架构、规则与合同；当前完成度、运行缺口和检查结果看CURRENT_STATUS，逐轮历史可查[整理前固定版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/9b13e4afdaa243e987822b2218bc87cf85a39131/stock-fish/docs/PROJECT_OVERVIEW.md)。
+本轮架构增加显式封存RESULT本地复制来源合同及late-completed后验入口：普通V1、同路径恢复与不同路径复制各自明确绑定，不从JSON推断授权。来源、证书、session/store、作业policy/ledger及实际末验保持一致；原物理身份LOST与历史PIT未恢复事实保留，旧run和九个normalizer未改。
 
-年度研究只维护[2026短线主线与情绪周期总报告](2026_SHORT_TERM_MAINLINE_REPORT.md)，聚焦活跃且与冻结选股标准相交的主线。市场成交、同股参与、成员更替、价格承接、题材发酵及风险分别研究；当前成员回看不冒充历史成分或过去盘前知识。完整独立周期及历史PIT均未认证，MARKET_EDGE=NOT_ESTABLISHED。
+900秒资源合同的新库14步工程闭环已实际完成；原生默认300秒单/双run计划通过而worker均超时，没有新增产品/ledger。全部后验UNKNOWN/null，数值和策略优势仍未建立。采集06失败后SOURCE05只修原子指标发布竞态，B05完整采集未验收。当前具体范围见[交付与蓝图](CONTINUATION_DELIVERY_20261023.md)和[性能记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)；下文公式、策略关系与历史合同保留，不以本轮工程成功改动其语义。
 
 ## 当前系统
 

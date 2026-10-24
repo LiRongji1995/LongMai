@@ -47,6 +47,11 @@ PUBLIC_RESOURCES = (
     "docs/THEME_EVOLUTION_R1.md", "docs/THEME_OBSERVATION_DIAGNOSTICS_V1.md",
     "docs/ECONOMIC_DIRECTION_EXPLANATION_V1.md", "docs/ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md",
     "docs/SAVED_R2_COMPLETE_DELIVERY_V2.md",
+    # The native theme phase hashes these specifications while issuing and
+    # validating its live source/industry/stream capabilities. CLI help alone
+    # does not exercise this runtime dependency closure.
+    "docs/SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md",
+    "docs/INDUSTRY_SINA_CONTEXT_V1.md", "docs/THEME_EVOLUTION_STREAMING_V2.md",
 )
 
 # These are exact old-source fragments, not a fuzzy patch or arbitrary command.
