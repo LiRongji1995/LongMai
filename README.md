@@ -2,7 +2,7 @@
 
 沪深主板股票研究工具，用于读取候选名单、解释筛选依据、跟踪后续表现。你可以直接在本项目的 Codex 对话里提出请求，网页和终端是其他入口。
 
-本轮已完成独立运行基线、可信来源接库和显式900秒的单/双run后验工程闭环；原生默认300秒单/双run均真实超时，性能目标尚未达标。所有后验数值仍为UNKNOWN/null，参数尚未验证，MARKET_EDGE=NOT_ESTABLISHED。[当前状态](CURRENT_STATUS.md)列明可用范围与缺口，[交付蓝图](stock-fish/docs/CONTINUATION_DELIVERY_20261023.md)保留实际失败和下一步。
+新增日期化身份输入已完成真实单／双 run 后验、幂等、三产品回查及独立数值 H1：15→16 的原全池 3,041 只、观察集合 25 只均可逐项复算；19 日及后续身份缺口仍保留 UNKNOWN。默认 300 秒性能尚未达标，生产服务未切换，参数尚未验证，MARKET_EDGE=NOT_ESTABLISHED。[当前状态](CURRENT_STATUS.md)和[本轮验收与蓝图](stock-fish/docs/DATED_IDENTITY_NUMERIC_H1_20261024.md)分别记录数值、工程检查、性能试验与剩余缺口。
 
 ## 从这里开始
 

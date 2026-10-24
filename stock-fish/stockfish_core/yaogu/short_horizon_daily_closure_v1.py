@@ -145,6 +145,9 @@ class ShortHorizonDailyClosure:
     def _execution_context(self, request, started_at):
         return {}
 
+    def _load_outcome_input(self, input_id, verification):
+        return _bridge_module().load_verified_bridge_input(self.service, input_id, session=verification)
+
     def _validated_evaluation(self, request):
         identity = self._request_identity(request)
         evaluated = stamp(request['evaluated_at'])
@@ -601,7 +604,7 @@ class ShortHorizonDailyClosure:
         # Authenticate every archive before loading the typed input. Delay the
         # full run borrows until after its parser's temporary buffers are gone;
         # the same session keeps the original source and store-bound proofs.
-        bundle = _bridge_module().load_verified_bridge_input(self.service, request['input_id'], session=verification)
+        bundle = self._load_outcome_input(request['input_id'], verification)
         if bundle.observation_date != calendar.observation_date or bundle.sessions != calendar.sessions:
             raise ValueError('SHORT_HORIZON_CLOSURE_INPUT_CHANGED_AFTER_AUTHENTICATION')
         borrowed, pending_nonempty = [], set()

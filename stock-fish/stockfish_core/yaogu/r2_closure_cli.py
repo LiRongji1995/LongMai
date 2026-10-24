@@ -30,7 +30,11 @@ RESTORED_COMMANDS = frozenset({'r2-restored-daily-plan', 'r2-restored-daily-run'
     'r2-restored-daily-status', 'r2-restored-daily-retry'})
 LOCAL_COPY_COMMANDS = frozenset({'r2-local-copy-late-plan', 'r2-local-copy-late-run',
     'r2-local-copy-late-status', 'r2-local-copy-late-retry'})
-COMMANDS = ARCHIVE_COMMANDS | REPLAY_COMMANDS | LATE_COMMANDS | RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
+DATED_LATE_COMMANDS = frozenset({'r2-dated-late-plan', 'r2-dated-late-run',
+    'r2-dated-late-status', 'r2-dated-late-retry'})
+DATED_REGISTER_COMMAND = 'r2-dated-input-register'
+DATED_COMMANDS = DATED_LATE_COMMANDS | frozenset({DATED_REGISTER_COMMAND})
+COMMANDS = ARCHIVE_COMMANDS | REPLAY_COMMANDS | LATE_COMMANDS | RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
     'r2-daily-run', 'r2-daily-status', 'r2-daily-retry'})
 
 
@@ -39,14 +43,20 @@ def parser():
     commands = result.add_subparsers(dest='command', required=True)
     for command_name in sorted(COMMANDS):
         command = commands.add_parser(command_name)
-        name = command_name.replace('r2-restored-daily-', 'r2-daily-').replace('r2-local-copy-late-', 'r2-late-completed-')
-        if command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS or name in ARCHIVE_COMMANDS:
-            command.add_argument('--source-protocol', choices=('SEALED_RESULT_BYTES_RESTORED_V1', 'SEALED_RESULT_LOCAL_COPY_V1'),
-                required=command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS)
+        name = command_name.replace('r2-restored-daily-', 'r2-daily-').replace('r2-local-copy-late-', 'r2-late-completed-').replace('r2-dated-late-', 'r2-late-completed-')
+        if command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS or name in ARCHIVE_COMMANDS:
+            protocols = (('SEALED_RESULT_LOCAL_COPY_V1',) if command_name in DATED_COMMANDS else
+                         ('SEALED_RESULT_BYTES_RESTORED_V1', 'SEALED_RESULT_LOCAL_COPY_V1'))
+            command.add_argument('--source-protocol', choices=protocols,
+                required=command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS)
             command.add_argument('--restoration-manifest', type=Path, required=command_name in RESTORED_COMMANDS)
             command.add_argument('--restoration-manifest-sha256', required=command_name in RESTORED_COMMANDS)
-            command.add_argument('--local-copy-manifest', type=Path, required=command_name in LOCAL_COPY_COMMANDS)
-            command.add_argument('--local-copy-manifest-sha256', required=command_name in LOCAL_COPY_COMMANDS)
+            command.add_argument('--local-copy-manifest', type=Path, required=command_name in LOCAL_COPY_COMMANDS | DATED_COMMANDS)
+            command.add_argument('--local-copy-manifest-sha256', required=command_name in LOCAL_COPY_COMMANDS | DATED_COMMANDS)
+        if command_name == DATED_REGISTER_COMMAND:
+            command.add_argument('--base-input-id', required=True, help='Exact authenticated price-base archive input ID')
+            command.add_argument('--identity-input-id', action='append', required=True,
+                help='Exact authenticated capture-day identity archive input ID; repeat explicitly')
         if name in ARCHIVE_COMMANDS:
             command.add_argument('archive', type=Path, help='Exact original sealed premarket job directory')
             command.add_argument('--expected-final-sha256', required=True,
@@ -313,10 +323,14 @@ def execute(args):
     _fixture_boundary(args)
     restored_daily = args.command in RESTORED_COMMANDS
     local_copy_late = args.command in LOCAL_COPY_COMMANDS
+    dated_late = args.command in DATED_LATE_COMMANDS
+    dated_register = args.command == DATED_REGISTER_COMMAND
     if restored_daily:
         args.command = args.command.replace('r2-restored-daily-', 'r2-daily-')
     if local_copy_late:
         args.command = args.command.replace('r2-local-copy-late-', 'r2-late-completed-')
+    if dated_late:
+        args.command = args.command.replace('r2-dated-late-', 'r2-late-completed-')
     restoration_ref = None
     local_copy_ref = None
     protocol = getattr(args, 'source_protocol', None)
@@ -331,7 +345,8 @@ def execute(args):
             local_copy_ref = manifest_reference(*copy_arguments)
         else:
             raise ValueError('EXPLICIT_SOURCE_PROTOCOL_AND_PINNED_MANIFEST_REQUIRED')
-    if (restored_daily and restoration_ref is None) or (local_copy_late and local_copy_ref is None):
+    if ((restored_daily and restoration_ref is None)
+            or ((local_copy_late or dated_late or dated_register) and local_copy_ref is None)):
         raise ValueError('EXPLICIT_COMMAND_SOURCE_PROTOCOL_MISMATCH')
     source_options = ({'local_copy_manifest_ref': local_copy_ref} if local_copy_ref is not None else
                       {'restoration_manifest_ref': restoration_ref} if restoration_ref is not None else {})
@@ -346,6 +361,12 @@ def execute(args):
     closure_options = ({'verification_profile': verification_profile} if resource_policy is not None else {})
     if hasattr(args, 'wait_seconds') and not 1 <= args.wait_seconds <= 3600:
         raise ValueError('WAIT_SECONDS_MUST_BE_1_TO_3600')
+    if dated_register:
+        from .dated_identity_outcome_closure_v1 import register_input
+        with service_context(args, writable=True) as service:
+            return 0, register_input(service, base_input_id=args.base_input_id,
+                identity_input_ids=args.identity_input_id, local_copy_manifest_ref=local_copy_ref,
+                **closure_options)
     if args.command in ARCHIVE_COMMANDS:
         from .short_horizon_archive_bridge_v1 import authenticate_archive, commit_bridge, ArchiveVerificationSession
         authentication_kwargs = session_options(verification_profile)
@@ -398,7 +419,10 @@ def execute(args):
     write = args.command in {'r2-daily-run', 'r2-daily-retry',
         'r2-closed-session-run', 'r2-closed-session-retry', 'r2-late-completed-run', 'r2-late-completed-retry'}
     with service_context(args, writable=write) as service:
-        closure_type = (LocalCopyLateCompletedSessionClosure if local_copy_late else
+        if dated_late:
+            from .dated_identity_outcome_closure_v1 import DatedIdentityLateClosure
+        closure_type = (DatedIdentityLateClosure if dated_late else
+                        LocalCopyLateCompletedSessionClosure if local_copy_late else
                         RestoredResultDailyClosure if restored_daily else
                         LateCompletedSessionClosure if args.command in LATE_COMMANDS else
                         ClosedSessionClosure if args.command in REPLAY_COMMANDS else ShortHorizonDailyClosure)

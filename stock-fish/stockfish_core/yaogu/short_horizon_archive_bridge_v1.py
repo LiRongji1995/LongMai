@@ -1138,7 +1138,7 @@ def _stored_matches(connection, namespace, document_id, expected_hash, session=N
 
 
 def _put_archived_document(connection, namespace, document_id, expected_hash, session,
-                           *, reference=None, document=None, temporary_dir=None):
+                           *, reference=None, document=None, typed_document=None, temporary_dir=None):
     """Write authenticated canonical TEXT without a whole UTF-8 encoding copy.
 
     The original gzip is not canonical JSON. Encode the validated object to a
@@ -1149,13 +1149,20 @@ def _put_archived_document(connection, namespace, document_id, expected_hash, se
     """
     if _stored_matches(connection, namespace, document_id, expected_hash, session):
         return
-    _require((reference is None) != (document is None), 'ARCHIVED_DOCUMENT_SOURCE_REQUIRED')
+    _require(sum(value is not None for value in (reference, document, typed_document)) == 1,
+             'ARCHIVED_DOCUMENT_SOURCE_REQUIRED')
     if reference is not None:
         document = _decompress(session.read(reference['path'], reference), session)
-    _require(isinstance(document, dict), 'ARCHIVED_DOCUMENT_OBJECT_REQUIRED')
+    if typed_document is not None:
+        _inline_typed_input(typed_document)
+        chunks = _typed_canonical_chunks(typed_document, checkpoint=session.check,
+                                        encoding_profile=session.encoding_profile)
+    else:
+        _require(isinstance(document, dict), 'ARCHIVED_DOCUMENT_OBJECT_REQUIRED')
+        chunks = _canonical_chunks(document, checkpoint=session.check)
     with tempfile.TemporaryFile(prefix='stockfish-verified-bridge-', dir=temporary_dir) as spool:
         digest, total = hashlib.sha256(), 0
-        for block in _canonical_chunks(document, checkpoint=session.check):
+        for block in chunks:
             total += len(block)
             _require(total <= 256 * 1024**2, 'CANONICAL_DOCUMENT_BUDGET_EXCEEDED')
             digest.update(block)

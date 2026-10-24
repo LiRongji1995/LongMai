@@ -53,6 +53,14 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 历史10月16日单 run 在相同源码的隔离克隆中显式重试成功，随后幂等、三产品回读和独立 H1 通过；原正式失败不改判。双 run 两次仍触及300秒且无新产品/ledger。每次完整鉴证共享300秒、RSS 2 GiB、唯一原件4 GiB、实际读取8 GiB和4096文件上限；外层等待或子进程 watchdog 不扩大这些额度。默认5条或显式1–100上限不构成容量承诺，不能据单次通过切换生产。事务末终验在同一写事务内持锁完成，并发写与锁等待尚未经过生产负载验收。
 
+### 日期化身份后验的显式入口
+
+新增[日期化输入与真实数值 H1](stock-fish/docs/DATED_IDENTITY_NUMERIC_H1_20261024.md)仅在明确的新 owned DB/state 中运行，不切换服务。完成原归档鉴证后，`r2-dated-input-register` 显式选择 `--base-input-id` 和可重复的 `--identity-input-id`；随后使用 `r2-dated-late-plan`、`r2-dated-late-run`、`r2-dated-late-status` 或显式 `r2-dated-late-retry`。这些命令由既有 `scripts/stockfish.py` 分发，须同时给出 DB/state、`--source-protocol SEALED_RESULT_LOCAL_COPY_V1`、本地复制 manifest 及其 SHA；具体参数以对应 `--help` 为准。
+
+新输入先追加提交，再写实际时钟的 fsync seal，最后登记完成；半成品保留且拒绝使用。计划及 worker 每次完整重认原来源、重构全输入并核 hash/lineage；发布前和写事务内末验不省略。seal 严格绑定原源代码路径、inode、七字段物理身份及实际 ctime。把测试源码快照复制到发布目录不会迁移旧私有 seal；新 source/owner epoch 必须重新鉴证、登记，不能复制 JSON 接权或回拨截止。
+
+默认仍为 300 秒／2 GiB，显式 `FULL_ARCHIVE_900S_V1` 的正确性成功不能当默认性能通过。本轮独立 H1 的 300 秒验收与 native worker 是两个范围；性能候选、旧失败及生产未切换分别保留。
+
 ## Go候选工具
 
 Go工具目前绑定明确选择的已发布V2隔离库，生产未切换。查询和本地研究使用原生二进制；可选在线采集另需固定Python worker及独立预算。包内用户说明、身份、校验和与检查报告必须属于同一构建。

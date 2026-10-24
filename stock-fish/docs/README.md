@@ -1,6 +1,6 @@
 # 技术资料索引
 
-本轮优先查看[继续交付与蓝图](CONTINUATION_DELIVERY_20261023.md)、[当前状态](../../CURRENT_STATUS.md)与[真实后验性能记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)。显式900秒14步已闭合；默认300秒单/双run均真实超时，数值后验仍UNKNOWN/null，生产未切换。
+本轮优先查看[日期化输入与真实数值H1](DATED_IDENTITY_NUMERIC_H1_20261024.md)和[当前状态](../../CURRENT_STATUS.md)：15→16的全池3,041／观察25已独立复算，单／双run闭环、幂等与三产品回查通过；19日及后续身份未知保持，默认300秒性能尚未达标，生产未切换。[前轮继续交付](CONTINUATION_DELIVERY_20261023.md)与[性能原记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)中的全部UNKNOWN与42文件保留为历史事实。
 
 三份来源/执行协议各有独立语义：[同路径字节恢复](SEALED_RESULT_BYTES_RESTORED_V1.md)、[不同路径本地复制](SEALED_RESULT_LOCAL_COPY_V1.md)、[迟到完成会话](LATE_COMPLETED_SESSION_CLOSURE_V1.md)。协议与测试准备不代替真实验收，历史记录按各自当时状态保留。
 
