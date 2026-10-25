@@ -465,7 +465,8 @@ def submit_or_reuse_job(client, kind, path, body, wait_seconds, run_id=None, pay
 def shared_local_command(runtime, args):
     """Dispatch bounded units with the registered interpreter and shared roots."""
     from scripts.codex_premarket import _prepared, _run
-    if args.command not in {"core-run", "market-plan", "market-sync"}:
+    if args.command not in {"core-run", "market-plan", "market-sync", "core-run-compact",
+                            "core-archive-register", "core-archive-reuse", "core-archive-status"}:
         raise ResearchError("UNKNOWN_SHARED_COMMAND")
     if runtime is None:
         raise ResearchError("RUNTIME_REGISTRATION_REQUIRED")
@@ -474,9 +475,27 @@ def shared_local_command(runtime, args):
     runtime.check_binding()
     prepared = _prepared(runtime.profile)
     common = ["--runtime", runtime.profile["name"], "--registry-root", str(runtime.registry_root)]
-    if args.command == "core-run":
-        script = "codex_core.py"
+    if args.command in {"core-run", "core-run-compact"}:
+        script = "codex_core.py" if args.command == "core-run" else "codex_compact_core.py"
         arguments = [*common, "--manifest", str(args.manifest.expanduser().absolute())]
+        if args.command == "core-run-compact":
+            arguments += ["--profile", args.profile]
+    elif args.command.startswith("core-archive-"):
+        script = "codex_core_archive.py"
+        operation = args.command.removeprefix("core-archive-")
+        arguments = [*common, operation]
+        if operation != "status":
+            arguments += ["--profile", args.profile]
+        if operation == "register":
+            arguments += ["--manifest", str(args.manifest.expanduser().absolute()),
+                          "--worker-dir", str(args.worker_dir.expanduser().absolute()),
+                          "--supervisor-dir", str(args.supervisor_dir.expanduser().absolute())]
+        elif operation == "reuse":
+            arguments += ["--archive-id", args.archive_id]
+            for name in ("observation_date", "target_session", "cutoff", "manifest"):
+                value = getattr(args, name, None)
+                if value is not None:
+                    arguments += ["--" + name.replace("_", "-"), str(value)]
     else:
         script = "codex_incremental.py"
         arguments = ["plan" if args.command == "market-plan" else "sync", *common,
@@ -497,6 +516,62 @@ def shared_local_command(runtime, args):
     if not isinstance(result, dict):
         raise ResearchError("SHARED_COMMAND_INVALID_RESPONSE")
     return {**result, "command_exit_code": code, "runtime": runtime.profile["name"]}
+
+
+def shared_factor_command(runtime, args):
+    """A registered resource lock and write policy surround every factor call."""
+    import math
+    from scripts.codex_premarket import _prepared, _control
+    from scripts import codex_factor_incremental as factor
+    if runtime is None or runtime.profile.get("backend") != "premarket":
+        raise ResearchError("REGISTERED_PREMARKET_RUNTIME_REQUIRED")
+    prepared = _prepared(runtime.profile)
+    if prepared["source"] != ROOT or Path(sys.executable).absolute() != prepared["python"]:
+        raise ResearchError("FACTOR_REGISTERED_SOURCE_AND_INTERPRETER_REQUIRED")
+    operation = args.command.removeprefix("factor-")
+    if operation not in {"plan", "sync", "reuse"}:
+        raise ResearchError("UNKNOWN_FACTOR_COMMAND")
+    network = operation == "sync" and args.execute_network
+    expected_profile = "FACTORS_DELTA_DIAGNOSTIC_V1" if operation == "sync" else "FACTORS_READONLY_V1"
+    if args.profile != expected_profile:
+        raise ResearchError("EXPLICIT_FACTOR_PROFILE_REQUIRED")
+    cache = prepared["state"] / "cache"
+    with runtime.exclusive():
+        configuration, _ = _control(prepared["config"])
+        capture = configuration.get("capture", {})
+        configured_limits = configuration.get("limits", {})
+        if not isinstance(capture, dict) or not isinstance(configured_limits, dict):
+            raise ResearchError("FACTOR_CONFIGURED_LIMIT_INVALID")
+        if type(capture.get("offline", False)) is not bool:
+            raise ResearchError("FACTOR_CONFIGURED_OFFLINE_INVALID")
+        limits = dict(factor.CAPS)
+        if operation == "sync":
+            if args.purpose != "DELTA_FACTS_ONLY":
+                raise ResearchError("EXPLICIT_FACTOR_DIAGNOSTIC_PURPOSE_REQUIRED")
+            if network and capture.get("offline", False):
+                raise ResearchError("FACTOR_REGISTERED_OFFLINE_POLICY")
+            # An explicit diagnostic is still bounded by the registered writer
+            # limits. A readonly profile never enlarges the write allowance.
+            for key, value in configured_limits.items():
+                if key in limits:
+                    if value is None and key == "max_seconds":
+                        continue
+                    if type(value) not in (int, float) or not math.isfinite(value) or value <= 0:
+                        raise ResearchError("FACTOR_CONFIGURED_LIMIT_INVALID")
+                    limits[key] = min(limits[key], value)
+            if "request_timeout_seconds" in capture:
+                value = capture["request_timeout_seconds"]
+                if type(value) not in (int, float) or not math.isfinite(value) or value < 1:
+                    raise ResearchError("FACTOR_CONFIGURED_LIMIT_INVALID")
+                limits["request_timeout_seconds"] = int(min(limits["request_timeout_seconds"], value))
+        result = getattr(factor, operation)(source_root=prepared["source"], cache_root=cache,
+            baseline_record=factor._read_control(args.baseline_record),
+            calendar_record=factor._read_control(args.calendar_record), target_session=str(args.target_session),
+            overlap_days=args.overlap_days, limits=limits, offline=not network,
+            purpose="DELTA_FACTS_ONLY" if operation == "sync" else None,
+            admit=lambda growth: runtime.preflight(expected_growth_bytes=growth, destination=cache))
+    return {**result, "runtime": runtime.profile["name"], "profile": args.profile,
+            "registered_writer_limits_unchanged": True}
 
 
 def parser():
@@ -527,6 +602,33 @@ def parser():
             sub.add_argument("--offline", action="store_true")
     sub = commands.add_parser("core-run", help="复用相同真实来源与截止的原盘前核心计算")
     sub.add_argument("--manifest", type=Path, required=True)
+    sub = commands.add_parser("core-run-compact", help="显式运行原核心并以新版本压缩保存；旧产物不改写")
+    sub.add_argument("--manifest", type=Path, required=True)
+    sub.add_argument("--profile", choices=["FULL_CORE_COMPACT_V1"], required=True)
+    sub = commands.add_parser("core-archive-register", help="鉴证完整原核心并登记共享归档，不重新选股")
+    sub.add_argument("--manifest", type=Path, required=True)
+    sub.add_argument("--worker-dir", type=Path, required=True)
+    sub.add_argument("--supervisor-dir", type=Path, required=True)
+    sub.add_argument("--profile", choices=["FULL_CORE_ARCHIVE_READONLY_V1"], required=True)
+    sub = commands.add_parser("core-archive-reuse", help="完整核验已登记原结果，零重算复用")
+    sub.add_argument("--archive-id", required=True)
+    sub.add_argument("--profile", choices=["FULL_CORE_ARCHIVE_READONLY_V1"], required=True)
+    sub.add_argument("--observation-date", type=observation_session)
+    sub.add_argument("--target-session", type=observation_session)
+    sub.add_argument("--cutoff")
+    sub.add_argument("--manifest", type=Path)
+    commands.add_parser("core-archive-status", help="只读归档定位；展示名单前仍须reuse验真")
+    for operation in ("plan", "reuse", "sync"):
+        sub = commands.add_parser("factor-" + operation, help="复权原件复用及显式尾窗事实；不合成策略输入")
+        sub.add_argument("--baseline-record", type=Path, required=True)
+        sub.add_argument("--calendar-record", type=Path, required=True)
+        sub.add_argument("--target-session", type=observation_session, required=True)
+        sub.add_argument("--overlap-days", type=int, default=7)
+        sub.add_argument("--profile", choices=["FACTORS_DELTA_DIAGNOSTIC_V1" if operation == "sync"
+                                               else "FACTORS_READONLY_V1"], required=True)
+        if operation == "sync":
+            sub.add_argument("--purpose", choices=["DELTA_FACTS_ONLY"], required=True)
+            sub.add_argument("--execute-network", action="store_true")
     return result
 
 
@@ -636,8 +738,11 @@ def main(argv=None):
         elif args.command == "storage-status":
             runtime = load_runtime(args.runtime, args.registry_root)
             result = runtime.storage_report() if runtime else runtime_status(None, args.registry_root)
-        elif args.command in {"market-plan", "market-sync", "core-run"}:
+        elif args.command in {"market-plan", "market-sync", "core-run", "core-run-compact",
+                              "core-archive-register", "core-archive-reuse", "core-archive-status"}:
             result = shared_local_command(load_runtime(args.runtime, args.registry_root), args)
+        elif args.command in {"factor-plan", "factor-reuse", "factor-sync"}:
+            result = shared_factor_command(load_runtime(args.runtime, args.registry_root), args)
         elif args.command == "premarket":
             from scripts.codex_premarket import execute_premarket
             runtime = load_runtime(args.runtime, args.registry_root)

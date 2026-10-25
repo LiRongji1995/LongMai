@@ -1,5 +1,7 @@
 # 工程维护约定
 
+[共享结果与压缩V2](stock-fish/docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)继续在独立脚本层登记操作身份：首次旧核心导入可调用一次原normalizer鉴证，重复查询不调用normalizer/selector；新输出压缩须全字节回解及原终验。复权尾窗保持诊断用途，不合成完整来源能力。原代码闭包、历史原件、FAILED/UNKNOWN与既有容量政策保持；工程夹具和真实测量分别报告。
+
 ## 2026-10-25 共享入口工程范围
 
 [CODEX_CHAT_WORKSPACE_V1](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)只新增脚本层协调、私有位置配置模板和 TEST_FIXTURE 检查。完整来源、日期、UNKNOWN 和正式导出检查保留；策略和旧运行身份没有降级为只验文件存在。`codex_research.py` 参与旧策略 source hash，故保留原字节并另建 `codex_chat.py`。不得仅为聊天换页建立新 DB/完整源码快照。

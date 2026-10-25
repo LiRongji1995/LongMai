@@ -1,5 +1,7 @@
 # StockFish
 
+新增[共享结果复用、新输出压缩与复权尾窗](stock-fish/docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)：完整保存核心可经鉴证登记后跨聊天读取，新核心可显式压缩保存。复权入口优先复用原件，尾窗仅作诊断，不自动拼成完整策略输入；旧策略与历史证据保持。
+
 新增 [Codex 共享聊天入口与容量管理](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)：不同聊天复用同一运行目录、原作业和正式导出；重复请求不自动重采、重算或复制数据库。写入前检查容量，状态不明时停止重复提交。
 
 [第二阶段：共享环境恢复与增量研究](stock-fish/docs/SHARED_RUNTIME_INCREMENTAL_V1.md)已恢复并验收本机固定的 daily/review 58 包环境，登记为聊天默认实例 `shared-daily`。运行位置和环境验收不代表最新行情或盘前清单已就绪；有界行情增量、相同来源的核心计算复用及真实小样本结果按第二阶段说明分别报告。第一阶段隔离样本事实保留，生产服务未切换，策略保持。

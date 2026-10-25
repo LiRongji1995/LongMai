@@ -1,5 +1,7 @@
 # 部署与维护
 
+本轮新增[完整结果归档、新输出压缩与复权尾窗](stock-fish/docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)，由已登记的解释器和共享路径执行。归档登记只增加小回执；压缩只处理本次拥有的新输出。显式执行档位不修改本机1 GiB总逻辑上限或原写入配置，尾窗诊断不自动合成完整因子，也不切换服务。
+
 ## Codex 聊天的共享运行登记（2026-10-25）
 
 新日常入口见 [CODEX_CHAT_WORKSPACE_V1](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)。Codex 先核实原运行环境，再用私有 JSON 登记既有路径；登记只写小型位置和操作回执，不安装依赖、复制 DB、迁库、起服务或修改历史源码。默认登记表位于用户 state 目录，所有聊天共用；自定义时固定 `STOCKFISH_CHAT_STATE`，不能每个聊天另建。API 入口必须与 `/health/ready` 的实际 DB/state 身份一致。

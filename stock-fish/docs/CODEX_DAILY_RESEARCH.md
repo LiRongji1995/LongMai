@@ -1,5 +1,7 @@
 # Codex日常研究协议
 
+已取得完整原核心时，按[共享结果V2](SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)先查 `core-archive-status` 定位，再用 `core-archive-reuse` 核完整来源、原run与导出；定位记录本身不能显示为已验真名单。未登记的受支持旧核心先显式 `core-archive-register`，不伪造原盘前终态。新计算可显式 `core-run-compact`；`factor-plan/reuse` 只读，`factor-sync` 的尾窗仍是诊断资料，不自动拼接成完整输入。
+
 ## 新聊天优先使用共享入口
 
 先以 `scripts/codex_chat.py runtime-status` 和 `storage-status` 读取固定私有登记表。本机 daily/review 58 包共享环境已恢复验收，聊天默认实例为 `shared-daily`；新聊天复用该登记，不另建环境或复制大库。状态只表示实际位置与绑定，不能据此宣布最新行情或清单就绪。另一台机器没有登记时先定位已有环境，不猜测端口、不自动建库。完整配置见 [CODEX_CHAT_WORKSPACE_V1](CODEX_CHAT_WORKSPACE_V1.md)，恢复、有界增量与核心复用范围见[第二阶段协议](SHARED_RUNTIME_INCREMENTAL_V1.md)。
