@@ -1,5 +1,11 @@
 # Codex日常研究协议
 
+## 新聊天优先使用共享入口
+
+先以 `scripts/codex_chat.py runtime-status` 和 `storage-status` 读取固定私有登记表。已登记时使用新入口调用原 API/CLI；没有登记则先定位现有环境，不回落猜测端口、不建新库、不复制源码/大库。用户本次确认已清理旧数据，恢复路径前保持 `UNCONFIGURED`。完整配置及命令见 [CODEX_CHAT_WORKSPACE_V1](CODEX_CHAT_WORKSPACE_V1.md)。
+
+所有聊天沿用同一登记根与报告目录。一次盘前请求使用固定观察日、目标日和跨聊天相同的 request-key，例如 `premarket-观察日-target-目标日`；不要按聊天ID或当前秒钟生成新 key，也不能跨交易日沿用旧 key。先查原 job/run；有原结果就认证后复用，有进行中任务就跟踪，未知提交先核查。新 key 不是自动重试许可。旧 `codex_research.py` 保留显式离线研究及历史兼容，普通日常工作优先共享入口。
+
 日常用户入口为[使用说明](../../USER_GUIDE.md)，运行维护见[部署说明](../../DEPLOYMENT.md)，当前未达标项目见[当前状态](../../CURRENT_STATUS.md)。本协议用于调用已有逻辑；详细规则与架构按[技术索引](README.md)展开。
 
 日期化身份缺口按[新输入与数值 H1 合同](DATED_IDENTITY_NUMERIC_H1_20261024.md)显式处理：先完整认证原身份／价格父来源，再登记新的 `DATED_IDENTITY_OUTCOME_INPUT_V1` 与实际完成 seal，只补有同日适用证据的字段。不更改原 run、旧输入、策略或历史首见钟；16日证据不延伸19日，未知事件与缺结果继续保留。

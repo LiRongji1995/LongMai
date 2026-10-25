@@ -3,7 +3,7 @@
 本文件适用于此业务 Git 根目录及其子目录。当前任务中的用户指令优先；普通研究和工程修改分开授权。
 
 - 日常先读 [执行协议](docs/CODEX_DAILY_RESEARCH.md)，用户入口见 [README](README.md)。[全面项目综述](docs/PROJECT_OVERVIEW.md) 供规则解释与新对话使用，不必每次全读。
-- Codex是自然语言日常入口，网页可选。用户无需自己执行命令；协调现有正式 API/CLI，复用正确实例及保存结果。调用封装为 [codex_research.py](scripts/codex_research.py)，不复制策略或后验算法。
+- Codex是自然语言日常入口，网页可选。用户无需自己执行命令；协调现有正式 API/CLI，复用正确实例及保存结果。日常优先调用 [codex_chat.py](scripts/codex_chat.py)，按 [共享协议](docs/CODEX_CHAT_WORKSPACE_V1.md)使用固定登记根和原请求标识；旧 [codex_research.py](scripts/codex_research.py) 保留原字节及历史兼容，不复制策略或后验算法。
 - 市场限沪深主板普通A股，沿用日期化资格、ST/停牌/上市时长等证据门槛。日常PV是已确认的量价研究实验；DAILY_V1保持冻结五族主策略身份。不得用实验替代不可用的DAILY结论，不凑17/20/30只。
 - 阶段感知主动核心为 `STAGE_AWARE_MOMENTUM_V2`，说明见 [STAGE_AWARE_MOMENTUM_V2.md](docs/STAGE_AWARE_MOMENTUM_V2.md)；`STAGE_AWARE_MOMENTUM_V1` 冻结为历史只读别名。先识别 `START/ACCELERATION/HIGH_LEVEL_REPAIR/TREND_PULLBACK`，再分离事实、setup、行为确认、市场/题材/资金情境、关键反证和最终 `FOCUS/WATCH/REJECTED/UNKNOWN` 决策；A/CLV 不作全阶段统一硬门槛，初始参数必须标明“尚未验证”，`MARKET_EDGE=NOT_ESTABLISHED`。
 - 普通请求允许读代码/配置/结果、在现有来源和预算内采集、调用正式逻辑、保存名单/报告/后验。它不授权改策略公式、权重、窗口、资格、生产代码、依赖、交易口径、Git历史，也不自动授权提交推送。

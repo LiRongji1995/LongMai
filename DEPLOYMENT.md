@@ -1,5 +1,11 @@
 # 部署与维护
 
+## Codex 聊天的共享运行登记（2026-10-25）
+
+新日常入口见 [CODEX_CHAT_WORKSPACE_V1](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)。Codex 先核实原运行环境，再用私有 JSON 登记既有路径；登记只写小型位置和操作回执，不安装依赖、复制 DB、迁库、起服务或修改历史源码。默认登记表位于用户 state 目录，所有聊天共用；自定义时固定 `STOCKFISH_CHAT_STATE`，不能每个聊天另建。API 入口必须与 `/health/ready` 的实际 DB/state 身份一致。
+
+容量模板中的 20 GiB 总逻辑上限、10 GiB 余量与 2 GiB 单次预计增长只是初始配置示例，须结合真实用量及原 worker 预算核实。准入不是文件系统硬配额；API 返回只是入队，后台增长仍受原 worker 预算管理。没有切换生产部署；新控制文件的安全目录扫描与锁在本机 macOS/POSIX 验证，Windows 安全扫描不可用时拒绝写入，不宣称跨平台已验收。
+
 本轮继续采用独立运行环境、明确源码身份与新owned DB/state/artifact；生产服务、默认入口、权威库及调度未切换。源码提交不等于实例已升级。显式本地复制协议只支持封存RESULT的同字节不同路径复制件，RAW/receipt/producer/locator及完整终验仍严格；原物理身份和历史PIT没有恢复。
 
 900秒late-completed新库14步已闭合，默认300秒实验使用两个独立owner/inode快照，继承900产品不能算300验收。V1因侧文件存在拒绝，V2另按空WAL、原样钉住SHM和完整源组合同准入；只复制主库，未删除/checkpoint侧文件，也未打开源SQL。V2初始化通过后单/双run均时间门禁失败，均无新增产品/ledger。等待时长、外层watchdog、磁盘余量和认证预算相互独立，不能调大等待冒充300达标。
