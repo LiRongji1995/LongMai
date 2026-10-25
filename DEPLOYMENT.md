@@ -4,9 +4,11 @@
 
 新日常入口见 [CODEX_CHAT_WORKSPACE_V1](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)。Codex 先核实原运行环境，再用私有 JSON 登记既有路径；登记只写小型位置和操作回执，不安装依赖、复制 DB、迁库、起服务或修改历史源码。默认登记表位于用户 state 目录，所有聊天共用；自定义时固定 `STOCKFISH_CHAT_STATE`，不能每个聊天另建。API 入口必须与 `/health/ready` 的实际 DB/state 身份一致。
 
+[第二阶段](stock-fish/docs/SHARED_RUNTIME_INCREMENTAL_V1.md)已在本机恢复固定的 daily/review 58 包共享环境，通过原哈希锁、三个 doctor profile 及隔离应用/CLI/SQLite 验收，并登记聊天默认实例 `shared-daily`。恢复由独立的有界安装工具完成，登记本身仍只保存位置；解释器、配置与状态路径保存在私有登记中，不按聊天另建环境。`runtime-status` 确认定位与绑定，行情日期、完整性和原盘前结果另验；本次未启动或切换生产服务，也不代表 Qlib/Live 环境已恢复。源码发布、共享聊天登记和生产部署是分别记录的动作。
+
 容量模板中的 20 GiB 总逻辑上限、10 GiB 余量与 2 GiB 单次预计增长只是初始配置示例，须结合真实用量及原 worker 预算核实。准入不是文件系统硬配额；API 返回只是入队，后台增长仍受原 worker 预算管理。没有切换生产部署；新控制文件的安全目录扫描与锁在本机 macOS/POSIX 验证，Windows 安全扫描不可用时拒绝写入，不宣称跨平台已验收。
 
-本轮继续采用独立运行环境、明确源码身份与新owned DB/state/artifact；生产服务、默认入口、权威库及调度未切换。源码提交不等于实例已升级。显式本地复制协议只支持封存RESULT的同字节不同路径复制件，RAW/receipt/producer/locator及完整终验仍严格；原物理身份和历史PIT没有恢复。
+此前日期化后验轮次采用独立运行环境、明确源码身份与新owned DB/state/artifact；生产服务、生产默认入口、权威库及调度未切换。源码提交不等于实例已升级。显式本地复制协议只支持封存RESULT的同字节不同路径复制件，RAW/receipt/producer/locator及完整终验仍严格；原物理身份和历史PIT没有恢复。
 
 900秒late-completed新库14步已闭合，默认300秒实验使用两个独立owner/inode快照，继承900产品不能算300验收。V1因侧文件存在拒绝，V2另按空WAL、原样钉住SHM和完整源组合同准入；只复制主库，未删除/checkpoint侧文件，也未打开源SQL。V2初始化通过后单/双run均时间门禁失败，均无新增产品/ledger。等待时长、外层watchdog、磁盘余量和认证预算相互独立，不能调大等待冒充300达标。
 
@@ -14,7 +16,7 @@
 
 ## 已有部署优先
 
-新增[独立 daily/review 环境](stock-fish/docs/ISOLATED_DAILY_RUNTIME_V1.md)采用官方 PyPI 工件及完整哈希锁，在新目录创建并验收原生 macOS x86_64、CPython 3.12 环境。两个独立目录的 58 包安装、三个 doctor profile 和隔离应用烟测已通过；旧虚拟环境、盘前 locator、Qlib 和运行服务未切换。其他平台须另行锁定验收，不能直接套用本锁。
+[独立 daily/review 环境合同](stock-fish/docs/ISOLATED_DAILY_RUNTIME_V1.md)采用官方 PyPI 工件及完整哈希锁，目标为原生 macOS x86_64、CPython 3.12。该合同记录前轮两个独立目录的 58 包安装、三个 doctor profile 和隔离应用烟测；旧目录清理后，本次固定共享环境按同一合同重新恢复验收，现状以上述第二阶段记录为准。其他平台须另行锁定验收，不能直接套用本锁。
 
 Python服务继续使用项目虚拟环境、既有DB/state和单个调度器。日常规则不要求账户、应用LLM或旧Alpha158模型。采用pyqlib 0.9.7 wheel，不改相邻Qlib源码为editable安装。
 

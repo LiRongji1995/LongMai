@@ -2,7 +2,9 @@
 
 ## 新聊天优先使用共享入口
 
-先以 `scripts/codex_chat.py runtime-status` 和 `storage-status` 读取固定私有登记表。已登记时使用新入口调用原 API/CLI；没有登记则先定位现有环境，不回落猜测端口、不建新库、不复制源码/大库。用户本次确认已清理旧数据，恢复路径前保持 `UNCONFIGURED`。完整配置及命令见 [CODEX_CHAT_WORKSPACE_V1](CODEX_CHAT_WORKSPACE_V1.md)。
+先以 `scripts/codex_chat.py runtime-status` 和 `storage-status` 读取固定私有登记表。本机 daily/review 58 包共享环境已恢复验收，聊天默认实例为 `shared-daily`；新聊天复用该登记，不另建环境或复制大库。状态只表示实际位置与绑定，不能据此宣布最新行情或清单就绪。另一台机器没有登记时先定位已有环境，不猜测端口、不自动建库。完整配置见 [CODEX_CHAT_WORKSPACE_V1](CODEX_CHAT_WORKSPACE_V1.md)，恢复、有界增量与核心复用范围见[第二阶段协议](SHARED_RUNTIME_INCREMENTAL_V1.md)。
+
+`market-plan`、`market-sync` 与 `core-run` 是显式有界入口，按第二阶段协议核对请求范围、原来源及预算；它们不自动替代完整盘前工作流或改变冻结策略。已保存结果、缺口续采、核心结果与题材等附件分别报告，不把环境就绪或局部真实样本成功当作全市场每日交付已通过。
 
 所有聊天沿用同一登记根与报告目录。一次盘前请求使用固定观察日、目标日和跨聊天相同的 request-key，例如 `premarket-观察日-target-目标日`；不要按聊天ID或当前秒钟生成新 key，也不能跨交易日沿用旧 key。先查原 job/run；有原结果就认证后复用，有进行中任务就跟踪，未知提交先核查。新 key 不是自动重试许可。旧 `codex_research.py` 保留显式离线研究及历史兼容，普通日常工作优先共享入口。
 

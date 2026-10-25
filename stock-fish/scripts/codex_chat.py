@@ -462,6 +462,43 @@ def submit_or_reuse_job(client, kind, path, body, wait_seconds, run_id=None, pay
     return result
 
 
+def shared_local_command(runtime, args):
+    """Dispatch bounded units with the registered interpreter and shared roots."""
+    from scripts.codex_premarket import _prepared, _run
+    if args.command not in {"core-run", "market-plan", "market-sync"}:
+        raise ResearchError("UNKNOWN_SHARED_COMMAND")
+    if runtime is None:
+        raise ResearchError("RUNTIME_REGISTRATION_REQUIRED")
+    if runtime.profile["backend"] != "premarket":
+        raise ResearchError("PREMARKET_BACKEND_REQUIRED")
+    runtime.check_binding()
+    prepared = _prepared(runtime.profile)
+    common = ["--runtime", runtime.profile["name"], "--registry-root", str(runtime.registry_root)]
+    if args.command == "core-run":
+        script = "codex_core.py"
+        arguments = [*common, "--manifest", str(args.manifest.expanduser().absolute())]
+    else:
+        script = "codex_incremental.py"
+        arguments = ["plan" if args.command == "market-plan" else "sync", *common,
+                     "--codes", *args.codes, "--sessions", *args.sessions]
+        if args.command == "market-sync":
+            arguments += ["--calendar-record", str(args.calendar_record.expanduser().absolute())]
+            if args.offline:
+                arguments.append("--offline")
+    command = [str(prepared["python"]), "-I", "-B", str(prepared["source"] / "scripts" / script), *arguments]
+    # The selected child owns its physical resource lock and bounded worker.
+    # Its budget/worker timeout is authoritative; do not orphan SDK workers by
+    # killing their parent using an independent shorter wrapper timer.
+    code, raw, _ = _run(command, prepared)
+    try:
+        result = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ResearchError("SHARED_COMMAND_INVALID_RESPONSE") from None
+    if not isinstance(result, dict):
+        raise ResearchError("SHARED_COMMAND_INVALID_RESPONSE")
+    return {**result, "command_exit_code": code, "runtime": runtime.profile["name"]}
+
+
 def parser():
     result = legacy.parser()
     result.description = "Codex 跨聊天入口：先登记已有实例，再复用任务和报告；不复制数据库。离线研究保留 codex_research.py 入口。"
@@ -481,6 +518,15 @@ def parser():
     sub = commands.add_parser("premarket", help="跨聊天协调既有独立盘前入口")
     sub.add_argument("--observation-date", type=observation_session, required=True)
     sub.add_argument("--target-session", type=observation_session, required=True)
+    for name in ("market-plan", "market-sync"):
+        sub = commands.add_parser(name, help="同一共享cache中的有界逐日RAW增量；不执行选股")
+        sub.add_argument("--codes", nargs="+", required=True)
+        sub.add_argument("--sessions", nargs="+", required=True)
+        if name == "market-sync":
+            sub.add_argument("--calendar-record", type=Path, required=True)
+            sub.add_argument("--offline", action="store_true")
+    sub = commands.add_parser("core-run", help="复用相同真实来源与截止的原盘前核心计算")
+    sub.add_argument("--manifest", type=Path, required=True)
     return result
 
 
@@ -590,6 +636,8 @@ def main(argv=None):
         elif args.command == "storage-status":
             runtime = load_runtime(args.runtime, args.registry_root)
             result = runtime.storage_report() if runtime else runtime_status(None, args.registry_root)
+        elif args.command in {"market-plan", "market-sync", "core-run"}:
+            result = shared_local_command(load_runtime(args.runtime, args.registry_root), args)
         elif args.command == "premarket":
             from scripts.codex_premarket import execute_premarket
             runtime = load_runtime(args.runtime, args.registry_root)
@@ -616,7 +664,7 @@ def main(argv=None):
             result = execute(args, client)
         rendered = json.dumps(result, ensure_ascii=False, indent=2)
         print(rendered.replace(key, "[REDACTED]") if key else rendered)
-        return 0
+        return result.get("command_exit_code", 0)
     except (ResearchError, WorkspaceError, CapacityError) as exc:
         print(json.dumps({"status": "BLOCKED", "reason": str(exc)}, ensure_ascii=False))
         return 2
