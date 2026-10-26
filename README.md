@@ -1,10 +1,6 @@
 # StockFish
 
-新增[空间与时间优化V1](stock-fish/docs/SPACE_TIME_OPTIMIZATION_V1.md)：显式 `codex_optimize.py` 提供归档V2复用、新采集RESULT压缩、容量增长观察、后验计时和调度定向查询。旧证据与默认入口保持；真实复用、夹具收益、缓存门禁与300秒未达标分别报告。
-
-新增[共享结果复用、新输出压缩与复权尾窗](stock-fish/docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)：完整保存核心可经鉴证登记后跨聊天读取，新核心可显式压缩保存。复权入口优先复用原件，尾窗仅作诊断，不自动拼成完整策略输入；旧策略与历史证据保持。
-
-新增 [Codex 共享聊天入口与容量管理](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)：不同聊天复用同一运行目录、原作业和正式导出；重复请求不自动重采、重算或复制数据库。写入前检查容量，状态不明时停止重复提交。
+日常已有成果统一从 [执行入口V1](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md) 读取：`codex_daily.py show` 核对本地封签和五份原导出，明确显示原日期与最后完整认证时间；`plan` 说明哪些可复用、哪些缺资料，新计算保留完整来源认证。真实三次摘要读取为0.93／0.79／0.79秒，首次完整认证并封存72.01秒；仅增加5.4 KiB视图，不复制原输入。采集继续复用已登记的 [共享聊天入口](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)，不另建数据库或环境。
 
 [第二阶段：共享环境恢复与增量研究](stock-fish/docs/SHARED_RUNTIME_INCREMENTAL_V1.md)已恢复并验收本机固定的 daily/review 58 包环境，登记为聊天默认实例 `shared-daily`。运行位置和环境验收不代表最新行情或盘前清单已就绪；有界行情增量、相同来源的核心计算复用及真实小样本结果按第二阶段说明分别报告。第一阶段隔离样本事实保留，生产服务未切换，策略保持。
 

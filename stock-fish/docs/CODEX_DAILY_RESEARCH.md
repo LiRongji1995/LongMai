@@ -1,8 +1,10 @@
 # Codex日常研究协议
 
-[空间与时间优化V1](SPACE_TIME_OPTIMIZATION_V1.md)提供显式新工具 `codex_optimize.py`；普通日常仍从下述共享入口开始。V2归档必须另行登记和完整reuse验真，不能仅凭定位、容量观察或压缩成功宣布名单就绪。新采集压缩不授权增大缓存、删除旧原件或联网补缺，后验计时入口只读且不提交worker。
+## 已保存成果的默认查询路径
 
-已取得完整原核心时，按[共享结果V2](SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)先查 `core-archive-status` 定位，再用 `core-archive-reuse` 核完整来源、原run与导出；定位记录本身不能显示为已验真名单。未登记的受支持旧核心先显式 `core-archive-register`，不伪造原盘前终态。新计算可显式 `core-run-compact`；`factor-plan/reuse` 只读，`factor-sync` 的尾窗仍是诊断资料，不自动拼接成完整输入。
+本轮采用 [统一执行入口V1](SYSTEM_EXECUTION_PIPELINE_V1.md)。普通已保存名单、详情及正式导出先执行 `scripts/codex_daily.py show`，按需指定 `--role`、原观察日和目标日；首次没有封存视图时，用 `publish --archive-id ID --profile FULL_CORE_ARCHIVE_READONLY_V1` 对已登记完整归档认证一次。未登记归档先按原协议登记；不得从普通JSON制作可信视图。查询必须明示原日期、截止、最后完整认证时间和 `source_reauthenticated_now=false`，不能称为本次来源重新验真或当前市场就绪。
+
+`show` 每次验证本地HMAC及五份原导出SHA/七字段物理身份，不读取大input或RAW，不重新选股。`audit` 保留原完整审计；新计算必须重新取得当次来源能力。`plan` 只说明精确依赖的复用与缺口，不自动采集、执行或授予来源能力。这个查询分工优先于下文历史完整交付协议中的“每次重认来源”：涉及新题材、后验或新计算仍须完整认证。
 
 ## 新聊天优先使用共享入口
 

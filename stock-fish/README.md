@@ -1,5 +1,7 @@
 # StockFish Python业务目录
 
+已保存结果优先使用 [统一执行入口V1](docs/SYSTEM_EXECUTION_PIPELINE_V1.md) `python scripts/codex_daily.py show`；它转入原登记环境，约1秒核对并读取原成果，明示原日期和最后完整认证时间。`plan`查看依赖缺口，`audit`重新完整审计，计算命令保留原预算及来源终验。采集仍沿用原共享入口。
+
 日常使用从[项目首页](../README.md)和[使用说明](../USER_GUIDE.md)进入；当前能力及未达标项目见[当前状态](../CURRENT_STATUS.md)，启动、停止与备份恢复见[部署维护](../DEPLOYMENT.md)。
 
 现有Python Web/API与Codex薄调用封装使用同一保存运行。日常主动核心为V2，旧PV等实验保留独立身份；网页可选，用户可直接在本项目中提出研究请求。真实DB/state、配置和端口需当场核对，源码更新不代表已切换运行服务。

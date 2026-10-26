@@ -1,5 +1,7 @@
 # Python业务维护入口
 
+[统一执行路径V1](docs/SYSTEM_EXECUTION_PIPELINE_V1.md)新增代码限定scripts层，旧core源码与动态认证集合保持。封存查询、依赖计划和有界新计算分开验收；局部解析次数下降不能冒充真实全链路或默认300秒后验通过。
+
 新增[共享结果、压缩及复权尾窗V2](docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)采用独立版本和TEST_FIXTURE检查；旧核心及来源文件保持。完整归档复用、新输出压缩与尾窗诊断分别验证，不因只读档位扩大原写入预算，不将尾窗升级为完整策略输入。
 
 ## Codex 共享入口增量
