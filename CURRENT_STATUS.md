@@ -137,3 +137,5 @@ compact输入的每日上游仍需同一精确input的原生history owner；完�
 4. Go候选工具的暖计算、跨日更新、查询性能及人工验收；见[交付报告](stock-fish-go/delivery/DELIVERY_REPORT.md)，不自动切换Python生产入口。
 
 **完整独立情绪周期认证0、历史盘前PIT验证0；初始参数尚未验证，MARKET_EDGE=NOT_ESTABLISHED，生产晋级关闭。** 工程检查、来源修复及局部数学不能替代这些验收。
+
+最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

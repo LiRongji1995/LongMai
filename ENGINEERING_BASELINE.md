@@ -56,3 +56,5 @@ Go的构建与隔离运行见[Go说明](stock-fish-go/README.md)，架构与证�
 本轮另完成10项隔离内存候选检查及两次旧归档只读认证，均退出0。提前释放候选在本次测量中降低局部RSS和累计峰值，但认证耗时99.214→100.751秒、CPU83.565→88.717秒，未证明提速，故未安装；新身份未写入旧库。双run的300秒缺口仍在，详见[本轮诊断](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)。
 
 预算绑定各自任务；一次允许扩大容量或时间不授权后续自动扩大。系统不连接券商、不下单，外部消息、收费服务和部署切换按明确授权执行。保留[第三方通知](THIRD_PARTY_NOTICES.md)，MiroFish适用AGPL-3.0。
+
+最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

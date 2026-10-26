@@ -105,3 +105,5 @@ CONFIG、RUN、SECURITY 都需替换为自己的实际值。上面的查询不�
 可请求对同一保存清单补充[经济方向业务解释](stock-fish/docs/ECONOMIC_DIRECTION_EXPLANATION_V1.md)：正式业务材料已证的电池或消费关系单列，原子题材阶段与模型完整保留。业务联系与当日资金炒作分别判断；小范围观察股金额不能代表整个板块或用于整体强度排序。资料取得时间、报告期、参股关系、项目终止及其他主营业务会一起列明，未知关系保留，不按股票名字或行业硬排除。
 
 保存的经济方向附件现在可由Codex使用[归档展示V1](stock-fish/docs/ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md)交付完整清单，原业务解释、子题材阶段与模型项并列保留。该显式入口核对实际显示索引和资料时间，早于真实可见时刻不会显示晚到内容；输出到新私有目录，原名单和评分保持。它不自动生成当日新附件，连续每日交付仍需另验收。
+
+最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

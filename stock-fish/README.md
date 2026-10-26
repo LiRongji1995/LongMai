@@ -7,3 +7,5 @@
 Codex执行先读[日常协议](docs/CODEX_DAILY_RESEARCH.md)；规则和模块说明见[项目综述](docs/PROJECT_OVERVIEW.md)，维护约定见[根工程基线](../ENGINEERING_BASELINE.md)。源码、数据与结果口径见[技术索引](docs/README.md)。
 
 原R05操作手册可从[固定Git历史版本](https://github.com/LiRongji1995/stockfish-qlib-quant-system/blob/16d2fb810c7c921f55cd9b3f2f730627faec0d35/stock-fish/docs/archive/before-cleanup-20261005/stock-fish/README.md)追溯；各轮数字、机器路径和验收只适用于对应日期。上游英文说明[README_EN](README_EN.md)保留原语境。
+
+最新日采集与首次核心执行采用显式[有界入口V1](docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

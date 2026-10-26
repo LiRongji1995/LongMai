@@ -27,3 +27,5 @@
 开发维护按[工程约定](ENGINEERING_BASELINE.md)和[AGENTS](AGENTS.md)执行；深入资料见[技术索引](stock-fish/docs/README.md)，过去各轮记录见[历史归档](stock-fish/docs/archive/README.md)。
 
 真实配置、密钥、数据库、行情、模型和本机报告保留在私有运行目录。版权与许可见[第三方通知](THIRD_PARTY_NOTICES.md)：StockFish/Qlib 保留各自许可，MiroFish 适用 AGPL-3.0，整个仓库不称为纯 MIT。
+
+最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

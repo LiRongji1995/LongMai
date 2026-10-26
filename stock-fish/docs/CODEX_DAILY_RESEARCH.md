@@ -103,3 +103,5 @@ Python使用[scripts/codex_research.py](../scripts/codex_research.py)薄封装�
 显式[经济方向解释V1](ECONOMIC_DIRECTION_EXPLANATION_V1.md)只在同一完整保存分组、整节点原件及正式业务原件核对通过后附加。原全部观察项与每项数值、确认/发酵/活跃分歧角色保持；已证业务关系观察子集与整体方向强度分列。原目录计数冲突、节点中非A证券、参股/其他主营/项目终止及晚取得材料均保留。新资料截止须晚于实际接收，不能回填旧run；保存附件不恢复来源权限或再跑selector。默认每日服务尚未自动生成，不能仅凭14项工程测试或真实同61投影称全年主线覆盖已完成。
 
 同一保存经济方向附件可显式调用[归档展示V1](ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md)：`economic-direction-display --attachment SAVED_EXPLANATION_JSON --grouped-parent EXACT_GROUPED_PARENT_JSON --output NEW_PRIVATE_DIRECTORY`。省略 `--as-of` 使用实际当前UTC，显式时刻必须带时区。完整并集、实际业务/模型显示索引、原分组角色与父及真实捕获时钟下界分别校验；新目录不覆盖。该入口在创建API Client之前只读归档，不认证来源能力、不重选、不打开业务DB。早截止返回NOT_YET_VISIBLE且不显示候选或数值。常态每日任务先验收当次新附件再完整交付，不能把已保存旧附件改日期当作新清单。
+
+最新日采集与首次核心执行采用显式[有界入口V1](FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

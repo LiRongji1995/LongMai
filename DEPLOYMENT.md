@@ -100,3 +100,5 @@ Go隔离库的备份、恢复、导出与回退按[隔离生命周期](stock-fis
 `/health/live` 公开且仅检查进程响应；`/health/ready` 与 `/health/deep` 和各 API 别名使用同一鉴权边界。readiness 要求成功调度轮询，失败、停滞或未开始不会因线程尚存而通过。SSE 每个应用实例限两条，超额 429；Live 面板仅允许本机同源访问，默认限 16 条 WebSocket。Tushare 普通 REST 在 HTTPS 合同确认前禁止新凭据请求，完整旧 checkpoint 可只读复用；不要为恢复采集改回明文端点。上述源码发布不会自动重启已有实例。
 
 日常任务按已登记交易日历与实际配置执行，未来计划不等于已完成观察。新部署、在线成功、Windows原生运行与连续交易日稳定性各自验收，当前缺口见[当前状态](CURRENT_STATUS.md)。历次部署记录见[归档索引](stock-fish/docs/archive/README.md)。
+
+最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。

@@ -518,6 +518,51 @@ def shared_local_command(runtime, args):
     return {**result, "command_exit_code": code, "runtime": runtime.profile["name"]}
 
 
+def shared_first_run_command(runtime, args):
+    """Use independently versioned, bounded first-run workers in the shared environment."""
+    from scripts.codex_premarket import _prepared, _run
+    if runtime is None or runtime.profile["backend"] != "premarket":
+        raise ResearchError("REGISTERED_PREMARKET_RUNTIME_REQUIRED")
+    runtime.check_binding()
+    prepared = _prepared(runtime.profile)
+    common = ["--runtime", runtime.profile["name"], "--registry-root", str(runtime.registry_root)]
+    if args.command == "core-first-run":
+        script = "codex_first_core.py"
+        arguments = [*common, "--manifest", str(args.manifest.expanduser().absolute()),
+                     "--profile", args.profile]
+        if args.force_first:
+            arguments += ["--force-first", args.force_first]
+    elif args.command in {"core-sources-plan", "core-sources-build"}:
+        script = "codex_core_sources.py"
+        arguments = [*common, args.command.removeprefix("core-sources-"),
+                     "--profile", args.profile, "--identity-policy", args.identity_policy]
+        if args.as_of:
+            arguments += ["--as-of", args.as_of]
+    elif args.command in {"latest-plan", "latest-sync"}:
+        script = "codex_latest_capture.py"
+        arguments = [args.command.removeprefix("latest-"), *common, "--mode", args.mode,
+                     "--profile", args.profile, "--calendar-record", str(args.calendar_record.expanduser().absolute())]
+        for name in ("codes", "sessions"):
+            value = getattr(args, name, None)
+            if value:
+                arguments += ["--" + name, *value]
+        if getattr(args, "execute_network", False):
+            arguments.append("--execute-network")
+    else:
+        raise ResearchError("UNKNOWN_FIRST_RUN_COMMAND")
+    # Each child owns its lock, admission and supervisor. A second wrapper
+    # timeout could orphan the original provider's SDK worker.
+    code, raw, _ = _run([str(prepared["python"]), "-I", "-B",
+                         str(prepared["source"] / "scripts" / script), *arguments], prepared)
+    try:
+        result = json.loads(raw)
+    except (ValueError, UnicodeError):
+        raise ResearchError("FIRST_RUN_COMMAND_INVALID_RESPONSE") from None
+    if not isinstance(result, dict):
+        raise ResearchError("FIRST_RUN_COMMAND_INVALID_RESPONSE")
+    return {**result, "command_exit_code": code, "runtime": runtime.profile["name"]}
+
+
 def shared_factor_command(runtime, args):
     """A registered resource lock and write policy surround every factor call."""
     import math
@@ -605,6 +650,24 @@ def parser():
     sub = commands.add_parser("core-run-compact", help="显式运行原核心并以新版本压缩保存；旧产物不改写")
     sub.add_argument("--manifest", type=Path, required=True)
     sub.add_argument("--profile", choices=["FULL_CORE_COMPACT_V1"], required=True)
+    sub = commands.add_parser("core-first-run", help="显式首次计算编码档位；冻结策略及全部证据校验保持")
+    sub.add_argument("--manifest", type=Path, required=True)
+    sub.add_argument("--profile", choices=["FIRST_CORE_REFERENCE_V1", "FIRST_CORE_CANONICAL_128_V1"], required=True)
+    sub.add_argument("--force-first", help="仅有界工程对照使用的独立首次ID；同ID失败不自动重试")
+    for operation in ("plan", "build"):
+        sub = commands.add_parser("core-sources-" + operation, help="离线核对25日核心来源；题材67日缺口独立报告")
+        sub.add_argument("--profile", choices=["CORE_SOURCES_FIRST_V1"], required=True)
+        sub.add_argument("--identity-policy", choices=["NATIVE_CORE_UNKNOWN_PRESERVED_V1"], required=True)
+        sub.add_argument("--as-of", help="显式历史回放截止；不传则核对当前最新已闭市日期")
+    for operation in ("plan", "sync"):
+        sub = commands.add_parser("latest-" + operation, help="最新已闭市会话的有界原始采集；连续缺口合并")
+        sub.add_argument("--mode", choices=["market-session", "scoped-history"], required=True)
+        sub.add_argument("--profile", choices=["LATEST_MARKET_SESSION_V1", "LATEST_SCOPED_HISTORY_V1"], required=True)
+        sub.add_argument("--calendar-record", type=Path, required=True)
+        sub.add_argument("--codes", nargs="+")
+        sub.add_argument("--sessions", nargs="+")
+        if operation == "sync":
+            sub.add_argument("--execute-network", action="store_true")
     sub = commands.add_parser("core-archive-register", help="鉴证完整原核心并登记共享归档，不重新选股")
     sub.add_argument("--manifest", type=Path, required=True)
     sub.add_argument("--worker-dir", type=Path, required=True)
@@ -743,6 +806,8 @@ def main(argv=None):
             result = shared_local_command(load_runtime(args.runtime, args.registry_root), args)
         elif args.command in {"factor-plan", "factor-reuse", "factor-sync"}:
             result = shared_factor_command(load_runtime(args.runtime, args.registry_root), args)
+        elif args.command in {"core-first-run", "core-sources-plan", "core-sources-build", "latest-plan", "latest-sync"}:
+            result = shared_first_run_command(load_runtime(args.runtime, args.registry_root), args)
         elif args.command == "premarket":
             from scripts.codex_premarket import execute_premarket
             runtime = load_runtime(args.runtime, args.registry_root)
