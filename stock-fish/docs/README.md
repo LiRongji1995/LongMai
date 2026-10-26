@@ -1,5 +1,9 @@
 # 技术资料索引
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+新盘前入口及完整数据、预算准入见 [完整盘前执行V1](PREMARKET_SHARED_EXECUTION_V1.md)；保存成果查询继续使用 [统一执行入口V1](SYSTEM_EXECUTION_PIPELINE_V1.md)。
+
 日常查询与计算先读 [统一执行路径V1](SYSTEM_EXECUTION_PIPELINE_V1.md)：`codex_daily.py` 提供封存查询、依赖计划、完整审计及同次共享计算。旧入口和历史合同保留；普通保存结果读取无需每次重建全市场来源。
 
 新增[空间与时间优化V1](SPACE_TIME_OPTIMIZATION_V1.md)：归档与核心V2校验、新采集RESULT压缩、容量增长观察、只读后验计时及调度任务族查询；含显式命令、实测边界和未执行范围。

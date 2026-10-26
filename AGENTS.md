@@ -1,5 +1,8 @@
 # 项目协作说明
 
+- 新盘前入口默认 `--engine original`；共享题材 `--engine shared` 仅显式性能实验。不得把解码次数或小样本结果外推全市场提速，也不得通过换engine或request-key自动重试。
+- 新交易日盘前清单先按[完整执行协议](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md)调用 `codex_daily_v2.py premarket-plan`；准入后同入口 `premarket` 接完整工作流。固定原登记与request-key，失败或不明请求不自动重试，换版本不能绕过旧请求；原 `codex_chat.py` 保留已有作业跟踪与显式单阶段采集。
+
 - 2026-09-07 权限修订：普通名单、日报、查询和跟踪请求不自动授权修改生产代码、正式策略或提交推送。当前任务明确授权的工程交付，完成对应检查后直接中文提交推送，不重复询问；本次Codex日常入口与项目综述任务已获授权。无文件改动不创建空提交。
 - 发布目标固定为 https://github.com/LiRongji1995/stockfish-qlib-quant-system 的 main 分支。本机业务开发目录是 stock-fish/，发布检出目录是 publish/stockfish-qlib-quant-system/。发布前核对实际远端与工作区变化，只提交本次授权范围内的改动，保护用户其他修改。
 - 各任务较新的明确授权优先；不得把本次工程交付授权扩大为以后普通研究的自动提交权限。
@@ -20,7 +23,7 @@
 ## 日常研究协议
 
 - 日常量价请求沿用已确认的PV实验上下文，DAILY_V1仍是冻结主策略并单独报告可用性。观察日、资料截止、范围、全部/焦点数量与run_id必须可追溯；不把陈旧数据冒充最新、不凑数量、不混合成数据。
-- 查询原run、详情、正式导出及后验；Codex解释与未知另列。已封存成果优先按[统一执行协议](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md)调用 `codex_daily.py show`，保留原日期和最后完整认证时间，不把本地成果完整性当作来源本次重认；首次封存及新计算仍完整认证。普通报告不触发全历史回测，只有缺新数据且已有授权/预算时才续采。采集和原作业跟踪继续使用[共享聊天入口](stock-fish/scripts/codex_chat.py)，按[共享协议](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)复用固定登记根、原运行环境和同一请求标识；旧[薄封装](stock-fish/scripts/codex_research.py)保留离线研究与历史兼容，不引入平行名单或数据库。
+- 查询原run、详情、正式导出及后验；Codex解释与未知另列。已封存成果优先按[统一执行协议](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md)调用 `codex_daily.py show`，保留原日期和最后完整认证时间，不把本地成果完整性当作来源本次重认；首次封存及新计算仍完整认证。普通报告不触发全历史回测，只有缺新数据且已有授权/预算时才续采。既有作业跟踪与显式单阶段采集继续使用[共享聊天入口](stock-fish/scripts/codex_chat.py)，按[共享协议](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)复用固定登记根、原运行环境和同一请求标识；旧[薄封装](stock-fish/scripts/codex_research.py)保留离线研究与历史兼容，不引入平行名单或数据库。
 - 用户当前模型保持不变；较低成本模型仅是初始尝试建议，不自动升级、购买服务、扩大预算或要求应用内LLM凭据。普通研究可保存私有报告；提交研究数据另查许可与敏感性。
 - 经授权改变策略、关键配置、来源、存储、运行方式或协作边界时，同步维护综述相关章节；日常报告写各自研究产物。没有自动更新综述进程，也未通过本文件声明验证新的模型会话自动加载。
 - 发布前检查实际远端、分支、dirty和文件差异，仅同步本任务文件；禁止整体覆盖开发目录、盲目全量暂存、新分支/worktree及改写历史。工程检查、真实数据验证与投资结论分别报告。

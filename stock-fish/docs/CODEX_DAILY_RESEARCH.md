@@ -1,5 +1,11 @@
 # Codex日常研究协议
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+## 新盘前请求的完整执行前检查
+
+新交易日清单先调用 [完整盘前执行V1](PREMARKET_SHARED_EXECUTION_V1.md) 的 `codex_daily_v2.py premarket-plan`，核完整依赖、原预算和当前日期；准入通过后由同入口 `premarket` 连接采集、原核心、共享题材、展示和终验。沿用固定request-key，失败/不明状态不自动重试；同key换版本不能绕过旧请求。`codex_chat.py`保留既有原作业和单阶段采集入口。完整新清单速度单独实测，旧保存成果仍优先按下文V1查询。
+
 ## 已保存成果的默认查询路径
 
 本轮采用 [统一执行入口V1](SYSTEM_EXECUTION_PIPELINE_V1.md)。普通已保存名单、详情及正式导出先执行 `scripts/codex_daily.py show`，按需指定 `--role`、原观察日和目标日；首次没有封存视图时，用 `publish --archive-id ID --profile FULL_CORE_ARCHIVE_READONLY_V1` 对已登记完整归档认证一次。未登记归档先按原协议登记；不得从普通JSON制作可信视图。查询必须明示原日期、截止、最后完整认证时间和 `source_reauthenticated_now=false`，不能称为本次来源重新验真或当前市场就绪。

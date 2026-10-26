@@ -1,0 +1,482 @@
+"""Full native premarket workflow with one shared theme session projection.
+
+The original workflow, sources, selectors and files stay unchanged. A private
+function's import table selects the versioned theme implementation; production
+never uses the original TEST_FIXTURE adapter escape hatch. The original native
+owner, per-phase budgets, presentation and terminal checks remain authoritative.
+"""
+from __future__ import annotations
+
+import argparse
+import ast
+import builtins
+from contextlib import contextmanager
+from copy import deepcopy
+from datetime import date, datetime, time as wall_time, timezone
+import json
+import math
+import os
+from pathlib import Path
+import subprocess
+import sys
+import tempfile
+import time
+from types import FunctionType, SimpleNamespace
+
+ROOT = Path(__file__).resolve().parents[1]
+if str(ROOT) not in sys.path:
+    sys.path.insert(0, str(ROOT))
+
+from stockfish_core.yaogu import premarket_workflow_v1 as legacy
+from stockfish_core.yaogu.premarket_runtime_v1 import Budget, BudgetExceeded
+
+VERSION = "CODEX_PREMARKET_SHARED_WORKFLOW_V1"
+EXIT_CODES = {"COMPLETE": 0, "COMPLETED_WITH_UNKNOWNS": 2, "FAILED": 3, "BUDGET_EXCEEDED": 4}
+SUCCESS = frozenset(("COMPLETE", "COMPLETED_WITH_UNKNOWNS"))
+MAX_SCRIPT_FILES = 4096
+
+
+def _engine(value):
+    if value not in ("original", "shared"):
+        raise ValueError("SHARED_PREMARKET_EXPLICIT_ENGINE_REQUIRED")
+    return value
+
+
+def _expected_sessions(value):
+    if value is None:
+        return None
+    if type(value) not in (tuple, list) or len(value) != 3 or any(type(part) is not str for part in value):
+        raise ValueError("SHARED_PREMARKET_EXPECTED_SESSION_FORMAT")
+    try:
+        parsed = tuple(date.fromisoformat(part) for part in value)
+    except ValueError:
+        raise ValueError("SHARED_PREMARKET_EXPECTED_SESSION_FORMAT") from None
+    if tuple(day.isoformat() for day in parsed) != tuple(value) or parsed[0] >= parsed[1]:
+        raise ValueError("SHARED_PREMARKET_EXPECTED_SESSION_FORMAT")
+    return tuple(value)
+
+
+def _expected_gate(expected, now=None):
+    expected = _expected_sessions(expected)
+    if expected is None:
+        return None
+    current = datetime.now(timezone.utc) if now is None else now
+    if not isinstance(current, datetime) or current.tzinfo is None or current.utcoffset() is None:
+        raise ValueError("SHARED_PREMARKET_AWARE_CURRENT_CLOCK_REQUIRED")
+    local = current.astimezone(legacy.SH)
+    observation, target, planned_local_day = (date.fromisoformat(part) for part in expected)
+    if local.date() != planned_local_day:
+        raise ValueError("SHARED_PREMARKET_PLANNING_LOCAL_DAY_CHANGED")
+    if not (datetime.combine(observation, wall_time(18), legacy.SH) <= local
+            < datetime.combine(target, wall_time(18), legacy.SH)):
+        raise ValueError("SHARED_PREMARKET_EXPECTED_SESSION_WINDOW_CHANGED")
+    return current
+
+
+def _clone(function, bindings):
+    scope = dict(function.__globals__)
+    scope.update(bindings)
+    result = FunctionType(function.__code__, scope, function.__name__,
+        function.__defaults__, function.__closure__)
+    result.__kwdefaults__ = function.__kwdefaults__
+    return result
+
+
+def _script_refs(read_meter=None):
+    # Start from explicit entrypoints and follow only statically declared
+    # script imports, including function-local imports. Unrelated new scripts
+    # therefore do not invalidate an archived execution's source identity.
+    pending = {ROOT / "scripts" / (name + ".py") for name in (
+        "codex_premarket_shared_v1", "codex_native_theme_shared_v1",
+        "codex_daily_session_v1", "codex_daily_v2", "codex_premarket_preflight_v1")}
+    references = {}
+    while pending:
+        path = min(pending)
+        pending.remove(path)
+        if path in references:
+            continue
+        if len(references) >= MAX_SCRIPT_FILES:
+            raise ValueError("SHARED_PREMARKET_SCRIPT_CLOSURE_LIMIT")
+        reference = legacy._ref(path, read_meter)
+        raw = path.read_bytes()
+        if read_meter is not None:
+            read_meter(len(raw))
+        if legacy.fingerprint(path) != reference["fp"]:
+            raise ValueError("SHARED_PREMARKET_SCRIPT_CHANGED_DURING_DISCOVERY")
+        tree = ast.parse(raw, filename=str(path))
+        references[path] = reference
+        names = set()
+        for node in ast.walk(tree):
+            if isinstance(node, ast.Import):
+                names.update(alias.name for alias in node.names if alias.name.startswith("scripts."))
+            elif isinstance(node, ast.ImportFrom):
+                if node.module == "scripts":
+                    names.update("scripts." + alias.name for alias in node.names)
+                elif node.module and node.module.startswith("scripts."):
+                    names.add(node.module)
+                elif node.level and path.parent == ROOT / "scripts":
+                    raise ValueError("SHARED_PREMARKET_RELATIVE_SCRIPT_IMPORT_UNSUPPORTED")
+        for name in names:
+            if not all(part.isidentifier() for part in name.split(".")):
+                raise ValueError("SHARED_PREMARKET_SCRIPT_IMPORT_UNSUPPORTED")
+            candidate = ROOT.joinpath(*name.split(".")).with_suffix(".py")
+            pending.add(candidate)
+    return [references[path] for path in sorted(references)]
+
+
+def _code_refs(read_meter=None):
+    refs = {ref["path"]: ref for ref in legacy._code_refs(read_meter)}
+    for reference in _script_refs(read_meter):
+        prior = refs.setdefault(reference["path"], reference)
+        if prior != reference:
+            raise ValueError("SHARED_PREMARKET_SOURCE_REFERENCE_CONFLICT")
+    return [refs[path] for path in sorted(refs)]
+
+
+code_refs = _code_refs
+
+
+def _workflow_budget(*args, **kwargs):
+    """Keep the exact original Budget type and its genuine counters."""
+    budget = Budget(*args, **kwargs)
+    budget.shared_source_refs = None
+    budget.phase_timings = []
+    original_phase = budget.phase
+    @contextmanager
+    def phase(name):
+        started = time.monotonic()
+        status = "FAILED"
+        try:
+            with original_phase(name):
+                if budget.shared_source_refs is None:
+                    if name != "capture":
+                        raise ValueError("SHARED_PREMARKET_CAPTURE_MUST_START_FIRST")
+                    budget.shared_source_refs = _script_refs(budget.charge_read)
+                yield budget
+            status = "COMPLETE"
+        finally:
+            budget.phase_timings.append(dict(phase=name, status=status,
+                elapsed_seconds=round(time.monotonic() - started, 6)))
+    budget.phase = phase
+    return budget
+
+
+def _shared_completion(job, *, status, phases, budget, **fields):
+    if status in SUCCESS:
+        # These are control/source reads, charged to the original capture
+        # allocation. No phase borrows another allocation and exhaustion stays
+        # sticky. This runs inside the original workflow's exception boundary.
+        with budget.phase("capture"):
+            for reference in budget.shared_source_refs:
+                legacy._verify(reference, budget.charge_read)
+        references = {ref["path"]: ref for ref in fields["validation_references"]}
+        for reference in budget.shared_source_refs:
+            prior = references.setdefault(reference["path"], reference)
+            if prior != reference:
+                raise ValueError("SHARED_PREMARKET_SOURCE_REFERENCE_CONFLICT")
+        fields["validation_references"] = list(references.values())
+    fields.update(execution_version=VERSION,
+        native_core_algorithm="UNCHANGED_ORIGINAL_NATIVE_CORE",
+        theme_execution=("SHARED_SESSION_PROJECTION_V1" if budget.execution_engine == "shared"
+                         else "UNCHANGED_ORIGINAL_NATIVE_THEME"),
+        execution_engine=budget.execution_engine,
+        phase_timings=deepcopy(budget.phase_timings),
+        source_capability_restored=False,
+        expected_sessions=list(budget.expected_sessions) if budget.expected_sessions is not None else None)
+    return _clone(legacy._completion, {"VERSION": VERSION})(job,
+        status=status, phases=phases, budget=budget, **fields)
+
+
+def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expected_sessions=None, engine="original"):
+    """Run capture through display and terminal checks in the owned worker.
+
+    ``adapters`` retains the exact original explicit TEST_FIXTURE restriction.
+    The production path has no arbitrary collaborator/owner/reader injection.
+    """
+    engine = _engine(engine)
+    expected = _expected_sessions(expected_sessions)
+    fixture_clock = now if config.get("capture", {}).get("allow_test_fixture") is True else None
+    if expected is not None and now is not None and fixture_clock is None:
+        raise ValueError("SHARED_PREMARKET_PRODUCTION_CLOCK_OVERRIDE_FORBIDDEN")
+    capture_now = _expected_gate(expected, fixture_clock) if expected is not None else now
+    from scripts import codex_native_theme_shared_v1 as shared_theme
+    from stockfish_core.yaogu import premarket_presentation_v1 as presentation
+    from stockfish_core.yaogu import premarket_capture_cache_v1 as capture
+    theme_data = _clone(presentation._theme_data, {"THEME_SCHEMA": shared_theme.VERSION})
+    renderer = (_clone(presentation.render_premarket, {"_theme_data": theme_data})
+                if engine == "shared" else presentation.render_premarket)
+    original_import = builtins.__import__
+
+    def collect(*args, **kwargs):
+        if expected is not None:
+            kwargs["now"] = _expected_gate(expected, fixture_clock)
+        return capture.capture_collect(*args, **kwargs)
+
+    def collect_themes(*args, **kwargs):
+        _expected_gate(expected, fixture_clock)
+        return capture.capture_theme_sources(*args, **kwargs)
+
+    def selected_import(name, globals=None, locals=None, fromlist=(), level=0):
+        if (level == 1 and name == "premarket_capture_cache_v1"
+                and tuple(fromlist) == ("CaptureCache", "capture_collect", "capture_theme_sources")
+                and globals is not None
+                and globals.get("__package__") == legacy.__package__):
+            return SimpleNamespace(CaptureCache=capture.CaptureCache,
+                capture_collect=collect, capture_theme_sources=collect_themes)
+        if (level == 1 and name == "premarket_theme_context_v1"
+                and tuple(fromlist) == ("attach_theme_context",)
+                and globals is not None
+                and globals.get("__package__") == legacy.__package__):
+            if engine == "shared":
+                return SimpleNamespace(attach_theme_context=shared_theme.attach_theme_context_shared)
+            return original_import(name, globals, locals, fromlist, level)
+        if (level == 1 and name == "premarket_presentation_v1"
+                and tuple(fromlist) == ("render_premarket",)
+                and globals is not None
+                and globals.get("__package__") == legacy.__package__):
+            return SimpleNamespace(render_premarket=renderer)
+        return original_import(name, globals, locals, fromlist, level)
+
+    local_builtins = dict(vars(builtins))
+    local_builtins["__import__"] = selected_import
+
+    def budget_factory(*args, **kwargs):
+        budget = _workflow_budget(*args, **kwargs)
+        budget.expected_sessions = expected
+        budget.execution_engine = engine
+        return budget
+
+    def latest_gate(calendar_rows, observation, target, clock=None):
+        if expected is None:
+            return legacy._latest_gate(calendar_rows, observation, target, clock)
+        current = _expected_gate(expected, fixture_clock)
+        if (str(observation), str(target)) != expected[:2]:
+            raise ValueError("SHARED_PREMARKET_CAPTURE_SESSION_DIFFERS_FROM_REQUEST")
+        return legacy._latest_gate(calendar_rows, observation, target, current)
+
+    execute = _clone(legacy.execute_workflow, {"__builtins__": local_builtins,
+        "Budget": budget_factory, "_completion": _shared_completion,
+        "_latest_gate": latest_gate})
+    return execute(config, job_dir, now=capture_now, adapters=adapters)
+
+
+class _SupervisorGuard:
+    def __init__(self, limits, started_at=None, expected_sessions=None, engine="original"):
+        now = time.monotonic()
+        if started_at is not None and (type(started_at) not in (int, float)
+                or not math.isfinite(started_at) or not 0 <= started_at <= now):
+            raise ValueError("SHARED_PREMARKET_PARENT_CLOCK_INVALID")
+        self.started = now if started_at is None else started_at
+        self.limits = limits
+        self.job = None
+        self.failed = False
+        self.last_output_check = 0.0
+        self.expected_sessions = _expected_sessions(expected_sessions)
+        self.engine = _engine(engine)
+
+    def check(self, *, force=False):
+        if self.failed:
+            raise BudgetExceeded("SHARED_PREMARKET_SUPERVISOR_BUDGET_EXHAUSTED")
+        reason = None
+        if self.limits["max_seconds"] is not None and time.monotonic() - self.started > self.limits["max_seconds"]:
+            reason = "TOTAL_TIME_LIMIT_EXCEEDED"
+        if self.job is not None and (force or time.monotonic() - self.last_output_check >= 0.5):
+            if legacy.directory_bytes(self.job) > self.limits["output_bytes"]:
+                reason = "OUTPUT_LIMIT_EXCEEDED"
+            self.last_output_check = time.monotonic()
+        if reason:
+            self.failed = True
+            raise BudgetExceeded(reason)
+
+    def seal(self, path, value):
+        self.job = Path(path).parent
+        if value.get("status") in SUCCESS:
+            _expected_gate(self.expected_sessions)
+            self.check(force=True)
+            value["execution_version"] = VERSION
+            value["elapsed_seconds"] = round(time.monotonic() - self.started, 6)
+            value["whole_workflow_wall_enforced"] = True
+            value["expected_sessions"] = list(self.expected_sessions) if self.expected_sessions is not None else None
+            value["execution_engine"] = self.engine
+        legacy._seal(path, value)
+        if value.get("status") in SUCCESS:
+            _expected_gate(self.expected_sessions)
+            self.check(force=True)
+
+    def reference(self, path, read_meter=None):
+        self.check()
+        result = legacy._ref(path, read_meter)
+        self.check()
+        return result
+
+    def verify(self, reference, read_meter=None):
+        self.check()
+        legacy._verify(reference, read_meter)
+        self.check()
+
+    def tree_sample(self, pid, read_meter=None):
+        self.check()
+        result = legacy._tree_sample(pid, read_meter)
+        self.check()
+        return result
+
+
+class _WorkerSubprocess:
+    """Only rewrite the original owned worker invocation, never its globals."""
+    def __init__(self, absent, guard, fixture_command=None):
+        self.absent, self.guard, self.fixture_command = absent, guard, fixture_command
+
+    def __getattr__(self, name):
+        return getattr(subprocess, name)
+
+    def Popen(self, command, **kwargs):
+        self.guard.check()
+        _expected_gate(self.guard.expected_sessions)
+        if self.fixture_command is None:
+            if (len(command) != 7 or command[:4] != [sys.executable, "-B", "-m", legacy.__spec__.name]
+                    or command[4:6] != ["_worker", "--job"]):
+                raise ValueError("SHARED_PREMARKET_UNEXPECTED_WORKER_COMMAND")
+            command = [sys.executable, "-I", "-B", "-X", "pycache_prefix=" + str(self.absent),
+                str(Path(__file__).resolve()), "_worker", "--job", command[6], "--engine", self.guard.engine]
+            if self.guard.expected_sessions is not None:
+                for option, value in zip(("--observation-date", "--target-session", "--planning-local-date"),
+                                        self.guard.expected_sessions):
+                    command += [option, value]
+        elif command != self.fixture_command:
+            raise ValueError("SHARED_PREMARKET_FIXTURE_COMMAND_CHANGED")
+        if Path(self.absent).exists():
+            raise ValueError("SHARED_PREMARKET_BYTECODE_PATH_MUST_BE_ABSENT")
+        environment = dict(kwargs["env"])
+        for name in ("PYTHONPATH", "PYTHONHOME"):
+            environment.pop(name, None)
+        environment["PYTHONDONTWRITEBYTECODE"] = "1"
+        kwargs["env"] = environment
+        return subprocess.Popen(command, **kwargs)
+
+
+def supervise(config, *, progress=True, started_at=None, expected_sessions=None, engine="original", _fixture_worker_command=None):
+    """Return ``(exit_code, final)``; caller coordinates its stable request key.
+
+    Configuration is the unchanged original schema and retains every original
+    limit. The parent additionally enforces wall/output during terminal hashing.
+    ``_fixture_worker_command`` is restricted to explicit isolated fixture state.
+    """
+    if not isinstance(config, dict) or set(config) - {
+            "schema_version", "state_root", "minimum_amount_cny", "limits",
+            "capture", "news", "seed_sources"} or config.get("schema_version", legacy.VERSION) != legacy.VERSION:
+        raise ValueError("UNSUPPORTED_PREMARKET_CONFIG")
+    config = legacy.load_config(overrides=deepcopy(config))
+    if _fixture_worker_command is not None and config.get("capture", {}).get("allow_test_fixture") is not True:
+        raise ValueError("ADAPTERS_REQUIRE_EXPLICIT_TEST_FIXTURE")
+    guard = _SupervisorGuard(config["limits"], started_at, expected_sessions, engine)
+    _expected_gate(guard.expected_sessions)
+    with tempfile.TemporaryDirectory(prefix="stockfish-premarket-shared-bytecode-") as directory:
+        worker = _WorkerSubprocess(Path(directory) / "absent", guard, _fixture_worker_command)
+        run = _clone(legacy.supervise, {"VERSION": VERSION, "_code_refs": _code_refs,
+            "_ref": guard.reference, "_verify": guard.verify, "_seal": guard.seal,
+            "subprocess": worker, "_tree_sample": guard.tree_sample})
+        return run(config, progress=progress, worker_command=_fixture_worker_command)
+
+
+def verify_job(path):
+    """Verify owned derivatives too; external RAW gains no fresh authority."""
+    job = Path(path).expanduser().resolve(strict=True)
+    final_ref = legacy._ref(job / "final-control.json")
+    result = _clone(legacy.verify_job, {"VERSION": VERSION})(job)
+    final = legacy._read_control(job / "final-control.json")
+    owned, seen, already_verified = {}, {}, set()
+    if final.get("completion"):
+        completion = legacy._read_control(final["completion"]["path"])
+        known = []
+        for role in ("core_artifacts", "theme_artifacts"):
+            known.extend((completion.get(role) or {}).values())
+        known.extend((final.get("display") or {}).get("artifacts", {}).values())
+        if completion.get("news") is not None:
+            known.append(completion["news"]["metadata"])
+        for reference in known:
+            prior = seen.setdefault(reference["path"], reference)
+            if prior != reference:
+                raise ValueError("SHARED_PREMARKET_ARCHIVED_REFERENCE_CONFLICT")
+            already_verified.add(reference["path"])
+        for reference in completion.get("validation_references", ()):
+            if (not isinstance(reference, dict) or set(reference) != {"path", "sha256", "bytes", "fp"}
+                    or not isinstance(reference["path"], str)):
+                raise ValueError("SHARED_PREMARKET_ARCHIVED_REFERENCE_SCHEMA")
+            prior = seen.setdefault(reference["path"], reference)
+            if prior != reference:
+                raise ValueError("SHARED_PREMARKET_ARCHIVED_REFERENCE_CONFLICT")
+            source = Path(reference["path"])
+            if not source.is_absolute():
+                raise ValueError("SHARED_PREMARKET_ARCHIVED_REFERENCE_NOT_ABSOLUTE")
+            if source.is_relative_to(job):
+                if source.resolve(strict=True) != source or source == job:
+                    raise ValueError("SHARED_PREMARKET_ARCHIVED_DERIVATIVE_ALIAS")
+                owned[reference["path"]] = reference
+        for name, reference in owned.items():
+            if name not in already_verified:
+                legacy._verify(reference)
+        for reference in owned.values():
+            if legacy.fingerprint(reference["path"]) != reference["fp"]:
+                raise ValueError("SHARED_PREMARKET_ARCHIVED_DERIVATIVE_CHANGED")
+    legacy._verify(final_ref)
+    result.update(owned_derivative_reference_count=len(owned),
+        owned_derivatives_verified=True, external_sources_reauthenticated=False)
+    return result
+
+
+def parser():
+    result = argparse.ArgumentParser(description="完整盘前共享执行；保持原来源、策略与预算")
+    commands = result.add_subparsers(dest="command", required=True)
+    run = commands.add_parser("premarket")
+    run.add_argument("--config", required=True)
+    run.add_argument("--quiet", action="store_true")
+    run.add_argument("--engine", choices=("original", "shared"), default="original")
+    for option in ("--observation-date", "--target-session", "--planning-local-date"):
+        run.add_argument(option)
+    for command in ("premarket-status", "premarket-verify"):
+        sub = commands.add_parser(command)
+        sub.add_argument("job")
+    worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
+    worker.add_argument("--job", required=True)
+    worker.add_argument("--engine", choices=("original", "shared"), default="original")
+    for option in ("--observation-date", "--target-session", "--planning-local-date"):
+        worker.add_argument(option)
+    return result
+
+
+def main(argv=None):
+    args = parser().parse_args(argv)
+    try:
+        expected = None
+        if args.command in ("premarket", "_worker"):
+            parts = tuple(getattr(args, name) for name in ("observation_date", "target_session", "planning_local_date"))
+            expected = _expected_sessions(parts) if any(part is not None for part in parts) else None
+        if args.command == "_worker":
+            if (not sys.flags.isolated or not sys.dont_write_bytecode
+                    or sys.pycache_prefix is None or Path(sys.pycache_prefix).exists()
+                    or os.name == "posix" and os.getpgrp() != os.getpid()):
+                raise ValueError("SHARED_PREMARKET_ISOLATED_OWNED_WORKER_REQUIRED")
+            job = Path(args.job).resolve(strict=True)
+            value = execute_workflow_shared(legacy._read_control(job / "configuration.json"), job,
+                expected_sessions=expected, engine=args.engine)
+            return EXIT_CODES[value["status"]]
+        if args.command == "premarket-status":
+            value = legacy._read_control(Path(args.job) / "final-control.json")
+            code = 0
+        elif args.command == "premarket-verify":
+            value, code = verify_job(args.job), 0
+        else:
+            code, value = supervise(legacy.load_config(args.config), progress=not args.quiet,
+                expected_sessions=expected, engine=args.engine)
+        print(json.dumps(value, ensure_ascii=False))
+        return code
+    except Exception as error:
+        # Outer errors contain controlled codes only; raw provider exceptions
+        # remain in the private original worker completion.
+        print(json.dumps(dict(schema_version=VERSION, status="FAILED_BEFORE_EXECUTION",
+            error=type(error).__name__), ensure_ascii=False), file=sys.stderr)
+        return 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

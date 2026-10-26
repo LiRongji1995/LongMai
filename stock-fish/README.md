@@ -1,5 +1,9 @@
 # StockFish Python业务目录
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+新盘前研究先执行 [完整盘前准入与共享执行](docs/PREMARKET_SHARED_EXECUTION_V1.md) 的 `scripts/codex_daily_v2.py premarket-plan`，通过后用同入口 `premarket`，沿用固定运行登记、原配置与request-key。保存成果继续由原 `codex_daily.py show` 读取。
+
 已保存结果优先使用 [统一执行入口V1](docs/SYSTEM_EXECUTION_PIPELINE_V1.md) `python scripts/codex_daily.py show`；它转入原登记环境，约1秒核对并读取原成果，明示原日期和最后完整认证时间。`plan`查看依赖缺口，`audit`重新完整审计，计算命令保留原预算及来源终验。采集仍沿用原共享入口。
 
 日常使用从[项目首页](../README.md)和[使用说明](../USER_GUIDE.md)进入；当前能力及未达标项目见[当前状态](../CURRENT_STATUS.md)，启动、停止与备份恢复见[部署维护](../DEPLOYMENT.md)。

@@ -1,5 +1,9 @@
 # 日常执行路径V1
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+较新的 [完整盘前执行V1](PREMARKET_SHARED_EXECUTION_V1.md) 将共享题材接入实际完整工作流，并提供 `codex_daily_v2.py premarket-plan/premarket`。本文原V1查询、独立theme-run和历史实测边界保持；新完整流程不以本文402→134解码计数直接宣称真实提速。
+
 这轮解决重复工作的执行结构：已保存成果只做成果完整性验证；需要新事实的计算重新认证来源，并在同一次调用中共享解析和验证会话。入口为 `scripts/codex_daily.py`，新模块均位于scripts，保留历史core源码集合、策略、原run及原始文件。
 
 ## 已保存成果

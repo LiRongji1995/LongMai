@@ -1,5 +1,9 @@
 # 工程维护约定
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+[完整盘前执行V1](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md)的验证须覆盖原/新全流程精确等价、真实owned子进程监管、同request-key防重复/防隐式重试、整份源码与派生产物SHA/七字段物理末验。只读索引成本估算不授予来源能力；小型TEST_FIXTURE速度及真实全市场速度分开报告。
+
 [系统性执行优化V1](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md)把保存成果完整性、当次来源认证和新计算拆成明确合同。新代码只增于scripts层，旧核心动态源码集合保持；本地HMAC不作为来源能力。共享会话仅限同一次调用，保留完整SHA/物理终验、借用对象迟变、原事务末验及失败回滚。外层监督绑定自己的子进程组、真实退出码、请求与入口源码，不把父进程退出当作整组清理。
 
 [空间与时间优化V1](stock-fish/docs/SPACE_TIME_OPTIMIZATION_V1.md)只增加新版本脚本和隔离测试，保留原状态机、全部语义检查和完整物理末验；禁止用跨请求hash缓存绕过原件校验。所有新子进程固定登记解释器并使用全新字节码查找位置。原RAW、回执和旧源码不得因压缩或性能调整而覆写；实测耗时、Python返回字节、RSS与夹具tracemalloc分列。

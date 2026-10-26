@@ -1,5 +1,9 @@
 # Python业务维护入口
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+[完整盘前执行V1](docs/PREMARKET_SHARED_EXECUTION_V1.md)新增scripts版本，完整原/新流程等价与实际进程监督分别验证。性能比较必须测整个流程，不能用解码次数代替耗时；真实缺数据及预算阻塞不改判。旧core源码和历史run保持。
+
 [统一执行路径V1](docs/SYSTEM_EXECUTION_PIPELINE_V1.md)新增代码限定scripts层，旧core源码与动态认证集合保持。封存查询、依赖计划和有界新计算分开验收；局部解析次数下降不能冒充真实全链路或默认300秒后验通过。
 
 新增[共享结果、压缩及复权尾窗V2](docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)采用独立版本和TEST_FIXTURE检查；旧核心及来源文件保持。完整归档复用、新输出压缩与尾窗诊断分别验证，不因只读档位扩大原写入预算，不将尾窗升级为完整策略输入。

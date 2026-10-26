@@ -1,5 +1,9 @@
 # 部署与维护
 
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+新增 [完整盘前执行V1](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md)：`codex_daily_v2.py premarket-plan` 只读准入，`premarket` 在同一登记根和原配置下调用完整工作流。新worker使用新schema及明确scripts闭包，旧core和旧入口原字节保留。源码发布不修改私有预算、不切换生产服务或调度。
+
 [统一执行入口V1](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md)只新增 `scripts/` 执行器；不得把新模块放进旧 `stockfish_core` 动态认证集合而破坏历史归档。入口转入原登记解释器、源码目录和全新字节码查找位置。封存视图与私有HMAC密钥留在同一共享报告根；密钥丢失不重新生成以接管旧视图，需显式完整审计后处理。新计算采用原配置与新执行器限额的较小值，没有切换运行服务或自动启用任务。
 
 [空间与时间优化V1](stock-fish/docs/SPACE_TIME_OPTIMIZATION_V1.md)使用独立 `codex_optimize.py`，按原登记源码和解释器启动新执行版本。V1原代码和归档身份保留；V2另行登记。容量和缓存预算不扩大，未迁移真实DB或切换服务；调度索引迁移、适配器服务启动均为显式操作。本轮源码发布不能解释为日常后端已自动升级。

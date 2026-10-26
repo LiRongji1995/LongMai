@@ -1,6 +1,10 @@
 # StockFish
 
-日常已有成果统一从 [执行入口V1](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md) 读取：`codex_daily.py show` 核对本地封签和五份原导出，明确显示原日期与最后完整认证时间；`plan` 说明哪些可复用、哪些缺资料，新计算保留完整来源认证。真实三次摘要读取为0.93／0.79／0.79秒，首次完整认证并封存72.01秒；仅增加5.4 KiB视图，不复制原输入。采集继续复用已登记的 [共享聊天入口](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)，不另建数据库或环境。
+默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
+
+新盘前生成先用 [完整盘前准入与共享执行](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md) 的 `codex_daily_v2.py premarket-plan` 核对全流程数据与预算；准入通过后使用同入口 `premarket`。新路径实际连接采集、原核心、共享题材、展示和终验。真实跨日数据未齐时会在采集前阻塞；不能把已保存名单的约0.8秒读取当作新名单生成速度。
+
+日常已有成果统一从 [执行入口V1](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md) 读取：`codex_daily.py show` 核对本地封签和五份原导出，明确显示原日期与最后完整认证时间；`plan` 说明哪些可复用、哪些缺资料，新计算保留完整来源认证。真实三次摘要读取为0.93／0.79／0.79秒，首次完整认证并封存72.01秒；仅增加5.4 KiB视图，不复制原输入。原作业和分阶段采集继续复用已登记的 [共享聊天入口](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)，不另建数据库或环境。
 
 [第二阶段：共享环境恢复与增量研究](stock-fish/docs/SHARED_RUNTIME_INCREMENTAL_V1.md)已恢复并验收本机固定的 daily/review 58 包环境，登记为聊天默认实例 `shared-daily`。运行位置和环境验收不代表最新行情或盘前清单已就绪；有界行情增量、相同来源的核心计算复用及真实小样本结果按第二阶段说明分别报告。第一阶段隔离样本事实保留，生产服务未切换，策略保持。
 
