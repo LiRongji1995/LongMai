@@ -1,5 +1,7 @@
 # 技术资料索引
 
+新增[空间与时间优化V1](SPACE_TIME_OPTIMIZATION_V1.md)：归档与核心V2校验、新采集RESULT压缩、容量增长观察、只读后验计时及调度任务族查询；含显式命令、实测边界和未执行范围。
+
 新增[共享结果复用、新输出压缩与复权尾窗V2](SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)：统一聊天入口的完整归档登记／复用、显式新输出压缩和复权只读／诊断合同。旧来源闭包与策略不改，尾窗不自动晋级为完整因子；实际测量和未验范围在该文独立记录。
 
 本轮优先查看[日期化输入与真实数值H1](DATED_IDENTITY_NUMERIC_H1_20261024.md)和[当前状态](../../CURRENT_STATUS.md)：15→16的全池3,041／观察25已独立复算，单／双run闭环、幂等与三产品回查通过；19日及后续身份未知保持，默认300秒性能尚未达标，生产未切换。[前轮继续交付](CONTINUATION_DELIVERY_20261023.md)与[性能原记录](REAL_DAILY_ACCEPTANCE_PERFORMANCE_V1.md)中的全部UNKNOWN与42文件保留为历史事实。

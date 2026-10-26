@@ -1,5 +1,7 @@
 # 工程维护约定
 
+[空间与时间优化V1](stock-fish/docs/SPACE_TIME_OPTIMIZATION_V1.md)只增加新版本脚本和隔离测试，保留原状态机、全部语义检查和完整物理末验；禁止用跨请求hash缓存绕过原件校验。所有新子进程固定登记解释器并使用全新字节码查找位置。原RAW、回执和旧源码不得因压缩或性能调整而覆写；实测耗时、Python返回字节、RSS与夹具tracemalloc分列。
+
 [共享结果与压缩V2](stock-fish/docs/SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)继续在独立脚本层登记操作身份：首次旧核心导入可调用一次原normalizer鉴证，重复查询不调用normalizer/selector；新输出压缩须全字节回解及原终验。复权尾窗保持诊断用途，不合成完整来源能力。原代码闭包、历史原件、FAILED/UNKNOWN与既有容量政策保持；工程夹具和真实测量分别报告。
 
 ## 2026-10-25 共享入口工程范围

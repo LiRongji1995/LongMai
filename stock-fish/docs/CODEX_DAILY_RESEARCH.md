@@ -1,5 +1,7 @@
 # Codex日常研究协议
 
+[空间与时间优化V1](SPACE_TIME_OPTIMIZATION_V1.md)提供显式新工具 `codex_optimize.py`；普通日常仍从下述共享入口开始。V2归档必须另行登记和完整reuse验真，不能仅凭定位、容量观察或压缩成功宣布名单就绪。新采集压缩不授权增大缓存、删除旧原件或联网补缺，后验计时入口只读且不提交worker。
+
 已取得完整原核心时，按[共享结果V2](SHARED_RESULT_COMPACT_INCREMENTAL_V2.md)先查 `core-archive-status` 定位，再用 `core-archive-reuse` 核完整来源、原run与导出；定位记录本身不能显示为已验真名单。未登记的受支持旧核心先显式 `core-archive-register`，不伪造原盘前终态。新计算可显式 `core-run-compact`；`factor-plan/reuse` 只读，`factor-sync` 的尾窗仍是诊断资料，不自动拼接成完整输入。
 
 ## 新聊天优先使用共享入口
