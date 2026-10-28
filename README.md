@@ -1,5 +1,7 @@
 # StockFish
 
+**2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](stock-fish/docs/PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
+
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
 
 新盘前生成先用 [完整盘前准入与共享执行](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md) 的 `codex_daily_v2.py premarket-plan` 核对全流程数据与预算；准入通过后使用同入口 `premarket`。新路径实际连接采集、原核心、共享题材、展示和终验。真实跨日数据未齐时会在采集前阻塞；不能把已保存名单的约0.8秒读取当作新名单生成速度。

@@ -1,5 +1,7 @@
 # 技术资料索引
 
+**2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
+
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
 
 新盘前入口及完整数据、预算准入见 [完整盘前执行V1](PREMARKET_SHARED_EXECUTION_V1.md)；保存成果查询继续使用 [统一执行入口V1](SYSTEM_EXECUTION_PIPELINE_V1.md)。
