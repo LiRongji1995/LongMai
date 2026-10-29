@@ -1,8 +1,10 @@
 # 部署与维护
 
+新增[original 精确编码执行 V1](stock-fish/docs/ORIGINAL_CANONICAL_PERFORMANCE_V1.md)：`codex_daily_fast_v1.py` 是显式登记入口，复用原准入、固定 request-key、预算及完整 original 流程；默认入口和私有登记不变。恢复登记仍须显式选择既有 runtime，换入口或 key 不能重试旧失败请求。真实阶段性能与完整日常交付分别验收。
+
 新增[失败题材冷存 V1](stock-fish/docs/FAILED_THEME_COLD_STORAGE_V1.md)，只显式处理已失败且 worker 已回收的 V2 派生 journal。真实五步已完成，归档及全件实体恢复核验后移除精确载荷，四根净逻辑减量约 404 MiB；原 manifest、失败控制、核心和 RAW 保持。恢复仅到新目录，保留原计划、工具身份、归档和回执；不恢复旧 inode、owner 或来源能力。日常入口不自动清理，源码发布不切换服务或重试盘前请求。
 
-**2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](stock-fish/docs/PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
+**2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实端到端提速比例仍未测得。详见[环境恢复、真实执行与性能边界](stock-fish/docs/PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
 
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
 

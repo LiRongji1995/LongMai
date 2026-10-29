@@ -1,5 +1,7 @@
 # 工程维护约定
 
+[original 精确编码执行 V1](stock-fish/docs/ORIGINAL_CANONICAL_PERFORMANCE_V1.md)复用已有 canonical C/128 行精确编码，每次仍重算完整 hash；独占单线程作用域退出时验证源码并恢复全部绑定。历史阶段 ABBA 使用共同的实际 UTC 截止、全来源重认、完整结果对照和发布前后 SHA/七字段身份守卫。来源解码复用与题材分组是独立候选，不能以计数或夹具结果替代真实性能。
+
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
 
 [完整盘前执行V1](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md)的验证须覆盖原/新全流程精确等价、真实owned子进程监管、同request-key防重复/防隐式重试、整份源码与派生产物SHA/七字段物理末验。只读索引成本估算不授予来源能力；小型TEST_FIXTURE速度及真实全市场速度分开报告。
