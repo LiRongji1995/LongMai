@@ -1,5 +1,7 @@
 # 当前状态与待办
 
+**2026-10-30 P0续批：**[完整复权与首见时间V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)已提供独立producer升级、持久attempt/checkpoint及原请求scope接线。工程完整性与真实数据就绪分别验收；原28→29仍FAILED，原历史结果保持，尚未执行真实全市场补采或连续交付。
+
 **2026-10-30 P0首批工程：**新增[交付账本、全池覆盖与R2执行评价基础](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)。两次原失败任务只读核对仍为BUDGET_EXCEEDED/FAILED；原26日run保留声明总体5227、eligible3042、资格未知621、研究观察22、FOCUS0。执行readiness阻塞且不生成收益，条件归档模拟不计市场验证。旧策略/来源/结果和生产默认入口保持；连续20真实交易日、完整复权与真实执行证据认证仍待验收。
 
 **2026-10-29 时间优化实测：**[original 精确编码执行 V1](stock-fish/docs/ORIGINAL_CANONICAL_PERFORMANCE_V1.md)在完整119份历史来源上完成四臂ABBA及完整结果比较：核心阶段中位393.84→309.20秒，耗时减少21.49%（约省84.64秒），CPU减少20.81%；发布组合218项通过、退出0。编码优化有显式登记入口，默认入口保持。独立认证候选本次中位减少15.26%但波动明显，未接入默认；完整实时盘前端到端提速仍未建立。

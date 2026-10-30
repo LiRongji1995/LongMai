@@ -1,5 +1,7 @@
 # Codex日常研究协议
 
+新增[完整复权来源V3显式协议](FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)。默认daily_v2/original保持；新bundle仅通过已有恢复登记的专用入口选择，先只读计划，实际执行仍需当次授权及原预算。禁止换版本/换key重开旧失败，不迁移缺钟RAW、不将尾窗作为完整复权。
+
 新增[P0只读诊断V1](P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：既有请求可用 `codex_p0.py delivery/ledger` 核对最终状态；完整原run可用 `coverage` 审计全池及UNKNOWN分母，`execution-readiness` 列执行证据缺口。它不替代下面的新盘前准入/执行协议，不采集、不重试、不重选；缺后验仅表示NOT_PROVIDED。保存JSON不恢复来源能力，完整数据及用户送达未证时不计算成功率。
 
 **2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。

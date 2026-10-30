@@ -1,5 +1,7 @@
 # 技术资料索引
 
+新增[完整复权采集、真实首见时间与原请求接线V3](FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)，记录新producer合同、独立bundle、原scope接线、隔离检查和未执行范围。
+
 新增[P0交付账本、全池覆盖与R2执行评价基础V1](P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)，包含统一诊断CLI、严格原件读取、研究执行API、隔离测试及真实归档核对范围。默认策略与生产日常入口保持。
 
 新增[original 精确编码执行与真实性能 V1](ORIGINAL_CANONICAL_PERFORMANCE_V1.md)：真实完整119份历史来源四臂ABBA通过，核心中位耗时减少21.49%、CPU减少20.81%，发布组合218项通过。文档区分显式 original 执行入口、独立候选、失败修正及端到端未验收范围；默认入口、旧来源与失败记录保持。

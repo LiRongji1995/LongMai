@@ -1,5 +1,7 @@
 # 工程维护约定
 
+[完整复权P0续批](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)要求完整1990窗口、每证券游标终验、实际观测钟即时落盘、父timeout只回收本次绑定片段；父PARTIAL不升级。新producer全部内嵌在三文件身份范围内，旧源不改；验证覆盖真实owned子进程超时回收、同scope/祖先防重、特殊文件与物理迟变、原数值/未知断言。
+
 [P0首批工程](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)只新增scripts与TEST_FIXTURE，保持旧core/config/scripts认证字节。验收覆盖失败终态优先、缺记录与多请求、完整资格/选择/后验集合、UNKNOWN不填零、发布失败撤销、祖先路径重定向、完整物理末验及原账户执行约束。归档一致性、真实来源、连续交付和投资有效性分别报告；缺后验输入用NOT_PROVIDED，不能推断从未运行。
 
 [original 精确编码执行 V1](stock-fish/docs/ORIGINAL_CANONICAL_PERFORMANCE_V1.md)复用已有 canonical C/128 行精确编码，每次仍重算完整 hash；独占单线程作用域退出时验证源码并恢复全部绑定。历史阶段 ABBA 使用共同的实际 UTC 截止、全来源重认、完整结果对照和发布前后 SHA/七字段身份守卫。来源解码复用与题材分组是独立候选，不能以计数或夹具结果替代真实性能。
