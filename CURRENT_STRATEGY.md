@@ -1,5 +1,7 @@
 # 当前策略说明
 
+新增[P0 R2执行评价适配](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)只评估冻结选择，复用原研究执行器，不调整R1/R2/SAM V2/DAILY公式和门槛。真实信号仍须原生owner；执行归档仅证明本地一致性，条件模拟不恢复历史PIT、不计投资验证，正式策略账户收益仍为null。容量和完整题材风险未知，MARKET_EDGE=NOT_ESTABLISHED。
+
 ## 当前主线
 
 主动核心为 `STAGE_AWARE_MOMENTUM_V2`：研究沪深主板普通A股的强势股阶段，区分启动、加速、高位修复和趋势回调。先看证券身份、数据日期和资料是否真实可见，再判断形态、行为确认、市场与题材资金背景，以及关键反证。

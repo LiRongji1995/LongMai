@@ -1,5 +1,7 @@
 # StockFish
 
+新增[P0交付与研究诊断](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：通过 `scripts/codex_p0.py` 只读核对原请求终态、完整R2全池及后验覆盖，并列出执行评价缺口。原策略、历史结果、original默认入口和运行服务保持；首批工程不等于连续每日交付或投资优势已验证。
+
 **2026-10-29 空间实测：**已将一份失败题材日志完整归档并验证恢复，470.70 MiB 的原日志改为约 44.52 MiB 的归档及必要记录；四个管理目录扣除本轮审计和测试后净减少约 404 MiB（25.6%）。原行情、核心及失败状态保持，日常重复写入的持续增长仍待处理。见[实际冷存与计量](stock-fish/docs/FAILED_THEME_COLD_STORAGE_V1.md)。
 
 **2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](stock-fish/docs/PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。

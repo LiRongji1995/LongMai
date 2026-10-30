@@ -1,5 +1,7 @@
 # Codex日常研究协议
 
+新增[P0只读诊断V1](P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：既有请求可用 `codex_p0.py delivery/ledger` 核对最终状态；完整原run可用 `coverage` 审计全池及UNKNOWN分母，`execution-readiness` 列执行证据缺口。它不替代下面的新盘前准入/执行协议，不采集、不重试、不重选；缺后验仅表示NOT_PROVIDED。保存JSON不恢复来源能力，完整数据及用户送达未证时不计算成功率。
+
 **2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
 
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。

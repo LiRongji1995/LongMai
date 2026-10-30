@@ -1,5 +1,7 @@
 # 部署与维护
 
+新增[P0诊断与评价基础V1](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)，只新增scripts层入口及隔离测试。`codex_p0.py` 不启动worker、采集、DB或恢复任务；已有恢复登记须显式选择。私有报告仅写新文件，不覆盖旧报告，发布前后核输入载体。源码发布不切换服务、默认入口、预算或通知计划；执行评价Python API的条件归档模拟不等于真实来源认证。
+
 新增[original 精确编码执行 V1](stock-fish/docs/ORIGINAL_CANONICAL_PERFORMANCE_V1.md)：`codex_daily_fast_v1.py` 是显式登记入口，复用原准入、固定 request-key、预算及完整 original 流程；默认入口和私有登记不变。恢复登记仍须显式选择既有 runtime，换入口或 key 不能重试旧失败请求。真实阶段性能与完整日常交付分别验收。
 
 新增[失败题材冷存 V1](stock-fish/docs/FAILED_THEME_COLD_STORAGE_V1.md)，只显式处理已失败且 worker 已回收的 V2 派生 journal。真实五步已完成，归档及全件实体恢复核验后移除精确载荷，四根净逻辑减量约 404 MiB；原 manifest、失败控制、核心和 RAW 保持。恢复仅到新目录，保留原计划、工具身份、归档和回执；不恢复旧 inode、owner 或来源能力。日常入口不自动清理，源码发布不切换服务或重试盘前请求。
