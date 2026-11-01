@@ -1,5 +1,7 @@
 # StockFish
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 **2026-10-30 完整复权工程V3：**新增[完整窗口采集、真实首见时间与原请求接线](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)。新源码副本在每证券完整接收后持久化检查点，超时保留原钟和PARTIAL；显式入口沿用原恢复登记、防重及预算。旧策略、历史原件和失败保持，本轮尚未执行全市场补采。
 
 新增[P0交付与研究诊断](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：通过 `scripts/codex_p0.py` 只读核对原请求终态、完整R2全池及后验覆盖，并列出执行评价缺口。原策略、历史结果、original默认入口和运行服务保持；首批工程不等于连续每日交付或投资优势已验证。

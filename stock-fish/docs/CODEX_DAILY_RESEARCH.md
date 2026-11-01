@@ -1,5 +1,7 @@
 # Codex日常研究协议
 
+新增[原失败请求显式复权恢复 V1](EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 新增[完整复权来源V3显式协议](FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)。默认daily_v2/original保持；新bundle仅通过已有恢复登记的专用入口选择，先只读计划，实际执行仍需当次授权及原预算。禁止换版本/换key重开旧失败，不迁移缺钟RAW、不将尾窗作为完整复权。
 
 新增[P0只读诊断V1](P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：既有请求可用 `codex_p0.py delivery/ledger` 核对最终状态；完整原run可用 `coverage` 审计全池及UNKNOWN分母，`execution-readiness` 列执行证据缺口。它不替代下面的新盘前准入/执行协议，不采集、不重试、不重选；缺后验仅表示NOT_PROVIDED。保存JSON不恢复来源能力，完整数据及用户送达未证时不计算成功率。

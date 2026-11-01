@@ -1,5 +1,7 @@
 # 技术资料索引
 
+新增[原失败请求显式复权恢复 V1](EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 新增[完整复权采集、真实首见时间与原请求接线V3](FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)，记录新producer合同、独立bundle、原scope接线、隔离检查和未执行范围。
 
 新增[P0交付账本、全池覆盖与R2执行评价基础V1](P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)，包含统一诊断CLI、严格原件读取、研究执行API、隔离测试及真实归档核对范围。默认策略与生产日常入口保持。

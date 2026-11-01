@@ -1,5 +1,7 @@
 # 部署与维护
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 新增[完整复权来源bundle V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)：只在新私有源码副本精确升级两个producer，旧producer路径保留。显式gateway只允许原已验收恢复登记，使用原scope、锁、配置与有限profile，逐次选择bundle；发布不切服务/默认登记，不重试旧请求。
 
 新增[P0诊断与评价基础V1](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)，只新增scripts层入口及隔离测试。`codex_p0.py` 不启动worker、采集、DB或恢复任务；已有恢复登记须显式选择。私有报告仅写新文件，不覆盖旧报告，发布前后核输入载体。源码发布不切换服务、默认入口、预算或通知计划；执行评价Python API的条件归档模拟不等于真实来源认证。

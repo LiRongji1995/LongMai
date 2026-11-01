@@ -1,5 +1,7 @@
 # 使用说明
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 新增[复权采集V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)：可要求核验新来源bundle并规划全新交易日的完整复权采集。Codex使用原恢复登记、固定request-key及original全流程；计划不采集，旧失败不因升级自动重试。旧缺首见时间资料不能补钟成有效历史。
 
 新增[P0诊断入口](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：可以要求“核对某次盘前失败与完整交付状态”“审计原run全池及UNKNOWN分母”“查看R2执行评价还缺哪些证据”。Codex调用 `codex_p0.py delivery/ledger/coverage/execution-readiness`，只读原件并可保存新私有报告；不重试旧请求、不改原名单。缺后验输入仅记NOT_PROVIDED，不声称系统从未运行；执行资料不足保持BLOCKED_DATA。

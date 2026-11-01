@@ -1,5 +1,7 @@
 # 工程维护约定
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 [完整复权P0续批](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)要求完整1990窗口、每证券游标终验、实际观测钟即时落盘、父timeout只回收本次绑定片段；父PARTIAL不升级。新producer全部内嵌在三文件身份范围内，旧源不改；验证覆盖真实owned子进程超时回收、同scope/祖先防重、特殊文件与物理迟变、原数值/未知断言。
 
 [P0首批工程](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)只新增scripts与TEST_FIXTURE，保持旧core/config/scripts认证字节。验收覆盖失败终态优先、缺记录与多请求、完整资格/选择/后验集合、UNKNOWN不填零、发布失败撤销、祖先路径重定向、完整物理末验及原账户执行约束。归档一致性、真实来源、连续交付和投资有效性分别报告；缺后验输入用NOT_PROVIDED，不能推断从未运行。

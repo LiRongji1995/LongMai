@@ -1,5 +1,7 @@
 # 当前策略说明
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 [复权来源V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)只升级新来源采集、检查点和执行接线，原复权公式、选择条件及配置保持。全窗/游标/事件唯一/时间验证失败保留未知；空因子查询不填1，当前下载不冒充历史可见，MARKET_EDGE=NOT_ESTABLISHED。
 
 新增[P0 R2执行评价适配](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)只评估冻结选择，复用原研究执行器，不调整R1/R2/SAM V2/DAILY公式和门槛。真实信号仍须原生owner；执行归档仅证明本地一致性，条件模拟不恢复历史PIT、不计投资验证，正式策略账户收益仍为null。容量和完整题材风险未知，MARKET_EDGE=NOT_ESTABLISHED。

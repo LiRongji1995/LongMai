@@ -1,5 +1,7 @@
 # 当前状态与待办
 
+新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
+
 **2026-10-30 P0续批：**[完整复权与首见时间V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)已提供独立producer升级、持久attempt/checkpoint及原请求scope接线。工程完整性与真实数据就绪分别验收；原28→29仍FAILED，原历史结果保持，尚未执行真实全市场补采或连续交付。
 
 **2026-10-30 P0首批工程：**新增[交付账本、全池覆盖与R2执行评价基础](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)。两次原失败任务只读核对仍为BUDGET_EXCEEDED/FAILED；原26日run保留声明总体5227、eligible3042、资格未知621、研究观察22、FOCUS0。执行readiness阻塞且不生成收益，条件归档模拟不计市场验证。旧策略/来源/结果和生产默认入口保持；连续20真实交易日、完整复权与真实执行证据认证仍待验收。
