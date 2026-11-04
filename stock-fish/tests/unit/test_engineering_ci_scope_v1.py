@@ -71,6 +71,8 @@ def test_workflow_has_no_privileged_triggers_or_secrets_and_uses_native_lock_tar
     workflow = yaml.safe_load(raw)
     assert "pull_request_target" not in raw and "secrets." not in raw
     assert workflow["permissions"] == {"contents": "read"}
+    assert workflow["concurrency"]["cancel-in-progress"] is False
+    assert "${{ github.sha }}" in workflow["concurrency"]["group"]
     assert workflow["jobs"]["daily"]["runs-on"] == "macos-15-intel"
     assert workflow["jobs"]["go"]["env"]["STOCKFISH_FORMAL_ACCEPTANCE"] == "1"
     assert "--require-hashed-inputs" in raw
@@ -114,7 +116,7 @@ def _daily_native_builder_source():
     return builder.split("<<'PY'\n", 1)[1].rsplit("\nPY", 1)[0], steps
 
 
-def test_ci_native_builder_executes_unchanged_bootstrap_once_without_identity_rewriting(tmp_path, monkeypatch):
+def test_ci_native_builder_executes_versioned_ci_builder_once_without_identity_rewriting(tmp_path, monkeypatch):
     import os
     import runpy
     import sys
@@ -147,7 +149,7 @@ def test_ci_native_builder_executes_unchanged_bootstrap_once_without_identity_re
     assert len(calls) == 1
     path, argv, environment = calls[0]
     assert path == str(native.resolve())
-    assert argv == [path, "-I", "-B", str(scope.ROOT / "stock-fish/scripts/bootstrap_daily_runtime.py"),
+    assert argv == [path, "-I", "-B", str(scope.ROOT / "stock-fish/scripts/bootstrap_ci_native_runtime_v1.py"),
                     "create", "--destination", str(tmp_path / "TEST_FIXTURE_daily_runtime")]
     assert "__PYVENV_LAUNCHER__" not in environment and "PYTHONEXECUTABLE" not in environment
     assert sys.orig_argv == original_argv and sys.executable == original_executable

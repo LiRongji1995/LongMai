@@ -108,3 +108,9 @@
 macOS解释器诊断保留host与新venv的固定启动命令、实际`sys.orig_argv`、cwd、解释器路径、framework及`_NSGetExecutablePath`，分别检查最小环境/继承环境中的真实子进程和孙进程；不输出环境变量全集。新venv在任一argv/cwd不一致时拒绝进入工程门禁，不归一化身份、不修改旧V2/V3守卫、不跳过旧测试。
 
 本机另用已有Python.org framework 3.10.6做启动机制对照，仅在两个全新TEST_FIXTURE目录创建无pip空venv：launcher创建者的子/孙进程原始argv0被改为框架Python.app路径，探针退出3；从`_NSGetExecutablePath`实际Mach-O直接创建者保持原始argv0，探针退出0，cwd相同。这不是3.12或项目运行环境验收。CI据此在创建前核对真实Mach-O存在且可执行，清除`__PYVENV_LAUNCHER__`与`PYTHONEXECUTABLE`，仅一次启动原`bootstrap_daily_runtime.py create`，仍完整安装与核验原锁；不修补既有venv、不回退或重试。托管3.12.10的完整验收仍待远端实际结果，不能由上述3.10机制对照替代。
+
+第二轮远端host探针已确认cwd相同而framework launcher改写argv0；直接Mach-O启动原builder后，其复制出的`bin/Python`在`ensurepip`阶段收到SIGKILL 9，未完成锁安装或准入。日志没有证实该信号的根因，不能将其归因为已确认的codesign或资源问题。
+
+后续CI候选增加`bootstrap_ci_native_runtime_v1.py`：只接受全新`TEST_FIXTURE_`目录，直接使用原锁校验、平台身份、带记录的安装调用和完整`verify`；创建方式明确为symlinks=True且禁止stdlib复制回退，解释器链接必须指向当前实际Mach-O，原`installed_identity`返回的目标与SHA256必须相同。只有全部原验收及严格子/孙argv/cwd探针成功才写ACCEPTED。既有runtime、原builder、来源文件守卫及旧监督守卫均不修改，失败目录保留且同目标不能重试。本机3.10.6独立空symlink venv机制对照的创建、严格探针及原`installed_identity`全部退出0，prefix准确、链接目标准确；没有安装第三方包，仍不替代托管3.12完整验收。
+
+CI并发组增加提交SHA并关闭自动取消；每个commit使用独立runner临时目录，保留正在进行的旧Go验收和各次失败证据。各job既有上限保持（daily和Go候选45分钟），不同提交的验收消耗分别计入，不自动重试。新提交通过也不改写旧commit的失败或未完成记录。新增CI builder及其测试后，累计发布范围为43文件。
