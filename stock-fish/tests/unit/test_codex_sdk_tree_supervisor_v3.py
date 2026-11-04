@@ -267,9 +267,17 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
     # budget. This checks evidence retention, not 65-sample throughput in 10 s.
     case["limits"]["max_seconds"] = max_seconds
     owned, all_samples, released_after = {"pid": os.getpid()}, [], []
+    terminal_observations, terminal_window, anchors = [], {}, []
     handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
     def launched(pid):
         owned["pid"] = pid
+        owned["identity"] = supervisor._identity(supervisor.psutil.Process(pid))
+    native_anchor = supervisor.RootAnchor
+    def record_anchor(*args, **kwargs):
+        anchor = native_anchor(*args, **kwargs)
+        anchors.append(anchor)
+        return anchor
+    monkeypatch.setattr(supervisor, "RootAnchor", record_anchor)
     # Bound only enumeration to this real, childless fixture. Keep the actual
     # snapshot implementation, including Darwin live -> zombie re-observation.
     # Real process_iter does not raise when a PID disappears before construction;
@@ -297,11 +305,46 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
             time.sleep(snapshot_delay)
         return native_snapshot()
     monkeypatch.setattr(supervisor, "_snapshot", delayed_native_snapshot)
+    def wait_for_fixture_zombie():
+        # Capacity evidence is already collected. Synchronize this fixture's
+        # natural exit without consuming wait status or changing native rows.
+        started = time.monotonic()
+        deadline = min(started + 2., fixture_started + max_seconds)
+        terminal_window.update(started_at=started, deadline=deadline)
+        while time.monotonic() < deadline:
+            try:
+                process = supervisor.psutil.Process(owned["pid"])
+                identity = supervisor._identity(process)
+                status = process.status()
+                observed_at = time.monotonic()
+                terminal_observations.append(dict(event="OBSERVED_STATE", identity=identity,
+                    status=status, monotonic_offset_seconds=observed_at-fixture_started))
+                if identity != owned["identity"]:
+                    raise AssertionError("TEST_FIXTURE_EXIT_SYNC_IDENTITY_CHANGED")
+                if status == supervisor.psutil.STATUS_ZOMBIE:
+                    if observed_at >= deadline:
+                        break
+                    terminal_window["terminal_observed_at"] = observed_at
+                    return
+            except (supervisor.psutil.NoSuchProcess, ProcessLookupError) as error:
+                # Absence is not terminal proof. Keep it in the fixture record
+                # and wait only within the already declared finite deadlines.
+                terminal_observations.append(dict(event="NO_PROCESS_OBSERVATION", error=type(error).__name__,
+                    monotonic_offset_seconds=time.monotonic()-fixture_started))
+            except Exception as error:
+                terminal_observations.append(dict(event="OBSERVATION_ERROR", error=type(error).__name__,
+                    message=str(error), monotonic_offset_seconds=time.monotonic()-fixture_started))
+                raise
+            time.sleep(min(.005, max(0., deadline-time.monotonic())))
+        terminal_observations.append(dict(event="EXIT_SYNC_TIMEOUT",
+            monotonic_offset_seconds=time.monotonic()-fixture_started))
+        raise AssertionError("TEST_FIXTURE_EXIT_SYNC_MATCHING_ZOMBIE_NOT_OBSERVED")
     def sampled(state):
         all_samples.append(dict(state))
         if state["sample_count"] == 65:
             released_after.append(state["sample_count"])
             handshake.touch(exist_ok=False)
+            wait_for_fixture_zombie()
     body = (
         "from pathlib import Path\nimport time\n"
         "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
@@ -310,8 +353,13 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
         "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
         "    time.sleep(.005)\n"
     )
+    fixture_started = time.monotonic()
     value = run(case, body, _test_hooks={"after_launch": launched, "after_sample": sampled})
-    assert value["status"] == "COMPLETE", json.dumps(value, sort_keys=True, indent=2)
+    exit_sync = dict(scope="TEST_FIXTURE_CAPACITY_EXIT_SYNC_NOT_SUPERVISOR_RETRY", max_wait_seconds=2.,
+                    max_seconds=max_seconds, anchor_instances=len(anchors), observations=terminal_observations,
+                    monotonic_window=terminal_window)
+    (case["root"] / "TEST_FIXTURE_capacity_exit_sync.json").write_text(json.dumps(exit_sync, sort_keys=True, indent=2))
+    assert value["status"] == "COMPLETE", json.dumps(dict(value=value, exit_sync=exit_sync), sort_keys=True, indent=2)
     assert value["failure_reason"] is None and value["cleanup"]["errors"] == []
     assert value["sample_count"] > 64 and len(value["samples"]) == 64
     assert value["samples"][0]["sample_number"] == 1
@@ -321,6 +369,15 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
     assert value["terminal_supervisor_returned_read_bytes"] > value["process_snapshot_bytes_total"]
     assert released_after == [65] and len(all_samples) == value["sample_count"]
     assert value["child_exit_code"] == 0 and value["root_reaped"]
+    assert terminal_observations[-1]["event"] == "OBSERVED_STATE"
+    assert terminal_observations[-1]["status"] == supervisor.psutil.STATUS_ZOMBIE
+    assert terminal_observations[-1]["identity"] == value["root_identity"] == owned["identity"]
+    assert terminal_window["terminal_observed_at"] < terminal_window["deadline"]
+    assert terminal_window["deadline"] <= min(terminal_window["started_at"] + 2., fixture_started + max_seconds)
+    assert len(anchors) == 1 and anchors[0].reaped and anchors[0].code == anchors[0].wait_status == 0
+    assert value["cleanup"]["root_reap_evidence"]["exit_code_proven"]
+    assert value["cleanup"]["root_reap_evidence"]["wait_status"] == 0
+    assert value["cleanup"]["signals"] == []
     assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
     assert value["monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
     assert value["actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]

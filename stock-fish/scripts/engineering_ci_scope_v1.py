@@ -13,6 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 DAILY_TESTS = (
     "tests/unit/test_engineering_ci_scope_v1.py",
+    "tests/unit/test_engineering_go_packages_v1.py",
     "tests/unit/test_native_python_identity_probe_v1.py",
     "tests/unit/test_bootstrap_ci_native_runtime_v1.py",
     "tests/unit/test_release_profile_manifest_v1.py",
@@ -55,6 +56,8 @@ def classify(paths):
             result["daily"] = True
         if raw.startswith("stock-fish-go/"):
             result["go"] = result["daily"] = True
+        if raw == "stock-fish/scripts/engineering_go_packages_v1.py":
+            result["go"] = True
         if raw.startswith("go-core/"):
             result["go_core"] = True
         if raw.startswith("stockfish-live/"):

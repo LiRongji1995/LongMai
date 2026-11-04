@@ -23,7 +23,11 @@ func factCacheKeyWithIdentity(algorithm string, frozen Frozen, inputHash, instru
 	rows := make([]string, 0, len(selected))
 	for _, row := range append(append([]Row{}, selected...), state) {
 		for _, ref := range row.Strings("source_refs") {
-			parents[ref] = RowHash(resolver.Receipts[ref])
+			// A receipt is stable within this call; do not retain hashes across
+			// calls because the legacy Row API permits in-place mutation.
+			if _, exists := parents[ref]; !exists {
+				parents[ref] = RowHash(resolver.Receipts[ref])
+			}
 		}
 	}
 	for _, row := range selected {

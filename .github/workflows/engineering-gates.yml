@@ -109,9 +109,19 @@ jobs:
     needs: scope
     if: needs.scope.outputs.go == 'true'
     runs-on: macos-15-intel
+    # Three separate 45-minute jobs: total allocated ceiling is now 135 minutes.
+    # Complete package binaries retain all internal tests and shared lifecycle.
     timeout-minutes: 45
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        group: [research, core, remaining]
     env:
       STOCKFISH_FORMAL_ACCEPTANCE: '1'
+      GOTOOLCHAIN: local
+      GOFLAGS: -mod=readonly
+      GO_PACKAGE_GROUP: ${{ matrix.group }}
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -127,18 +137,15 @@ jobs:
       - run: python -I -B stock-fish/scripts/bootstrap_daily_runtime.py create --destination "$RUNNER_TEMP/TEST_FIXTURE_oracle_runtime"
       - name: Generate independent Python TEST_FIXTURE oracle
         run: '"$RUNNER_TEMP/TEST_FIXTURE_oracle_runtime/bin/python" -I -B stock-fish-go/tools/oracle.py --output "$RUNNER_TEMP/TEST_FIXTURE_oracle"'
-      - name: Formal Go differential, race and vet gates
-        shell: bash
-        working-directory: stock-fish-go
+      - name: Discover complete package partition and run race plus vet
         run: |
           export STOCKFISH_R1_ORACLE="$RUNNER_TEMP/TEST_FIXTURE_oracle"
-          go test -race -p 1 -json ./... -count=1 | tee "$RUNNER_TEMP/go-race.jsonl"
-          go vet -p 1 ./...
+          "$RUNNER_TEMP/TEST_FIXTURE_oracle_runtime/bin/python" -I -B stock-fish/scripts/engineering_go_packages_v1.py --group "$GO_PACKAGE_GROUP" --destination "$RUNNER_TEMP/TEST_FIXTURE_go_$GO_PACKAGE_GROUP"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: go-race-events
-          path: ${{ runner.temp }}/go-race.jsonl
+          name: go-package-${{ matrix.group }}-results
+          path: ${{ runner.temp }}/TEST_FIXTURE_go_${{ matrix.group }}/
           if-no-files-found: warn
 
   go-core:

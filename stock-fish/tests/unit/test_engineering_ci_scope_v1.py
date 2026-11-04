@@ -176,23 +176,26 @@ def test_ci_native_builder_refuses_missing_executable_without_fallback(tmp_path,
         exec(compile(source, "TEST_FIXTURE_ci_builder", "exec"), {})
 
 
-def test_serial_go_race_failure_cannot_be_hidden_by_event_tee(tmp_path):
-    import os
-    import subprocess
-    import yaml
-
+def test_go_matrix_preserves_complete_packages_and_declares_three_independent_job_budgets():
     workflow = yaml.safe_load((scope.ROOT / ".github/workflows/engineering-gates.yml").read_text())
     job = workflow["jobs"]["go"]
-    step = next(step for step in job["steps"] if "go test -race" in step.get("run", ""))
-    assert job["timeout-minutes"] == 45 and step["shell"] == "bash"
-    assert "go test -race -p 1 -json ./... -count=1" in step["run"]
-    assert "-timeout" not in step["run"] and "-run " not in step["run"]
-    binary = tmp_path / "go"
-    binary.write_text('#!/bin/sh\ncase "$1" in test) echo "TEST_FIXTURE_RACE_FAILURE"; exit 17;; *) touch "$RUNNER_TEMP/UNEXPECTED_VET"; exit 0;; esac\n')
-    binary.chmod(0o700)
-    environment = dict(os.environ, RUNNER_TEMP=str(tmp_path), PATH=str(tmp_path)+os.pathsep+os.environ["PATH"])
-    result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
-                            cwd=tmp_path, env=environment, capture_output=True, text=True)
-    assert result.returncode == 17
-    assert (tmp_path / "go-race.jsonl").read_text().strip() == "TEST_FIXTURE_RACE_FAILURE"
-    assert not (tmp_path / "UNEXPECTED_VET").exists()
+    assert job["timeout-minutes"] == 45
+    assert job["runs-on"] == "macos-15-intel"
+    assert job["strategy"] == {"fail-fast": False, "max-parallel": 3,
+                                "matrix": {"group": ["research", "core", "remaining"]}}
+    assert job["env"]["GOTOOLCHAIN"] == "local"
+    assert job["env"]["GOFLAGS"] == "-mod=readonly"
+    assert job["env"]["GO_PACKAGE_GROUP"] == "${{ matrix.group }}"
+    commands = [step.get("run", "") for step in job["steps"]]
+    assert any("bootstrap_daily_runtime.py create" in command for command in commands)
+    assert any("stock-fish-go/tools/oracle.py" in command for command in commands)
+    runner = next(command for command in commands if "engineering_go_packages_v1.py" in command)
+    assert '--group "$GO_PACKAGE_GROUP"' in runner
+    assert '--destination "$RUNNER_TEMP/TEST_FIXTURE_go_$GO_PACKAGE_GROUP"' in runner
+    assert not any(step.get("continue-on-error") for step in job["steps"])
+    artifact = next(step for step in job["steps"] if step.get("uses", "").startswith("actions/upload-artifact"))
+    assert artifact["if"] == "always()"
+    assert artifact["with"]["name"] == "go-package-${{ matrix.group }}-results"
+    assert artifact["with"]["path"].endswith("/TEST_FIXTURE_go_${{ matrix.group }}/")
+    assert scope.classify(["stock-fish/scripts/engineering_go_packages_v1.py"])["components"]["go"] is True
+    assert "tests/unit/test_engineering_go_packages_v1.py" in scope.DAILY_TESTS
