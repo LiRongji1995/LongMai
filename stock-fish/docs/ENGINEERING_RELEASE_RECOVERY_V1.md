@@ -90,3 +90,5 @@ daily/review 仅使用原锁覆盖的原生 `macos-15-intel` / Python 3.12；不
 未在本轮安装/升级环境、执行 Docker build、运行真实备份、连接市场来源、切生产或认证投资有效性。Actions 固定版本与 GitHub 官方 runner 标签已核对，远端工作流验收另记。
 
 首轮远端daily另录371 passed / 4 failed：旧V2和新V3的两个真实worker身份检查分别在严格argv/cwd核验处拒绝。当前日志没有显示实际两值，不能将framework launcher假说冒充定论。新增 `native_python_identity_probe_v1.py` 以最小和继承环境观察真实child/grandchild的原始argv、cwd及原生可执行文件路径；不修改身份、不转印环境变量、不改变旧检查。默认诊断成功不是运行环境准入；`--require-exact` 在任何不一致时返回3。原门禁仍完整执行，诊断JSON作为独立CI工件保留。
+
+首轮远端Go候选完整race退出1：application/research与core各触默认单包10分钟上限；sqlitev2完整容量样本的隔离子进程触30秒上限；CLI生命周期的一步触原上下文截止。未发现本轮源码变化导致的数值差分结论，不能因此免除这些失败。原历史交付也记录过完整race超时及定向补验，不能拿旧合并覆盖替代本次整条命令。后续仅将Go包级并发固定为 `-p 1` 并保留逐项 `-json` 日志，仍执行所有包、完整oracle和原断言；单包默认10分钟、样本30秒和job45分钟均保持，没有拆分内部状态链、过滤失败样本或扩大skip。是否消除资源争用须由下一轮真实结果确认；race失败后vet未执行继续明示。

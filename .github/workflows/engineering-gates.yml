@@ -128,11 +128,18 @@ jobs:
       - name: Generate independent Python TEST_FIXTURE oracle
         run: '"$RUNNER_TEMP/TEST_FIXTURE_oracle_runtime/bin/python" -I -B stock-fish-go/tools/oracle.py --output "$RUNNER_TEMP/TEST_FIXTURE_oracle"'
       - name: Formal Go differential, race and vet gates
+        shell: bash
         working-directory: stock-fish-go
         run: |
           export STOCKFISH_R1_ORACLE="$RUNNER_TEMP/TEST_FIXTURE_oracle"
-          go test -race ./... -count=1
-          go vet ./...
+          go test -race -p 1 -json ./... -count=1 | tee "$RUNNER_TEMP/go-race.jsonl"
+          go vet -p 1 ./...
+      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
+        if: always()
+        with:
+          name: go-race-events
+          path: ${{ runner.temp }}/go-race.jsonl
+          if-no-files-found: warn
 
   go-core:
     needs: scope

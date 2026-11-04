@@ -172,3 +172,25 @@ def test_ci_native_builder_refuses_missing_executable_without_fallback(tmp_path,
     monkeypatch.setattr(os, "execve", lambda *args: pytest.fail("must not fall back to a launcher"))
     with pytest.raises(FileNotFoundError):
         exec(compile(source, "TEST_FIXTURE_ci_builder", "exec"), {})
+
+
+def test_serial_go_race_failure_cannot_be_hidden_by_event_tee(tmp_path):
+    import os
+    import subprocess
+    import yaml
+
+    workflow = yaml.safe_load((scope.ROOT / ".github/workflows/engineering-gates.yml").read_text())
+    job = workflow["jobs"]["go"]
+    step = next(step for step in job["steps"] if "go test -race" in step.get("run", ""))
+    assert job["timeout-minutes"] == 45 and step["shell"] == "bash"
+    assert "go test -race -p 1 -json ./... -count=1" in step["run"]
+    assert "-timeout" not in step["run"] and "-run " not in step["run"]
+    binary = tmp_path / "go"
+    binary.write_text('#!/bin/sh\ncase "$1" in test) echo "TEST_FIXTURE_RACE_FAILURE"; exit 17;; *) touch "$RUNNER_TEMP/UNEXPECTED_VET"; exit 0;; esac\n')
+    binary.chmod(0o700)
+    environment = dict(os.environ, RUNNER_TEMP=str(tmp_path), PATH=str(tmp_path)+os.pathsep+os.environ["PATH"])
+    result = subprocess.run(["bash", "--noprofile", "--norc", "-e", "-o", "pipefail", "-c", step["run"]],
+                            cwd=tmp_path, env=environment, capture_output=True, text=True)
+    assert result.returncode == 17
+    assert (tmp_path / "go-race.jsonl").read_text().strip() == "TEST_FIXTURE_RACE_FAILURE"
+    assert not (tmp_path / "UNEXPECTED_VET").exists()
