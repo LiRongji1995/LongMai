@@ -256,19 +256,57 @@ def test_ancestor_symlink_and_unnamed_fingerprint_are_rejected(case):
         supervisor.reference(path, partial)
 
 
-def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case, monkeypatch):
+@pytest.mark.parametrize("snapshot_delay", [0., .03], ids=["native", "native-delayed-30ms"])
+def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case, monkeypatch, snapshot_delay):
+    import time
     case["limits"]["sample_interval_seconds"] = .01
-    owned = {}
+    assert case["limits"]["max_seconds"] == 10.
+    owned, all_samples, released_after = {"pid": os.getpid()}, [], []
+    handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
     def launched(pid):
         owned["pid"] = pid
     # Bound only enumeration to this real, childless fixture. Keep the actual
-    # snapshot implementation, including Darwin live -> zombie re-observation;
-    # a hand-written fast snapshot previously dropped that kernel transition.
+    # snapshot implementation, including Darwin live -> zombie re-observation.
+    # Real process_iter does not raise when a PID disappears before construction;
+    # all failures other than NoSuchProcess must still propagate.
     def fixture_processes():
-        return iter([supervisor.psutil.Process(owned["pid"])])
+        try:
+            process = supervisor.psutil.Process(owned["pid"])
+        except supervisor.psutil.NoSuchProcess:
+            return iter(())
+        return iter((process,))
+    with monkeypatch.context() as construction:
+        def missing(pid):
+            raise supervisor.psutil.NoSuchProcess(pid)
+        construction.setattr(supervisor.psutil, "Process", missing)
+        assert list(fixture_processes()) == []
+        def denied(pid):
+            raise supervisor.psutil.AccessDenied(pid)
+        construction.setattr(supervisor.psutil, "Process", denied)
+        with pytest.raises(supervisor.psutil.AccessDenied):
+            list(fixture_processes())
     monkeypatch.setattr(supervisor.psutil, "process_iter", fixture_processes)
-    value = run(case, "import time;time.sleep(1.5)\n", _test_hooks={"after_launch": launched})
-    assert value["status"] == "COMPLETE"
+    native_snapshot = supervisor._snapshot
+    def delayed_native_snapshot():
+        if snapshot_delay:
+            time.sleep(snapshot_delay)
+        return native_snapshot()
+    monkeypatch.setattr(supervisor, "_snapshot", delayed_native_snapshot)
+    def sampled(state):
+        all_samples.append(dict(state))
+        if state["sample_count"] == 65:
+            released_after.append(state["sample_count"])
+            handshake.touch(exist_ok=False)
+    body = (
+        "from pathlib import Path\nimport time\n"
+        "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
+        "deadline = time.monotonic() + 8.0\n"
+        "while not ready.exists():\n"
+        "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
+        "    time.sleep(.005)\n"
+    )
+    value = run(case, body, _test_hooks={"after_launch": launched, "after_sample": sampled})
+    assert value["status"] == "COMPLETE", json.dumps(value, sort_keys=True, indent=2)
     assert value["failure_reason"] is None and value["cleanup"]["errors"] == []
     assert value["sample_count"] > 64 and len(value["samples"]) == 64
     assert value["samples"][0]["sample_number"] == 1
@@ -276,6 +314,22 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case,
     assert value["max_sample_gap_seconds"] > 0
     assert value["cleanup_process_snapshot_bytes"] > 0
     assert value["terminal_supervisor_returned_read_bytes"] > value["process_snapshot_bytes_total"]
+    assert released_after == [65] and len(all_samples) == value["sample_count"]
+    assert value["child_exit_code"] == 0 and value["root_reaped"]
+    assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
+    assert value["monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
+    assert value["actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]
+    assert value["max_sample_gap_seconds"] == pytest.approx(max(
+        right["monotonic_offset_seconds"] - left["monotonic_offset_seconds"]
+        for left, right in zip(all_samples, all_samples[1:])))
+    assert value["max_utc_sample_gap_seconds"] == pytest.approx(max(
+        (datetime.fromisoformat(right["sampled_at"]) - datetime.fromisoformat(left["sampled_at"])).total_seconds()
+        for left, right in zip(all_samples, all_samples[1:])))
+    assert value["total_sample_seconds"] == pytest.approx(sum(row["sample_seconds"] for row in all_samples))
+    if snapshot_delay:
+        # At this genuine per-snapshot delay, the old 1.5 s lifetime cannot
+        # contain 65 samples. The handshake still meets the unchanged 10 s cap.
+        assert all_samples[64]["monotonic_offset_seconds"] >= 64 * snapshot_delay
 
 
 def test_deadline_during_completion_publication_cannot_report_success(case, monkeypatch):
