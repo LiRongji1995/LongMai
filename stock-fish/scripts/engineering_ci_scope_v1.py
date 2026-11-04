@@ -13,6 +13,7 @@ import sys
 ROOT = Path(__file__).resolve().parents[2]
 DAILY_TESTS = (
     "tests/unit/test_engineering_ci_scope_v1.py",
+    "tests/unit/test_native_python_identity_probe_v1.py",
     "tests/unit/test_release_profile_manifest_v1.py",
     "tests/unit/test_recovery_drill_v1.py",
     "tests/unit/test_codex_operational_report_v1.py",

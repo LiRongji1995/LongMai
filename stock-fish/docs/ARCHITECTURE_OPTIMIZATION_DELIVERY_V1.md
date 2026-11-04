@@ -102,3 +102,9 @@
 未执行完整历史golden套件、全仓真实市场回测、真实SDK采集、跨平台实际部署或券商操作。远端CI实际验收与本机组合分开，不能仅凭已增加workflow宣称远端通过。
 
 发行profile、CI与恢复演练详见 [ENGINEERING_RELEASE_RECOVERY_V1](ENGINEERING_RELEASE_RECOVERY_V1.md)。原[完整盘前协议](PREMARKET_SHARED_EXECUTION_V1.md)、[日常协议](CODEX_DAILY_RESEARCH.md)、[部署](../../DEPLOYMENT.md)和许可边界继续有效。
+
+首次39文件提交后的远端CI暴露了Live发行包未安装及macOS托管解释器严格argv/cwd不一致，两者均保留失败。后续在原授权内补齐非editable wheel安装与两份只读原生解释器诊断/测试文件，累计发布范围增至41文件；具体证据及未决项见上述工程记录。原432项本机结果只归属于其实际版本，不能替代后续远端验收。
+
+macOS解释器诊断保留host与新venv的固定启动命令、实际`sys.orig_argv`、cwd、解释器路径、framework及`_NSGetExecutablePath`，分别检查最小环境/继承环境中的真实子进程和孙进程；不输出环境变量全集。新venv在任一argv/cwd不一致时拒绝进入工程门禁，不归一化身份、不修改旧V2/V3守卫、不跳过旧测试。
+
+本机另用已有Python.org framework 3.10.6做启动机制对照，仅在两个全新TEST_FIXTURE目录创建无pip空venv：launcher创建者的子/孙进程原始argv0被改为框架Python.app路径，探针退出3；从`_NSGetExecutablePath`实际Mach-O直接创建者保持原始argv0，探针退出0，cwd相同。这不是3.12或项目运行环境验收。CI据此在创建前核对真实Mach-O存在且可执行，清除`__PYVENV_LAUNCHER__`与`PYTHONEXECUTABLE`，仅一次启动原`bootstrap_daily_runtime.py create`，仍完整安装与核验原锁；不修补既有venv、不回退或重试。托管3.12.10的完整验收仍待远端实际结果，不能由上述3.10机制对照替代。

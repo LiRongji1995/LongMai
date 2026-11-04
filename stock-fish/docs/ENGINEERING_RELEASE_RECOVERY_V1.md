@@ -11,7 +11,7 @@ Docker 的健康探针改为带原鉴权头的 `/health/ready`。应用可响应
 - Python：来源与 UNKNOWN 合同、HTTP 鉴权与容量、readiness、账户约束、备份和真实隔离子进程监督；另运行本次变更测试文件。
 - Go 候选：先由独立 Python 路径生成 TEST_FIXTURE oracle，再设置 `STOCKFISH_FORMAL_ACCEPTANCE=1`，执行 race 与 vet；缺 oracle 必须失败。
 - Go 边界模块：独立 race 与 vet。
-- Live：新隔离环境、现有版本约束与独立测试。不把无工件哈希的安装声明为可复建发行版。
+- Live：新隔离环境安装现有依赖版本锁，再通过项目原 PEP 517 构建配置生成 wheel，以 `--no-deps --no-index` 非 editable 安装。测试前执行 `pip check`，在源码目录之外用 `python -I` 确认 `stockfish_live` 来自该 venv；保留真实 uvicorn HTTP/WebSocket 子进程测试。构建隔离所需工具遵循原 pyproject，工件哈希仍未锁定，不把这次安装声明为可复建发行版。
 
 daily/review 仅使用原锁覆盖的原生 `macos-15-intel` / Python 3.12；不会在 Linux 或 ARM 上复用 macOS x86_64 工件锁。手动触发没有 diff base 时运行全部组件固定门禁，私人路径扫描明确为 `NOT_CHECKED_NO_DIFF_BASE`；不会把仓库保留的上游历史模型重分类为本轮新发布数据。普通 PR/push 的新增或变化路径仍拒绝真实 `.env`、DB、模型权重和运行环境目录，许可文件缺失也失败。
 
@@ -85,4 +85,8 @@ daily/review 仅使用原锁覆盖的原生 `macos-15-intel` / Python 3.12；不
 
 本机额外检查未下载工具链或依赖：现有Go为1.20.4，候选模块的 `go test -race ./... -count=1` 与 `go vet ./...` 均在其1.26.0声明解析处退出1，尚未运行候选测试。go-core的同两条命令分别退出0（17.685/10.415秒，race覆盖3个测试包），但该工具链低于模块声明的1.24，不能作为声明平台验收。原Python oracle独立生成14个TEST_FIXTURE案例、每例8只，31.118秒退出0；这不等于Go差分通过。Live因现有环境缺pyarrow、duckdb、fastapi、uvicorn、wsproto、httpx未运行；本机也无Docker命令。目标工具链及独立运行环境由上述CI描述，远端实际结果仍须另验。
 
+首轮远端 Live 检查为 622 passed / 1 failed：真实 uvicorn 子进程无法导入 `stockfish_live`。当时只安装依赖，父测试进程注入的源码路径没有使子进程获得本项目发行包。修复仅补上述 wheel 构建、非 editable 安装、依赖检查和独立导入验证；没有设置 PYTHONPATH、过滤真实子进程用例、放宽锁检查或修改 Qlib wheel。补丁本机 CI 配置合同测试为 15 passed，2.84 秒，退出 0；Live 步骤的 `bash -n` 语法检查退出 0。首轮失败保留，补丁的远端结果另外验收；本机因缺 Live 依赖未运行 Live 测试，不安装环境来追认远端通过。
+
 未在本轮安装/升级环境、执行 Docker build、运行真实备份、连接市场来源、切生产或认证投资有效性。Actions 固定版本与 GitHub 官方 runner 标签已核对，远端工作流验收另记。
+
+首轮远端daily另录371 passed / 4 failed：旧V2和新V3的两个真实worker身份检查分别在严格argv/cwd核验处拒绝。当前日志没有显示实际两值，不能将framework launcher假说冒充定论。新增 `native_python_identity_probe_v1.py` 以最小和继承环境观察真实child/grandchild的原始argv、cwd及原生可执行文件路径；不修改身份、不转印环境变量、不改变旧检查。默认诊断成功不是运行环境准入；`--require-exact` 在任何不一致时返回3。原门禁仍完整执行，诊断JSON作为独立CI工件保留。
