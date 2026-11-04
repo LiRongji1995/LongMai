@@ -1,5 +1,7 @@
 # StockFish Python业务目录
 
+新增[架构、交付与量化评价优化V1](docs/ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)：提供内外层原生监督V3、统一运行/交付/覆盖审阅、冻结研究与条件评价、显式组件清单、存储实验、根级CI和新目录恢复演练。旧策略/核心及默认original入口保持。当前环境七步复验通过，但原登记物理身份变化仍阻塞真实准入；最新完整盘前、连续20交易日、真实执行证据和独立投资验证未通过，源码发布不切换服务或重试旧请求。
+
 默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
 
 新盘前研究先执行 [完整盘前准入与共享执行](docs/PREMARKET_SHARED_EXECUTION_V1.md) 的 `scripts/codex_daily_v2.py premarket-plan`，通过后用同入口 `premarket`，沿用固定运行登记、原配置与request-key。保存成果继续由原 `codex_daily.py show` 读取。

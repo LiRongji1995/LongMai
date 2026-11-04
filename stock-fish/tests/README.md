@@ -1,6 +1,12 @@
 # 测试入口与边界
 
-所有业务测试入口保持 `python scripts/run_core_tests.py tests -q`（工作目录 `stock-fish`）。本次未删除测试、改默认排除规则或扩大 skip；r02/r03 等旧名称仍覆盖兼容和安全断言。
+新工程检查使用已验收的独立 daily/review 解释器，默认入口为 `"$REGISTERED_PYTHON" -I -B scripts/run_isolated_tests.py tests/明确文件.py -q --basetemp /全新私有/TEST_FIXTURE目录`（工作目录 `stock-fish`）。只使用所选 venv 的第三方包，关闭插件自动加载及 pytest 缓存；不从旧 `review/test-tools` 借包。环境合同见 [独立运行环境](../docs/ISOLATED_DAILY_RUNTIME_V1.md)。
+
+`run_core_tests.py` 原字节保留，仅供已有兼容工作流；其存在 `review/test-tools` 时会注入该路径，不作为新隔离工程验收入口。以下历史命令保留其原范围，r02/r03 等旧名称仍覆盖兼容和安全断言；选择这些用例做新验收时改用上面的隔离 runner，不能删除失败样本或扩大 skip。
+
+根 `.github/workflows/engineering-gates.yml` 按组件变化运行新隔离安全门禁、变更测试和 Go 独立 oracle/race/vet；Live 使用独立环境。daily/review 仅在锁覆盖的原生 macOS x86_64 / Python 3.12 构建，其他平台不复用该锁。CI 不部署、不采集、不重试业务、不使用账户密钥；源端完整性、未知语义、账户约束和进程监督失败都会保留为失败。
+
+CI 的定向门禁、完整历史兼容套件、真实每日交付和投资有效性分别报告。历史 golden 或依赖不匹配仍按原失败记录处理，不改 golden 或跳过用例来宣称全仓通过；定向检查通过不等于历史全套通过。发行输入缺口由 `scripts/release_profile_manifest_v1.py` 只读列出，`HASHED_INPUTS_VERIFIED` 也不等于本次运行已验收。
 
 - 日常闭环：`python scripts/run_core_tests.py tests/r05_product/test_daily_observation.py tests/r05_product/test_daily_research_delivery.py tests/r05_product/test_daily_research_delivery_boundaries.py tests/r05_product/test_daily_research_service_outcomes.py tests/r05_product/test_daily_research_scheduler.py -q`。
 - 存储/资源瘦身：`python scripts/run_core_tests.py tests/r05_product/test_slimming_storage.py tests/r05_product/test_runtime_resources.py -q`。

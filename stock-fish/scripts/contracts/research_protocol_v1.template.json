@@ -1,0 +1,26 @@
+{
+  "plan_id": "REQUIRED_NEW_RESEARCH_PLAN_ID",
+  "hypothesis": "REQUIRED: state the falsifiable incremental hypothesis before validation",
+  "discovery_evidence": [{"id": "REQUIRED_ORIGINAL_RUN", "content_hash": null, "observation_date": null, "known_at": null}],
+  "windows": {
+    "discovery": {"start": null, "end": null},
+    "validation": {"start": null, "end": null},
+    "holdout": {"start": null, "end": null}
+  },
+  "expected_signal_sessions": [],
+  "strategy_identities": {
+    "SHORT_HORIZON_STRENGTH_R1": {"source_hash": null, "config_hash": null, "spec_hash": null, "implementation_version": null, "feature_version": null},
+    "SHORT_HORIZON_STRENGTH_R2": {"source_hash": null, "config_hash": null, "spec_hash": null, "implementation_version": null, "feature_version": null}
+  },
+  "comparison_family": ["R2_MINUS_R1", "R2_MINUS_ELIGIBLE", "R2_MINUS_RISK_MATCHED", "R2_MINUS_R1:STRONG_START", "R2_MINUS_R1:STRONG_CONTINUATION", "R2_MINUS_R1:FIRST_PULLBACK"],
+  "primary_comparison": "R2_MINUS_R1",
+  "horizons": [1, 2, 3, 5, 10],
+  "primary_horizon": 5,
+  "block_lengths": [20, 40],
+  "primary_block_length": 20,
+  "bootstrap_repetitions": 2000,
+  "seed": 20261104,
+  "attempts": [{"attempt_id": "REQUIRED_ALL_ATTEMPTS", "configuration_hash": null, "status": "PLANNED", "registered_at": null, "result_hash": null}],
+  "stopping_rule": "REQUIRED: freeze the end date, cost/drawdown criteria and treatment of incomplete evidence; no optional stopping on favorable results",
+  "risk_matching": {"categorical_axes": ["exchange"], "amount_boundaries_cny": []}
+}
