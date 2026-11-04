@@ -124,3 +124,17 @@ CI并发组增加提交SHA并关闭自动取消；每个commit使用独立runner
 本次将既有V2测试文件的上述单项夹具纳入发布范围，累计为44文件；此处不改变早先39/41/43文件版本的验收归属。
 
 发布检出进一步执行V2/V3两个完整监督测试文件：**82 passed，37.38秒，退出0**，使用原登记Python、隔离runner及独立TEST_FIXTURE根；未将这次结果累加进早先432项组合。
+
+第四轮托管daily（run `41932442083`）实际为**400项中398通过、2失败**，两项均为新增的 `native-delayed-30ms` 参数；两版未加延迟的 `native` 参数均通过。完整失败报告确认V2/V3分别取得64/55次真实采样，child均因自己的8秒截止退出23，报告原因均为 `SUPERVISOR_CHILD_EXIT_NOT_ACCEPTED`，实际UTC耗时分别为8.191293/8.412964秒。这是child存活时间假设不足的直接证据，不能写成监督10秒守卫已经触发；原失败日志继续保留。
+
+本轮仅给新增的30ms延迟采样容量参数显式声明监督30秒、child 25秒的固定测试预算；未加延迟参数仍为监督10秒、child 8秒。这里检验超过64次采样后的证据保留与汇总，不能据此宣称65次采样必在10秒完成。第65次真实采样握手、`sample_count > 64`、保留64条、全部样本的monotonic/UTC最大间隔和总采样时间、原生身份与RSS、实际退出回收断言全部保留，并核对封存claim的本次预算和发布终验耗时。没有自适应扩额、重试、降低采样数或修改生产监督守卫。
+
+每版另增同样30ms真实快照下固定1秒预算的独立反例：65次延迟本身已超过1秒，child仍等待同样第65次握手且自身25秒截止，必须由监督报告 `DEADLINE_EXCEEDED`，握手不得发生，并核对真实信号退出、根进程回收、无遗留已观察后代、无清理错误和零业务预算延长。原其他截止及权限反例保持不动；本次变更不会把清理耗时伪称为业务预算内完成。
+
+修复后在本机开发目录以登记Python、全新字节码查找路径及独立TEST_FIXTURE实跑V2/V3两个完整文件：**84 passed，40.15秒，退出0**；外层进程计时42.611秒。两份生产监督源码与本轮修改前SHA256一致，原有函数除这项采样容量夹具外逐段保持一致；每版只新增上述短预算反例。完整argv、cwd、stdout、退出码和JUnit保留在独立私有记录，实际命令形式如下。该结果不替代修复版本的下一次远端门禁，也不累加为此前82/432项版本的验收。
+
+```sh
+"$PYTHON" -I -B -X "pycache_prefix=$NEW_PYCACHE_PATH" stock-fish/scripts/run_isolated_tests.py -q \
+  tests/unit/test_codex_sdk_tree_supervisor_v2.py tests/unit/test_codex_sdk_tree_supervisor_v3.py \
+  --basetemp "$NEW_TEST_FIXTURE_ROOT" --junitxml "$NEW_JUNIT" --tb=short
+```

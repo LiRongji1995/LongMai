@@ -256,11 +256,16 @@ def test_ancestor_symlink_and_unnamed_fingerprint_are_rejected(case):
         supervisor.reference(path, partial)
 
 
-@pytest.mark.parametrize("snapshot_delay", [0., .03], ids=["native", "native-delayed-30ms"])
-def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case, monkeypatch, snapshot_delay):
+@pytest.mark.parametrize("snapshot_delay,max_seconds,child_seconds", [(0., 10., 8.), (.03, 30., 25.)],
+                         ids=["native", "native-delayed-30ms"])
+def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
+        case, monkeypatch, snapshot_delay, max_seconds, child_seconds):
     import time
     case["limits"]["sample_interval_seconds"] = .01
     assert case["limits"]["max_seconds"] == 10.
+    # Only the deliberately delayed capacity fixture receives a larger declared
+    # budget. This checks evidence retention, not 65-sample throughput in 10 s.
+    case["limits"]["max_seconds"] = max_seconds
     owned, all_samples, released_after = {"pid": os.getpid()}, [], []
     handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
     def launched(pid):
@@ -300,7 +305,7 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case,
     body = (
         "from pathlib import Path\nimport time\n"
         "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
-        "deadline = time.monotonic() + 8.0\n"
+        f"deadline = time.monotonic() + {child_seconds!r}\n"
         "while not ready.exists():\n"
         "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
         "    time.sleep(.005)\n"
@@ -319,6 +324,10 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case,
     assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
     assert value["monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
     assert value["actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]
+    assert value["terminal_monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
+    assert value["terminal_actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]
+    claim = json.loads((case["root"] / "control/claim.json").read_bytes())
+    assert claim["limits"]["max_seconds"] == max_seconds
     assert value["max_sample_gap_seconds"] == pytest.approx(max(
         right["monotonic_offset_seconds"] - left["monotonic_offset_seconds"]
         for left, right in zip(all_samples, all_samples[1:])))
@@ -328,8 +337,57 @@ def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case,
     assert value["total_sample_seconds"] == pytest.approx(sum(row["sample_seconds"] for row in all_samples))
     if snapshot_delay:
         # At this genuine per-snapshot delay, the old 1.5 s lifetime cannot
-        # contain 65 samples. The handshake still meets the unchanged 10 s cap.
+        # contain 65 samples. The larger fixed fixture budget is explicit above.
         assert all_samples[64]["monotonic_offset_seconds"] >= 64 * snapshot_delay
+
+
+def test_slow_native_sampling_cannot_extend_short_declared_deadline(case, monkeypatch):
+    import time
+    case["limits"]["sample_interval_seconds"] = .01
+    case["limits"]["max_seconds"] = 1.
+    owned, samples = {"pid": os.getpid()}, []
+    handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
+    def launched(pid):
+        owned["pid"] = pid
+    def fixture_processes():
+        try:
+            return iter((supervisor.psutil.Process(owned["pid"]),))
+        except supervisor.psutil.NoSuchProcess:
+            return iter(())
+    monkeypatch.setattr(supervisor.psutil, "process_iter", fixture_processes)
+    native_snapshot = supervisor._snapshot
+    def delayed_native_snapshot():
+        time.sleep(.03)
+        return native_snapshot()
+    monkeypatch.setattr(supervisor, "_snapshot", delayed_native_snapshot)
+    def sampled(state):
+        samples.append(dict(state))
+        if state["sample_count"] == 65:
+            handshake.touch(exist_ok=False)
+    # 65 real 30 ms snapshots alone exceed 1 s, regardless of host speed. The
+    # child stays live so failure must come from the supervisor's fixed budget.
+    body = (
+        "from pathlib import Path\nimport time\n"
+        "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
+        "deadline = time.monotonic() + 25.0\n"
+        "while not ready.exists():\n"
+        "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
+        "    time.sleep(.005)\n"
+    )
+    value = run(case, body, _test_hooks={"after_launch": launched, "after_sample": sampled})
+    assert value["status"] == "FAILED", json.dumps(value, sort_keys=True, indent=2)
+    assert value["failure_reason"] in (
+        "SUPERVISOR_UTC_DEADLINE_EXCEEDED", "SUPERVISOR_MONOTONIC_DEADLINE_EXCEEDED")
+    assert 0 < value["sample_count"] == len(samples) < 65
+    assert not handshake.exists()
+    assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
+    assert value["child_exit_code"] in (-signal.SIGTERM, -signal.SIGKILL)
+    assert value["root_reaped"] is value["all_observed_owned_exited"] is value["all_observed_descendants_gone"] is True
+    assert value["cleanup"]["errors"] == []
+    assert value["cleanup"]["business_budget_extension_seconds"] == 0
+    claim = json.loads((case["root"] / "control/claim.json").read_bytes())
+    assert claim["limits"]["max_seconds"] == 1.
+    assert json.loads((case["root"] / "control/completion.json").read_bytes())["status"] == "FAILED"
 
 
 def test_deadline_during_completion_publication_cannot_report_success(case, monkeypatch):
