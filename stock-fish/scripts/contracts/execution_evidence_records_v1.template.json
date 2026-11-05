@@ -1,0 +1,110 @@
+{
+  "schema_version": "EXECUTION_EVIDENCE_V1_RECORDS",
+  "records": [
+    {
+      "kind": "CALENDAR",
+      "value": {
+        "known_at": null,
+        "sessions": null
+      }
+    },
+    {
+      "kind": "RULE",
+      "value": {
+        "instrument_id": null,
+        "known_at": null,
+        "limit_down": null,
+        "limit_up": null,
+        "lot_size": null,
+        "session": null,
+        "settlement": null,
+        "tick_size": null
+      }
+    },
+    {
+      "kind": "SECURITY",
+      "value": {
+        "board": null,
+        "exchange": null,
+        "instrument_id": null,
+        "known_at": null,
+        "security_type": null,
+        "session": null,
+        "suspended": null
+      }
+    },
+    {
+      "kind": "COST",
+      "value": {
+        "commission_assessment": null,
+        "commission_includes_transfer_or_tax": null,
+        "commission_rate": null,
+        "effective_from": null,
+        "effective_to": null,
+        "known_at": null,
+        "minimum_commission": null,
+        "sell_tax_rate": null,
+        "transfer_rate": null
+      }
+    },
+    {
+      "kind": "ACTION_COVERAGE",
+      "value": {
+        "complete": null,
+        "events": null,
+        "from_session": null,
+        "instrument_id": null,
+        "known_at": null,
+        "session": null,
+        "through_session": null
+      }
+    },
+    {
+      "kind": "ORDER",
+      "value": {
+        "instrument_id": null,
+        "known_at": null,
+        "limit_price": null,
+        "order_id": null,
+        "planned_exit_session": null,
+        "quantity": null,
+        "session": null,
+        "side": null,
+        "submitted_at": null
+      }
+    },
+    {
+      "kind": "FILL",
+      "value": {
+        "executed_at": null,
+        "fill_id": null,
+        "known_at": null,
+        "order_id": null,
+        "paid_fees_cny": null,
+        "price": null,
+        "quantity": null,
+        "session": null
+      }
+    },
+    {
+      "kind": "ORDER_STATE",
+      "value": {
+        "cumulative_filled_quantity": null,
+        "known_at": null,
+        "order_id": null,
+        "session": null,
+        "status": null
+      }
+    },
+    {
+      "kind": "MARK",
+      "value": {
+        "basis": null,
+        "close": null,
+        "instrument_id": null,
+        "known_at": null,
+        "session": null
+      }
+    }
+  ]
+}

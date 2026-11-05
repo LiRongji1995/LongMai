@@ -173,13 +173,13 @@ def _scenario_evidence(name, *, core, accepted=None, job=None, attempt=None, tra
     return evidence
 
 
-def _run_daily_primary(core, input_id=None, body=None):
+def _run_daily_primary(core, input_id=None, body=None, *, job_wait_timeout=20):
     client = create_app(core).test_client()
     payload = {"input_id": input_id} if body is None and input_id is not None else (body or {})
     accepted = client.post("/api/daily-primary/run", json=payload)
     assert accepted.status_code == 202, accepted.text
     trace = core.candidates.daily_traces.get(accepted.headers["X-Daily-Trace-Id"])
-    job = _wait_job(core, accepted.json["job_id"])
+    job = _wait_job(core, accepted.json["job_id"], timeout=job_wait_timeout)
     attempt = _attempt(core, job["job_id"])
     export_response = None
     if job["state"] == "SUCCEEDED" and (job.get("result") or {}).get("run_id"):
@@ -416,7 +416,11 @@ def test_scenario_d_subset_incomplete_becomes_unknown_not_rejected(tmp_path, mon
     changed = _without_bars(bundle, lambda bar: bar.instrument_id == missing_id and bar.session <= cutoff_start)
     core, input_id, _ = _core(tmp_path, monkeypatch, changed)
     try:
-        accepted, job, attempt, trace, export_response = _run_daily_primary(core, input_id=input_id)
+        # This 60/100-security fixture checks typed correctness, not a 20s SLO.
+        # Independent complete-job measurements were 39.18s / 69.71s; the
+        # original 20s failures are retained in the delivery evidence.
+        accepted, job, attempt, trace, export_response = _run_daily_primary(
+            core, input_id=input_id, job_wait_timeout=180)
         assert job["state"] == "SUCCEEDED", job
         assert attempt["final_status"] == "READY"
         run = core.candidates.strategy_experiment(job["result"]["run_id"])
@@ -445,7 +449,11 @@ def test_scenario_e_none_bar_and_incomplete_window_are_typed_not_crashes(tmp_pat
     ))
     core, input_id, _ = _core(tmp_path, monkeypatch, changed)
     try:
-        accepted, job, attempt, trace, export_response = _run_daily_primary(core, input_id=input_id)
+        # This 60/100-security fixture checks typed correctness, not a 20s SLO.
+        # Independent complete-job measurements were 39.18s / 69.71s; the
+        # original 20s failures are retained in the delivery evidence.
+        accepted, job, attempt, trace, export_response = _run_daily_primary(
+            core, input_id=input_id, job_wait_timeout=180)
         assert job["state"] == "SUCCEEDED", job
         assert attempt["final_status"] == "READY"
         sample = {

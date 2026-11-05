@@ -11,6 +11,7 @@ import socket
 import sqlite3
 from threading import Thread
 from types import SimpleNamespace
+from unittest.mock import patch
 
 import pytest
 
@@ -24,13 +25,22 @@ from stockfish_core.yaogu import short_horizon_daily_closure_v1 as original
 from stockfish_core.yaogu import provider_normalization
 from stockfish_core.yaogu.short_horizon_outcomes_v1 import NAMESPACES
 from tests.support.short_horizon_archive_fixture import fixture_archive
+from tests.support import short_horizon_archive_fixture as archive_fixture
 
 
 @pytest.fixture(scope="module")
 def genuine_seed(tmp_path_factory):
     root = tmp_path_factory.mktemp("TEST_FIXTURE_shared_seed")
-    archives = [fixture_archive(root / ("TEST_FIXTURE_archive_" + day), observation_date=day,
-                generated_at=day + "T09:02:00+00:00") for day in ("2026-10-23", "2026-10-26")]
+    # This is a fixed simulated October chronology. Freeze the fixture creator
+    # before writing/sealing it, rather than rewriting authenticated timestamps
+    # or letting November's wall clock preempt the late-admission assertion.
+    class FixtureClock(datetime):
+        @classmethod
+        def now(cls, tz=None):
+            return datetime(2026, 10, 26, 9, 3, tzinfo=timezone.utc).astimezone(tz or timezone.utc)
+    with patch.object(archive_fixture, "datetime", FixtureClock):
+        archives = [fixture_archive(root / ("TEST_FIXTURE_archive_" + day), observation_date=day,
+                    generated_at=day + "T09:02:00+00:00") for day in ("2026-10-23", "2026-10-26")]
     store = SQLiteStore(root / "TEST_FIXTURE_seed.sqlite")
     jobs = JobService(store, recover=False)
     service = object.__new__(CandidateService)

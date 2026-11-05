@@ -1,5 +1,7 @@
 # StockFish
 
+**2026-11-05 工程修复候选：**[共同请求权威、恢复与研究隔离实施记录](stock-fish/docs/REMEDIATION_20261105.md)提供新的主动执行树、事务防重、多代恢复、持久阶段计量、标签隔离及专项 CI 映射。新执行树通过精确输入清单和责任层接线约束旧兼容入口；原已认证源码与登记保持。**源码发布不代表实际登记启用；旧运行路径的缺口尚不能据此宣布消除。**启用前须完成完整历史导入、有限预算及环境预检并取得明确切换授权；不能直接用下面历史命令重试旧失败。连续 20 个真实交易日、真实执行来源与独立投资验证未完成，`MARKET_EDGE=NOT_ESTABLISHED`。
+
 新增[架构、交付与量化评价优化V1](stock-fish/docs/ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)：提供内外层原生监督V3、统一运行/交付/覆盖审阅、冻结研究与条件评价、显式组件清单、存储实验、根级CI和新目录恢复演练。旧策略/核心及默认original入口保持。当前环境七步复验通过，但原登记物理身份变化仍阻塞真实准入；最新完整盘前、连续20交易日、真实执行证据和独立投资验证未通过，源码发布不切换服务或重试旧请求。
 
 新增[SDK 子进程树监督 V2 与本轮盘前验收记录](stock-fish/docs/SDK_TREE_SUPERVISED_CURRENT_PREMARKET_V2.md)：监督与回收采用版本化修复，保留实际执行的 V1 原件。11 月 2 日固定请求已补齐当前日历、原主板范围 3,194 只/64 批完整复权并生成核心产物，但后续流程因采样超时与 UTC 总限时失败，根进程当时的回收未获确认；10 项题材 PARTIAL 保留，完整盘前尚未通过。V2 仅完成隔离工程验收，未重跑真实业务；原三小时预算、登记、策略、历史结果与全部失败记录保持，未切换服务。
@@ -38,7 +40,7 @@
 
 先查看保存结果的观察日、资料截止和覆盖范围。旧名单可作历史研究，缺资料不代表没有机会，程序成功也不代表股票值得买。
 
-需要脱离Codex执行本轮R2盘前研究，可在项目Python环境、`stock-fish/`目录运行 `python scripts/stockfish.py premarket --theme-read-gib 12 --max-requests 768 --max-seconds 0`。它本地协调采集、原策略、67日题材及3亿元展示，不要求Web服务或LLM；失败和未知分别保存。预算、缓存、导出与验收范围见[独立终端入口](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)。
+历史[独立终端入口](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)保留为兼容与审计材料。新写任务须走经完整历史导入并明确启用的新主动树和共同 authority；不能用旧独立命令绕过失败登记。新合同要求显式有限总时长，旧 `--max-seconds 0` 不作为新运行建议。启用步骤和当前阻塞见本页首部实施记录。
 
 开发维护按[工程约定](ENGINEERING_BASELINE.md)和[AGENTS](AGENTS.md)执行；深入资料见[技术索引](stock-fish/docs/README.md)，过去各轮记录见[历史归档](stock-fish/docs/archive/README.md)。
 

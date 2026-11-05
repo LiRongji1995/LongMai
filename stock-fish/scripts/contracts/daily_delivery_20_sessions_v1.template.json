@@ -1,0 +1,27 @@
+{
+  "schema_version": "DAILY_DELIVERY_20_SESSION_PROTOCOL_TEMPLATE_V1",
+  "status": "UNFROZEN_TEMPLATE_NOT_MARKET_EVIDENCE",
+  "strategy_id": "SHORT_HORIZON_STRENGTH_R2",
+  "minimum_actual_consecutive_trading_sessions": 20,
+  "first_target_session": null,
+  "calendar_native_reference": null,
+  "deadline_timezone": "Asia/Shanghai",
+  "deadline_local": "09:00",
+  "required_horizons": [1, 2, 3, 5, 10],
+  "required_per_day": [
+    "one business authority identity and terminal receipt",
+    "native final and original canonical carrier binding",
+    "full eligibility partition including unknown and absent identities",
+    "full eligible security by five-horizon Cartesian product; pending is retained",
+    "operational completeness and mature-label acceptance reported separately",
+    "all security by horizon labels mature before final acceptance; final H10 requires additional actual sessions",
+    "durable worker and supervisor stages with failed and incomplete tails retained",
+    "actual process cleanup proof independent from a successful core",
+    "precommitted deadline, original final seal and resource expenditure",
+    "manual interventions and user receipt are independently recorded or unknown"
+  ],
+  "unknown_policy": "Never impute zero returns, remove missing days or reinterpret failure as EMPTY",
+  "market_edge": "NOT_ESTABLISHED",
+  "real_acceptance": "NOT_RUN",
+  "collection_authorized": false
+}

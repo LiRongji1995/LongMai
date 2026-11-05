@@ -1,5 +1,7 @@
 # 部署与维护
 
+**2026-11-05 工程修复候选：**[共同请求权威、恢复与研究隔离实施记录](stock-fish/docs/REMEDIATION_20261105.md)提供新的主动执行树、事务防重、多代恢复、持久阶段计量、标签隔离及专项 CI 映射。新执行树通过精确输入清单和责任层接线约束旧兼容入口；原已认证源码与登记保持。**源码发布不代表实际登记启用；旧运行路径的缺口尚不能据此宣布消除。**启用前须完成完整历史导入、有限预算及环境预检并取得明确切换授权；不能直接用下面历史命令重试旧失败。连续 20 个真实交易日、真实执行来源与独立投资验证未完成，`MARKET_EDGE=NOT_ESTABLISHED`。
+
 新增[架构、交付与量化评价优化V1](stock-fish/docs/ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)：提供内外层原生监督V3、统一运行/交付/覆盖审阅、冻结研究与条件评价、显式组件清单、存储实验、根级CI和新目录恢复演练。旧策略/核心及默认original入口保持。当前环境七步复验通过，但原登记物理身份变化仍阻塞真实准入；最新完整盘前、连续20交易日、真实执行证据和独立投资验证未通过，源码发布不切换服务或重试旧请求。
 
 新增[SDK 子进程树监督 V2 与本轮盘前验收记录](stock-fish/docs/SDK_TREE_SUPERVISED_CURRENT_PREMARKET_V2.md)：监督与回收采用版本化修复，保留实际执行的 V1 原件。11 月 2 日固定请求已补齐当前日历、原主板范围 3,194 只/64 批完整复权并生成核心产物，但后续流程因采样超时与 UTC 总限时失败，根进程当时的回收未获确认；10 项题材 PARTIAL 保留，完整盘前尚未通过。V2 仅完成隔离工程验收，未重跑真实业务；原三小时预算、登记、策略、历史结果与全部失败记录保持，未切换服务。
@@ -73,7 +75,7 @@ pwsh -NoProfile -File ./Stop-StockFish.ps1 -Root /你的仓库根目录
 
 [独立源码 bundle V2](stock-fish/docs/PREMARKET_FACTOR_CHECKPOINT_SOURCE_BUNDLE_V2.md)提供显式离线构建/校验工具：只创建新目录，不修改原 worker、request、budget，不自动更新 locator 或服务。既有32项隔离检查与源码快照离线校验分别保留。其后已按单独授权从该快照执行[10月21日盘前尝试](stock-fish/docs/PREMARKET_BOUNDED_RETRY_20261021.md)：3个官方目录完成后触采集读取限额，capture余额为0，退出4；没有核心run、名单或后验，未切换部署。继续采集不能仅凭其余请求/时间余额启动，须另行处理预算与授权。旧 cache 引用的三个 producer 原路径须继续保留，不能以副本替换旧物理身份。
 
-新增[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)：在已有项目Python环境、`stock-fish/`目录执行 `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
+历史[独立终端研究V1](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)保留兼容说明；以下为旧接口定位，新写任务须使用首部实施记录中的共同 authority 和已启用主动树，不直接执行该旧路径： `python scripts/stockfish.py premarket --config PRIVATE_CONFIG.json`。它直接使用本地原件及公开来源，不要求启动HTTP服务或创建业务DB，也不自动切换现有部署。配置模板位于 `stock-fish/config/premarket.example.json`；默认用户状态目录或显式 `--state-root` 保存私有数据、排他锁及每次任务的最终控制文件。各阶段预算、实际进程资源和退出码分别保存；Windows进程树采样需现有锁定psutil。命令退出与真实连续交付分开验收，不把源码发布当作服务已加载。
 
 ## R2 归档衔接与每日后验
 

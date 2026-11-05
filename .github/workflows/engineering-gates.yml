@@ -31,7 +31,7 @@ jobs:
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '0000000000000000000000000000000000000000' }}
           HEAD_SHA: ${{ github.sha }}
-        run: python3 -I -B stock-fish/scripts/engineering_ci_scope_v1.py --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/scope.json" --github-output "$GITHUB_OUTPUT"
+        run: python3 -I -B stock-fish/scripts/engineering_ci_scope_v2.py --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/scope.json" --github-output "$GITHUB_OUTPUT"
       - name: Inventory release inputs without asserting platform acceptance
         run: python3 -I -B stock-fish/scripts/release_profile_manifest_v1.py
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
@@ -45,6 +45,14 @@ jobs:
     # The only existing full hash lock is native macOS x86_64 / CPython 3.12.
     runs-on: macos-15-intel
     timeout-minutes: 45
+    # Partition complete modules exactly once; all fixed safety gates remain in
+    # the workflow union. Three 45-minute engineering allocations, no business
+    # request budget change and no automatic retry.
+    strategy:
+      fail-fast: false
+      max-parallel: 3
+      matrix:
+        shard: [0, 1, 2]
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -86,23 +94,26 @@ jobs:
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: native-python-identity
+          name: native-python-identity-${{ matrix.shard }}
           path: |
             ${{ runner.temp }}/host-native-python-identity.json
             ${{ runner.temp }}/native-python-identity.json
           if-no-files-found: warn
-      - name: Run mandatory safety gates and changed tests
+      - name: Run mandatory safety and dependency-selected specialist gates
         env:
           BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before || '0000000000000000000000000000000000000000' }}
           HEAD_SHA: ${{ github.sha }}
         run: |
-          python -I -B stock-fish/scripts/engineering_ci_scope_v1.py --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/scope.json"
-          "$RUNNER_TEMP/TEST_FIXTURE_daily_runtime/bin/python" -I -B stock-fish/scripts/engineering_ci_scope_v1.py --run-scope "$RUNNER_TEMP/scope.json" --basetemp "$RUNNER_TEMP/TEST_FIXTURE_daily_tests" --junitxml "$RUNNER_TEMP/daily-junit.xml"
+          python -I -B stock-fish/scripts/engineering_ci_scope_v2.py --base "$BASE_SHA" --head "$HEAD_SHA" --output "$RUNNER_TEMP/scope.json"
+          "$RUNNER_TEMP/TEST_FIXTURE_daily_runtime/bin/python" -I -B stock-fish/scripts/engineering_ci_scope_v2.py --run-scope "$RUNNER_TEMP/scope.json" --shard-index "${{ matrix.shard }}" --shard-count 3 --partition-output "$RUNNER_TEMP/partition.json" --basetemp "$RUNNER_TEMP/TEST_FIXTURE_daily_tests" --junitxml "$RUNNER_TEMP/daily-junit.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
-          name: daily-engineering-results
-          path: ${{ runner.temp }}/daily-junit.xml
+          name: daily-engineering-results-${{ matrix.shard }}
+          path: |
+            ${{ runner.temp }}/daily-junit.xml
+            ${{ runner.temp }}/partition.json
+            ${{ runner.temp }}/scope.json
           if-no-files-found: warn
 
   go:
@@ -187,7 +198,7 @@ jobs:
           "$RUNNER_TEMP/TEST_FIXTURE_live_runtime/bin/python" -I -B -m pip install --no-deps --no-index "$RUNNER_TEMP/TEST_FIXTURE_live_wheels"/stockfish_live-*.whl
           "$RUNNER_TEMP/TEST_FIXTURE_live_runtime/bin/python" -I -B -m pip check
           (cd "$RUNNER_TEMP" && "$RUNNER_TEMP/TEST_FIXTURE_live_runtime/bin/python" -I -B -c "import stockfish_live, sys; from pathlib import Path; assert Path(stockfish_live.__file__).resolve().is_relative_to(Path(sys.prefix).resolve()); print(stockfish_live.__file__)")
-          "$RUNNER_TEMP/TEST_FIXTURE_live_runtime/bin/python" -I -B stock-fish/scripts/engineering_ci_scope_v1.py --run-live --basetemp "$RUNNER_TEMP/TEST_FIXTURE_live_tests" --junitxml "$RUNNER_TEMP/live-junit.xml"
+          "$RUNNER_TEMP/TEST_FIXTURE_live_runtime/bin/python" -I -B stock-fish/scripts/engineering_ci_scope_v2.py --run-live --basetemp "$RUNNER_TEMP/TEST_FIXTURE_live_tests" --junitxml "$RUNNER_TEMP/live-junit.xml"
       - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
         if: always()
         with:
