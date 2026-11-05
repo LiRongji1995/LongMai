@@ -97,7 +97,7 @@ daily/review 仅使用原锁覆盖的原生 `macos-15-intel` / Python 3.12；不
 
 首轮远端 Live 检查为 622 passed / 1 failed：真实 uvicorn 子进程无法导入 `stockfish_live`。当时只安装依赖，父测试进程注入的源码路径没有使子进程获得本项目发行包。修复仅补上述 wheel 构建、非 editable 安装、依赖检查和独立导入验证；没有设置 PYTHONPATH、过滤真实子进程用例、放宽锁检查或修改 Qlib wheel。补丁本机 CI 配置合同测试为 15 passed，2.84 秒，退出 0；Live 步骤的 `bash -n` 语法检查退出 0。首轮失败保留，补丁的远端结果另外验收；本机因缺 Live 依赖未运行 Live 测试，不安装环境来追认远端通过。
 
-上述首次工程检查未安装/升级环境、执行 Docker build、运行真实备份、连接市场来源、切生产或认证投资有效性。后续 Go 诊断已在新的私有目录下载官方 1.27.1 工具链及按原 go.sum 校验的模块，未修改既有运行环境；其实际输入、资源与验收结果见[独立交付记录](ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)。Actions 固定版本与 GitHub 官方 runner 标签已核对，远端工作流验收另记。
+上述首次工程检查未安装/升级环境、执行 Docker build、运行真实备份、连接市场来源、切生产或认证投资有效性。后续 Go 诊断已在新的私有目录下载并校验官方 1.27.1 工具链，设置独立模块缓存并以 `-mod=readonly` 运行；该诊断仅使用 SDK 内源码，实际模块缓存为空，未下载或验收外部模块，go.mod/go.sum及既有运行环境保持。其实际输入、资源与验收结果见[独立交付记录](ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)。Actions 固定版本与 GitHub 官方 runner 标签已核对，远端工作流验收另记。
 
 首轮远端daily另录371 passed / 4 failed：旧V2和新V3的两个真实worker身份检查分别在严格argv/cwd核验处拒绝。当前日志没有显示实际两值，不能将framework launcher假说冒充定论。新增 `native_python_identity_probe_v1.py` 以最小和继承环境观察真实child/grandchild的原始argv、cwd及原生可执行文件路径；不修改身份、不转印环境变量、不改变旧检查。默认诊断成功不是运行环境准入；`--require-exact` 在任何不一致时返回3。原门禁仍完整执行，诊断JSON作为独立CI工件保留。
 
@@ -115,3 +115,12 @@ daily/review 仅使用原锁覆盖的原生 `macos-15-intel` / Python 3.12；不
 这些逐子例正常推进的证据支持把测试装载期限与单业务期限分开声明，但不能外推剩余测试耗时。新的三臂配置因此保留完整包内状态，在各自独立 job 内验收；30分钟包期限与135 runner-minutes总分配上限是显式新增工程预算，旧失败保留。新配置的真实远端结果另记，本机合同测试使用 TEST_FIXTURE 假 Go 进程验证分区、argv、退出传播与证据检查，不冒充原生 Go 性能或 race 通过。
 
 三臂补丁的两个定向合同文件最终 **42 passed，7.84 秒，退出 0**；新增漏包/重复/未知包、发现失败、Test skip、缺失终态、race 与 vet 同时失败、race 信号退出、既有结果保护等反例。工作流全部 12 个 run 步骤的 `bash -n` 均退出 0。本机未为这次 CI 改动重新运行真实 Go 全套或下载工具链；远端三臂完整验收仍需当轮实际结果。
+
+
+## 最终同版本远端结果
+
+[工作流41936519830](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/41936519830)对代码提交`bba41c8efd359c333a942b15196f58cc960680a7`于2026-11-05 00:08:39 UTC完成，全部job成功。daily 426项、Live 623项均0失败/0跳过，Go边界模块3个测试包race及vet通过。原锁58包的完整环境验收和严格原生身份检查已完成；此后仅补录工程文档，没有更换代码或归并旧失败。
+
+三份Go原ZIP均与GitHub digest匹配。真实包全集和三个plan严格一致，1+1+27的互斥分区完整覆盖29包：17个有测试包通过、12个无测试包正常package skip。220个顶层测试/503个含子测试PASS事件分别统计，无Test级skip/fail；三臂真实race、vet退出码均0，journal与execution一致。research完整增量差分、全部6个rolling和4个新增父receipt顶层通过；core的RawEvidence及FullSemantic完整Python对照通过。原容量30秒样本29.68秒、CLI整包252.317秒通过，没有放宽其业务期限。
+
+research/core/remaining实际job墙钟分别20分30秒、15分58秒、15分45秒，累计52分13秒；分组配置总上限为135 runner-minutes，非单45分钟预算。完整包运行并不证明真实市场吞吐；所有本机旧轮与远端旧轮失败继续保留。详细原命令、结果归属、工件核对及未完成范围见[架构交付记录](ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)。发行profile仍是输入清单，不会因CI通过自动把Docker构建、全平台工件哈希、生产部署或服务RTO/RPO标为已认证。
