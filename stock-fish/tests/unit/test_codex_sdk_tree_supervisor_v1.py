@@ -234,26 +234,50 @@ def test_ancestor_symlink_and_unnamed_fingerprint_are_rejected(case):
         supervisor.reference(path, partial)
 
 
-def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case, monkeypatch):
+@pytest.mark.parametrize("sample_delay_seconds", [0., .035], ids=["normal", "slow-enumeration"])
+def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(case, monkeypatch, sample_delay_seconds):
     case["limits"]["sample_interval_seconds"] = .01
     owned = {}
+    offsets = []
+    release = case["root"] / "TEST_FIXTURE_samples_ready"
     def launched(pid):
         owned["pid"] = pid
     # Bound only enumeration to this real, childless fixture. Keep the actual
     # snapshot implementation, including Darwin live -> zombie re-observation;
     # a hand-written fast snapshot previously dropped that kernel transition.
     def fixture_processes():
+        if sample_delay_seconds:
+            supervisor.time.sleep(sample_delay_seconds)
         return iter([supervisor.psutil.Process(owned["pid"])])
+    def sampled(state):
+        offsets.append(state["monotonic_offset_seconds"])
+        if state["sample_count"] == 65:
+            release.touch(exist_ok=False)
     monkeypatch.setattr(supervisor.psutil, "process_iter", fixture_processes)
-    value = run(case, "import time;time.sleep(1.5)\n", _test_hooks={"after_launch": launched})
+    # A fixed worker sleep assumes a host sampling rate. Wait for actual
+    # progress instead; both worker and supervisor retain the original bound.
+    value = run(case, f'''import time
+from pathlib import Path
+release = Path({str(release)!r})
+deadline = time.monotonic() + {case["limits"]["max_seconds"]!r}
+while not release.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit("TEST_FIXTURE_SAMPLE_PROGRESS_DEADLINE")
+    time.sleep(.01)
+''', _test_hooks={"after_launch": launched, "after_sample": sampled})
     assert value["status"] == "COMPLETE"
     assert value["failure_reason"] is None and value["cleanup"]["errors"] == []
     assert value["sample_count"] > 64 and len(value["samples"]) == 64
+    assert value["sample_count"] == len(offsets)
     assert value["samples"][0]["sample_number"] == 1
     assert value["samples"][-1]["sample_number"] == value["sample_count"]
     assert value["max_sample_gap_seconds"] > 0
+    assert value["max_sample_gap_seconds"] == max(right-left for left, right in zip(offsets, offsets[1:]))
     assert value["cleanup_process_snapshot_bytes"] > 0
     assert value["terminal_supervisor_returned_read_bytes"] > value["process_snapshot_bytes_total"]
+    assert value["child_exit_code"] == 0
+    assert value["root_reaped"] and value["all_observed_descendants_gone"]
+    assert value["cleanup"]["signals"] == []
 
 
 def test_deadline_during_completion_publication_cannot_report_success(case, monkeypatch):

@@ -18,15 +18,20 @@ func TestCacheMetricsCorruptionCancellationAndEviction(t *testing.T) {
 	// unchanged sample in its own process, as the CLI does, rather than inherit
 	// allocator pages retained by unrelated bundle fixtures in this package.
 	if os.Getenv("STOCKFISH_TEST_CAPACITY_CHILD") != "1" {
-		ctx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+		// This is the test-process watchdog, not the unchanged one-minute budget
+		// below. Allow setup, cleanup, and the race runtime's exit wait as well;
+		// a child printing PASS has not yet proved that its process exited cleanly.
+		const processTimeout = 90 * time.Second
+		ctx, cancel := context.WithTimeout(context.Background(), processTimeout)
 		defer cancel()
 		cmd := exec.CommandContext(ctx, os.Args[0], "-test.run=^TestCacheMetricsCorruptionCancellationAndEviction$", "-test.v")
 		cmd.Env = append(os.Environ(), "STOCKFISH_TEST_CAPACITY_CHILD=1")
+		started := time.Now()
 		raw, e := cmd.CombinedOutput()
 		if e != nil {
-			t.Fatalf("isolated capacity sample: %v\n%s", e, raw)
+			t.Fatalf("isolated capacity sample after %s (watchdog=%s, context=%v): %v\n%s", time.Since(started), processTimeout, ctx.Err(), e, raw)
 		}
-		t.Logf("isolated full-capacity sample: %s", raw)
+		t.Logf("isolated full-capacity sample process exited after %s: %s", time.Since(started), raw)
 		return
 	}
 
