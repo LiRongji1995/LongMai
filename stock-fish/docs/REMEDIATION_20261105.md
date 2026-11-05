@@ -1,19 +1,19 @@
 # 2026-11-05 八项整改实施报告
 
-**状态：LOCAL_ENGINEERING_PASSED，等待本次发布的远端CI核验。最终发布检出15个受影响模块266项通过（1430.78秒、退出0、零跳过）；不能据此宣称生产已启用、连续交付或投资有效性通过。** 新能力位于 `ACTIVE_RUNTIME_V1`、V2 恢复合同和新增控制模块；旧已认证源码、旧运行登记、历史请求和旧策略保持原身份。**新版本未正式启用前，既有运行实例不能视为已修复。** `MARKET_EDGE=NOT_ESTABLISHED`。
+**状态：已实现本轮工程修复并完成分层本地验证；完整远端验收尚未闭合。首次源码发布前15个受影响模块266项通过（1430.78秒、退出0、零跳过）；不能据此宣称生产已启用、连续交付或投资有效性通过。** 新能力位于 `ACTIVE_RUNTIME_V1`、V2 恢复合同和新增控制模块；旧已认证源码、旧运行登记、历史请求和旧策略保持原身份。**新版本未正式启用前，既有运行实例不能视为已修复。** `MARKET_EDGE=NOT_ESTABLISHED`。
 
-基线读取始于2026-11-05；最终本地组合记录始于04:29 UTC。继续发布前再次核对开发/发布检出、源码SHA及远端main未变。远端提交与CI将据实际结果补录，不能用本地子模块通过替代。
+基线读取始于2026-11-05；首次源码发布前组合记录始于04:29 UTC。继续发布前再次核对开发/发布检出、源码SHA及远端main。首次源码提交 `edbd1092e9fced8eef3a60710410610580afdc0c` 的实际 CI 发现冻结脚本的 Git 检出字节转换缺陷；修复已作为 `f753e63593ef1ca6d1a83790cae77477d9e1d364` 发布，原失败保留，详见第十节。不能用本地通过替代远端实际结果。
 
 | 最终验收项 | 当前记录 |
 | --- | --- |
-| 本轮授权文件清单及完整 SHA manifest | 62个授权文件；私有release-final-source-manifest记录逐文件SHA；不发布私有日志/DB/原始数据/完整本机包 |
-| 发布检出的最终 commit / 远端 main SHA | PENDING_ROOT_COMMIT_AND_REMOTE_VERIFICATION |
+| 本轮授权文件清单及完整 SHA manifest | 67个授权文件；首次62文件release-commit-manifest、checkout-fix-release、timing-fix-release及supervision-diagnostics-release精确记录各提交SHA；不发布私有日志/DB/原始数据/完整本机包 |
+| 最后测试修复提交 / 已核源码远端 SHA | [`7b96f62e443d96fb5e3214c60b44e0791a2a8170`](https://github.com/LiRongji1995/stockfish-qlib-quant-system/commit/7b96f62e443d96fb5e3214c60b44e0791a2a8170)；本地发布main与远端一致；后续仅本报告和入口文档收尾，最终文档提交由Git历史及交付回复标识 |
 | 主动树实际构建及最终 `verify` 回执 | TEST_FIXTURE 实际构建469个冻结原件、489个输出；verify与独立身份/依赖图重算通过，exit 0；manifest SHA `e3205c82704916728178805d96f58b4b7e70fb62905ec5472815c500a7cf0ab3` |
-| 主动桥接全调用链与原专项测试组合 | 发布检出15模块266 passed，exit 0，0 skip；含新Authority家族、两层环境、原生后验、只读CLI及CI分组 |
+| 主动桥接全调用链与原专项测试组合 | 首次源码发布前15模块266 passed，exit 0，0 skip；含新Authority家族、两层环境、原生后验、只读CLI及CI分组 |
 | 最终同夹具完整成本比较 | 未建立最终同预算/完整成本的真实对照；原小夹具只用于数值与边界检查，不作为提速验收 |
-| 最终测试退出码、失败、skip、时限 | 1430.78s（外层1432.617s）；JUnit SHA `5a05d5ea444414175a1970f48e5d97b7371d3012403b6ec774d002149f1d9579`；此前失败原件保留 |
-| GitHub Actions run URL、目标 commit、各 job 结果 | PENDING_ROOT_CI_RECORD |
-| 源码推送 | PENDING_ROOT_PUSH；未在初稿中预写成功 |
+| 首次发布前组合退出码、失败、skip、时限 | 1430.78s（外层1432.617s）；JUnit SHA `5a05d5ea444414175a1970f48e5d97b7371d3012403b6ec774d002149f1d9579`；此前失败原件保留 |
+| GitHub Actions run URL、目标 commit、各 job 结果 | [最终测试修复CI 42073927423](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42073927423)：绑定7b96，scope无runner/无步骤而失败，下游未执行；前三轮实际范围与失败见第十节，不能报全绿 |
+| 源码发布 | edbd→f753→7ca→7b96四次中文提交均以预期旧SHA更新main并核远端；无force、无历史改写。工作区保留与最终文档提交另核 |
 | 真实 authority / epoch / 服务切换 | NOT_EXECUTED；只做私有TEST_FIXTURE工程登记 |
 | 当前业务完整盘前与连续 20 交易日验收 | NOT_ESTABLISHED / NOT_RUN |
 | 独立投资有效性与真实账户曲线 | NOT_ESTABLISHED / BLOCKED |
@@ -28,7 +28,7 @@
 
 本次可确认的成果主要是：共同业务身份、完整范围核验后的失败继承机制、版本化主动树、持久阶段证据、标签隔离和条件账户对账。不能确认的是：最新真实市场完整交付、连续日常稳定性、来源/许可充分性、真实成本和容量、独立样本优势。没有启动获准的真实业务验收、全市场回测或交易操作；但本轮完整链测试发生一次未经授权的真实 provider 调用事故，详见下段，不能把它隐去或计作成功。
 
-主负责人另已完成一次**真实登记的只读预检**：182 份 codex-chat 控制 JSON 的原字节前后 SHA 保持；13 个旧 operation 中，4 个 FAILED_OR_UNKNOWN 盘前业务可直接辨认，另 9 个 RECORDED 使用旧原生核心计算、复用及归档认证的复合 identity，不能无歧义映射到新业务身份。inventory 明确返回 `BLOCKED / BUSINESS_OPERATION_EXPLICIT_REQUIRED`。私有记录为 `real-recovery-readonly-precheck.json`、`real-recovery-mapping-gaps.json`；最终 SHA 与准确命令待主负责人补录。没有据此初始化真实 authority、激活 epoch 或重新认证来源。
+主负责人另已完成一次**真实登记的只读预检**：182 份 codex-chat 控制 JSON 的原字节前后 SHA 保持；13 个旧 operation 中，4 个 FAILED_OR_UNKNOWN 盘前业务可直接辨认，另 9 个 RECORDED 使用旧原生核心计算、复用及归档认证的复合 identity，不能无歧义映射到新业务身份。inventory 明确返回 `BLOCKED / BUSINESS_OPERATION_EXPLICIT_REQUIRED`。私有记录为 `real-recovery-readonly-precheck.json`、`real-recovery-mapping-gaps.json`；预检 SHA256 为 `caf52318c02431ef1b15efbb0570de890ee71ff19fdf23bb20e13d7c6051feb7`，只读 inventory 命令及输入定位在该私有记录中。没有据此初始化真实 authority、激活 epoch 或重新认证来源。
 
 因此，启用前至少还需：逐项核实这 9 个旧复合操作的真实业务语义并形成有证据的 mapping；由运维确认全部登记根及祖先分支已经纳入；核验旧操作真实累计预算和未知支出。4 个已识别旧失败继续阻塞。**不能把“获得授权”本身写成“即可启用”；当前真实恢复准入仍未满足。**
 
@@ -42,18 +42,18 @@ V3 监督原报告为 FAILED、child exit -15，root_reaped 与 all_observed_des
 
 ## 二、八项状态矩阵
 
-“工程”表示新版本代码及相应隔离检查的状态；“反例”表示已验证的具体拒绝或恢复行为；“兼容”表示保留旧材料及版本边界；“真实”和“投资”必须独立验收。下列局部通过不能覆盖仍在变化的主集成源码。
+“工程”表示新版本代码及相应隔离检查的状态；“反例”表示已验证的具体拒绝或恢复行为；“兼容”表示保留旧材料及版本边界；“真实”和“投资”必须独立验收。早期局部通过不能替代后文所列最终发布源码快照的组合验收。
 
 | ID / 工作项 | 工程状态 | 反例状态 | 兼容状态 | 真实业务状态 | 投资状态 |
 | --- | --- | --- | --- | --- | --- |
 | P1-01 统一业务请求防重 | 共同 authority、effect、阶段能力已实现；启动前预留、同socket认证及跨后验修订家族累计约束已通过发布组合 | 换 key/engine/version、跨入口 provider 重复、旧失败继承已有局部测试；实际并发预 fork 反例已通过 | 不改旧登记；新主动树接入同一业务权威 | 未激活真实 authority / worker | 不授投资有效性 |
-| P1-02 多代恢复与受限历史读取 | V2全祖先DAG、单活动epoch、双层环境与受限历史/主动树审计已通过发布组合；固定Authority载体灾备另受限制 | 祖先分支遗漏、登记迟变、三处 crash、旧失败换代、受限载体越界已有局部测试 | 旧字节/失败保留，新状态另建；历史读取不恢复 owner/PIT | 真实只读预检 BLOCKED：9 项核心计算/复用/归档操作待映射、根完备性/预算待核；未迁移 | 不恢复历史 PIT 或优势 |
-| P1-03 真实交付闭环工程能力 | 单日/20日合同、源自举、逐日原生后验合成与受限审计已通过发布组合；五期限成熟另有11档原件认证夹具 | 全 UNKNOWN 格子误计成功已修；首观察日前驱、缺终态、缺清理、缺日均拒绝 | 不追认旧失败或迟交为当时盘前成功 | 连续 20 个真实交易日 NOT_RUN | 完成交付也不等于优势 |
-| P1-04 真实执行证据与账户验证 | 有界证据接口与条件对账已实现，正式来源适配仍阻塞 | 部分/未成交、T+1、费用、重复成交、延迟退出、UNKNOWN 资本/状态等通过；跨日补买被拒绝 | 复用旧费用函数及安全断言，不改旧账户核心 | 缺真实原生执行来源、资本和容量证据；正式曲线 null | `BLOCKED_PROVIDER_AUTHORITY` |
+| P1-02 多代恢复与受限历史读取 | 固定Authority范围完成：V2全祖先DAG、单活动epoch、双层环境与受限历史/主动树审计已通过发布组合；固定Authority载体灾备另受限制 | 祖先分支遗漏、登记迟变、三处 crash、旧失败换代、受限载体越界已有局部测试 | 旧字节/失败保留，新状态另建；历史读取不恢复 owner/PIT | 真实只读预检 BLOCKED：9 项核心计算/复用/归档操作待映射、根完备性/预算待核；未迁移 | 不恢复历史 PIT 或优势 |
+| P1-03 真实交付闭环工程能力 | 单日/20日合同、源自举、逐日原生后验合成与受限审计已通过发布组合；五期限成熟另有11档原件认证夹具；一次远端原生signal失败未定因，集成风险尚未闭合 | 全 UNKNOWN 格子误计成功已修；首观察日前驱、缺终态、缺清理、缺日均拒绝 | 不追认旧失败或迟交为当时盘前成功 | 连续 20 个真实交易日 NOT_RUN | 完成交付也不等于优势 |
+| P1-04 真实执行证据与账户验证 | 条件对账与有界接口已实现；可信原生来源适配未完成 | 部分/未成交、T+1、费用、重复成交、延迟退出、UNKNOWN 资本/状态等通过；跨日补买被拒绝 | 复用旧费用函数及安全断言，不改旧账户核心 | 缺真实原生执行来源、资本和容量证据；正式曲线 null | `BLOCKED_PROVIDER_AUTHORITY` |
 | P2-05 标签隔离与研究试验账本 | V2 隔离与追加账本已实现，作者组合测试通过 | H10 跨窗、未知历史 span、同 plan 重复窥看、读取前 CLAIM、失败不可重试、恢复末验已覆盖 | 旧 V1 只保留原身份；V2 不重写旧结果 | 未开始新的真实独立验证 | 离线探索完整性 UNKNOWN，优势未建立 |
 | P2-06 主动架构收敛 | 统一gateway/薄路由、显式身份和469→489新树构建及发布组合通过 | 原树不改、额外/遗漏依赖拒绝、策略/执行身份分离、跨树 fallback 拒绝已有局部测试 | 旧核心保留；只在新主动树生成有限 AST 接线 | 没有切换真实服务或默认登记 | 不改公式、门槛或策略结论 |
 | P2-07 失败阶段持久计量 | stage journal 与失败尾已实现；control/publication 尾计量与 API job 日志已补齐可观测部分，最后不可观测尾明确 UNKNOWN | 采样失败、开着的 stage、缺终态、同字节换 inode、identity 不匹配等已有局部测试 | 新日志不替换原控制件；原终态继续核验 | 新真实端到端成本未测得 | 无收益或提速承诺 |
-| P2-08 源码依赖到专项测试映射 | V2映射、120模块40/40/40分组及选测反例已通过本地发布组合；远端CI待本次提交核验 | 整模块选择、固定安全底线、未知依赖保守并集、scope 重算拒绝篡改已有局部测试 | V1 必跑底线保留，不删断言/扩 skip | CI 通过也不等于业务就绪 | 不构成投资验证 |
+| P2-08 源码依赖到专项测试映射 | V2映射与选测反例已通过；实际CI的120模块及后续40模块分组均核验无遗漏，最终远端门禁未全部闭合 | 整模块选择、固定安全底线、未知依赖保守并集、scope 重算拒绝篡改已有局部测试 | V1 必跑底线保留，不删断言/扩 skip | CI 通过也不等于业务就绪 | 不构成投资验证 |
 
 ## 三、根因、实现和验收条件
 
@@ -86,7 +86,7 @@ V3 监督原报告为 FAILED、child exit -15，root_reaped 与 all_observed_des
 | `CaptureCache`、provider parent/child、RequestQueue | capture 前日历阶段门、provider/SDK/HTTP 在副作用前事务预留；旧 PARTIAL/retry 拒绝，完整返回才收束传输状态 |
 | `SQLiteStore` 与直接 SQLite / 文件 / subprocess 责任层 | 实际写与子进程需当前阶段能力；只读 URI 独立验证；窄内存 schema oracle 不允许 ATTACH/扩展等逃逸 |
 | 旧 register / 自动恢复重跑 / 通用配置和训练写 | 主动树明确拒绝；未通过新薄入口替旧入口掩盖可写绕过 |
-| `active_outcome_pipeline_v1` 原生五期限后验 | 两个原始档案、各自 PREMARKET 权威和共同 OUTCOME 请求；离线原 evaluator、阶段计量和唯一原件发布，换 key/目录不能重做失败 |
+| `active_outcome_pipeline_v1` 原生五期限后验 | 信号与后验或逐日原始档案、各自 PREMARKET 权威和共同 OUTCOME 请求；离线原 evaluator、阶段计量和唯一原件发布，换 key/目录不能重做失败 |
 | authority 初始化、V2 recovery apply、host bootstrap | 显式控制面；固定载体、完整历史和单活动 epoch；不会自动切服务或把旧失败再运行 |
 
 这些约束针对校验后的受支持程序和受控目录；具有任意源码/数据库修改权限的操作者仍属于信任边界，不能据此声称操作系统级恶意代码隔离。
@@ -107,7 +107,7 @@ V3 监督原报告为 FAILED、child exit -15，root_reaped 与 all_observed_des
 
 独立最小反例曾构造“每日完整五期限格子，但所有标签 UNKNOWN”：旧接受谓词计入 20/20。修后运行完成率可单列 20/20，**总验收必须 0/20，成熟标签 0/20**。另一个隔离反例发现仅内容一致的 MATURE 可计入 accepted；现必须绑定原生 OUTCOME 回执、信号/后验档案各自 PREMARKET 登记、精确原件、原生 journal 与原 evaluator 全部五期限重算。缺权威时成熟计数仅供描述，不取得验收资格。两个反例均隔离接受谓词，没有伪造完整原生来源认证。首观察日还必须是原生日历中首目标日的直接前驱。
 
-V1 保留原 `PROSPECTIVE_CAPTURED` 严格条件。新 V2 必须事前显式冻结 `PROSPECTIVE_OPERATIONAL_DELIVERY`，只验原定日期原生执行、及时封存、本地来源链与成熟原生后验；原 `RECONSTRUCTED_HISTORICAL` 不改写，历史特征 PIT=false。显式 `STRICT_PROSPECTIVE_PIT` 仍受原历史覆盖约束。省略 scope 保留 V1，不能隐式升级旧协议。运行取得时间需位于观察日来源释放时间18:00至约定交付截止之间；协议冻结须在首观察日15:00前。
+V1 保留原 `PROSPECTIVE_CAPTURED` 严格条件。新 V2 必须事前显式冻结 `PROSPECTIVE_OPERATIONAL_DELIVERY`，只验原定日期原生执行、及时封存、本地来源链与成熟原生后验；原 `RECONSTRUCTED_HISTORICAL` 不改写，历史特征 PIT=false。显式 `STRICT_PROSPECTIVE_PIT` 仍受原历史覆盖约束。省略 scope 保留 V1，不能隐式升级旧协议。原业务 CLAIM 开始不得早于观察日18:00来源释放门槛，且 CLAIM → decision_cutoff → generated → sealed → authority 终态时钟链须顺序一致并满足事前冻结的交付截止；缓存原始 first_seen 保留，不要求在18:00后重采。协议冻结须在首观察日15:00前。
 
 最终验收要求真实自然经过的连续 **20 个交易会话**，不是 20 个自然日、20 次重放或测试夹具日期。须在首观察日收盘前冻结协议；每个原定日报告 NOT_RUN/FAILED/UNKNOWN/COMPLETE/COMPLETED_WITH_UNKNOWNS、原生运行终态、声明预算和干预信息。用户收讫始终为 UNKNOWN_NOT_OBSERVED；干预次数为显式自报或 UNKNOWN。准时性相对于事前冻结的调用方截止时间（默认09:00），不自动证明交易所盘前 SLO。当前 REAL_DAILY_ACCEPTANCE_ESTABLISHED 仅指该运行/标签合同，不证明用户已收到或全部成本已观测。全池身份分区与 security × H1/H2/H3/H5/H10 必须完整计数。PENDING、UNKNOWN、NOT_PROVIDED 均不能进入成熟验收；末日 H10 还需额外真实交易日。
 
@@ -171,7 +171,7 @@ V1 保留原 `PROSPECTIVE_CAPTURED` 严格条件。新 V2 必须事前显式冻�
 
 验收应覆盖“只改源码、未新增测试”的选择反例，mandatory 不丢失，scope 篡改拒绝，独立 oracle/账户/HTTP 安全原断言保留；测试时限与资源不足不得通过删样本或扩大 skip 掩盖。**本地最终15模块已通过；实际提交的Git diff选测及远端各作业仍须逐一核验。** 本地映射函数通过不等于 GitHub job 已运行。
 
-此次最终候选选择120个完整测试模块。CI 按完整测试模块确定性分为 3 个 daily 作业（40/40/40），联合集合保留全部固定门禁，每模块恰执行一次，`partition.json` 记录完整/实际列表和提交；源 diff 选择结果在每组执行前重算。实测旧 81 模块约24分钟、新增15模块约6分钟、原 archive bridge约7分钟，尚未加入新增整链，不能继续假定单45分钟充分。每组工程装载上限45分钟、总分配上限135分钟；这不改变任何业务请求预算。没有跳过或选单个方便断言。
+此次最终候选选择120个完整测试模块。CI 按完整测试模块确定性分为 3 个 daily 作业（40/40/40），联合集合保留全部固定门禁，每模块恰执行一次，`partition.json` 记录完整/实际列表和提交；源 diff 选择结果在每组执行前重算。早期实测旧 81 模块约24分钟、15模块依赖专项349.72秒（约6分钟）、原 archive bridge约7分钟，当时尚未纳入后来新增的整链；首次edbd源码发布前组合为另外15模块、1430.78秒（约24分钟）；之后的检出/采样/Go测试修复分别由33项、22项、Go整包及各自实际CI另验。这些范围不同的测量不能相互替代，也不能据早期结果假定单45分钟充分。每组工程装载上限45分钟、总分配上限135分钟；这不改变任何业务请求预算。没有跳过或选单个方便断言。
 
 ## 四、已执行验证与尚待填入的证据
 
@@ -205,9 +205,11 @@ V1 保留原 `PROSPECTIVE_CAPTURED` 严格条件。新 V2 必须事前显式冻�
 | 多日后验合同 | 52 passed/77.17s/exit 0 | 所有daily权威、原cap、manifest与原eval重算及末验；假来源/多加signal ID拒绝 |
 | 实际双日合成与旧入口复用 | 1 passed/220.25s/exit 0 | 原V3双档案、1MATURE+9UNKNOWN、同B只1次OUTCOME worker；后增wall计量由最终发布组合再验 |
 | OUTCOME家族原子额度 | 最后Authority+Recovery93 passed/27.66s；前版含Host102 passed/112.47s；exit 0 | 新revision、worker、job-create、显式resume耗尽前置拒绝；11条修前失败保留，未改旧schema |
-| 发布最终本地组合 | 15模块266 passed，1430.78s，exit 0，0 skip | 精确发布源码快照；受影响主链与原断言通过，不等于全仓/市场验证 |
+| 首次源码发布前本地组合 | 15模块266 passed，1430.78s，exit 0，0 skip | 精确发布源码快照；受影响主链与原断言通过，不等于全仓/市场验证 |
 
-量化最终包可复核摘要：`delivery-manifest.json` SHA256 为 `0a26a1dfa08a07750b218fd1d321626ee216cba5a620f767952dcd83021ef020`，`command.json` 为 `fcc2cecfa9cfdb05e69f417b5d0d358d578e2738aed13c56d64db2c5d7d001a7`，`junit.xml` 为 `be3bf683607914c2b43323a2a02b273404f0b00d3190e289358acfadef2f2bac`。这些摘要只绑定该次私有工程记录，不是市场来源签名。
+上述跨日期原生TEST_FIXTURE在产物创建前明确设置合成业务UTC时钟，用于验证日期关系、原件认证和期限边界；不是自然等待两日或两周。OS/PID及monotonic监督仍真实，不能把它计入20个真实交易日或真实标签成熟。
+
+早期185项量化验证包 `TEST_FIXTURE_quant_complete_fxupz6_e` 可复核摘要：`delivery-manifest.json` SHA256 为 `0a26a1dfa08a07750b218fd1d321626ee216cba5a620f767952dcd83021ef020`，`command.json` 为 `fcc2cecfa9cfdb05e69f417b5d0d358d578e2738aed13c56d64db2c5d7d001a7`，`junit.xml` 为 `be3bf683607914c2b43323a2a02b273404f0b00d3190e289358acfadef2f2bac`。这些摘要只绑定该轮私有工程快照，不是最终266项发布验收的 manifest，也不是市场来源签名。
 
 该 185 项实际命令使用项目 Python `-I -B -X pycache_prefix=<该包新目录>`，调用 `stock-fish/scripts/run_isolated_tests.py -q`，完整文件列表为：
 
@@ -227,7 +229,7 @@ tests/yaogu/test_short_horizon_outcomes_v1.py
 
 - D/E 两个真实 JobService 夹具在测试轮询 20s 时被 finally 取消；未改发布源码的独立有界诊断等待真实终态后，原 UNKNOWN、非 REJECTED、READY 和 typed reason 断言全部通过。仅这两条测试显式等待 180s，其他仍 20s；业务预算与原业务断言不变。定向 2 passed/117.07s/exit 0；未宣称达到 20s 性能目标。
 - shared late-admission 的合成档案使用固定十月业务时间，却在十一月造 fixture 时使用当前封存钟，正确触发 `ARCHIVE_SEALED_AFTER_CUTOFF`，未走到待测准入分支。只在创建该明确 TEST_FIXTURE 之前冻结其合成钟，没有封签后改时间、没有 mock 认证器或放宽原错误码断言。整模块 21 passed/195.04s/exit 0。
-- 新完整 native differential 曾被严格预 fork 门禁拒绝；测试改为真实 supervisor/live pipe 后，又发现桥错误拒绝合法带 UNKNOWN 终态。桥修复后原所有数值/UNKNOWN 断言与终态绑定均通过，1 passed/107.62s/exit 0。
+另一次新完整 native differential 整链检查（不属于上述81模块的三个失败）曾被严格预 fork 门禁拒绝；测试改为真实 supervisor/live pipe 后，又发现桥错误拒绝合法带 UNKNOWN 终态。桥修复后原所有数值/UNKNOWN 断言与终态绑定均通过，1 passed/107.62s/exit 0。
 
 ## 五、经 CLI 源码核实的操作接口
 
@@ -376,7 +378,7 @@ python -I -B stock-fish/scripts/engineering_ci_scope_v2.py \
 
 1. 本轮pre-fork、journal/publication、HTTP作业日志和终态桥接已由最终本地组合核验。真实来源、连续运行和投资缺口不能据此关闭。
 2. 本轮已保留全部失败及退出码，主动树与依赖身份通过独立重算，原受保护文件未变；远端最终选测与结果据实际提交单独记录。
-3. 仅62个授权文件进入既有发布检出；指定main须核实远端提交与CI。源码发布不代表服务激活。
+3. 首次62文件、检出属性及四项原测试修复共67个授权文件进入既有发布检出；指定main须核实远端提交与CI。源码发布不代表服务激活。
 4. 后续真实运行须先解决实际预检的 9 项复合身份映射、全部登记根/祖先完备性及旧预算证据缺口，并核新环境和完整恢复计划，再单独判断是否具备显式启用条件；旧失败/UNKNOWN 与原预算继续继承。连续日验收等待自然交易日及 H10 成熟，不能用 TEST_FIXTURE、历史重放或旧核心成功代替。
 5. 来源、费用、资本、公司行动、成交约束和数据许可未明确之前，正式账户曲线保持阻塞；所有策略初始参数仍尚未验证，`MARKET_EDGE=NOT_ESTABLISHED`。第三方许可证及 [THIRD_PARTY_NOTICES](../../THIRD_PARTY_NOTICES.md) 保留，MiroFish 不能被描述为 MIT 组件。
 
@@ -407,10 +409,10 @@ python -I -B stock-fish/scripts/engineering_ci_scope_v2.py \
 | P2-05 | [codex_research_protocol_v2.py:111](../scripts/codex_research_protocol_v2.py#L111) `freeze_plan`；[research_trial_ledger_v1.py:261](../scripts/research_trial_ledger_v1.py#L261) `claim_study` |
 | P2-06 | [active_runtime_v1.py:400](../scripts/active_runtime_v1.py#L400) `build`；[active_identity_v2.py:625](../scripts/active_identity_v2.py#L625) `component_identities` |
 | P2-07 | [durable_stage_metrics_v1.py:99](../scripts/durable_stage_metrics_v1.py#L99) `StageJournal` |
-| P2-08 | [engineering_ci_scope_v2.py:78](../scripts/engineering_ci_scope_v2.py#L78) `classify`；[engineering_ci_scope_v2.py:110](../scripts/engineering_ci_scope_v2.py#L110) `partition_tests` |
+| P2-08 | [engineering_ci_scope_v2.py:78](../scripts/engineering_ci_scope_v2.py#L78) `classify`；[engineering_ci_scope_v2.py:117](../scripts/engineering_ci_scope_v2.py#L117) `partition_tests` |
 
 
-## 九、本地最终命令与文件保护
+## 九、本地整合命令与文件保护
 
 实际使用项目daily-review Python，以 `-I -B -X pycache_prefix=<新TEST_FIXTURE目录>` 启动保护引导，再执行 `stock-fish/scripts/run_isolated_tests.py -q` 及下列完整模块；显式传入新的 `--basetemp`、`--junitxml`、`--tb=short`。外层只允许本地HTTP测试loopback并避免反向DNS，真实采集/计算worker另有OS拒网。准确argv保存在私有 `release-acceptance-command.json`，exit 0。
 
@@ -432,6 +434,61 @@ tests/unit/test_daily_outcome_authority_v1.py
 tests/unit/test_engineering_ci_scope_v2.py
 ```
 
-`git diff --check`、最终AST/JSON检查、独立build/verify和用户文件保护检查均退出0。初始开发review HEAD `2064173d15c478093fc9b3db90931e2aa04391e4` 保持；发布基线main `2bfbbbb8bd08b0f49c081b26ec77f7da61c7345e`。开发原2043个非任务文件与10项既有删除保持，11个已有文件的修改属于本任务，另51个新增任务文件；额外native_r2本地实现未发布。发布检出未纳入任何非任务变化。
+`git diff --check`、最终AST/JSON检查、独立build/verify和用户文件保护检查均退出0。首次暂存空白检查曾报告新增环境测试文件末尾多余空行；只去掉该空行后退出0，没有改变AST或断言。初始开发review HEAD `2064173d15c478093fc9b3db90931e2aa04391e4` 保持；发布基线main `2bfbbbb8bd08b0f49c081b26ec77f7da61c7345e`。增加检出属性和四项测试修复后，开发原2038个非任务文件与10项既有删除保持，16个已有文件的修改属于本任务，另51个新增任务文件；额外native_r2本地实现未发布。发布检出未纳入任何非任务变化。
 
 SSH与无凭据HTTPS远端查询此前均退出128；没有搜索凭据。发布使用已连接GitHub工具，精确Git树并在更新main时校验预期原SHA，禁止force；远端实际结果见报告首表。未执行生产切换、旧请求重试、真实20会话、全市场回测、账户真实执行或投资验证。测试误采集事故及其未知成本已在第一节单列，不能把本段误读为本轮从未发生真实网络。
+
+## 十、实际远端 CI 与发布后交叉核验
+
+首次源码提交 [edbd1092](https://github.com/LiRongji1995/stockfish-qlib-quant-system/commit/edbd1092e9fced8eef3a60710410610580afdc0c) 的 [实际 CI 42056902440](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42056902440) **没有全绿**。原日志、JUnit、scope、partition 和下载 artifact 摘要均已保留。实际 Git diff 为62路径，scope 选择120个完整模块；三份真实 partition 的并集与独立复算相同，40/40/40，无遗漏或重复，包含全部39个强制模块及其中23个旧安全底线。测试失败没有被换成 skip。
+
+| 首次远端 job | 原始结果 | 判断 |
+| --- | --- | --- |
+| daily (0) / 127347764445 | 658 passed、28 setup errors，422.80s，exit 1，0 skip | 28项均因冻结 `premarket.ps1` 字节不符，尚未进入测试体 |
+| daily (1) / 127347763984 | 963 passed、3 failed、26 setup errors、30 subtests passed，1048.84s，exit 1，0 skip | 28项同冻结字节问题；另一项固定1.5秒误作采样次数保证，实际39次而断言需大于64 |
+| daily (2) / 127347764131 | 802 passed、3 failed、13 setup errors、40 subtests passed，600.05s，exit 1，0 skip | 16项同冻结字节问题 |
+| Live / 127347763814 | 623 passed，84.53s，exit 0 | version-pinned测试通过；job未声明构件可复现性，仍UNVERIFIED |
+| go-core / 127347764157 | 原 `go test -race ./... -count=1` 与 `go vet` 通过；3包ok、1包无测试 | 对应精确edbd提交，未改变原工具链或断言 |
+| Go core / 127347764267 | race+vet exit 0；25顶层测试、86含子测试通过，0skip，runner896.558s | 独立Python oracle及完整包真实执行通过，不与含子测试数相加 |
+| Go remaining / 127347763896 | race阶段exit 1，runner824.204s；14包pass、1包fail、12包无测试 | 容量子测试已输出PASS/29.72s，父测试30.17s超时终止；不能将子PASS解释为整个job成功 |
+| Go research / 127347764443 | race+vet exit0；17顶层/117含子测试通过事件，0skip0fail，包1387.517s、runner1496.106s | 原始日志和最终执行回执已核验 |
+
+首次三组 daily 的 JUnit 合计2496个case：2423通过、6失败、67准备错误，零skip，另70个subtests；72项与冻结字节有关，1项是采样夹具前提。此处只汇总同次运行的不重叠分组，不与本地或后续CI重复相加。
+
+首次Go三组按实际go list覆盖29包，无遗漏或重复；16包pass、1包fail、12包没有测试，219顶层通过/1失败，502含子测试通过事件，0测试skip。remaining artifact的原 `execution.json`另证race exit1/739.109s、vet独立exit0/75.360s；这不改变该job整体失败。
+
+第一项根因是根 `.gitattributes` 的 `*.ps1 eol=crlf` 将913字节LF原件变为932字节CRLF。469个冻结文件的Git blob均与清单一致，唯一检出转换风险为这个文件；本地已有工作树没有触发重新检出，因此此前266项不能发现该问题。新增真实Git clean/smudge回归核全部469个原件，并对根/业务 `.gitattributes` 的单独变更补全保守选测。修前3个反例失败（20.16s、exit1）；修后完整两个模块33 passed（110.86s、exit0），原SHA、策略身份和所有断言保持。修复提交 [f753e635](https://github.com/LiRongji1995/stockfish-qlib-quant-system/commit/f753e63593ef1ca6d1a83790cae77477d9e1d364) 的 [实际CI 42059613880](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42059613880) 已重新选择同一120模块；这是修复后的新提交执行，不是对旧业务或旧CI反复重试。
+
+原生身份 artifact 独立下载并核对GitHub SHA：三组host初探均MISMATCH，原样保留；新隔离测试runtime的继承/最小环境、子/孙进程argv与cwd均EXACT，`identity_modified=false`，`runtime_acceptance=NOT_CLAIMED`。这不能升级为生产运行认证。
+
+f753的120模块真实结果为：daily0的687 passed/1239.94s、daily2的818 passed及40subtests/950.04s均退出0；daily1为993 passed、1 failed及30subtests/1409.22s，退出1。合计2498通过、1失败、0准备错误；唯一失败仍是未在该提交修复的采样固定等待（实际37次）。冻结字节相关测试已实际进入并通过，不能把这个提交整体改称全绿。之后7ca仅改变两项测试，所有生产源码及冻结合同与f753逐字一致；其实际scope为40模块，14/13/13，39个固定模块之外明确包含本次改变的旧采样测试。
+
+采样测试的修前独立反例保留真实snapshot，只在枚举前加入35ms延迟：原1.5秒worker实际完成30次采样，状态COMPLETE、已回收，但原大于64断言失败（1 failed/1.91s、exit1）。修后worker等待实际第65次采样的私有release，仍受原10秒上限约束；原64条上限、首末编号、gap、清理及读量断言全部保持，另用全部实际offset独立核验计数与最大gap。正常及慢枚举分支分别完成67/66次，完整模块22 passed/18.11s、exit0、0skip。生产监督器字节未变，没有把样本频率当作性能保证。
+
+Go容量测试的外层进程watchdog原为30秒，却监督内部既有60秒业务Budget，且没有包含race退出等待。[Go官方race说明](https://go.dev/doc/articles/race_detector)的默认退出等待为1000ms（核验2026-11-05）；与原CI的PASS后超时一致，但不能把推断写成未观测的逐点内核事实。修复只将**子测试进程看护**设为90秒并补elapsed/context诊断；内部60秒、256MiB容量、512MiB软heap目标和1GiB RSS采样门禁不变。从原子测试正文到文件末逐字相同，仍要求真实退出码0。RSS是采样门禁，不是内核硬限额。
+
+本机旧默认race定向曾通过，不能替代原CI失败。为检查退出边界，原二进制显式设置 `GORACE=atexit_sleep_ms=31000` 后30.229秒退出1；该次尚未输出PASS，只是旧看护边界反例，不是精准重演原CI。新二进制同条件下业务体28.09秒PASS、子进程实际59.257秒退出0；完整外命令还包含父测试自身31秒race尾，共91.272秒，不能把90秒称为整条命令上限。完整 `go test -race -p 1 -json -count=1 ./infrastructure/sqlitev2` 为68顶层测试/111含子测试通过事件、0失败/0skip，exit0，包234.174秒、外层250.820秒；`go vet -p 1 -json ./infrastructure/sqlitev2` exit0/63.394秒。全部在独立TEST_FIXTURE与OS拒网环境执行，未重复原业务请求。
+
+两项测试修复提交为 [7ca46618](https://github.com/LiRongji1995/stockfish-qlib-quant-system/commit/7ca4661869c2ef67dde35f5442b641705d4ea212)，[实际CI 42062377460](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42062377460) 对精确两文件diff选择daily与Go。未变化的Live/go-core按scope跳过，相关成功证据仍绑定首次提交，不能冒称最新提交重跑了它们。第一次GitHub分支更新返回服务端UNKNOWN；只读核实main仍在f753后，使用同一7ca提交及同一预期原SHA完成更新并再次核验，本地提交对象/树与远端相同、发布检出clean。没有创建替代提交、force或改写旧历史。
+
+7ca首轮daily并未全绿：14模块组229 passed/313.64s；第二组247 passed、1 failed/817.64s；第三组269 passed、2 failed/625.77s。40模块实际全部执行，共745通过、3失败、0准备错误/0skip。先前采样进度修复的两参数已通过；新增失败分别为旧V2身份测试、旧V3 RSS测试，以及原生后验测试的首个signal档案。原CI只保存JUnit/scope/partition，未保存这三项的完整内部控制件，因此底层原因不能从外层断言补造。
+
+V2的独立反例在首个真实snapshot前等待0.8秒，原worker只活0.6秒，正确触发 `LIVE_SAMPLING_COVERAGE_INSUFFICIENT`，原测试退出1（1 failed/1.21s）。修后仅测试worker等待两次实际非零RSS/native identity采样再退出，原10秒预算和公开wall-clock不参与身份的全部断言不变；正常/慢采样都实得三次采样、内核wait状态0且无signal，完整模块43 passed/20.27s/exit0。此反例证明一个真实夹具前提缺口，**不是证实原CI唯一根因**。
+
+V3的独立反例在真实后代分配内存后推迟root ready标记3.25秒；旧 `after_launch` 等3秒期间没有主循环采样，失败原因为 `TEST_FIXTURE_CHILD_NOT_READY`、monitor类型AssertionError（1 failed/3.60s/exit1）。这与原CI只显示AssertionError的证据并不等价。修后仅RSS测试不在launch钩子等待全树ready，让原监督器即时观察实际进程；原112MiB阈值、5秒预算、TERM/KILL升级、无关进程保护不变。正常/迟就绪分别观察8/9个样本，RSS峰186,646,528/185,106,432字节，均正确报告TREE_RSS_LIMIT_EXCEEDED、根进程已内核回收、后代确认退出、清理无残留；完整模块20 passed/15.27s/exit0。不能把后代确认退出说成全部由controller waitpid回收。
+
+原生后验失败发生在首signal档案，尚未到后验组合或收益断言；远端case总时86.435秒，没有证据可将它归因为180秒业务预算耗尽。未修改原目标的一次新隔离执行为1 passed/300.35s，首signal和later均完成原生封签，但远端内部失败仍UNKNOWN，不能因此宣布修复。新增诊断只对已经返回的非零child读取明确TEST_FIXTURE控制件，保留原退出码与stderr，不授予来源/业务成功；不覆盖原 `TimeoutExpired`。三个监督器及诊断的发布检出组合86 passed/52.43s/exit0；后续诊断自身的有界性与异常隔离另行验证，不能把该86项冒称包含后加修改。
+
+7ca的Go remaining和core实际成功：分别为178/25个顶层测试，300/86个含子测试通过事件，0测试失败/0skip。remaining原artifact证race exit0/767.301s、vet exit0/66.708s；core的race exit0/733.104s、vet exit0/36.033s。research因 `proxy.golang.org` 的依赖DNS超时，在 `go list` 阶段退出1（runner退出2）；race/vet没有启动，不能算已执行测试。其Python14个各8证券的独立oracle此前通过，也不是全市场验证。
+
+在保留上述原件并定位DNS基础设施失败之后，仅对同一7ca提交的research作了一次显式有界复验，未重跑已通过的Go组。GitHub attempt2的 [research作业127385109912](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42062377460/job/127385109912) 在6秒内失败，`runner_id=0`、`steps=[]`，oracle/list/race/vet均NOT_STARTED。官方metadata显示1条annotation但正文无法取得：连接器不支持此endpoint，匿名官方请求404，浏览器不可用。因此平台原因仍UNKNOWN，不能推断账单、额度或再次DNS。未再次复验，未修改计费或预算；旧research在edbd的成功和本次未执行必须分开报告。
+
+用户随后提供线索：“我好像这个月的GitHub action usage用完了”。本报告将其记录为 **USER_REPORTED_POSSIBLE_USAGE_EXHAUSTION**；官方annotation正文仍UNKNOWN，不将用户的推测升级为平台独立确认。按额度受限处理，停止额外CI复验，未扩大额度、改计费或购买服务。本地可执行的验证及任务文件发布继续；远端门禁待原额度恢复或明确另行授权后补验。
+
+失败诊断的最终边界为最多256目录项、64目录、6层深度、32个指定控制文件、每件512KiB；使用不跟随符号链接的目录FD遍历，读取前后核物理身份。过深JSON、部分文件、超限、符号链接、枚举异常、采集异常和诊断落盘失败均保留明确遗漏/诊断错误，原returncode与stderr不被覆盖。8项诊断专项通过（2.03s、exit0），4个原native测试在该纯诊断命令中明确deselected，不算skip或已执行；随后才进行原13模块集成。先前诊断自身的1条失败原件保留，没有修改业务180秒、child240秒或任何原native断言。
+
+平台执行条件恢复后的补验顺序是：先核报告所指源码与远端main的实际差异；对最终发布提交的原CI运行补齐未执行门禁，保留原attempt及所有失败，再核实际scope/partition/JUnit/原生终态。另核7ca研究Go包与最终源码的依赖原件是否仍逐字一致，再补其未运行的race/vet及独立oracle。原盘前、OUTCOME、provider失败请求与研究账本不会因工程CI恢复而获得重试权限。若原生signal再失败，先用本次有界诊断定位具体阶段和原终态，不能只换key/树/预算或反复运行直到通过。
+
+最终新增测试修复提交为 [7b96f62e](https://github.com/LiRongji1995/stockfish-qlib-quant-system/commit/7b96f62e443d96fb5e3214c60b44e0791a2a8170)。发布检出的原失败daily1同序13模块组合为 **256 passed、0失败/错误/skip、exit0**，pytest996.51秒、外层1002.73秒（工程外层上限2700秒）。原7ca分组的248个case ID全部守恒，新增8项诊断；全部13文件SHA前后不变。六份原生worker均COMPLETED_WITH_UNKNOWNS/exit2/reaped，直接V3均COMPLETE、root_reaped且all_observed_descendants_gone；六个真实worker的libc拒网探针均EPERM且Python拒网钩子有效。UNKNOWN10及MATURE1/UNKNOWN9保持，PIT=false、formal_account_return=null。这个组合检验了共享测试状态/原分组顺序假设；未重现旧远端故障，原因继续UNKNOWN。
+
+7b96正常发布触发的 [CI 42073927423](https://github.com/LiRongji1995/stockfish-qlib-quant-system/actions/runs/42073927423) 已自然终态：scope作业127408929864在17:22:08–11 UTC失败，官方 `runner_id=0`、`steps=[]`；daily/Go/go-core/Live下游均因前置失败未执行。没有测试退出码，不能填0或称测试通过。没有增加skip条件或关闭任何门禁。本地对实际7ca→7b96三测试文件diff重新计算，计划39个daily模块、13/13/13；这份本地scope退出0，不冒充远端scope已运行。未对该CI额外复验。平台annotation尚未知，用户报告的月度额度可能耗尽作为线索保留。

@@ -91,7 +91,7 @@ python -I -B scripts/codex_active_v1.py delivery-protocol inspect-sequence \
   --output <新私有审计JSON>
 ```
 
-`plan` 默认从现有有限官方日历产生 20 日协议，不登记 authority、不采集、不证明完成。可同时提供 `--calendar-state-root`、`--calendar-record`、`--calendar-record-sha256`，只读重验已存在原生缓存并将其精确行集合绑定到协议；选择窗口还必须与有限官方轴一致。正式序列审计应再次提供相同原生日历载体，以及原 `--protocol-business-id`；未提供时明确 NOT_ESTABLISHED。请求文件为 `{ "requests": [...] }`，每项沿用原 `audit_delivery` 的 business_id、job、journal_directory、run/outcomes 路径和 SHA 参数；不接受替换内部审计预算。
+`plan` 默认从现有有限官方日历产生 20 日协议，不登记 authority、不采集、不证明完成。可同时提供 `--calendar-state-root`、`--calendar-record`、`--calendar-record-sha256`，只读重验已存在原生缓存并将其精确行集合绑定到协议；选择窗口还必须与有限官方轴一致。正式序列审计应再次提供相同原生日历载体，以及原 `--protocol-business-id`；未提供时明确 NOT_ESTABLISHED。请求文件为 `{ "requests": [...] }`，每项沿用原 `audit_delivery` 的 business_id、job、journal_directory、run/outcomes 路径和 SHA 参数，并提供 `outcome_business_id`，值为原 OUTCOME 计算业务 ID；不接受替换内部审计预算。注意：`delivery-audit --outcome-business-id` 同样指原 OUTCOME 计算业务，而前述 `outcomes --outcome-business-id` 指后验来源的 PREMARKET 业务，二者不能互换。
 
 需要权威事前冻结时，另调用 `delivery-protocol freeze`，明确提供 `--authorize-freeze`、`--authorization-id`、`--epoch-id` 及原协议/authority 定位。只有该子命令会调用原 `freeze_protocol`；plan 和 inspect-sequence 永不隐式冻结。CLI 授权标识随新输出保存，实际权威登记和事前时钟仍由原合同检查。
 
