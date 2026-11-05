@@ -6,7 +6,6 @@ from threading import Barrier, Lock
 
 import pytest
 
-from stockfish_core.api import create_app
 from stockfish_core.yaogu.contracts import digest
 from stockfish_core.yaogu.daily_research import recommendation_snapshot
 from stockfish_core.yaogu.daily_research_outcomes import POLICY_ID
@@ -57,7 +56,6 @@ def test_primary_transaction_saves_the_same_four_state_snapshot_and_pending(tmp_
         _, job, attempt, _, response = _run_daily_primary(core, input_id=input_id)
         assert job["state"] == "SUCCEEDED", job
         assert attempt["final_status"] == "READY"
-        assert response.status_code == 200
         run_id = job["result"]["run_id"]
         run = core.candidates.strategy_experiment(run_id)
         snapshot = core.store.get_document("daily_research_snapshots", run_id)
@@ -117,30 +115,23 @@ def test_worker_persists_twenty_rows_per_focus_watch_and_same_session_is_idempot
         core.close()
 
 
-def test_api_reads_do_not_write_and_reject_client_computed_or_future_values(tmp_path, monkeypatch):
+def test_local_reads_do_not_write_and_reject_client_computed_values(tmp_path, monkeypatch):
     core, input_id, snapshot, _, _ = isolated_consumer(tmp_path, monkeypatch)
     run_id = snapshot["identity"]["run_id"]
-    client = create_app(core).test_client()
-    path = f"/api/daily-research/runs/{run_id}"
+    service = core.candidates
     try:
-        accepted = client.post(path + "/outcomes", json={"input_id": input_id})
-        assert accepted.status_code == 202, accepted.text
-        assert _wait_job(core, accepted.json["job_id"])["state"] == "SUCCEEDED"
+        accepted = service.submit_daily_recommendation_outcomes(run_id, input_id)
+        assert _wait_job(core, accepted["job_id"])["state"] == "SUCCEEDED"
         before = fingerprint(core)
-        assert client.get(path + "/snapshot").json == snapshot
-        outcome = client.get(path + "/outcomes")
-        assert outcome.status_code == 200 and len(outcome.json["items"]) == 40
-        assert client.get(path + "/outcomes?instrument_id=TEST000").status_code == 200
-        assert len(client.get(path + "/outcomes?instrument_id=TEST000").json["items"]) == 20
-        assert client.get("/api/daily-research/analysis").status_code == 200
-        report = client.get("/api/daily-research/report", query_string={"run_id": run_id, "format": "markdown"})
-        assert report.status_code == 200
-        assert "FOCUS" in report.text and "WATCH" in report.text
+        assert service.daily_recommendation_snapshot(run_id) == snapshot
+        assert len(service.daily_recommendation_outcomes(run_id)["items"]) == 40
+        assert len(service.daily_recommendation_outcomes(run_id, instrument_id="TEST000")["items"]) == 20
+        service.daily_recommendation_analysis()
+        report = service.daily_recommendation_report(run_id=run_id)
+        assert "FOCUS" in report["markdown"] and "WATCH" in report["markdown"]
         for forbidden in ("close_reference_change", "return", "evaluated_at", "cutoff", "trust", "path"):
-            response = client.post(path + "/outcomes", json={"input_id": input_id, forbidden: "TEST_FIXTURE_FORBIDDEN"})
-            assert response.status_code == 400, (forbidden, response.text)
-        assert client.get(path + "/outcomes?return=100").status_code == 400
-        assert client.get("/api/daily-research/analysis?return=100").status_code == 400
+            with pytest.raises(TypeError):
+                service.submit_daily_recommendation_outcomes(run_id, input_id, **{forbidden: "TEST_FIXTURE_FORBIDDEN"})
         assert fingerprint(core) == before
     finally:
         core.close()
@@ -160,21 +151,20 @@ def test_legacy_saved_run_projects_without_new_snapshot_or_current_identity(tmp_
                "comparable_close": item["comparable_close"], "comparable_basis": item["comparable_basis"]}]}}}
     core.store.put_document("strategy_experiment_runs", run_id, run)
     core.store.put_document("strategy_experiment_summaries", run_id, {"run_id": run_id, "results": {STAGE: {}}})
-    client = create_app(core).test_client()
+    service = core.candidates
     try:
         before = fingerprint(core)
-        response = client.get(f"/api/daily-research/runs/{run_id}/snapshot")
-        assert response.status_code == 200, response.text
-        projected = response.json
+        response = service.daily_recommendation_snapshot(run_id)
+        projected = response
         assert projected["identity"]["strategy_version"] is None
         assert projected["identity"]["config_version"] is None
         assert projected["items"][0]["decision_status"] == "WATCH"
         assert projected["items"][0]["reason_codes"] == ["TEST_FIXTURE_FROZEN_REASON"]
         assert core.store.get_document("daily_research_snapshots", run_id) is None
-        outcomes = client.get(f"/api/daily-research/runs/{run_id}/outcomes")
-        assert outcomes.status_code == 200 and outcomes.json["items"] == []
-        assert len(outcomes.json["summary"]["groups"]) == 20
-        assert all(row["counts"]["signals"] == row["counts"]["missing_labels"] == 1 for row in outcomes.json["summary"]["groups"])
+        outcomes = service.daily_recommendation_outcomes(run_id)
+        assert outcomes["items"] == []
+        assert len(outcomes["summary"]["groups"]) == 20
+        assert all(row["counts"]["signals"] == row["counts"]["missing_labels"] == 1 for row in outcomes["summary"]["groups"])
         assert fingerprint(core) == before
     finally:
         core.close()
@@ -314,17 +304,13 @@ def test_asof_cannot_expose_a_snapshot_before_its_known_availability_boundaries(
     monkeypatch.setattr(core.candidates, "_daily_research_sessions", lambda: list(bundle.sessions))
     snapshot = store_fixture_snapshot(core, snapshot)
     run_id = snapshot["identity"]["run_id"]
-    client = create_app(core).test_client()
+    service = core.candidates
     try:
         before = fingerprint(core)
-        for path in (f"/api/daily-research/runs/{run_id}/outcomes", "/api/daily-research/report"):
-            query = {"as_of": requested.isoformat()}
-            if path.endswith("/report"):
-                query["run_id"] = run_id
-            response = client.get(path, query_string=query)
-            assert response.status_code == 400, (path, response.text)
-        analysis = client.get("/api/daily-research/analysis", query_string={"as_of": requested.isoformat()})
-        assert analysis.status_code == 200 and analysis.json["groups"] == []
+        for method in (service.daily_recommendation_outcomes, service.daily_recommendation_report):
+            with pytest.raises(ValueError):
+                method(run_id=run_id, as_of=requested.isoformat())
+        assert service.daily_recommendation_analysis(as_of=requested.isoformat())["groups"] == []
         assert fingerprint(core) == before
     finally:
         core.close()
@@ -366,17 +352,16 @@ def test_run_without_focus_or_watch_has_no_tracked_recommendations_or_false_pend
     core, _, _ = _core(tmp_path, monkeypatch, bundle, now=cutoff)
     monkeypatch.setattr(core.candidates, "_daily_research_sessions", lambda: list(bundle.sessions))
     snapshot = store_fixture_snapshot(core, snapshot)
-    client = create_app(core).test_client()
+    service = core.candidates
     try:
         before = fingerprint(core)
-        response = client.get(f"/api/daily-research/runs/{snapshot['identity']['run_id']}/outcomes")
-        assert response.status_code == 200, response.text
-        assert response.json["tracking_status"] == "NO_TRACKED_RECOMMENDATIONS"
-        assert response.json["items"] == []
-        assert response.json["horizons"] == list(range(1, 21))
-        assert response.json["summary_scope"] == "RUN"
-        assert response.json["instrument_id"] is None
-        assert response.json["summary"]["groups"] == []
+        response = service.daily_recommendation_outcomes(snapshot["identity"]["run_id"])
+        assert response["tracking_status"] == "NO_TRACKED_RECOMMENDATIONS"
+        assert response["items"] == []
+        assert response["horizons"] == list(range(1, 21))
+        assert response["summary_scope"] == "RUN"
+        assert response["instrument_id"] is None
+        assert response["summary"]["groups"] == []
         assert core.candidates.pending_daily_recommendation_outcomes() == []
         assert fingerprint(core) == before
     finally:
@@ -392,16 +377,15 @@ def test_untracked_decision_query_retains_run_summary_without_fake_capture_pendi
     monkeypatch.setattr(core.candidates, "_daily_research_sessions", lambda: list(bundle.sessions))
     snapshot = store_fixture_snapshot(core, snapshot)
     run_id = snapshot["identity"]["run_id"]
-    client = create_app(core).test_client()
+    service = core.candidates
     try:
         job = core.candidates.submit_daily_recommendation_outcomes(run_id, input_id)
         assert _wait_job(core, job["job_id"])["state"] == "SUCCEEDED"
         before = fingerprint(core)
-        full = client.get(f"/api/daily-research/runs/{run_id}/outcomes").json
+        full = service.daily_recommendation_outcomes(run_id)
         assert full["tracking_status"] == "RECORDED" and len(full["items"]) == 40
-        response = client.get(f"/api/daily-research/runs/{run_id}/outcomes", query_string={"instrument_id": instrument_id})
-        assert response.status_code == 200, response.text
-        selected = response.json
+        response = service.daily_recommendation_outcomes(run_id, instrument_id=instrument_id)
+        selected = response
         assert selected["tracking_status"] == "NOT_TRACKED_DECISION"
         assert selected["instrument_id"] == instrument_id
         assert selected["summary_scope"] == "RUN"

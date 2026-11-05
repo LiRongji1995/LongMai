@@ -28,15 +28,7 @@ JOB_KIND = 'short_horizon_daily_closure_v1'
 LEDGERS = 'short_horizon_daily_closure_ledgers_v1'
 MAX_ATTEMPTS = 3
 MAX_DISCOVERY_RECORDS = 10000
-REPLAY_VERSION = 'SHORT_HORIZON_CLOSED_SESSION_REPLAY_V1'
-REPLAY_JOB_KIND = 'short_horizon_closed_session_replay_v1'
-REPLAY_LEDGERS = 'short_horizon_closed_session_replay_ledgers_v1'
-REPLAY_MODE = 'EXPLICIT_CLOSED_SESSION_REPLAY'
 PENDING_RUN_MATERIALIZATION = 'AUTHENTICATED_NONEMPTY_V1'
-LATE_VERSION = 'SHORT_HORIZON_LATE_COMPLETED_SESSION_V1'
-LATE_JOB_KIND = 'short_horizon_late_completed_session_v1'
-LATE_LEDGERS = 'short_horizon_late_completed_session_ledgers_v1'
-LATE_MODE = 'EXPLICIT_LATE_COMPLETED_SESSION'
 
 
 def _closed_archive_seal(view, cutoff):
@@ -128,13 +120,6 @@ class ShortHorizonDailyClosure:
     def _session_options(self):
         return session_options(self.verification_profile)
 
-    def _check_retry_profile(self, request):
-        expected = resolve_verification_profile(self.verification_profile)
-        policy = request['policy']
-        if ((expected is None and 'verification_resource_profile' in policy)
-                or (expected is not None and canonical_json(policy.get('verification_resource_profile'))
-                    != canonical_json(expected))):
-            raise ValueError('SHORT_HORIZON_CLOSURE_RETRY_RESOURCE_PROFILE_MISMATCH')
 
     def _request_identity(self, request):
         return {key: request[key] for key in ('policy', 'run_ids', 'input_id', 'evaluation_session', 'bindings')}
@@ -461,24 +446,58 @@ class ShortHorizonDailyClosure:
     def _submit_plan(self, plan):
         if not plan['can_submit']:
             raise ValueError('SHORT_HORIZON_CLOSURE_' + plan['status'])
-        self._write_jobs()
-        self.service.jobs.register(self.job_kind, self._worker)
-        existing = self.service.jobs.get(plan['job_id'])
-        if existing is not None:
-            # One day's first accepted cutoff is immutable. A later command
-            # with the same input returns it, including FAILED/CANCELLED state.
-            if existing['kind'] != self.job_kind or self._stable_request(existing['payload']) != self._stable_request(plan['request']):
-                raise JobConflict('daily closure job identity collision')
-            return self._latest_attempt(existing)
-        try:
-            return self.service.jobs.submit(self.job_kind, plan['request'], job_id=plan['job_id'])
-        except JobConflict:
-            # Another caller can freeze the first cutoff between get/create.
+        with self._write_jobs()._lock:
+            # Policy/source revisions and a smaller batch must not hide an old
+            # accepted request. Keep its first cutoff, failure and spent budget.
+            requested = plan['request']
+            previous_roots = {}
+            offset = 0
+            while True:
+                rows = self.service.jobs.list(limit=1000, offset=offset)
+                for prior in rows:
+                    payload = prior.get('payload') or {}
+                    if (prior.get('kind') in {'strategy_outcomes', 'strategy_tracking'}
+                            and payload.get('input_id') == requested['input_id']
+                            and payload.get('run_id') in requested['run_ids']):
+                        raise JobConflict('prior legacy outcome request requires explicit reconciliation')
+                    if (str(prior.get('kind', '')).startswith('short_horizon_')
+                            and payload.get('input_id') == requested['input_id']
+                            and payload.get('evaluation_session') == requested['evaluation_session']
+                            and set(payload.get('run_ids') or ()) & set(requested['run_ids'])):
+                        if (prior['kind'] != self.job_kind
+                                or set(payload.get('run_ids') or ()) != set(requested['run_ids'])):
+                            raise JobConflict('prior overlapping outcome request requires explicit reconciliation')
+                        previous_roots.setdefault(payload['root_job_id'], prior)
+                offset += len(rows)
+                if len(rows) < 1000:
+                    break
+                if offset >= MAX_DISCOVERY_RECORDS:
+                    raise JobConflict('outcome request reconciliation scan limit reached')
+            if len(previous_roots) > 1:
+                raise JobConflict('multiple prior outcome requests require explicit reconciliation')
+            if previous_roots:
+                root_id = next(iter(previous_roots))
+                root = self.service.jobs.get(root_id)
+                if root is None:
+                    raise JobConflict('prior outcome root request is missing')
+                return self._latest_attempt(root)
+            self.service.jobs.register(self.job_kind, self._worker)
             existing = self.service.jobs.get(plan['job_id'])
-            if (existing is None or existing['kind'] != self.job_kind
-                    or self._stable_request(existing['payload']) != self._stable_request(plan['request'])):
-                raise
-            return self._latest_attempt(existing)
+            if existing is not None:
+                # One day's first accepted cutoff is immutable. A later command
+                # with the same input returns it, including FAILED/CANCELLED state.
+                if existing['kind'] != self.job_kind or self._stable_request(existing['payload']) != self._stable_request(plan['request']):
+                    raise JobConflict('daily closure job identity collision')
+                return self._latest_attempt(existing)
+            try:
+                return self.service.jobs.submit(self.job_kind, plan['request'], job_id=plan['job_id'])
+            except JobConflict:
+                # Another caller can freeze the first cutoff between get/create.
+                existing = self.service.jobs.get(plan['job_id'])
+                if (existing is None or existing['kind'] != self.job_kind
+                        or self._stable_request(existing['payload']) != self._stable_request(plan['request'])):
+                    raise
+                return self._latest_attempt(existing)
 
     @staticmethod
     def _stable_request(request):
@@ -522,56 +541,6 @@ class ShortHorizonDailyClosure:
             raise JobConflict('closure writes require the active matching job-service lock')
         return jobs
 
-    def retry(self, job_id):
-        previous = self._job(job_id)
-        self._check_retry_profile(previous['payload'])
-        self._run_ids(previous['payload']['run_ids'])
-        if previous['attempt'] >= MAX_ATTEMPTS:
-            raise JobConflict('daily closure retry limit reached')
-        self._write_jobs()
-        if previous['state'] in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'}:
-            previous = self._recover_target(job_id)
-        if previous['state'] not in {'FAILED', 'INTERRUPTED', 'CANCELLED'}:
-            raise JobConflict('only failed, interrupted or cancelled closure jobs may be retried')
-        self.service.jobs.register(self.job_kind, self._worker)
-        next_id = previous['payload']['root_job_id'] + '_attempt_' + str(previous['attempt'] + 1)
-        job = self.service.jobs.create(self.job_kind, previous['payload'], job_id=next_id, retry_of=job_id)
-        if job['state'] == 'QUEUED':
-            self.service.jobs.start(next_id)
-        return self.service.jobs.get(next_id)
-
-    def _recover_target(self, job_id):
-        """Explicit orphan recovery under the existing owner's OS lock only."""
-        jobs = self._write_jobs()
-        with jobs._lock:
-            self._write_jobs()  # Serialize against shutdown before any update.
-            if job_id in jobs._futures:
-                raise JobConflict('active current-process closure cannot be recovered')
-            with self.service.store.transaction() as connection:
-                row = connection.execute('SELECT * FROM jobs WHERE job_id=?', (job_id,)).fetchone()
-                previous = jobs._decode(row)
-                if previous['kind'] != self.job_kind:
-                    raise JobConflict('target recovery requires a closure job')
-                self._check_retry_profile(previous['payload'])
-                if previous['state'] not in {'QUEUED', 'RUNNING', 'CANCEL_REQUESTED'}:
-                    return previous
-                if previous['owner_id'] == jobs.owner_id:
-                    raise JobConflict('current-process closure cannot be recovered')
-                # Recheck the configured budget under the same write lock;
-                # refusal must not change even the target's audit state.
-                self._run_ids(previous['payload']['run_ids'])
-                if previous['attempt'] >= MAX_ATTEMPTS:
-                    raise JobConflict('daily closure retry limit reached')
-                state = 'CANCELLED' if previous['cancel_requested'] else 'INTERRUPTED'
-                error = {'code': 'EXPLICIT_CLOSURE_TARGET_RECOVERY',
-                         'message': 'only the explicitly selected orphaned closure was recovered'}
-                now = utc_now().isoformat()
-                connection.execute('UPDATE jobs SET state=?,error=?,finished_at=?,updated_at=?,revision=revision+1 WHERE job_id=?',
-                                   (state, canonical_json(error), now, now, job_id))
-                jobs._event(connection, job_id, state, previous['progress'],
-                    {'target_only_recovery': True, 'previous_state': previous['state'],
-                     'previous_owner_id': previous['owner_id']})
-        return jobs.get(job_id)
 
     def _worker(self, ctx):
         request = ctx.payload
@@ -719,412 +688,3 @@ class ShortHorizonDailyClosure:
         return ctx.complete({'schema_version': self.version, 'ledger_id': ctx.job_id, 'status': ledger['status'],
                              'run_count': len(runs), 'revision_ids': [result['outcomes']['revision_id'] for result in products],
                              'market_edge': 'NOT_ESTABLISHED'}, write)
-
-
-class ClosedSessionClosure(ShortHorizonDailyClosure):
-    """Explicit historical evidence cutoff, with actual present execution time.
-
-    No current-day admission rule is overridden. This separate job contract
-    reuses the exact evaluator, archive verification and atomic writer above.
-    """
-    version = REPLAY_VERSION
-    job_kind = REPLAY_JOB_KIND
-    ledgers = REPLAY_LEDGERS
-    job_prefix = 'short_replay_'
-
-    def __init__(self, service, *, clock=utc_now, max_runs=5, verification_profile=None):
-        if clock is not utc_now and getattr(service, 'allow_test_fixture', False) is not True:
-            raise ValueError('SHORT_HORIZON_REPLAY_REAL_CLOCK_REQUIRED')
-        super().__init__(service, clock=clock, max_runs=max_runs, verification_profile=verification_profile)
-
-    def _policy_identity(self):
-        return {**super()._policy_identity(), 'version': self.version, 'execution_mode': REPLAY_MODE}
-
-    def _request_identity(self, request):
-        return {**super()._request_identity(request), **{key: request[key] for key in
-            ('execution_mode', 'business_session', 'evaluated_at')}}
-
-    @staticmethod
-    def _stable_request(request):
-        # A changed historical cutoff is a different request, even when it
-        # produces the same visible rows and the same outcome revision.
-        return dict(request)
-
-    def _sealed_cutoff(self, request, evaluated):
-        return evaluated
-
-    def _execution_context(self, request, started_at):
-        return {'execution_mode': REPLAY_MODE, 'business_session': request['business_session'],
-                'knowledge_cutoff': request['evaluated_at'],
-                'execution_started_at': stamp(started_at).astimezone(timezone.utc).isoformat(),
-                'receipt_created_at': utc_now().isoformat(), 'current_session_acceptance': False,
-                'original_failed_job_rewritten': False,
-                'evaluated_at_semantics': 'HISTORICAL_KNOWLEDGE_CUTOFF_NOT_EXECUTION_TIME'}
-
-    @staticmethod
-    def _business_session(value):
-        if type(value) is str:
-            parsed = date.fromisoformat(value)
-            if parsed.isoformat() != value:
-                raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_ISO_BUSINESS_SESSION_REQUIRED')
-            return parsed
-        if type(value) is not date:
-            raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_BUSINESS_SESSION_REQUIRED')
-        return value
-
-    def _replay_reasons(self, business_session, evaluated, now):
-        reasons = []
-        if evaluated > now:
-            reasons.append('FUTURE_EVALUATION_CUTOFF')
-        if evaluated.astimezone(SH).date() != business_session:
-            reasons.append('REPLAY_CUTOFF_BUSINESS_SESSION_MISMATCH')
-        if business_session not in exchange_calendar_2026().sessions:
-            reasons.append('NO_SESSION')
-        elif evaluated < datetime.combine(business_session, time(15), SH):
-            reasons.append('BEFORE_SESSION_CLOSE')
-        return reasons
-
-    def _validated_evaluation(self, request):
-        evaluated, day = super()._validated_evaluation(request)
-        business = self._business_session(request['business_session'])
-        if (request.get('execution_mode') != REPLAY_MODE or business != day
-                or request['evaluated_at'] != evaluated.astimezone(timezone.utc).isoformat()
-                or self._replay_reasons(business, evaluated, stamp(self.clock()))):
-            raise ValueError('SHORT_HORIZON_REPLAY_FROZEN_REQUEST_INVALID')
-        return evaluated, day
-
-    def plan(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_PLAN_REPLAY_REQUIRED')
-
-    def submit(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_SUBMIT_REPLAY_REQUIRED')
-
-    def pending(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_REPLAY_EXPLICIT_RUN_IDS_REQUIRED')
-
-    def plan_replay(self, run_ids, input_id, *, business_session, evaluated_at):
-        run_ids = self._run_ids(run_ids)
-        business = self._business_session(business_session)
-        evaluated = stamp(evaluated_at).astimezone(timezone.utc)
-        reasons = self._replay_reasons(business, evaluated, stamp(self.clock()))
-        if reasons:
-            return {'schema_version': self.version, 'execution_mode': REPLAY_MODE,
-                'business_session': str(business), 'job_id': None, 'status': reasons[0],
-                'can_submit': False, 'reason_codes': reasons, 'request': None, 'runs': [],
-                'run_count': len(run_ids), 'max_runs': self.max_runs,
-                'collection': 'NOT_REQUESTED', 'archive_verification': None,
-                'current_session_acceptance': False, 'market_edge': 'NOT_ESTABLISHED'}
-        verification = _bridge_module().ArchiveVerificationSession(**self._session_options())
-        runs, bundle, bindings = self._authenticated(run_ids, input_id, verification, sealed_cutoff=evaluated)
-        latest = max(bundle.sessions) if bundle.sessions else None
-        if bundle.observation_date != business or latest != business:
-            reasons.append('REPLAY_INPUT_BUSINESS_SESSION_MISMATCH')
-        if any(evaluated < max(stamp(run['decision_cutoff']), stamp(run.get('generated_at', run['decision_cutoff'])))
-               for run in runs):
-            reasons.append('EVALUATION_PRECEDES_FROZEN_SIGNAL')
-        plans = self._schedule(runs, bundle, evaluated)
-        authentication = self._terminal(verification)
-        identity = {'policy': self._policy_identity(), 'run_ids': run_ids, 'input_id': input_id,
-            'evaluation_session': str(business), 'bindings': bindings, 'execution_mode': REPLAY_MODE,
-            'business_session': str(business), 'evaluated_at': evaluated.isoformat()}
-        job_id = self.job_prefix + digest(identity)
-        request = {**identity, 'root_job_id': job_id, 'horizons': list(HORIZONS)}
-        return {'schema_version': self.version, 'execution_mode': REPLAY_MODE,
-            'business_session': str(business), 'job_id': job_id,
-            'status': reasons[0] if reasons else 'READY', 'can_submit': not reasons,
-            'reason_codes': reasons, 'request': request, 'runs': plans, 'run_count': len(run_ids),
-            'max_runs': self.max_runs, 'collection': 'NOT_REQUESTED',
-            'outcome_input_observation_date': str(bundle.observation_date),
-            'outcome_input_latest_session': str(latest) if latest else None,
-            'archive_verification': authentication, 'current_session_acceptance': False,
-            'market_edge': 'NOT_ESTABLISHED'}
-
-    def submit_replay(self, run_ids, input_id, *, business_session, evaluated_at):
-        return self._submit_plan(self.plan_replay(run_ids, input_id,
-            business_session=business_session, evaluated_at=evaluated_at))
-
-
-class LateCompletedSessionClosure(ClosedSessionClosure):
-    """Explicit late processing with a present evidence cutoff, never past PIT.
-
-    The business day is the latest officially completed session at both the
-    supplied cutoff and new admission. An accepted request can finish/retry
-    later using that same frozen cutoff; new evidence is not admitted by retry.
-    """
-    version = LATE_VERSION
-    job_kind = LATE_JOB_KIND
-    ledgers = LATE_LEDGERS
-    job_prefix = 'short_late_'
-
-    def _policy_identity(self):
-        return {**ShortHorizonDailyClosure._policy_identity(self),
-                'version': self.version, 'execution_mode': LATE_MODE,
-                'session_admission': 'OFFICIAL_LATEST_COMPLETED_AT_CUTOFF_AND_ADMISSION_V1'}
-
-    @staticmethod
-    def _latest_completed(instant):
-        local = stamp(instant).astimezone(SH)
-        calendar = exchange_calendar_2026()
-        if not calendar.coverage_start <= local.date() <= calendar.coverage_end:
-            raise ValueError('SHORT_HORIZON_LATE_CALENDAR_OUT_OF_COVERAGE')
-        completed = [day for day in calendar.sessions if day < local.date()
-                     or (day == local.date() and local.time().replace(tzinfo=None) >= time(15))]
-        if not completed:
-            raise ValueError('SHORT_HORIZON_LATE_COMPLETED_SESSION_UNAVAILABLE')
-        return completed[-1]
-
-    def _late_reasons(self, business, evaluated, now, *, admission):
-        reasons = []
-        if evaluated > now:
-            reasons.append('FUTURE_EVALUATION_CUTOFF')
-        if business not in exchange_calendar_2026().sessions:
-            reasons.append('NO_SESSION')
-        if evaluated.astimezone(SH).date() <= business:
-            reasons.append('LATE_PROCESSING_REQUIRES_LATER_CALENDAR_DATE')
-        if self._latest_completed(evaluated) != business:
-            reasons.append('LATE_BUSINESS_NOT_LATEST_COMPLETED_AT_CUTOFF')
-        if admission and self._latest_completed(now) != business:
-            reasons.append('LATE_BUSINESS_NOT_LATEST_COMPLETED_AT_ADMISSION')
-        return reasons
-
-    def _validated_evaluation(self, request):
-        evaluated = stamp(request['evaluated_at']).astimezone(timezone.utc)
-        business = self._business_session(request['business_session'])
-        if (request.get('execution_mode') != LATE_MODE
-                or request['root_job_id'] != self.job_prefix + digest(self._request_identity(request))
-                or request['horizons'] != list(HORIZONS)
-                or request['evaluation_session'] != str(business)
-                or request['evaluated_at'] != evaluated.isoformat()
-                or self._late_reasons(business, evaluated, stamp(self.clock()), admission=False)):
-            raise ValueError('SHORT_HORIZON_LATE_FROZEN_REQUEST_INVALID')
-        return evaluated, business
-
-    def _execution_context(self, request, started_at):
-        return {'execution_mode': LATE_MODE, 'business_session': request['business_session'],
-                'knowledge_cutoff': request['evaluated_at'],
-                'execution_started_at': stamp(started_at).astimezone(timezone.utc).isoformat(),
-                'receipt_created_at': utc_now().isoformat(), 'current_session_acceptance': False,
-                'late_processing': True, 'historical_visibility_upgraded': False,
-                'original_failed_job_rewritten': False,
-                'evaluated_at_semantics': 'ACTUAL_LATE_KNOWLEDGE_CUTOFF_NOT_BUSINESS_DAY_PIT'}
-
-    def plan(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_LATE_EXPLICIT_PLAN_LATE_REQUIRED')
-
-    def submit(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_LATE_EXPLICIT_SUBMIT_LATE_REQUIRED')
-
-    def pending(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_LATE_EXPLICIT_RUN_IDS_REQUIRED')
-
-    def plan_replay(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_LATE_EXPLICIT_PLAN_LATE_REQUIRED')
-
-    def submit_replay(self, *args, **kwargs):
-        raise ValueError('SHORT_HORIZON_LATE_EXPLICIT_SUBMIT_LATE_REQUIRED')
-
-    def plan_late(self, run_ids, input_id, *, business_session, evaluated_at):
-        run_ids = self._run_ids(run_ids)
-        business = self._business_session(business_session)
-        evaluated = stamp(evaluated_at).astimezone(timezone.utc)
-        reasons = self._late_reasons(business, evaluated, stamp(self.clock()), admission=True)
-        common = {'schema_version': self.version, 'execution_mode': LATE_MODE,
-                  'business_session': str(business), 'knowledge_cutoff': evaluated.isoformat(),
-                  'run_count': len(run_ids), 'max_runs': self.max_runs, 'collection': 'NOT_REQUESTED',
-                  'current_session_acceptance': False, 'late_processing': True,
-                  'historical_visibility_upgraded': False, 'market_edge': 'NOT_ESTABLISHED'}
-        if reasons:
-            return {**common, 'job_id': None, 'status': reasons[0], 'can_submit': False,
-                    'reason_codes': reasons, 'request': None, 'runs': [], 'archive_verification': None}
-        verification = _bridge_module().ArchiveVerificationSession(**self._session_options())
-        runs, bundle, bindings = self._authenticated(run_ids, input_id, verification, sealed_cutoff=evaluated)
-        latest = max(bundle.sessions) if bundle.sessions else None
-        if bundle.observation_date != business or latest != business:
-            reasons.append('LATE_INPUT_BUSINESS_SESSION_MISMATCH')
-        if any(evaluated < max(stamp(run['decision_cutoff']), stamp(run.get('generated_at', run['decision_cutoff'])))
-               for run in runs):
-            reasons.append('EVALUATION_PRECEDES_FROZEN_SIGNAL')
-        plans = self._schedule(runs, bundle, evaluated)
-        authentication = self._terminal(verification)
-        # Authentication may straddle a close. Recheck new admission rather than
-        # accepting a now-stale input after a long, otherwise valid verification.
-        reasons.extend(reason for reason in self._late_reasons(business, evaluated, stamp(self.clock()), admission=True)
-                       if reason not in reasons)
-        identity = {'policy': self._policy_identity(), 'run_ids': run_ids, 'input_id': input_id,
-                    'evaluation_session': str(business), 'bindings': bindings, 'execution_mode': LATE_MODE,
-                    'business_session': str(business), 'evaluated_at': evaluated.isoformat()}
-        job_id = self.job_prefix + digest(identity)
-        return {**common, 'job_id': job_id, 'status': reasons[0] if reasons else 'READY',
-                'can_submit': not reasons, 'reason_codes': reasons,
-                'request': {**identity, 'root_job_id': job_id, 'horizons': list(HORIZONS)}, 'runs': plans,
-                'outcome_input_observation_date': str(bundle.observation_date),
-                'outcome_input_latest_session': str(latest) if latest else None,
-                'archive_verification': authentication}
-
-    def _submit_plan(self, plan):
-        if plan.get('can_submit'):
-            request = plan['request']
-            reasons = self._late_reasons(self._business_session(request['business_session']),
-                                        stamp(request['evaluated_at']), stamp(self.clock()), admission=True)
-            if reasons:
-                raise ValueError('SHORT_HORIZON_CLOSURE_' + reasons[0])
-        return super()._submit_plan(plan)
-
-    def submit_late(self, run_ids, input_id, *, business_session, evaluated_at):
-        return self._submit_plan(self.plan_late(run_ids, input_id,
-            business_session=business_session, evaluated_at=evaluated_at))
-
-
-class RestoredResultDailyClosure(ShortHorizonDailyClosure):
-    """Explicit current-day closure with sealed-result content recovery proofs.
-
-    Frozen calculations and every original terminal are inherited. Historical
-    result physical ownership remains lost; default daily/replay reject it.
-    """
-    version = 'SHORT_HORIZON_RESTORED_RESULT_DAILY_V1'
-    job_kind = 'short_horizon_restored_result_daily_v1'
-    ledgers = 'short_horizon_restored_result_daily_ledgers_v1'
-    job_prefix = 'short_restored_daily_'
-
-    def __init__(self, service, *, restoration_manifest_ref, clock=utc_now, **kwargs):
-        if clock is not utc_now and getattr(service, 'allow_test_fixture', False) is not True:
-            raise ValueError('SHORT_HORIZON_RESTORED_TEST_CLOCK_ONLY')
-        super().__init__(service, clock=clock, **kwargs)
-        from copy import deepcopy
-        from .short_horizon_archive_bridge_v1 import configure_restored_source_protocol
-        self.restoration_manifest_ref = deepcopy(restoration_manifest_ref)
-        self.source_protocol = configure_restored_source_protocol(service, restoration_manifest_ref)
-
-    def _require_actual_clock(self):
-        if self.clock is not utc_now and getattr(self.service, 'allow_test_fixture', False) is not True:
-            raise ValueError('SHORT_HORIZON_RESTORED_TEST_CLOCK_ONLY')
-
-    def plan(self, *args, **kwargs):
-        self._require_actual_clock()
-        return super().plan(*args, **kwargs)
-
-    def _validated_evaluation(self, request):
-        self._require_actual_clock()
-        return super()._validated_evaluation(request)
-
-    def _session_options(self):
-        from copy import deepcopy
-        return {**super()._session_options(), 'restoration_manifest_ref': deepcopy(self.restoration_manifest_ref)}
-
-    def _policy_identity(self):
-        self._require_actual_clock()
-        from .sealed_result_restoration_v1 import protocol_identity
-        if self.source_protocol != protocol_identity(self.restoration_manifest_ref):
-            raise ValueError('SHORT_HORIZON_RESTORED_SOURCE_PROTOCOL_CHANGED')
-        policy = super()._policy_identity()
-        policy['source_hashes']['sealed_result_restoration_v1.py'] = hashlib.sha256(
-            Path(__file__).with_name('sealed_result_restoration_v1.py').read_bytes()).hexdigest()
-        return {**policy, 'version': self.version, 'source_protocol': self.source_protocol}
-
-    def _check_retry_profile(self, request):
-        super()._check_retry_profile(request)
-        if request['policy'] != self._policy_identity():
-            raise JobConflict('SHORT_HORIZON_RESTORED_RETRY_SOURCE_PROTOCOL_MISMATCH')
-
-    def _authenticated(self, *args, sealed_cutoff=None, **kwargs):
-        result = super()._authenticated(*args, sealed_cutoff=sealed_cutoff, **kwargs)
-        if sealed_cutoff is not None:
-            session = args[2] if len(args) >= 3 else kwargs['session']
-            self._check_restoration_cutoff(session, sealed_cutoff)
-        return result
-
-    def _check_restoration_cutoff(self, session, evaluated):
-        # Current local physical pins must already exist by the actual cutoff.
-        # This necessary metadata order never proves past vendor publication.
-        delta = stamp(evaluated).astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
-        cutoff_ns = ((delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds) * 1000
-        references = [self.restoration_manifest_ref]
-        references += [proof['current_reference'] for proof in session.audit().get('result_restorations', ())]
-        if any(reference['fp']['st_ctime_ns'] > cutoff_ns for reference in references):
-            raise ValueError('SHORT_HORIZON_RESTORED_PHYSICAL_PIN_AFTER_CUTOFF')
-
-    def _sealed_cutoff(self, request, evaluated):
-        return evaluated
-
-    def _execution_context(self, request, started_at):
-        return {'source_protocol': request['policy']['source_protocol'],
-                'original_result_physical_ownership': 'LOST_NOT_RESTORED'}
-
-
-class LocalCopyLateCompletedSessionClosure(LateCompletedSessionClosure):
-    """Explicit local RESULT copies and latest-completed late-session admission.
-
-    Inherits the full late cutoff/calendar checks, frozen computation, source
-    terminals, database parent hashes and atomic worker. No execution clock is
-    moved backwards and no old physical or historical owner is restored.
-    """
-    version = 'SHORT_HORIZON_LOCAL_COPY_LATE_COMPLETED_V1'
-    job_kind = 'short_horizon_local_copy_late_completed_v1'
-    ledgers = 'short_horizon_local_copy_late_completed_ledgers_v1'
-    job_prefix = 'short_local_late_'
-
-    def __init__(self, service, *, local_copy_manifest_ref, clock=utc_now, **kwargs):
-        if clock is not utc_now and getattr(service, 'allow_test_fixture', False) is not True:
-            raise ValueError('SHORT_HORIZON_LOCAL_COPY_REAL_CLOCK_REQUIRED')
-        super().__init__(service, clock=clock, **kwargs)
-        from copy import deepcopy
-        from .short_horizon_archive_bridge_v1 import configure_local_copy_source_protocol
-        self.local_copy_manifest_ref = deepcopy(local_copy_manifest_ref)
-        self.source_protocol = configure_local_copy_source_protocol(service, local_copy_manifest_ref)
-        self._source_protocol_json = canonical_json(self.source_protocol)
-
-    def _require_source_identity(self):
-        if self.clock is not utc_now and getattr(self.service, 'allow_test_fixture', False) is not True:
-            raise ValueError('SHORT_HORIZON_LOCAL_COPY_REAL_CLOCK_REQUIRED')
-        from .sealed_result_local_copy_v1 import validate_protocol
-        validate_protocol(self.source_protocol)
-        if (canonical_json(self.source_protocol) != self._source_protocol_json
-                or self.source_protocol['manifest_reference'] != self.local_copy_manifest_ref):
-            raise ValueError('SHORT_HORIZON_LOCAL_COPY_SOURCE_PROTOCOL_CHANGED')
-
-    def plan_late(self, *args, **kwargs):
-        self._require_source_identity()
-        return super().plan_late(*args, **kwargs)
-
-    def _submit_plan(self, plan):
-        self._require_source_identity()
-        return super()._submit_plan(plan)
-
-    def _validated_evaluation(self, request):
-        self._require_source_identity()
-        return super()._validated_evaluation(request)
-
-    def _session_options(self):
-        self._require_source_identity()
-        from copy import deepcopy
-        return {**super()._session_options(), 'local_copy_manifest_ref': deepcopy(self.local_copy_manifest_ref)}
-
-    def _policy_identity(self):
-        self._require_source_identity()
-        from copy import deepcopy
-        policy = super()._policy_identity()
-        policy['source_hashes']['sealed_result_local_copy_v1.py'] = hashlib.sha256(
-            Path(__file__).with_name('sealed_result_local_copy_v1.py').read_bytes()).hexdigest()
-        return {**policy, 'version': self.version, 'source_protocol': deepcopy(self.source_protocol)}
-
-    def _check_retry_profile(self, request):
-        super()._check_retry_profile(request)
-        if request['policy'] != self._policy_identity():
-            raise JobConflict('SHORT_HORIZON_LOCAL_COPY_RETRY_SOURCE_PROTOCOL_MISMATCH')
-
-    def _authenticated(self, *args, sealed_cutoff=None, **kwargs):
-        result = super()._authenticated(*args, sealed_cutoff=sealed_cutoff, **kwargs)
-        if sealed_cutoff is not None:
-            session = args[2] if len(args) >= 3 else kwargs['session']
-            delta = stamp(sealed_cutoff).astimezone(timezone.utc) - datetime(1970, 1, 1, tzinfo=timezone.utc)
-            cutoff_ns = ((delta.days * 86400 + delta.seconds) * 1000000 + delta.microseconds) * 1000
-            references = [self.local_copy_manifest_ref]
-            references += [proof['current_reference'] for proof in session.audit().get('result_local_copies', ())]
-            if any(reference['fp']['st_ctime_ns'] > cutoff_ns for reference in references):
-                raise ValueError('SHORT_HORIZON_LOCAL_COPY_PHYSICAL_PIN_AFTER_CUTOFF')
-        return result
-
-    def _execution_context(self, request, started_at):
-        return {**super()._execution_context(request, started_at),
-                'source_protocol': request['policy']['source_protocol'],
-                'original_result_physical_ownership': 'LOST_NOT_RESTORED'}

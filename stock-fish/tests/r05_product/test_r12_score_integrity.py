@@ -108,7 +108,7 @@ def test_stage_and_parent_semantic_identity_changes_create_new_epoch(field):
     assert validation_identity_for_run(run) == before
 
 
-@pytest.mark.parametrize("filename", ["scheduler.py", "candidate_service.py", "validation_identity.py"])
+@pytest.mark.parametrize("filename", ["strategy_experiments.py", "candidate_service.py", "validation_identity.py"])
 def test_actual_protocol_implementation_file_change_creates_new_epoch(filename, monkeypatch):
     from pathlib import Path
 
@@ -295,14 +295,13 @@ def test_new_scorer_cannot_recompute_old_frozen_score_spec(monkeypatch):
 
 
 def test_score_api_defaults_active_epoch_and_unknown_epoch_does_not_fallback(tmp_path):
-    from stockfish_core.api import create_app
-    from stockfish_core.service import ApplicationService
+    from tests.support.local_service import ResearchService
     from stockfish_core.storage import SQLiteStore
     from stockfish_core.yaogu.stage_aware_momentum import stage_aware_source_identity
     from stockfish_core.yaogu.strategy_experiments import IMPLEMENTATION_VERSION, source_identity
     from stockfish_core.yaogu.validation_identity import PRIMARY_CUTOFF_POLICY_ID, VALIDATION_PROTOCOL_ID
 
-    core = ApplicationService(root=tmp_path / "state", store=SQLiteStore(tmp_path / "score.sqlite3"),
+    core = ResearchService(root=tmp_path / "state", store=SQLiteStore(tmp_path / "score.sqlite3"),
                               allow_test_fixture=True, data_dir=tmp_path / "no_model")
     try:
         old = _dated_run("2026-09-09", [_row("A", "FOCUS")], "old-later-day")
@@ -321,10 +320,10 @@ def test_score_api_defaults_active_epoch_and_unknown_epoch_does_not_fallback(tmp
         for run, doc in ((old, old_doc), (current, current_doc)):
             core.store.put_document("strategy_experiment_runs", run["run_id"], run)
             core.store.put_document("recommendation_score_revisions", doc["score_run_id"], doc)
-        client = create_app(core).test_client()
-        latest = client.get("/api/recommendation-scores/latest").json
-        old_view = client.get("/api/recommendation-scores/latest?validation_epoch_id=" + old_doc["validation_epoch_id"]).json
-        unknown = client.get("/api/recommendation-scores/latest?validation_epoch_id=UNKNOWN_EPOCH").json
+        service = core.candidates
+        latest = service.latest_recommendation_scores()
+        old_view = service.latest_recommendation_scores(validation_epoch_id=old_doc["validation_epoch_id"])
+        unknown = service.latest_recommendation_scores(validation_epoch_id="UNKNOWN_EPOCH")
         assert latest["latest"]["signal_run_id"] == "current"
         assert latest["latest"]["headline_status"] == "N_A_SIGNAL_DATA_UNAVAILABLE"
         assert latest["official_prospective_score"]["official_signal_days"] == 0

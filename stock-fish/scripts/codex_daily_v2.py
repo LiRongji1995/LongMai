@@ -1,16 +1,18 @@
-"""Registered daily entry with a complete, bounded shared premarket workflow.
+"""Single local entry for bounded research, saved results and maintenance.
 
-V1 remains byte-for-byte compatible for saved results. New runs have their own
-execution identity; a new identity never authorizes retrying an existing request.
+The existing registration, operation journal and source budgets remain in place.
+Saved results keep their original dates and never gain fresh source authority.
 """
 from __future__ import annotations
 
 import argparse
+from contextlib import nullcontext
 from datetime import date, datetime, timedelta, timezone
 import hashlib
 import json
 import os
 from pathlib import Path
+from types import SimpleNamespace
 import re
 import subprocess
 import sys
@@ -21,7 +23,10 @@ ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 
-from scripts import codex_daily as legacy
+from stockfish_core.file_integrity import (
+    content_equal, content_reference_equal, content_fingerprint, verify_content_reference,
+)
+
 from scripts import codex_premarket as original
 from scripts import codex_workspace as workspace
 
@@ -33,7 +38,7 @@ def _registered(runtime, argv):
     prepared = original._prepared(runtime.profile)
     script = prepared["source"] / "scripts/codex_daily_v2.py"
     original._fp(script)
-    if (ROOT == prepared["source"] and Path(sys.executable).absolute() == prepared["python"]
+    if (ROOT == prepared["source"] and workspace.interpreter_path(sys.executable) == prepared["python"]
             and sys.pycache_prefix is not None and not Path(sys.pycache_prefix).exists()):
         return None
     with tempfile.TemporaryDirectory(prefix="stockfish-daily-v2-") as directory:
@@ -51,9 +56,10 @@ def _workflow():
     return codex_premarket_shared_v1
 
 
-def _plan(runtime):
+def _plan(runtime, *, collect_missing=False, allow_test_fixture=False):
     from scripts import codex_premarket_preflight_v1
-    return codex_premarket_preflight_v1.plan(runtime)
+    return codex_premarket_preflight_v1.plan(runtime, collect_missing=collect_missing,
+                                            allow_test_fixture=allow_test_fixture)
 
 
 def _snapshot(prepared):
@@ -64,7 +70,7 @@ def _snapshot(prepared):
 
 
 def _same(prepared, expected):
-    need(_snapshot(prepared) == expected, "DAILY_SHARED_IMPLEMENTATION_OR_CONFIG_CHANGED")
+    need(content_equal(_snapshot(prepared), expected), "DAILY_SHARED_IMPLEMENTATION_OR_CONFIG_CHANGED")
 
 
 def _prior_request(runtime, identity):
@@ -73,6 +79,8 @@ def _prior_request(runtime, identity):
     Different source/configuration identities must not make a failed, uncertain,
     or already completed request disappear. Explicit reconciliation is separate.
     """
+    if getattr(runtime, "ancestor_ledgers", None):
+        runtime.guard_ancestor_request(identity)
     directory = runtime.directory / "operations"
     if not directory.exists():
         return
@@ -84,12 +92,13 @@ def _prior_request(runtime, identity):
         other = record.get("identity", {})
         if other == identity:
             continue
-        if (other.get("backend") == "premarket"
-                and other.get("request_key") == identity["request_key"]):
-            need((other.get("observation_date"), other.get("target_session")) ==
-                 (identity["observation_date"], identity["target_session"]),
-                 "DAILY_SHARED_REQUEST_KEY_REUSED_ACROSS_SESSIONS")
-            raise original.PremarketError("DAILY_SHARED_EXISTING_REQUEST_RECONCILE_NO_RETRY")
+        if other.get("backend") == "premarket":
+            same_sessions = (other.get("observation_date"), other.get("target_session")) == (
+                identity["observation_date"], identity["target_session"])
+            same_key = other.get("request_key") == identity["request_key"]
+            need(not same_key or same_sessions, "DAILY_SHARED_REQUEST_KEY_REUSED_ACROSS_SESSIONS")
+            if same_key or same_sessions:
+                raise original.PremarketError("DAILY_SHARED_EXISTING_REQUEST_RECONCILE_NO_RETRY")
 
 
 def _validate(prepared, snapshot, receipt, observation, target, expected_engine):
@@ -100,7 +109,7 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
          "DAILY_SHARED_RECEIPT_SESSIONS")
     job = original._job_path(prepared, receipt["job"])
     final, final_ref = original._control(job / "final-control.json")
-    need(final_ref == receipt["final"], "DAILY_SHARED_FINAL_CHANGED")
+    need(content_reference_equal(final_ref, receipt["final"]), "DAILY_SHARED_FINAL_CHANGED")
     need(final.get("schema_version") == workflow.VERSION and final.get("status") in original.SUCCESS
          and receipt.get("status") == final["status"]
          and final.get("job") == str(job)
@@ -120,7 +129,8 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
         original._inside_job(final[name], job)
         refs.append(final[name])
     completion, completion_ref = original._control(Path(final["completion"]["path"]))
-    need(completion_ref == final["completion"] == receipt["completion"]
+    need(content_reference_equal(completion_ref, final["completion"])
+         and content_reference_equal(completion_ref, receipt["completion"])
          and completion.get("schema_version") == workflow.VERSION
          and completion.get("status") == final["status"] and completion.get("core_verified") is True
          and completion.get("observation_date") == observation and completion.get("target_session") == target,
@@ -142,7 +152,7 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
     need(set(completion.get("core_artifacts") or {}) == original.CORE_FILES,
          "DAILY_SHARED_COMPLETE_CORE_REQUIRED")
     display = completion.get("display") or {}
-    need(display == final.get("display") and isinstance(display.get("artifacts"), dict)
+    need(content_equal(display, final.get("display")) and isinstance(display.get("artifacts"), dict)
          and len(display["artifacts"]) == 3
          and receipt.get("display_artifacts") == {key: value["path"] for key, value in display["artifacts"].items()},
          "DAILY_SHARED_COMPLETE_DISPLAY_REQUIRED")
@@ -156,7 +166,7 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
     from stockfish_core.yaogu import premarket_workflow_v1 as frozen
     actual_config = frozen._read_control(final["configuration"]["path"])
     need(actual_config == frozen.load_config(str(prepared["config"])), "DAILY_SHARED_EXECUTED_CONFIG_CHANGED")
-    need(frozen._read_control(final["code_registry"]["path"]) == workflow.code_refs(),
+    need(content_equal(frozen._read_control(final["code_registry"]["path"]), workflow.code_refs()),
          "DAILY_SHARED_EXECUTED_SOURCE_CHANGED")
     verified = workflow.verify_job(job)
     need(verified.get("archived_bytes_verified") is True
@@ -166,21 +176,22 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
     gate = frozen._latest_gate(completion["calendar_rows"], observation, target)
     _same(prepared, snapshot)
     for reference in refs:
-        need(original._fp(Path(reference["path"])) == reference["fp"], "DAILY_SHARED_FINAL_PHYSICAL_CHANGE")
-    need(original._reference(job / "final-control.json") == final_ref, "DAILY_SHARED_FINAL_CHANGED")
+        need(verify_content_reference(reference), "DAILY_SHARED_FINAL_CONTENT_CHANGE")
+    need(content_reference_equal(original._reference(job / "final-control.json"), final_ref), "DAILY_SHARED_FINAL_CHANGED")
     return dict(verified=True, archived_bytes_verified=True, currentness=gate,
                 source_authority_restored=False, complete_daily_delivery=True)
 
 
 def _premarket(runtime, args):
     observation, target = str(args.observation_date), str(args.target_session)
+    need(args.engine == "original", "REMOVED_EXPERIMENTAL_ENGINE")
     need(date.fromisoformat(observation).isoformat() == observation
          and date.fromisoformat(target).isoformat() == target and observation < target,
          "DAILY_SHARED_ORDERED_SESSIONS_REQUIRED")
     need(isinstance(args.request_key, str) and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", args.request_key),
          "DAILY_SHARED_REQUEST_KEY_REQUIRED")
     prepared = original._prepared(runtime.profile)
-    need(prepared["source"] == ROOT and Path(sys.executable).absolute() == prepared["python"],
+    need(prepared["source"] == ROOT and workspace.interpreter_path(sys.executable) == prepared["python"],
          "DAILY_SHARED_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
     snapshot = _snapshot(prepared)
     identity = dict(schema_version=VERSION, backend="premarket", state_root=str(prepared["state"]),
@@ -189,6 +200,22 @@ def _premarket(runtime, args):
         execution_sources_sha256=hashlib.sha256(workspace._canonical(snapshot)).hexdigest(),
         observation_date=observation, target_session=target, request_key=args.request_key,
         execution_engine=args.engine)
+    collect_missing = getattr(args, "collect_missing", False)
+    need(type(collect_missing) is bool, "DAILY_EXPLICIT_COLLECTION_MODE_REQUIRED")
+    if collect_missing:
+        identity["explicit_missing_collection"] = True
+
+    def admission_plan():
+        options = {}
+        if collect_missing:
+            options["collect_missing"] = True
+        if getattr(args, "allow_test_fixture", False):
+            options["allow_test_fixture"] = True
+        return _plan(runtime, **options)
+
+    def admitted(plan):
+        return plan.get("collection_admitted" if collect_missing else "execution_admitted") is True
+
     # Preflight is read-only and deliberately outside run_once: an inadmissible
     # request must not leave SUBMITTING/FAILED journal records or start collection.
     with runtime.exclusive():
@@ -197,8 +224,8 @@ def _premarket(runtime, args):
         existing = runtime.directory / "operations" / (key + ".json")
         already_claimed = existing.exists() or existing.is_symlink()
     if not already_claimed:
-        plan = _plan(runtime)
-        if not plan.get("execution_admitted"):
+        plan = admission_plan()
+        if not admitted(plan):
             return 4, dict(schema_version=VERSION, status="BLOCKED_BEFORE_COLLECTION", preflight=plan,
                 network_calls=0, worker_started=False, request_claimed=False, retry_authorized=False,
                 complete_daily_delivery=False)
@@ -225,8 +252,8 @@ def _premarket(runtime, args):
         # The shared coordinator's lock is now held. Re-evaluate the full
         # source/date/capacity admission under that lock; its read-only diagnostic
         # allocation remains distinct, while elapsed time consumes this action.
-        fresh_plan = _plan(runtime)
-        need(fresh_plan.get("execution_admitted") is True,
+        fresh_plan = admission_plan()
+        need(admitted(fresh_plan),
              "DAILY_SHARED_ADMISSION_CHANGED_BEFORE_EXECUTION")
         need(fresh_plan.get("observation_date") == observation and fresh_plan.get("target_session") == target,
              "DAILY_SHARED_REQUEST_NOT_LATEST_SESSION")
@@ -286,43 +313,394 @@ def _premarket(runtime, args):
     return result["receipt"]["execution_exit_code"], result
 
 
+def _safe_reason(error):
+    reason = str(error)
+    return reason if re.fullmatch(r"[A-Z][A-Z0-9_:.-]{1,180}", reason) else "LOCAL_DEPENDENCY_OR_RESPONSE_SCHEMA_ERROR"
+
+
+def _views():
+    from scripts import codex_result_view_v1
+    return codex_result_view_v1
+
+
+def _select_view(runtime, view_id, fixture=False):
+    if view_id is not None:
+        return view_id
+    rows = _views().list_views(runtime, allow_test_fixture=fixture)["views"]
+    need(bool(rows), "DAILY_NO_SEALED_RESULT_PUBLISH_ONCE_REQUIRED")
+    return max(rows, key=lambda row: (row["observation_date"], row["decision_cutoff"], row["view_id"]))["view_id"]
+
+
+def _export_new(path, content):
+    """Publish complete UTF-8 bytes once; never replace a report or source."""
+    path = Path(path).expanduser().absolute()
+    need(path.parent.resolve(strict=True) == path.parent, "EXPORT_PARENT_ALIAS_FORBIDDEN")
+    raw = content.encode("utf-8")
+    _views()._write_new(path, raw)
+    return dict(output=str(path), bytes=len(raw), sha256=hashlib.sha256(raw).hexdigest())
+
+
+def _operations(runtime):
+    runtime.check_binding()
+    rows = []
+    ledgers = [(runtime.directory / "operations", runtime.scope, False)] + [
+        (directory, scope, True) for directory, scope in getattr(runtime, "ancestor_ledgers", ())]
+    for directory, scope, inherited in ledgers:
+        need(not directory.is_symlink(), "DAILY_OPERATION_DIRECTORY_ALIAS")
+        paths = sorted(directory.glob("*.json")) if directory.exists() else []
+        need(len(paths) <= 10000, "DAILY_OPERATION_SCAN_LIMIT")
+        for path in paths:
+            record = workspace._read(path)
+            identity = record.get("identity", {})
+            need(record.get("scope") == scope and record.get("operation_id") == path.stem
+                 and path.stem == workspace._digest(dict(scope=scope, identity=identity)),
+                 "DAILY_OPERATION_IDENTITY_INVALID")
+            rows.append({key: record.get(key) for key in ("operation_id", "phase", "started_at", "completed_at", "reason")}
+                        | {key: identity.get(key) for key in ("request_key", "observation_date", "target_session", "backend")}
+                        | dict(scope=scope, inherited=inherited))
+    runtime.check_binding()
+    return dict(scope=runtime.scope, operations=rows, read_only=True, retry_authorized=False)
+
+
+def _database_command(runtime, args):
+    """Use existing local storage and original strategy workers; no HTTP service."""
+    from stockfish_core.yaogu import r2_closure_cli as local
+    local._fixture_boundary(args)
+    writing = args.command == "research" or (args.command == "research-outcomes" and args.update)
+    if writing and args.command == "research-outcomes":
+        # R1/R2 outcomes require authenticated original archives and the daily
+        # closure's cutoff and prior-request checks. The generic PV/V2 worker
+        # must never provide a second execution route for those saved runs.
+        with local.service_context(args) as service:
+            run = service.strategy_experiment(args.run_id)
+            need(run.get("execution_profile") != "SHORT_HORIZON_RESEARCH_SINGLE",
+                 "SHORT_HORIZON_UPDATE_REQUIRES_OUTCOMES_R2_DAILY_RUN")
+    if not writing:
+        with local.service_context(args) as service:
+            if args.command == "history":
+                if args.run_id:
+                    if args.format == "csv":
+                        content = service.export_strategy_experiment_csv(args.run_id, strategy_id=args.strategy)
+                    else:
+                        content = service.export_strategy_experiment_json(args.run_id, strategy_id=args.strategy)
+                    if args.output:
+                        return 0, dict(read_only=True, run_id=args.run_id, **_export_new(args.output, content))
+                    return 0, dict(read_only=True, run_id=args.run_id, content=content)
+                return 0, dict(read_only=True, runs=service.list_strategy_experiments(limit=args.limit))
+            if args.command == "research-outcomes":
+                return 0, dict(read_only=True, run_id=args.run_id, outcomes=service.strategy_outcomes(args.run_id))
+            if args.command == "jobs":
+                return 0, dict(read_only=True, jobs=service.jobs.get(args.job_id) if args.job_id else service.jobs.list(limit=args.limit))
+    need(runtime is not None and runtime.profile.get("backend") == "premarket", "DAILY_REGISTERED_RUNTIME_REQUIRED")
+    need(bool(args.input_id) and bool(args.request_key), "RESEARCH_EXPLICIT_INPUT_AND_REQUEST_KEY_REQUIRED")
+    need(re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", args.request_key), "RESEARCH_REQUEST_KEY_INVALID")
+    limits = workspace._read(runtime.profile["config"], limit=65536).get("limits", {})
+    configured = limits.get("max_seconds")
+    seconds = min(args.wait_seconds, configured) if configured is not None else args.wait_seconds
+    need(1 <= seconds <= 3600, "WAIT_SECONDS_MUST_BE_1_TO_3600")
+    kind = "strategy_experiments" if args.command == "research" else "strategy_outcomes"
+    database = str(args.db.resolve(strict=True))
+    for destination in (args.db.parent, args.state):
+        need(runtime.preflight(destination=destination)["allowed"], "RESEARCH_REGISTERED_STORAGE_BUDGET_BLOCKED")
+    identity = dict(schema_version="LOCAL_RESEARCH_REQUEST_V1", backend="local-research", database=database,
+        command=kind, input_id=args.input_id, run_id=getattr(args, "run_id", None), request_key=args.request_key)
+    # Original request records are authoritative across key/source changes.
+    def prior():
+        for path in sorted((runtime.directory / "operations").glob("*.json")):
+            other = workspace._read(path).get("identity", {})
+            if other == identity:
+                continue
+            same_key = other.get("request_key") == args.request_key
+            same_work = (other.get("backend") == "local-research" and
+                all(other.get(k) == identity[k] for k in ("database", "command", "input_id", "run_id")))
+            need(not (same_key or same_work), "RESEARCH_EXISTING_REQUEST_RECONCILE_NO_RETRY")
+    def action():
+        prior()
+        with local.service_context(args, writable=True) as service:
+            service.jobs.register(kind, service._strategy_experiment_job if kind == "strategy_experiments" else service._strategy_outcome_job)
+            # No startup migration/config activation and no input guessing.
+            service.input(args.input_id)
+            job_id = "local_" + workspace._digest(identity)
+            existing = service.jobs.get(job_id)
+            need(existing is None, "RESEARCH_EXISTING_JOB_RECONCILE_NO_RETRY")
+            # Old public entrypoints used other job IDs. Source/config/key
+            # changes cannot hide an earlier attempt for these business inputs.
+            previous_kinds = (kind, "strategy_tracking") if kind == "strategy_outcomes" else (kind,)
+            for previous_kind in previous_kinds:
+                offset = 0
+                while True:
+                    jobs = service.jobs.list(kind=previous_kind, limit=1000, offset=offset)
+                    for previous in jobs:
+                        payload = previous.get("payload", {})
+                        same = payload.get("input_id") == args.input_id
+                        if kind == "strategy_outcomes":
+                            same = same and payload.get("run_id") == args.run_id
+                        need(not same, "RESEARCH_EXISTING_JOB_USE_HISTORY_NO_RETRY")
+                    if len(jobs) < 1000:
+                        break
+                    offset += len(jobs)
+                    need(offset < 10000, "RESEARCH_JOB_RECONCILIATION_LIMIT")
+            if kind == "strategy_experiments":
+                job = service.submit_strategy_experiments(input_id=args.input_id, job_id=job_id)
+            else:
+                job = service.submit_strategy_outcomes(args.run_id, input_id=args.input_id, job_id=job_id)
+            adapter = SimpleNamespace(status=service.jobs.get, cancel=service.jobs.cancel)
+            code, terminal = local._wait(adapter, job, seconds, cancel_owned=True)
+            need(code == 0 and terminal.get("state") == "SUCCEEDED", "RESEARCH_JOB_FAILED_OR_UNCERTAIN_NO_RETRY")
+            return dict(job_id=job_id, run_id=terminal["result"].get("run_id"), input_id=args.input_id,
+                        result=terminal["result"], state=terminal["state"])
+    def validate(receipt):
+        with local.service_context(args) as service:
+            job = service.jobs.get(receipt["job_id"])
+            need(job is not None and job["state"] == "SUCCEEDED" and job["result"] == receipt["result"],
+                 "RESEARCH_SAVED_JOB_CHANGED")
+            # This reads and checks the saved canonical result, never recomputes it.
+            service.strategy_experiment(receipt["run_id"])
+            return dict(verified=True, source_reauthenticated_now=False)
+    with runtime.exclusive():
+        prior()
+    return 0, runtime.run_once(identity, action, validate)
+
+
+def _outcomes(runtime, args):
+    from stockfish_core.yaogu import r2_closure_cli as local
+    need(bool(args.arguments), "DAILY_EXPLICIT_OUTCOME_COMMAND_REQUIRED")
+    selected = local.parser().parse_args(args.arguments)
+    if args.allow_test_fixture:
+        selected.allow_test_fixture = True
+    if selected.command not in {"r2-archive-import", "r2-daily-run"}:
+        return local.execute(selected)
+    need(runtime is not None, "DAILY_REGISTERED_RUNTIME_REQUIRED")
+    need(bool(args.request_key) and re.fullmatch(r"[A-Za-z0-9_.-]{1,160}", args.request_key),
+         "OUTCOME_STABLE_REQUEST_KEY_REQUIRED")
+    for destination in (selected.db.parent, selected.state):
+        need(runtime.preflight(destination=destination)["allowed"], "OUTCOME_REGISTERED_STORAGE_BUDGET_BLOCKED")
+    business = dict(command=selected.command, database=str(selected.db.resolve(strict=True)))
+    if selected.command == "r2-daily-run":
+        business.update(run_ids=sorted(selected.run_id), input_id=selected.input_id)
+        limits = workspace._read(runtime.profile["config"], limit=65536).get("limits", {})
+        if limits.get("max_seconds") is not None:
+            selected.wait_seconds = min(selected.wait_seconds, limits["max_seconds"])
+    else:
+        business.update(archive_final_sha256=selected.expected_final_sha256)
+    identity = dict(schema_version="LOCAL_OUTCOME_REQUEST_V1", backend="local-outcomes",
+        request_key=args.request_key, business=business)
+    def prior():
+        paths = sorted((runtime.directory / "operations").glob("*.json"))
+        need(len(paths) <= 10000, "OUTCOME_OPERATION_SCAN_LIMIT")
+        for path in paths:
+            other = workspace._read(path).get("identity", {})
+            if other == identity:
+                continue
+            need(not (other.get("request_key") == args.request_key or
+                      other.get("backend") == "local-outcomes" and other.get("business") == business),
+                 "OUTCOME_EXISTING_REQUEST_RECONCILE_NO_RETRY")
+    def stored(receipt):
+        with local.service_context(selected) as service:
+            if receipt.get("job_id"):
+                value = service.jobs.get(receipt["job_id"])
+                need(value is not None and value["state"] == "SUCCEEDED", "OUTCOME_SAVED_JOB_NOT_SUCCESSFUL")
+                return value["result"]
+            return service.store.get_document(receipt["namespace"], receipt["document_id"])
+    def action():
+        prior()
+        code, result = local.execute(selected)
+        need(code == 0, "OUTCOME_FAILED_OR_UNCERTAIN_NO_RETRY")
+        if selected.command == "r2-daily-run":
+            job = result["job"]
+            receipt = dict(job_id=job["job_id"])
+        else:
+            from stockfish_core.yaogu.short_horizon_archive_bridge_v1 import CERTIFICATES
+            receipt = dict(namespace=CERTIFICATES, document_id=result["bridge_id"])
+        value = stored(receipt)
+        need(value is not None, "OUTCOME_COMMITTED_RESULT_MISSING")
+        return dict(receipt, result_sha256=workspace._digest(value), result_summary={
+            key: value.get(key) for key in ("status", "run_id", "input_id", "run_count", "ledger_id")})
+    def validate(receipt):
+        value = stored(receipt)
+        need(value is not None and workspace._digest(value) == receipt["result_sha256"], "OUTCOME_COMMITTED_RESULT_CHANGED")
+        return dict(verified=True, source_reauthenticated_now=False)
+    with runtime.exclusive():
+        prior()
+    return 0, runtime.run_once(identity, action, validate)
+
+
 def parser():
-    result = legacy.parser()
-    # Extend V1's parser without modifying its implementation or defaults.
-    commands = next(action for action in result._actions if isinstance(action, argparse._SubParsersAction))
-    commands.add_parser("premarket-plan", help="完整盘前只读准入；不采集", allow_abbrev=False)
-    sub = commands.add_parser("premarket", help="准入后完整共享盘前执行", allow_abbrev=False)
+    result = argparse.ArgumentParser(description=__doc__, allow_abbrev=False)
+    result.add_argument("--runtime")
+    result.add_argument("--registry-root", type=Path)
+    result.add_argument("--allow-test-fixture", action="store_true", help="Only isolated TEST_FIXTURE data")
+    commands = result.add_subparsers(dest="command", required=True)
+    sub = commands.add_parser("register", help="登记已有本机路径；保留旧账本", allow_abbrev=False)
+    sub.add_argument("--config", type=Path, required=True)
+    sub.add_argument("--default", action="store_true")
+    for name in ("status", "operations", "views", "doctor"):
+        commands.add_parser(name, allow_abbrev=False)
+    sub = commands.add_parser("premarket-plan", allow_abbrev=False)
+    sub.add_argument("--collect-missing", action="store_true",
+                     help="只读认证已有依赖并规划原预算内缺失来源；不采集")
+    for name in ("publish", "audit"):
+        sub = commands.add_parser(name, allow_abbrev=False)
+        sub.add_argument("--archive-id", required=True)
+        sub.add_argument("--profile", choices=("FULL_CORE_ARCHIVE_READONLY_V1", "FULL_CORE_ARCHIVE_READONLY_V2"), required=True)
+    for name in ("show", "export"):
+        sub = commands.add_parser(name, allow_abbrev=False)
+        sub.add_argument("--view-id")
+        sub.add_argument("--job", type=Path, help="已保存完整盘前任务目录")
+        sub.add_argument("--role", choices=("summary", "observation.json", "observation.csv", "all.csv", "focus.csv", "unselected.csv"), default="summary" if name == "show" else "all.csv")
+        sub.add_argument("--observation-date", type=date.fromisoformat)
+        sub.add_argument("--target-session", type=date.fromisoformat)
+        if name == "export":
+            sub.add_argument("--output", type=Path, required=True)
+    sub = commands.add_parser("premarket", help="准入后原盘前完整执行", allow_abbrev=False)
     sub.add_argument("--observation-date", type=date.fromisoformat, required=True)
     sub.add_argument("--target-session", type=date.fromisoformat, required=True)
     sub.add_argument("--request-key", required=True)
-    sub.add_argument("--engine", choices=("original", "shared"), default="original",
-                     help="默认原成熟题材路径；shared为显式性能实验，未证明真实市场提速")
+    sub.add_argument("--engine", choices=("original",), default="original")
+    sub.add_argument("--collect-missing", action="store_true",
+                     help="显式允许原采集器在登记预算内补齐缺失来源；不重试旧失败")
+    sub = commands.add_parser("outcomes", help="已有R2归档的显式后验", allow_abbrev=False)
+    sub.add_argument("--request-key", help="写操作必须提供稳定请求标识")
+    sub.add_argument("arguments", nargs=argparse.REMAINDER)
+    for name in ("history", "research", "research-outcomes", "jobs"):
+        sub = commands.add_parser(name, allow_abbrev=False)
+        sub.add_argument("--db", type=Path, required=True)
+        sub.add_argument("--state", type=Path, required=True)
+        if name == "history":
+            sub.add_argument("--run-id")
+            sub.add_argument("--limit", type=int, default=20)
+            sub.add_argument("--strategy", choices=("PV_OBSERVATION_V1", "STAGE_AWARE_MOMENTUM_V2", "DAILY_V1"))
+            sub.add_argument("--format", choices=("json", "csv"), default="json")
+            sub.add_argument("--output", type=Path)
+        elif name == "jobs":
+            sub.add_argument("--job-id")
+            sub.add_argument("--limit", type=int, default=20)
+        else:
+            sub.add_argument("--input-id", required=name == "research")
+            sub.add_argument("--request-key", required=name == "research")
+            sub.add_argument("--wait-seconds", type=float, default=300)
+            if name == "research-outcomes":
+                sub.add_argument("--run-id", required=True)
+                sub.add_argument("--update", action="store_true")
+    sub = commands.add_parser("backup", allow_abbrev=False)
+    sub.add_argument("--database", type=Path)
+    sub.add_argument("--artifact-root", type=Path, action="append", default=[])
+    sub.add_argument("--destination", type=Path, required=True)
+    sub = commands.add_parser("restore", allow_abbrev=False)
+    sub.add_argument("--backup", type=Path, required=True)
+    sub.add_argument("--destination", type=Path, required=True)
+    sub = commands.add_parser("verify-backup", allow_abbrev=False)
+    sub.add_argument("--backup", type=Path, required=True)
     return result
 
 
 def execute(runtime, args):
+    fixture = getattr(args, "allow_test_fixture", False)
+    if args.command == "doctor":
+        import importlib
+        import importlib.metadata
+        modules = {"pydantic": "pydantic", "PyYAML": "yaml", "requests": "requests",
+                   "psutil": "psutil", "akshare": "akshare", "baostock": "baostock"}
+        packages = {}
+        for distribution, module in modules.items():
+            importlib.import_module(module)
+            packages[distribution] = importlib.metadata.version(distribution)
+        return 0, dict(status="IMPORTS_VERIFIED", python=sys.executable, packages=packages,
+                       source_readiness="NOT_INFERRED", database_opened=False)
+    if args.command in {"history", "research", "research-outcomes", "jobs"}:
+        return _database_command(runtime, args)
+    if args.command in {"backup", "restore", "verify-backup"}:
+        from stockfish_core.snapshot_backup import backup_state, restore_state, verify_backup
+        if args.command == "backup":
+            with runtime.exclusive() if runtime is not None else nullcontext():
+                return 0, backup_state(args.database, args.destination, artifact_roots=args.artifact_root)
+        if args.command == "restore":
+            return 0, restore_state(args.backup, args.destination)
+        return 0, verify_backup(args.backup)
+    if args.command == "register":
+        return 0, workspace.register_profile(args.config, args.registry_root, make_default=args.default)
+    if args.command == "outcomes":
+        return _outcomes(runtime, args)
     need(runtime is not None and runtime.profile.get("backend") == "premarket", "DAILY_REGISTERED_RUNTIME_REQUIRED")
     if args.command == "premarket-plan":
-        return 0, _plan(runtime)
+        options = {}
+        if args.collect_missing:
+            options["collect_missing"] = True
+        if fixture:
+            options["allow_test_fixture"] = True
+        return 0, _plan(runtime, **options)
     if args.command == "premarket":
         return _premarket(runtime, args)
-    return legacy.execute(runtime, args)
+    if args.command == "operations":
+        return 0, _operations(runtime)
+    if args.command == "status":
+        return 0, dict(runtime=workspace.runtime_status(runtime.profile["name"], runtime.registry_root, allow_test_fixture=fixture),
+            capacity=runtime.storage_report(),
+            business_source_readiness="NOT_INFERRED_FROM_RUNTIME_OR_STORAGE")
+    if args.command == "views":
+        return 0, _views().list_views(runtime, allow_test_fixture=fixture)
+    if args.command == "publish":
+        return 0, _views().publish_view(runtime, args.archive_id, profile=args.profile, allow_test_fixture=fixture)
+    if args.command in {"show", "export"}:
+        if args.job is not None:
+            need(args.view_id is None, "CHOOSE_SAVED_JOB_OR_VIEW")
+            job = original._job_path(original._prepared(runtime.profile), str(args.job.absolute()))
+            final, reference = original._control(job / "final-control.json")
+            from stockfish_core.yaogu import premarket_workflow_v1
+            verifier = _workflow() if final.get("schema_version") == _workflow().VERSION else premarket_workflow_v1
+            verified = verifier.verify_job(job)
+            need(verified.get("archived_bytes_verified") is True, "SAVED_JOB_CONTENT_VERIFICATION_REQUIRED")
+            viewed = dict(status="VERIFIED_SAVED_JOB", job=str(job), final_status=final["status"],
+                          source_reauthenticated_now=False, source_authority_restored=False,
+                          full_premarket_ready=False, content_verification=verified)
+            if final.get("completion") is not None:
+                completion, _ = original._control(Path(final["completion"]["path"]))
+                for attr in ("observation_date", "target_session"):
+                    requested = getattr(args, attr)
+                    need(requested is None or str(requested) == completion.get(attr), "SAVED_JOB_SESSION_MISMATCH")
+                viewed["summary"] = {key: completion.get(key) for key in (
+                    "run_id", "strategy_id", "observation_date", "target_session", "status", "theme_status")}
+                if args.role != "summary":
+                    artifact = (completion.get("core_artifacts") or {}).get(args.role)
+                    need(artifact is not None, "SAVED_JOB_EXPORT_UNAVAILABLE")
+                    original._inside_job(artifact, job)
+                    viewed["content"] = Path(artifact["path"]).read_text(encoding="utf-8")
+                    need(verify_content_reference(artifact), "SAVED_JOB_EXPORT_CHANGED")
+            else:
+                viewed["summary"] = {key: final.get(key) for key in ("status", "error", "cleanup_error")}
+                need(args.role == "summary", "SAVED_FAILED_JOB_HAS_NO_EXPORT")
+            need(verify_content_reference(reference), "SAVED_JOB_FINAL_CHANGED")
+        else:
+            viewed = _views().read_view(runtime, _select_view(runtime, args.view_id, fixture), role=args.role,
+                allow_test_fixture=fixture,
+                observation_date=str(args.observation_date) if args.observation_date else None,
+                target_session=str(args.target_session) if args.target_session else None)
+        if args.command == "export":
+            content = viewed.get("content", json.dumps(viewed["summary"], ensure_ascii=False, allow_nan=False))
+            viewed = {key: value for key, value in viewed.items() if key != "content"}
+            viewed.update(_export_new(args.output, content))
+        return 0, viewed
+    if args.command == "audit":
+        from scripts import codex_core_archive, codex_core_archive_v2
+        module = codex_core_archive if args.profile.endswith("_V1") else codex_core_archive_v2
+        return 0, module.reuse_archive(runtime, args.archive_id, profile=args.profile, allow_test_fixture=fixture)
+    raise workspace.WorkspaceError("DAILY_UNKNOWN_COMMAND")
 
 
 def main(argv=None):
     selected = list(sys.argv[1:] if argv is None else argv)
     args = parser().parse_args(selected)
     try:
-        runtime = workspace.load_runtime(args.runtime, args.registry_root)
-        need(runtime is not None, "DAILY_REGISTERED_RUNTIME_REQUIRED")
-        dispatched = _registered(runtime, selected)
-        if dispatched is not None:
-            return dispatched
+        runtime = workspace.load_runtime(args.runtime, args.registry_root, allow_test_fixture=args.allow_test_fixture)
+        if runtime is not None:
+            dispatched = _registered(runtime, selected)
+            if dispatched is not None:
+                return dispatched
         code, result = execute(runtime, args)
     except KeyboardInterrupt:
         code, result = 130, dict(status="INTERRUPTED", reason="USER_INTERRUPTED")
     except Exception as error:
-        code, result = 2, dict(status="BLOCKED_OR_FAILED", reason=legacy._safe_reason(error))
+        code, result = 2, dict(status="BLOCKED_OR_FAILED", reason=_safe_reason(error))
     print(json.dumps({**result, "entry_version": VERSION, "command_exit_code": code}, ensure_ascii=False, allow_nan=False))
     return code
 

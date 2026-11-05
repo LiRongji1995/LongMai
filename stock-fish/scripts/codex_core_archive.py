@@ -8,7 +8,6 @@ Compressed relocated originals require a separate protocol and are rejected.
 """
 from __future__ import annotations
 
-import argparse
 from copy import deepcopy
 from datetime import date, datetime, timezone
 import gc
@@ -25,6 +24,7 @@ if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
 from scripts import codex_workspace as workspace
 from scripts import codex_premarket as premarket
+from stockfish_core.file_integrity import content_equal
 
 VERSION = 'CODEX_FULL_CORE_ARCHIVE_V1'
 PROFILE = 'FULL_CORE_ARCHIVE_READONLY_V1'
@@ -218,7 +218,7 @@ def _controls(session, runtime, manifest_path, worker, supervisor, fixture):
           all(completion.get('phases', {}).get(key) == 'COMPLETE' for key in ('input','core','presentation','terminal')),
           'ARCHIVE_WORKER_TERMINAL_MISMATCH')
     ready_ref = parent['core_ready_reference']
-    _need(ready_ref == completion['core_ready_reference'] and ready_ref['path'] == str(worker/'core-ready.json'),
+    _need(content_equal(ready_ref, completion['core_ready_reference']) and ready_ref['path'] == str(worker/'core-ready.json'),
           'ARCHIVE_READY_CONTROL_BINDING')
     ready = _read(session, ready_ref['path'], ready_ref)
     _need(ready.get('schema_version') == PRIVATE_VERSION and ready.get('status') == 'VERIFIED_ORIGINAL_R2_CORE' and
@@ -242,7 +242,7 @@ def _controls(session, runtime, manifest_path, worker, supervisor, fixture):
     artifacts = ready['original_artifacts']
     _need(set(artifacts) == premarket.CORE_FILES, 'ARCHIVE_EXACT_EIGHT_ARTIFACTS_REQUIRED')
     for name, ref in artifacts.items():
-        _need(ref['path'] == str(worker/'core'/name) and sealed.get(ref['path']) == ref,
+        _need(ref['path'] == str(worker/'core'/name) and content_equal(sealed.get(ref['path']), ref),
               'ARCHIVE_ORIGINAL_ARTIFACT_BINDING')
         _ref(session, ref['path'], ref)
     _need(parent.get('display') == completion.get('display') and isinstance(parent.get('display'),dict),
@@ -264,7 +264,7 @@ def _controls(session, runtime, manifest_path, worker, supervisor, fixture):
     source = _path(runtime.profile['source_root'])
     _need(source == ROOT, 'ARCHIVE_EXECUTING_SOURCE_MUST_MATCH_RUNTIME')
     closure = {str(path) for path in (source/'stockfish_core').rglob('*.py')} | {
-        str(source/name) for name in ('premarket','premarket.ps1','scripts/stockfish.py')}
+        str(source/name) for name in ('scripts/codex_daily_v2.py',)}
     outside = set(code_refs)-closure
     _need(closure <= set(code_refs) and len(outside) == 1, 'ARCHIVE_COMPLETE_ORIGINAL_IMPLEMENTATION_CLOSURE_REQUIRED')
     helper = code_refs[next(iter(outside))]
@@ -392,7 +392,7 @@ def _authenticate(session, runtime, manifest_path, worker, supervisor, fixture, 
 
 def _operation_identity(runtime, manifest, worker, supervisor, fixture):
     _need(runtime is not None and runtime.profile.get('backend') == 'premarket', 'ARCHIVE_REGISTERED_RUNTIME_REQUIRED')
-    _need(Path(sys.executable).absolute() == Path(runtime.profile['python']), 'ARCHIVE_REGISTERED_INTERPRETER_REQUIRED')
+    _need(workspace.interpreter_path(sys.executable) == Path(runtime.profile['python']), 'ARCHIVE_REGISTERED_INTERPRETER_REQUIRED')
     return dict(schema_version=VERSION, operation='AUTHENTICATE_EXISTING_FULL_CORE',
         manifest=str(manifest), worker=str(worker), supervisor=str(supervisor),
         strategy_id=STRATEGY, profile=PROFILE, allow_test_fixture=fixture)
@@ -412,7 +412,7 @@ def _validate_evidence(session, runtime, receipt, identity):
     _clock(evidence['authenticated_at'])
     _need(identity == _operation_identity(runtime,Path(identity['manifest']),Path(identity['worker']),
           Path(identity['supervisor']),identity['allow_test_fixture']), 'ARCHIVE_OPERATION_CONTRACT_CHANGED')
-    _need(evidence['verifier_references'] == _verifier(session), 'ARCHIVE_VERIFIER_IMPLEMENTATION_CHANGED')
+    _need(content_equal(evidence['verifier_references'], _verifier(session)), 'ARCHIVE_VERIFIER_IMPLEMENTATION_CHANGED')
     refs = _reference_map(evidence['references'])
     # Independently rebuild the necessary closure and saved result semantics;
     # an edited evidence JSON cannot omit a RAW, producer, or code dependency,
@@ -422,7 +422,7 @@ def _validate_evidence(session, runtime, receipt, identity):
     _need(summary == evidence['summary'] and artifacts == evidence['artifacts'] and locators == evidence['locators'],
           'ARCHIVE_EVIDENCE_DIFFERS_FROM_ORIGINAL_RESULT')
     control_paths = {str(path), str(runtime.directory/'operations'/(path.stem+'.json'))}
-    _need(all(refs.get(name) == ref for name,ref in session.files.items() if name not in control_paths),
+    _need(all(content_equal(refs.get(name), ref) for name,ref in session.files.items() if name not in control_paths),
           'ARCHIVE_REQUIRED_ORIGINAL_CLOSURE_MISSING')
     for reference in refs.values():
         _ref(session, reference['path'], reference)
@@ -435,7 +435,7 @@ def _validate_evidence(session, runtime, receipt, identity):
     _need(all(str(Path(identity[key])) in refs for key in ('manifest',)), 'ARCHIVE_MISSING_REQUEST_REFERENCE')
     for filename in ('invocation.json','completion.json'):
         _need(str(Path(identity['supervisor'])/filename) in refs, 'ARCHIVE_MISSING_PARENT_REFERENCE')
-    _need(set(evidence['artifacts']) == premarket.CORE_FILES and all(refs.get(ref['path']) == ref
+    _need(set(evidence['artifacts']) == premarket.CORE_FILES and all(content_equal(refs.get(ref['path']), ref)
           for ref in evidence['artifacts'].values()), 'ARCHIVE_ARTIFACT_SET_NOT_SEALED')
     return dict(verified=True, profile=PROFILE, source_authority_restored=False,
         currentness_recomputed=False, full_premarket_ready=False, normalizer_calls=0,
@@ -525,46 +525,3 @@ def archive_status(runtime, *, limit=100):
                     entries.append(dict(archive_id=record.get('operation_id'),phase=record.get('phase'),
                         worker=identity.get('worker'), source_authority_restored=False))
         return dict(status='LOCATORS_ONLY_REUSE_VALIDATION_REQUIRED',archives=entries)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument('--runtime')
-    parser.add_argument('--registry-root')
-    sub = parser.add_subparsers(dest='command',required=True)
-    register = sub.add_parser('register')
-    register.add_argument('--manifest',required=True)
-    register.add_argument('--worker-dir',required=True)
-    register.add_argument('--supervisor-dir',required=True)
-    reuse = sub.add_parser('reuse')
-    reuse.add_argument('--archive-id',required=True)
-    reuse.add_argument('--observation-date')
-    reuse.add_argument('--target-session')
-    reuse.add_argument('--cutoff')
-    reuse.add_argument('--manifest')
-    sub.add_parser('status')
-    for command in (register,reuse):
-        command.add_argument('--profile',choices=[PROFILE],required=True)
-        command.add_argument('--allow-test-fixture',action='store_true')
-    args = parser.parse_args(argv)
-    try:
-        runtime = workspace.load_runtime(args.runtime,args.registry_root)
-        if args.command == 'register':
-            result = register_archive(runtime,args.manifest,args.worker_dir,args.supervisor_dir,
-                profile=args.profile,allow_test_fixture=args.allow_test_fixture)
-        elif args.command == 'reuse':
-            result = reuse_archive(runtime,args.archive_id,profile=args.profile,
-                allow_test_fixture=args.allow_test_fixture,observation_date=args.observation_date,
-                target_session=args.target_session,cutoff=args.cutoff,manifest_path=args.manifest)
-        else:
-            result = archive_status(runtime)
-        print(json.dumps(result,ensure_ascii=False,allow_nan=False))
-        return 0
-    except Exception as error:
-        print(json.dumps(dict(status='BLOCKED',reason=str(error) if isinstance(error,(ArchiveError,workspace.WorkspaceError))
-            else 'ARCHIVE_ORIGINAL_VALIDATION_FAILED',error_type=type(error).__name__),ensure_ascii=False))
-        return 3
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())

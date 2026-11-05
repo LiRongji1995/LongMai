@@ -11,6 +11,7 @@ import unittest
 from unittest.mock import patch
 
 from stockfish_core.yaogu import premarket_workflow_v1 as workflow
+from scripts import codex_premarket_shared_v1 as active_workflow
 from stockfish_core.yaogu.premarket_capture_cache_v1 import (
     CaptureCollection, CaptureRecord, ThemeSourceCollection)
 from stockfish_core.yaogu.premarket_runtime_v1 import strict_json
@@ -155,10 +156,11 @@ class WorkflowFixtureTests(unittest.TestCase):
             workflow._latest_gate(rows[::2], '2026-10-14', '2026-10-16', before-timedelta(days=1))
 
     def _supervise(self, script, limits=None):
+        self.config['limits']['max_seconds'] = 120
         if limits:
             self.config['limits'].update(limits)
-        return workflow.supervise(self.config, progress=False,
-            worker_command=[sys.executable, '-B', '-c', script])
+        return active_workflow.supervise(self.config, progress=False,
+            _fixture_worker_command=[sys.executable, '-I', '-B', '-c', script])
 
     def test_supervisor_retains_actual_subprocess_nonzero_and_reaps(self):
         code, result = self._supervise('raise SystemExit(9)')
@@ -169,7 +171,7 @@ class WorkflowFixtureTests(unittest.TestCase):
 
     def test_supervisor_rejects_exit_status_mismatch_and_fake_success(self):
         def writer(status, exit_code):
-            value = {'schema_version': workflow.VERSION, 'status': status,
+            value = {'schema_version': active_workflow.VERSION, 'status': status,
                 'core_verified': False, 'display': None}
             return ("import pathlib,json; job=next(pathlib.Path("+repr(str(self.root/'state/jobs'))+
                 ").iterdir()); (job/'worker-completion.json').write_text("+repr(json.dumps(value))+
@@ -179,7 +181,7 @@ class WorkflowFixtureTests(unittest.TestCase):
         self.assertIn('STATUS_EXIT_MISMATCH', result['error']['reason'])
         # A separate owned state avoids selecting the previous job in the fixture child.
         self.config['state_root'] = str(self.root/'second-state')
-        value = {'schema_version': workflow.VERSION, 'status': 'COMPLETE', 'core_verified': True,
+        value = {'schema_version': active_workflow.VERSION, 'status': 'COMPLETE', 'core_verified': True,
                  'display': {'artifacts': {}}}
         script = ("import pathlib; job=next(pathlib.Path("+repr(str(self.root/'second-state/jobs'))+
             ").iterdir()); (job/'worker-completion.json').write_text("+repr(json.dumps(value))+
@@ -206,10 +208,11 @@ class WorkflowFixtureTests(unittest.TestCase):
     @unittest.skipUnless(os.name == 'posix', 'POSIX_SESSION_FIXTURE')
     def test_supervisor_rejects_exited_worker_with_live_owned_descendant(self):
         pidfile = self.root/'grandchild.pid'
-        script = ('import subprocess,sys,pathlib; p=subprocess.Popen([sys.executable,"-c",'
+        script = ('import subprocess,sys,pathlib,time; p=subprocess.Popen([sys.executable,"-c",'
             '"import time;time.sleep(30)"]); pathlib.Path('+repr(str(pidfile))+
-            ').write_text(str(p.pid)); raise SystemExit(0)')
+            ').write_text(str(p.pid)); time.sleep(1.5); raise SystemExit(0)')
         code, result = self._supervise(script)
         self.assertEqual(code, 3)
         self.assertIn('OWNED_DESCENDANTS_REMAIN', result['error']['reason'])
         self.assertTrue(result['external_worker_reaped'])
+        self.assertTrue(result['native_inner_supervision']['cleanup']['all_observed_descendants_gone'])

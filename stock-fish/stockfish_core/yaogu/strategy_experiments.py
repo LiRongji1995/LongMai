@@ -30,21 +30,12 @@ _assert_frozen_specs()
 SPEC = yaml.safe_load(SPEC_PATH.read_text(encoding='utf-8'))
 COMPLETION = yaml.safe_load(COMPLETION_PATH.read_text(encoding='utf-8'))
 PV_OBSERVATION_ID = 'PV_OBSERVATION_V1'
-DNA_ID, THEME_ID = 'DNA_RERANK_V1', 'THEME_CONTEXT_V1'
-DNA_REVERSAL_ID, THEME_LIMITUP_ID = 'DNA_REVERSAL_V1', 'THEME_LIMITUP_V1'
 FOCUS_POLICY_ID = COMPLETION['selection_policy']['id']
 IMPLEMENTATION_VERSION = 'R05_STRATEGY_EXPERIMENTS_V4_CANONICAL_IDENTITY'
 PARAMETER_STATUS = SPEC['parameter_status']
-PV_SPEC, DNA_SPEC, THEME_SPEC = (SPEC['strategies'][k] for k in (PV_OBSERVATION_ID,DNA_ID,THEME_ID))
+PV_SPEC = SPEC['strategies'][PV_OBSERVATION_ID]
 PV_WEIGHTS = {k: Decimal(str(PV_SPEC['weights']['percentile_'+k])) for k in ('A','R','H')}
-DNA_WEIGHTS = dict(zip(('LB_PREMIUM5','LB_FIRST_RED','LB_FIRST_SEAL','M_ADJ','LIMIT_COUNT_250D'),
-    (Decimal(str(v)) for v in DNA_SPEC['gene_weights'].values())))
-THEME_WEIGHTS = dict(zip(('PEER_LIMIT_COUNT','PEER_RET5_MEDIAN','PEER_UP_FRACTION'),
-    (Decimal(str(v)) for v in THEME_SPEC['theme_weights'].values())))
-DNA_HISTORY_SESSIONS = DNA_SPEC['history_sessions']
-DNA_MATURE_EVENT_SESSIONS = DNA_SPEC['mature_event_window_sessions']
 PV_QUOTE_COVERAGE_MIN = Decimal(str(SPEC['universe']['quote_coverage_min']))
-THEME_PEER_COVERAGE_MIN = Decimal(str(THEME_SPEC['peer_required_quote_coverage_min']))
 FOCUS_POLICY = {**COMPLETION['selection_policy'], 'policy_id': FOCUS_POLICY_ID}
 
 def _stable_id(prefix, payload):return prefix+'_'+digest(payload)[:24]
@@ -355,224 +346,23 @@ def run_pv_focus_preview(pv_result,*,max_count=None):
         'counts':{'parent_count':len(items),'selected':len(selected),'rejected':len(items)-len(selected)},'count':len(selected),
         'quota_min':None,'quota_max':None,'rank_window':None,'parameter_status':PARAMETER_STATUS}
 
-def _wilson_lower_bound(successes,n,*,z=None):
-    if n<=0:return None
-    if not 0<=successes<=n:raise ValueError('INVALID_BINOMIAL_COUNTS')
-    with localcontext() as ctx:
-        ctx.prec=50
-        z=Decimal(str(z if z is not None else DNA_SPEC['wilson_z']));nn=Decimal(n);p=Decimal(successes)/nn
-        result=(p+z*z/(2*nn)-z*(p*(1-p)/nn+z*z/(4*nn*nn)).sqrt())/(1+z*z/nn)
-        return max(Decimal(0),result)
 
-def _pv_population_scores(pv_items,ids,output_field=None):
-    ids=sorted(set(ids)&pv_items.keys())
-    maps={k:_percentile_map(_exact_factor(pv_items[i],k) for i in ids) for k in PV_WEIGHTS}
-    return {i:_score_from_decimals(PV_WEIGHTS,{k:maps[k][_exact_factor(pv_items[i],k)] for k in PV_WEIGHTS}) for i in ids}
-
-def _enhancement_base(strategy_id,ctx,pv_items,reason):
-    return {'strategy_id':strategy_id,'canonical_strategy_id':strategy_id,'implementation_version':IMPLEMENTATION_VERSION,
-        'base_strategy_id':PV_OBSERVATION_ID,'parameter_status':PARAMETER_STATUS,'spec_conformance':'SPEC_CONFORMANT',
-        'observation_date':ctx.observation_date,'status':'INSUFFICIENT_COVERAGE','reason':reason,
-        'counts':{'eligible':len(pv_items),'evaluated':0,'insufficient':len(pv_items)},'qualified_ids':[],
-        'items':[{'instrument_id':i,'status':'INSUFFICIENT_COVERAGE','reason':reason} for i in sorted(pv_items)],'top_ids':[]}
-
-def _next_premium(nxt,field):
-    # The next session's reference price preserves ex-rights semantics.
-    value,ref=_bar_decimal(nxt,field),_bar_decimal(nxt,'reference_prev_close')
-    return Fraction(value)/Fraction(ref)-1 if value is not None and ref is not None and value>0 and ref>0 else None
-
-def run_dna_rerank(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=None):
-    ctx=_context or _prepare_context(bundle,cutoff)
-    pv_result=pv_result if pv_result is not None else run_pv_observation(bundle,cutoff=cutoff,_context=ctx)
-    pv={r['instrument_id']:r for r in pv_result.get('items',[]) if r['instrument_id'] in ctx.eligible_ids}
-    result=_enhancement_base(DNA_ID,ctx,pv,'DNA_252_SESSION_HISTORY_REQUIRED')
-    result.update(history_sessions_required=DNA_HISTORY_SESSIONS,history_sessions_available=len(ctx.sessions))
-    if len(ctx.sessions)<DNA_HISTORY_SESSIONS:return result
-    history=ctx.sessions[-DNA_HISTORY_SESSIONS:]
-    mature=history[-(DNA_MATURE_EVENT_SESSIONS+1):-1]
-    count_window=history[-DNA_SPEC['limit_count_window_sessions_including_T']:]
-    raw=[];missing=[]
-    for iid in sorted(pv):
-        bars={s:_bar(ctx,s,iid) for s in history};events={s:_bar_limit_event(b,iid,s) for s,b in bars.items()}
-        if any(b is None for b in bars.values()) or any(not _known_limit_flag(e.close_limit_up) or not _known_limit_flag(e.touched_limit_up) for e in events.values()):
-            missing.append({'instrument_id':iid,'status':'INSUFFICIENT_COVERAGE','reason':'DNA_HISTORY_BARS_OR_EVENTS_INCOMPLETE'});continue
-        row={'instrument_id':iid,'close_limit_n':0,'close_limit_success':0,'first_attempt_n':0,'first_attempt_success':0,'first_sealed_n':0,'first_sealed_red':0,'open_premiums':[]}
-        for index in range(1,len(history)-1):
-            s=history[index]
-            if s not in mature:continue
-            ev=events[s];prev=events[history[index-1]];nxt=bars[history[index+1]]
-            close_ret=_next_premium(nxt,'close');open_ret=_next_premium(nxt,'open')
-            if ev.close_limit_up==TRUE and close_ret is not None:
-                row['close_limit_n']+=1;row['close_limit_success']+=close_ret>Fraction('0.05')
-            if ev.touched_limit_up==TRUE and prev.close_limit_up==FALSE:
-                row['first_attempt_n']+=1;row['first_attempt_success']+=ev.close_limit_up==TRUE
-                if open_ret is not None:row['open_premiums'].append(open_ret)
-                if ev.close_limit_up==TRUE and close_ret is not None:
-                    row['first_sealed_n']+=1;row['first_sealed_red']+=close_ret>0
-        n=row['first_attempt_n'];rate=Fraction(row['first_attempt_success'],n) if n else None
-        if n<DNA_SPEC['min_first_board_attempts'] or rate<=Fraction(str(DNA_SPEC['raw_first_board_seal_rate_gt'])) or not row['close_limit_n'] or not row['first_sealed_n'] or not row['open_premiums']:
-            missing.append({'instrument_id':iid,'status':'INSUFFICIENT_COVERAGE','reason':'DNA_RELIABILITY_GATE_NOT_MET',
-                'sample_counts':{k:v for k,v in row.items() if k.endswith('_n')},'raw_first_seal_rate':_number(rate)});continue
-        row['limit_count_250d']=sum(events[s].close_limit_up==TRUE for s in count_window)
-        row['raw_first_seal_rate']=rate;raw.append(row)
-    if not raw:
-        result.update(reason='DNA_RELIABILITY_GATE_NOT_MET',items=missing);return result
-    # The event-weighted prior contains only the frozen reliability-qualified cohort.
-    premiums=[p for r in raw for p in r['open_premiums']]
-    pool_mean=sum(premiums,Fraction(0))/len(premiums)
-    for row in raw:
-        n=len(row['open_premiums']);prior=Fraction(str(DNA_SPEC['mean_prior_strength']))
-        row['_factors']={'LB_PREMIUM5':_wilson_lower_bound(row['close_limit_success'],row['close_limit_n']),
-            'LB_FIRST_RED':_wilson_lower_bound(row['first_sealed_red'],row['first_sealed_n']),
-            'LB_FIRST_SEAL':_wilson_lower_bound(row['first_attempt_success'],row['first_attempt_n']),
-            'M_ADJ':(sum(row['open_premiums'],Fraction(0))+prior*pool_mean)/(n+prior),
-            'LIMIT_COUNT_250D':Fraction(row['limit_count_250d'])}
-    maps={k:_percentile_map(r['_factors'][k] for r in raw) for k in DNA_WEIGHTS}
-    rebased=_pv_population_scores(pv,[r['instrument_id'] for r in raw]);enriched=[]
-    for row in raw:
-        iid=row['instrument_id'];percentiles={k:maps[k][row['_factors'][k]] for k in DNA_WEIGHTS}
-        g=_score_from_decimals(DNA_WEIGHTS,percentiles)
-        score=Fraction(str(DNA_SPEC['combination']['pv_score_on_gene_eligible_cohort']))*rebased[iid]+Fraction(str(DNA_SPEC['combination']['gene_score']))*g
-        enriched.append({**pv[iid],'status':'EVALUATED','original_S_PV':pv[iid]['S_PV'],'S_PV_GENE_COHORT':_number(rebased[iid]),'G':_number(g),'S_DNA':_number(score),
-            'factors':{k:_number(v) for k,v in row['_factors'].items()},'factor_percentiles':{k:_number(v) for k,v in percentiles.items()},
-            'sample_counts':{**{k:v for k,v in row.items() if k.endswith('_n')},'open_premium_n':len(row['open_premiums'])},
-            'success_counts':{k:row[k] for k in ('close_limit_success','first_attempt_success','first_sealed_red')},
-            'raw_first_seal_rate':_number(row['raw_first_seal_rate']),'m_pool':_number(pool_mean),'m_pool_event_n':len(premiums),'m_pool_instrument_ids':sorted(rebased),
-            'window':{'history':history,'mature_event_sessions':mature,'limit_count_sessions':count_window},'_score':score})
-    ranked=sorted(enriched,key=lambda r:(-r['_score'],r['instrument_id']))
-    for rank,row in enumerate(ranked,1):row['rank']=rank
-    result.update(status='COMPLETE' if not missing else 'LIMITED_SCOPE',reason=None,formula='0.60*S_PV_GENE_COHORT + 0.40*G',
-        items=[_public(r) for r in ranked]+missing,top_ids=[r['instrument_id'] for r in ranked[:top_n]],qualified_ids=sorted(rebased),
-        counts={'eligible':len(pv),'evaluated':len(ranked),'insufficient':len(missing)})
-    return result
-
-def run_dna_reversal(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=None):
-    return {**run_dna_rerank(bundle,pv_result,top_n=top_n,cutoff=cutoff,_context=_context),
-        'strategy_id':DNA_REVERSAL_ID,'canonical_strategy_id':DNA_ID,'compatibility_alias':True}
-
-def _theme_peer_stat(ctx,theme,members,target,window):
-    peers=sorted(set(members)-{target});values=[];up=limits=0;refs=set(theme['source_refs'])
-    for iid in peers:
-        bars=[_bar(ctx,s,iid) for s in window]
-        if any(b is None or not _valid_ohlc(b) for b in bars):continue
-        basis=bars[0].get('comparable_basis')
-        if not basis or any(b.get('comparable_basis')!=basis or _bar_decimal(b,'comparable_close') is None for b in bars):continue
-        ret5=_comparable_return(bars[-1],bars[0]);ret1=_comparable_return(bars[-1],bars[-2]);event=_bar_limit_event(bars[-1],iid,window[-1])
-        if ret5 is None or ret1 is None or not _known_limit_flag(event.close_limit_up):continue
-        values.append(ret5);up+=ret1>0;limits+=event.close_limit_up==TRUE
-        refs.update(r for b in bars for r in b.get('source_refs',()))
-    coverage=Fraction(len(values),len(peers)) if peers else Fraction(0)
-    if coverage<THEME_PEER_COVERAGE_MIN:return None
-    return {'theme_id':theme['theme_id'],'theme_name':theme['name'],'member_count':len(members),'peer_expected':len(peers),'peer_observed':len(values),
-        'peer_coverage':coverage,'peer_ret5_median':median(values),'peer_up_fraction':Fraction(up,len(values)),
-        'peer_limit_count':Fraction(limits),'source_refs':sorted(refs)}
-
-def run_theme_context(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=None):
-    ctx=_context or _prepare_context(bundle,cutoff)
-    pv_result=pv_result if pv_result is not None else run_pv_observation(bundle,cutoff=cutoff,_context=ctx)
-    pv={r['instrument_id']:r for r in pv_result.get('items',[]) if r['instrument_id'] in ctx.eligible_ids};window=_prior_sessions(ctx,6)
-    result=_enhancement_base(THEME_ID,ctx,pv,'THEME_EVENT_SNAPSHOT_REQUIRED')
-    result['emotion_context']=_emotion_context(ctx)
-    if len(window)<6:result['reason']='THEME_6_SESSION_WINDOW_REQUIRED';return result
-    frozen=[];eligible_set=set(ctx.eligible_ids)
-    for theme in sorted(ctx.themes,key=lambda t:t['theme_id']):
-        members=sorted(set(theme['member_ids'])&eligible_set)
-        if len(members)<THEME_SPEC['min_theme_members']:continue
-        if _theme_peer_stat(ctx,theme,members,None,window) is not None:frozen.append((theme,members))
-    if not frozen:return result
-    chosen={};all_choices={};missing=[]
-    factor_fields=[('PEER_LIMIT_COUNT','peer_limit_count'),('PEER_RET5_MEDIAN','peer_ret5_median'),('PEER_UP_FRACTION','peer_up_fraction')]
-    for iid in sorted(pv):
-        # Every dated theme contributes once, after removing this target wherever present.
-        population=[r for theme,members in frozen if (r:=_theme_peer_stat(ctx,theme,members,iid,window)) is not None]
-        if len(population)!=len(frozen):
-            missing.append({'instrument_id':iid,'status':'INSUFFICIENT_COVERAGE','reason':'FROZEN_THEME_POPULATION_UNAVAILABLE_AFTER_SELF_REMOVAL'})
-            continue
-        maps={key:_percentile_map(r[field] for r in population) for key,field in factor_fields}
-        owned={t['theme_id'] for t,m in frozen if iid in m};choices=[]
-        for row in population:
-            if row['theme_id'] not in owned:continue
-            p={k:maps[k][row[field]] for k,field in factor_fields}
-            row.update(T=_score_from_decimals(THEME_WEIGHTS,p),factor_percentiles=p,
-                percentile_population_theme_ids=[r['theme_id'] for r in population]);choices.append(row)
-        if choices:
-            choices.sort(key=lambda r:(-r['T'],r['theme_id']));chosen[iid]=choices[0];all_choices[iid]=choices
-        else:missing.append({'instrument_id':iid,'status':'INSUFFICIENT_COVERAGE','reason':'THEME_MEMBER_OR_PEER_COVERAGE_GATE_NOT_MET'})
-    rebased=_pv_population_scores(pv,chosen);ranked=[]
-    def display_theme(row):
-        return {k:({a:_number(b) for a,b in v.items()} if k=='factor_percentiles' else _number(v) if isinstance(v,(Fraction,Decimal)) else v) for k,v in row.items()}
-    for iid,row in chosen.items():
-        score=Fraction(str(THEME_SPEC['combination']['pv_score_on_theme_eligible_cohort']))*rebased[iid]+Fraction(str(THEME_SPEC['combination']['theme_score']))*row['T']
-        ranked.append({**pv[iid],**display_theme(row),'status':'EVALUATED','original_S_PV':pv[iid]['S_PV'],
-            'S_PV_THEME_COHORT':_number(rebased[iid]),'S_THEME':_number(score),'candidate_themes':[display_theme(r) for r in all_choices[iid]],
-            'selection_reason':'MAX_THEME_SCORE_THEN_THEME_ID_ASC','_score':score})
-    ranked.sort(key=lambda r:(-r['_score'],r['instrument_id']))
-    for rank,row in enumerate(ranked,1):row['rank']=rank
-    result.update(status=('COMPLETE' if not missing else 'LIMITED_SCOPE') if ranked else 'INSUFFICIENT_COVERAGE',
-        reason=None if ranked else 'THEME_PEER_COVERAGE_GATE_NOT_MET',formula='0.75*S_PV_THEME_COHORT + 0.25*T',
-        items=[_public(r) for r in ranked]+missing,top_ids=[r['instrument_id'] for r in ranked[:top_n]],qualified_ids=sorted(chosen),
-        frozen_theme_ids=[t['theme_id'] for t,m in frozen],
-        counts={'eligible':len(pv),'evaluated':len(ranked),'insufficient':len(missing),'theme_snapshot_count':len(frozen)})
-    return result
-
-def _emotion_context(ctx):
-    """Descriptive facts on the declared current-qualified cohort; no score vote."""
-    output={'role':'CONTEXT_AND_STRATIFIED_EVALUATION_NO_NEW_HARD_VETO',
-        'cohort':'CURRENT_DATE_UNIQUE_QUALIFIED_SECURITIES','expected':len(ctx.eligible_ids),
-        'status':'UNAVAILABLE','reason':'VERIFIED_EVENTS_OR_HISTORY_INSUFFICIENT'}
-    if len(ctx.sessions)<2:return output
-    today,yesterday=ctx.sessions[-1],ctx.sessions[-2];observed=[];queue=[];buckets={'1':[],'2':[],'3_PLUS':[]}
-    width={'close_limit_count':0,'touched_not_closed_count':0};heights=[]
-    for iid in ctx.eligible_ids:
-        previous=_bar_limit_event(_bar(ctx,yesterday,iid),iid,yesterday)
-        current=_bar_limit_event(_bar(ctx,today,iid),iid,today)
-        if not _known_limit_flag(previous.close_limit_up) or not _known_limit_flag(current.close_limit_up):continue
-        history=[_bar_limit_event(_bar(ctx,s,iid),iid,s) for s in ctx.sessions[-22:]]
-        annotated=annotate_streaks(history);previous,current=annotated[-2:]
-        observed.append(iid);width['close_limit_count']+=current.close_limit_up==TRUE
-        width['touched_not_closed_count']+=current.touched_not_closed==TRUE
-        if current.close_limit_up==TRUE and current.streak_exchange is not None:heights.append(current.streak_exchange)
-        if previous.close_limit_up==TRUE:
-            ret=_comparable_return(_bar(ctx,today,iid),_bar(ctx,yesterday,iid))
-            queue.append({'instrument_id':iid,'return':_number(ret),'positive':ret>0 if ret is not None else None,'resealed':current.close_limit_up==TRUE})
-            streak=previous.streak_exchange
-            if streak is not None:buckets['1' if streak==1 else '2' if streak==2 else '3_PLUS'].append(current.close_limit_up==TRUE)
-    coverage=Fraction(len(observed),len(ctx.eligible_ids)) if ctx.eligible_ids else Fraction(0)
-    output.update(observed=len(observed),coverage=_number(coverage),scope_label='FULL_SCOPE' if ctx.universe_complete else 'LIMITED_SCOPE')
-    if coverage<PV_QUOTE_COVERAGE_MIN:return output
-    returns=[r['return'] for r in queue if r['return'] is not None]
-    output.update(status='COMPLETE' if ctx.universe_complete else 'LIMITED_SCOPE',reason=None,
-        promotions={k:{'n':len(v),'successes':sum(v),'rate':sum(v)/len(v) if v else None,'status':'AVAILABLE' if v else 'NO_COHORT'} for k,v in buckets.items()},
-        previous_limit_queue={'n':len(queue),'valid_price_n':len(returns),'median_return':median(returns) if returns else None,
-            'positive_fraction':sum(x>0 for x in returns)/len(returns) if returns else None,
-            'reseal_fraction':sum(r['resealed'] for r in queue)/len(queue) if queue else None,'items':queue},
-        width=width,verified_max_height=max(heights) if heights else None,
-        ladder_gaps=[n for n in range(1,max(heights)) if n not in heights] if heights else [],
-        source_refs=sorted(ctx.resolver.used))
-    return output
-
-def run_theme_limitup(bundle,pv_result=None,*,top_n=100,cutoff=None,_context=None):
-    return {**run_theme_context(bundle,pv_result,top_n=top_n,cutoff=cutoff,_context=_context),
-        'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
-
-def strategy_comparison(daily_summary,pv,dna,theme,focus=None,extra_strategies=None):
-    candidate_sets={k:set(v.get('top_ids',[])) for k,v in [('PV',pv),('DNA',dna),('THEME',theme)]}
-    rows=[{'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
-        'data_scope_status':x.get('data_scope_status'),'coverage_scope':x.get('coverage_scope'),
-        'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
-        'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[]))} for x in (pv,dna,theme)]
-    for x in extra_strategies or ():
-        rows.append({'strategy_id':x.get('canonical_strategy_id',x.get('strategy_id')),'status':x.get('status'),'scope_label':x.get('scope_label'),
-            'data_scope_status':x.get('data_scope_status'),'coverage_scope':x.get('coverage_scope'),
-            'top_ids':x.get('top_ids',[]),'actual_top_ids':x.get('top_ids',[]),'top_ids_source':'ACTUAL_STRATEGY','count':len(x.get('top_ids',[])),
-            'full_rank_count':sum(r.get('rank') is not None for r in x.get('items',[])),
-            'formal_list_policy':x.get('formal_list_policy'),'parameter_status_label_zh':x.get('parameter_status_label_zh')})
-    return {'comparison_version':'R05_STRATEGY_COMPARISON_V1','parameter_status':PARAMETER_STATUS,'strategies':rows,
-        'focus':{'strategy_id':FOCUS_POLICY_ID,'selected_ids':(focus or {}).get('selected_ids',[]),'count':len((focus or {}).get('selected_ids',[]))},
-        'overlaps':{'pv_dna':sorted(candidate_sets['PV']&candidate_sets['DNA']),'pv_theme':sorted(candidate_sets['PV']&candidate_sets['THEME']),
-            'dna_theme':sorted(candidate_sets['DNA']&candidate_sets['THEME']),'all_three':sorted(set.intersection(*candidate_sets.values()))},
-        'overlap_role':'DESCRIPTIVE_ONLY_NOT_COMMON_ELIGIBILITY_PERFORMANCE','published_reference':daily_summary.get('run_id') if daily_summary else None,
-        'market_edge':'NOT_ESTABLISHED'}
+def strategy_comparison(daily_summary, pv, stage_aware, focus=None):
+    rows = [{'strategy_id': x.get('strategy_id'), 'status': x.get('status'),
+        'scope_label': x.get('scope_label'), 'data_scope_status': x.get('data_scope_status'),
+        'coverage_scope': x.get('coverage_scope'), 'top_ids': x.get('top_ids', []),
+        'actual_top_ids': x.get('top_ids', []), 'top_ids_source': 'ACTUAL_STRATEGY',
+        'count': len(x.get('top_ids', [])),
+        'full_rank_count': sum(row.get('rank') is not None for row in x.get('items', []))}
+        for x in (pv, stage_aware)]
+    return {'comparison_version': 'PERSONAL_DAILY_COMPARISON_V1',
+        'parameter_status': PARAMETER_STATUS, 'strategies': rows,
+        'focus': {'strategy_id': FOCUS_POLICY_ID,
+            'selected_ids': (focus or {}).get('selected_ids', []),
+            'count': len((focus or {}).get('selected_ids', []))},
+        'published_reference': daily_summary.get('run_id') if daily_summary else None,
+        'DAILY_V1': daily_summary or {'status': 'UNKNOWN_NOT_EXECUTED'},
+        'market_edge': 'NOT_ESTABLISHED'}
 
 def implementation_conformance(run):
     """Append this assessment separately; never rewrite the historical run."""
@@ -622,14 +412,10 @@ def source_identity():
         'frozen_daily_config_hash':hashlib.sha256(baseline.read_bytes()).hexdigest(),'upstream_source_lock':SOURCE_LOCK['upstream_research']}
 
 def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,config=None):
+    """Run the confirmed PV and active V2 rules against one evidence context."""
     ctx=_prepare_context(bundle,cutoff);pv=run_pv_observation(bundle,top_n=top_n,cutoff=cutoff,_context=ctx);focus=run_pv_focus_preview(pv)
     pv.update(selection_policy_id=FOCUS_POLICY_ID,focus_count=focus['count'],focus_ids=focus['selected_ids'])
-    dna=run_dna_rerank(bundle,pv,top_n=top_n,cutoff=cutoff,_context=ctx);theme=run_theme_context(bundle,pv,top_n=top_n,cutoff=cutoff,_context=ctx)
     from .stage_aware_momentum import run_stage_aware_momentum
-    from .theme_capital_trend import run_simple_trend_template, run_theme_capital_trend, run_theme_capital_trend_technical_only
-    theme_capital_technical=run_theme_capital_trend_technical_only(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
-    theme_capital=run_theme_capital_trend(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
-    simple_trend=run_simple_trend_template(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     stage_aware=run_stage_aware_momentum(bundle,top_n=top_n,cutoff=cutoff,_context=ctx)
     from .coverage_diagnostics import build_coverage_diagnostics, json_safe
     data_coverage=json_safe(build_coverage_diagnostics(ctx,pv_result=pv,stage_aware_result=stage_aware))
@@ -638,10 +424,7 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
     context_scope=data_coverage['coverage_scope']['CONTEXT_READINESS']
     pv.update(data_scope_status=pv_scope['status'],coverage_scope=pv_scope,
         full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
-    for result in (dna,theme):
-        result.update(data_scope_status=pv_scope['status'],coverage_scope=pv_scope,
-            full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
-    for result in (theme_capital_technical,theme_capital,simple_trend,stage_aware):
+    for result in (stage_aware,):
         result.update(data_scope_status=trend_scope['status'],coverage_scope=trend_scope,
             context_scope_status=context_scope['status'],context_coverage_scope=context_scope,
             full_market_gate_policy=data_coverage['coverage_scope']['gate_policy'])
@@ -654,18 +437,12 @@ def run_strategy_experiments(bundle,daily_summary=None,*,top_n=100,cutoff=None,c
         'data_coverage_diagnostics':data_coverage,'data_readiness':data_coverage['coverage_scope'],
         'source_refs':sorted(ctx.resolver.used),'data_watermark':max((r.ingested_at.isoformat() for r in bundle.receipts),default=None),**identity,
         **history_identity(bundle),
-        'results':{PV_OBSERVATION_ID:pv,DNA_ID:dna,THEME_ID:theme,
-            theme_capital_technical['strategy_id']:theme_capital_technical,
-            theme_capital['strategy_id']:theme_capital,
-            simple_trend['strategy_id']:simple_trend,
-            stage_aware['strategy_id']:stage_aware},
+        'results':{PV_OBSERVATION_ID:pv,stage_aware['strategy_id']:stage_aware},
         'selection_results':{FOCUS_POLICY_ID:focus}}
     for result in payload['results'].values():
         for key,value in identity.items():result.setdefault(key,value)
         result.update(input_hash=input_hash,decision_cutoff=ctx.cutoff.isoformat(),coverage_type=bundle.coverage_type,**history_identity(bundle))
-    payload['results'][DNA_REVERSAL_ID]={**dna,'strategy_id':DNA_REVERSAL_ID,'canonical_strategy_id':DNA_ID,'compatibility_alias':True}
-    payload['results'][THEME_LIMITUP_ID]={**theme,'strategy_id':THEME_LIMITUP_ID,'canonical_strategy_id':THEME_ID,'compatibility_alias':True}
-    payload['comparison']=strategy_comparison(daily_summary,pv,dna,theme,focus,(theme_capital_technical,theme_capital,simple_trend,stage_aware))
+    payload['comparison']=strategy_comparison(daily_summary,pv,stage_aware,focus)
     payload['run_id']=_stable_id('strategy_experiment',{k:payload[k] for k in ('input_hash','observation_date','decision_cutoff','spec_hash','source_hash','implementation_version','universe_hash')})
     return payload
 
@@ -688,8 +465,6 @@ def _active_daily_comparison(stage_aware):
             'actual_top_ids':stage_aware.get('top_ids',()),'top_ids_source':'ACTIVE_DAILY_STRATEGY',
             'count':len(stage_aware.get('top_ids',())),'full_rank_count':sum(r.get('rank') is not None for r in stage_aware.get('items',()))}],
         'research_full_suite_executed':False,
-        'research_full_suite_endpoint':'/api/strategy-experiments/run',
-        'daily_primary_endpoint':'/api/daily-primary/run',
         'market_edge':'NOT_ESTABLISHED'}
 
 def run_active_daily_strategy(bundle,daily_summary=None,*,top_n=100,cutoff=None,config=None,
@@ -923,13 +698,11 @@ def strategy_specs():
     from .stage_aware_momentum import stage_aware_strategy_specs
     from .short_horizon_strength import short_horizon_strategy_specs
     from .short_horizon_participation import short_horizon_strategy_specs as participation_specs
-    from .theme_capital_trend import theme_capital_strategy_specs
     return {'task_id':'R05','implementation_version':IMPLEMENTATION_VERSION,**source_identity(),
         'strategies':[{'strategy_id':'DAILY_V1','description':'原五族冻结对照，缺数据不由PV替代。','config_hash':source_identity()['frozen_daily_config_hash']},
-            *[{'strategy_id':k,'parameter_status':PARAMETER_STATUS,'spec':v} for k,v in SPEC['strategies'].items()],
+            {'strategy_id':PV_OBSERVATION_ID,'parameter_status':PARAMETER_STATUS,'spec':PV_SPEC},
             {'strategy_id':FOCUS_POLICY_ID,'selection_policy':FOCUS_POLICY,'parameter_status':PARAMETER_STATUS},
-            *theme_capital_strategy_specs(),
-            *stage_aware_strategy_specs(),
+                *stage_aware_strategy_specs(),
             *short_horizon_strategy_specs(),
             *participation_specs()]}
 

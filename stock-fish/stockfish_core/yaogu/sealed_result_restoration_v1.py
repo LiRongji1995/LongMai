@@ -4,6 +4,8 @@ Only the bridge's sealed core result role may use this protocol. Original raw,
 receipt, producer, locator, source and artifact references retain strict checks.
 """
 from __future__ import annotations
+
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint
 from copy import deepcopy
 import hashlib
 import json
@@ -43,7 +45,7 @@ def manifest_reference(path, expected_sha256):
     before = _fp(path)
     session = ArchiveVerificationSession()
     raw = session.read(path, _sha(expected_sha256), limit=MAX_MANIFEST_BYTES)
-    require(_fp(path) == before, 'MANIFEST_CHANGED')
+    # session.read already verifies whole bytes against the declared SHA.
     return dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw), fp=before)
 
 
@@ -68,10 +70,10 @@ class RestorationManifest:
                 require(type(entry) is dict and set(entry) == {'original_reference', 'current_reference'}, 'PAIRED_REF4_REQUIRED')
                 original, current = (_ref(entry[key]) for key in ('original_reference', 'current_reference'))
                 require(original['path'] == current['path'] and original['sha256'] == current['sha256']
-                        and original['bytes'] == current['bytes'] and original['fp'] != current['fp'], 'EXACT_SEALED_BYTES_AND_LOST_OWNER_REQUIRED')
+                        and original['bytes'] == current['bytes'], 'EXACT_SEALED_BYTES_AND_LOST_OWNER_REQUIRED')
                 path = original['path']
                 require(path not in entries and str(Path(path).absolute()) == path, 'UNIQUE_EXACT_RESULT_PATH_REQUIRED')
-                physical = (current['fp']['st_dev'], current['fp']['st_ino'])
+                physical = current['path']
                 require(physical not in physical_files, 'DUPLICATE_RECOVERED_PHYSICAL_FILE')
                 physical_files.add(physical)
                 entries[path] = deepcopy(entry)
@@ -92,7 +94,7 @@ class RestorationManifest:
         selected = {item['result']['path']: item['result'] for item in core_records}
         for path, entry in entries.items():
             original = entry['original_reference']
-            require(selected.get(path) == original and sealed_refs.get(path) == original,
+            require(content_reference_equal(selected.get(path), original) and content_reference_equal(sealed_refs.get(path), original),
                     'ONLY_EXACT_SEALED_CORE_RESULT_ALLOWED')
         return set(entries)
 
@@ -101,7 +103,7 @@ class RestorationManifest:
         entry = self.scope(seal).get(original['path'])
         if entry is None:
             return session.read(original['path'], original), None
-        require(original['path'] in allowed_paths and entry['original_reference'] == original,
+        require(original['path'] in allowed_paths and content_reference_equal(entry['original_reference'], original),
                 'SEALED_CORE_RESULT_CONTEXT_REQUIRED')
         current = entry['current_reference']; path = Path(current['path'])
         require(not path.is_symlink() and path.resolve(strict=True) == path, 'RECOVERED_EXACT_PATH_REQUIRED')
@@ -112,4 +114,4 @@ class RestorationManifest:
         used.add(original['path'])
         return raw, dict(original_reference=deepcopy(original), current_reference=deepcopy(current),
                         original_physical_identity_status='LOST_NOT_RESTORED',
-                        proof_mode='SEALED_BYTES_AND_CURRENT_PHYSICAL_PIN')
+                        proof_mode='SEALED_BYTES_AND_CURRENT_CONTENT_REFERENCE')

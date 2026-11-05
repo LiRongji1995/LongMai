@@ -1,12 +1,15 @@
 """Run offline tests using only the selected venv's third-party packages."""
 import os
 from pathlib import Path
-import runpy
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
-bootstrap = runpy.run_path(str(ROOT / 'scripts/bootstrap_daily_runtime.py'))
-bootstrap['installed_identity']()
+import site
+if sys.prefix == sys.base_prefix or site.ENABLE_USER_SITE:
+    raise RuntimeError('ISOLATED_VIRTUAL_ENVIRONMENT_REQUIRED')
+for path in sys.path:
+    if 'site-packages' in Path(path).parts and not Path(path).resolve().is_relative_to(Path(sys.prefix).resolve()):
+        raise RuntimeError('FOREIGN_SITE_PACKAGES_REJECTED')
 os.environ['PYTEST_DISABLE_PLUGIN_AUTOLOAD'] = '1'
 os.environ['PYTHONDONTWRITEBYTECODE'] = '1'
 sys.path.insert(0, str(ROOT))

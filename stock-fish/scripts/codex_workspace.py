@@ -292,7 +292,18 @@ def validate_profile(value):
     return result
 
 
+def interpreter_path(value):
+    """Canonicalize the directory while preserving a virtualenv executable name."""
+    path = Path(value).expanduser().absolute()
+    return path.parent.resolve(strict=True) / path.name
+
+
 def _binding(profile):
+    """Check usable locators and snapshot metadata for legacy journal naming.
+
+    Saved device/inode values are historical coordination keys, not a condition
+    for opening an existing runtime on this machine.
+    """
     names = ["state_root", "report_root"]
     names += ["db_path"] if profile["backend"] == "api" else ["source_root", "python"]
     output = {}
@@ -324,10 +335,71 @@ def _binding(profile):
 
 
 def _resources(binding):
-    # Physical resources, independent of profile names, backends and hard links.
+    # Keep historical lock names so existing runtimes and receipts stay together.
     return sorted({_digest({"device": value["device"], "inode": value["inode"]})
                    for name, value in binding.items()
                    if name in {"state_root", "report_root", "db_path"} or name.startswith("storage:")})
+
+
+def _resource_paths(profile):
+    paths = [profile[name] for name in ("state_root", "report_root", "db_path") if name in profile]
+    paths.extend(root["path"] for root in profile["storage"]["roots"])
+    return paths
+
+
+def _path_resources(profile):
+    """Coordinate the configured locations across file replacement and epochs."""
+    paths = _resource_paths(profile)
+    return sorted({_digest({"resource_path": str(Path(path).resolve(strict=True))}) for path in paths})
+
+
+def _same_location(left, right):
+    if left == right:
+        return True
+    try:
+        return os.path.samefile(left, right)
+    except OSError:
+        return False
+
+
+def _registered_ledger_binding(root, profile, binding):
+    """A new name for an existing resource must find its original operation log.
+
+    This is location lookup, not physical authentication. A file restored at the
+    same path inherits its saved journal key instead of appearing as fresh work.
+    Multiple historical journals require reconciliation, never an arbitrary pick.
+    """
+    primary = "db_path" if profile["backend"] == "api" else "state_root"
+    paths = sorted((root / "runtimes").glob("*.json"))
+    _need(len(paths) <= 10000, "RUNTIME_REGISTRATION_SCAN_LIMIT")
+    candidates = []
+    policy = {"report_root": profile["report_root"], "storage": profile["storage"]}
+    locations = _resource_paths(profile)
+    for path in paths:
+        saved = _read(path)
+        previous = saved.get("profile", {})
+        old_binding = saved.get("binding", {})
+        # Legacy registrations predate path-policy claims. Compare their saved
+        # policies too, so a remount cannot create a second budget for one root.
+        if any(_same_location(left, right) for left in locations for right in _resource_paths(previous)):
+            _need(policy == {"report_root": previous["report_root"], "storage": previous["storage"]},
+                  "SHARED_RESOURCE_POLICY_CONFLICT")
+        if previous.get("backend") != profile["backend"] or primary not in old_binding:
+            continue
+        if _same_location(profile[primary], previous.get(primary, "")):
+            candidates.append(old_binding)
+    if not candidates:
+        return binding
+    ledger_keys = {(item[primary]["device"], item[primary]["inode"]) for item in candidates}
+    _need(len(ledger_keys) == 1, "EXISTING_OPERATION_LEDGERS_REQUIRE_RECONCILIATION")
+    result = deepcopy(binding)
+    for name, current in result.items():
+        for previous in candidates:
+            old = previous.get(name)
+            if old and _same_location(current["path"], old["path"]):
+                current.update(device=old["device"], inode=old["inode"])
+                break
+    return result
 
 
 def register_profile(config_path, registry_root=None, make_default=False):
@@ -341,20 +413,25 @@ def register_profile(config_path, registry_root=None, make_default=False):
     with _lock(root / "registry.lock"):
         destination = root / "runtimes" / (profile["name"] + ".json")
         binding = _binding(profile)
+        existing = destination.exists() or destination.is_symlink()
+        if existing:
+            saved = _read(destination)
+            _need(saved.get("schema_version") == VERSION and saved.get("profile") == profile,
+                  "REGISTERED_RUNTIME_EXISTS_PRESERVED")
+            binding = saved["binding"]
+        else:
+            binding = _registered_ledger_binding(root, profile, binding)
+        resources = sorted(set(_resources(binding)) | set(_path_resources(profile)))
         policy = {"report_root": profile["report_root"], "storage": profile["storage"]}
-        for resource in _resources(binding):
+        for resource in resources:
             claim = root / "resources" / (resource + ".json")
             if claim.exists() or claim.is_symlink():
                 _need(_read(claim) == policy, "SHARED_RESOURCE_POLICY_CONFLICT")
-        for resource in _resources(binding):
+        for resource in resources:
             claim = root / "resources" / (resource + ".json")
             if not claim.exists():
                 _write(claim, policy)
-        if destination.exists() or destination.is_symlink():
-            saved = _read(destination)
-            _need(saved.get("schema_version") == VERSION and saved.get("profile") == profile
-                  and saved.get("binding") == binding, "REGISTERED_RUNTIME_EXISTS_PRESERVED")
-        else:
+        if not existing:
             _write(destination, {"schema_version": VERSION, "profile": profile,
                                  "binding": binding, "registered_at": _stamp(),
                                  "authority": "LOCATION_ONLY_NOT_SOURCE_AUTHORITY"})
@@ -370,7 +447,7 @@ def register_profile(config_path, registry_root=None, make_default=False):
             "authority": "LOCATION_ONLY_NOT_SOURCE_AUTHORITY", "data_copied_bytes": 0}
 
 
-def load_runtime(name=None, registry_root=None):
+def load_runtime(name=None, registry_root=None, *, allow_test_fixture=False):
     root = Path(registry_root or default_registry_root()).expanduser().absolute()
     name = name or os.environ.get("STOCKFISH_CHAT_RUNTIME")
     if name is None:
@@ -385,10 +462,33 @@ def load_runtime(name=None, registry_root=None):
     if not path.exists() and not path.is_symlink():
         raise WorkspaceError("RUNTIME_NOT_REGISTERED")
     saved = _read(path)
-    _need(saved.get("schema_version") == VERSION, "RUNTIME_REGISTRY_VERSION")
+    _need(saved.get("schema_version") in {VERSION, "CODEX_RUNTIME_RECOVERY_V1"}, "RUNTIME_REGISTRY_VERSION")
     profile = validate_profile(saved.get("profile"))
     _need(profile["name"] == name, "RUNTIME_NAME_MISMATCH")
     runtime = Runtime(root, profile, saved.get("binding"))
+    if saved["schema_version"] == "CODEX_RUNTIME_RECOVERY_V1":
+        from stockfish_core.file_integrity import content_fingerprint, verify_content_reference
+        reference = saved.get("epoch", {})
+        _need(verify_content_reference(reference), "RECOVERY_EPOCH_CONTENT_CHANGED")
+        plan = _read(Path(reference["path"]), limit=16 * MAX_CONTROL)
+        _need(plan.get("schema_version") == "CODEX_RUNTIME_RECOVERY_V1"
+              and plan.get("registry_root") == str(root)
+              and plan.get("profile") == profile and plan.get("binding") == runtime.binding
+              and plan.get("epoch_id") == "runtime_recovery_" + _digest({k: v for k, v in plan.items() if k != "epoch_id"})
+              and plan.get("source_authority_restored") is False,
+              "RECOVERY_REGISTERED_EPOCH_MISMATCH")
+        _need(not plan.get("test_fixture") or allow_test_fixture, "RECOVERY_TEST_FIXTURE_NOT_PRODUCTION")
+        history = plan["history"]
+        parent_scope = history["scope"]
+        directory = root / "scopes" / _digest(parent_scope) / "operations"
+        _need(str(directory) == history["directory"], "RECOVERY_ANCESTOR_LEDGER_LOCATION_CHANGED")
+        runtime.ancestor_ledgers = [(directory, parent_scope)]
+        runtime.control_references = [dict(path=str(path), **content_fingerprint(path)), reference,
+            plan["config"], history["registry"], history["config"],
+            *([history["default"]] if history.get("default") else []),
+            *[item["reference"] for item in history["operations"]]]
+        runtime.resources = sorted(set(runtime.resources) | set(history["resources"]))
+        runtime.recovery_epoch = plan["epoch_id"]
     runtime.check_binding()
     return runtime
 
@@ -398,14 +498,46 @@ class Runtime:
         self.registry_root = Path(registry_root)
         self.profile = deepcopy(profile)
         self.binding = deepcopy(binding)
-        # Aliases of the same physical state share an OS lock and journal.
+        self.control_references = []
+        self.ancestor_ledgers = []
+        self.recovery_epoch = None
+        # Saved keys locate the original journal even after filesystem metadata
+        # changes. Never recompute them from today's device/inode.
         primary = binding["db_path" if profile["backend"] == "api" else "state_root"]
         self.scope = {"backend": profile["backend"], "device": primary["device"], "inode": primary["inode"]}
-        self.resources = _resources(binding)
+        self.resources = sorted(set(_resources(binding)) | set(_path_resources(profile)))
         self.directory = self.registry_root / "scopes" / _digest(self.scope)
 
     def check_binding(self):
-        _need(_binding(self.profile) == self.binding, "REGISTERED_RUNTIME_PHYSICAL_IDENTITY_CHANGED")
+        # Paths must remain usable, but machine/file identity is not admission.
+        _binding(self.profile)
+        if self.control_references:
+            from stockfish_core.file_integrity import verify_content_reference
+            _need(all(verify_content_reference(ref) for ref in self.control_references),
+                  "RECOVERY_LEDGER_OR_CONFIGURATION_CONTENT_CHANGED")
+
+    def guard_ancestor_request(self, identity):
+        for directory, scope in getattr(self, "ancestor_ledgers", ()) :
+            _need(not directory.is_symlink(), "RECOVERY_ANCESTOR_LEDGER_ALIAS")
+            paths = sorted(directory.glob("*.json"))
+            _need(len(paths) <= 10000, "RECOVERY_ANCESTOR_OPERATION_LIMIT")
+            for path in paths:
+                record = _read(path)
+                other = record.get("identity", {})
+                _need(record.get("scope") == scope and record.get("operation_id") == path.stem
+                      and path.stem == _digest({"scope": scope, "identity": other}),
+                      "RECOVERY_ANCESTOR_OPERATION_INVALID")
+                same_key = bool(identity.get("request_key")) and identity.get("request_key") == other.get("request_key")
+                same_session = (identity.get("backend") == other.get("backend") == "premarket"
+                    and bool(identity.get("observation_date")) and bool(identity.get("target_session"))
+                    and all(identity.get(k) == other.get(k) for k in ("observation_date", "target_session")))
+                same_local = (identity.get("backend") == other.get("backend") == "local-research"
+                    and bool(identity.get("input_id"))
+                    and all(identity.get(k) == other.get(k) for k in ("database", "command", "input_id", "run_id")))
+                same_outcome = (identity.get("backend") == other.get("backend") == "local-outcomes"
+                    and bool(identity.get("business")) and identity["business"] == other.get("business"))
+                _need(other != identity and not same_key and not same_session and not same_local and not same_outcome,
+                      "RECOVERY_ANCESTOR_REQUEST_RECONCILE_NO_RETRY")
 
     @contextmanager
     def exclusive(self):
@@ -468,6 +600,7 @@ class Runtime:
         path = self.directory / "operations" / (key + ".json")
         started = time.monotonic()
         with self.exclusive():
+            Runtime.guard_ancestor_request(self, identity)
             if path.exists() or path.is_symlink():
                 record = _read(path)
                 _need(record.get("schema_version") == VERSION and record.get("scope") == self.scope
@@ -513,8 +646,8 @@ class Runtime:
                     "capacity_after_allowed": after["allowed"]}
 
 
-def runtime_status(name=None, registry_root=None):
-    runtime = load_runtime(name, registry_root)
+def runtime_status(name=None, registry_root=None, *, allow_test_fixture=False):
+    runtime = load_runtime(name, registry_root, allow_test_fixture=allow_test_fixture)
     if runtime is None:
         return {"status": "UNCONFIGURED", "registry_root": str(registry_root or default_registry_root()),
                 "note": "Register an explicitly identified existing runtime; no default service or database was opened."}
@@ -522,4 +655,6 @@ def runtime_status(name=None, registry_root=None):
             "backend": runtime.profile["backend"], "state_root": runtime.profile["state_root"],
             "report_root": runtime.profile["report_root"], "scope": runtime.scope,
             "authority": "LOCATION_ONLY_NOT_SOURCE_AUTHORITY",
-            "physical_binding_verified": True}
+            "physical_binding_verified": False,
+            "coordination_policy": "SAVED_LEDGER_KEYS_AND_LOCATION_LOCKS",
+            "recovery_epoch": runtime.recovery_epoch, "ancestor_ledger_count": len(runtime.ancestor_ledgers)}

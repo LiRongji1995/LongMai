@@ -7,8 +7,7 @@ import time
 
 import pytest
 
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.candidate_service import CandidateRequest
 from tests.yaogu.fixtures import make_bundle
@@ -17,7 +16,7 @@ from tests.yaogu.fixtures import make_bundle
 @pytest.fixture
 def product(tmp_path):
     store=SQLiteStore(tmp_path/'TEST_FIXTURE_reads.sqlite3')
-    core=ApplicationService(root=tmp_path/'TEST_FIXTURE_state',store=store,
+    core=ResearchService(root=tmp_path/'TEST_FIXTURE_state',store=store,
                             allow_test_fixture=True,data_dir=tmp_path/'NO_QLIB')
     bundle,_=make_bundle()
     input_id=core.candidates.register_input(bundle)
@@ -46,14 +45,6 @@ def test_storage_health_hashes_current_bytes_without_materializing_payload_objec
     assert health['payload_rows_checked']['documents']>=2
 
 
-def test_api_health_does_not_construct_full_market_coverage_preview(product,monkeypatch):
-    core,_,_=product
-    monkeypatch.setattr(core,'health',lambda:{'status':'healthy','components':{'tracker':core.store.health()}})
-    def forbidden():raise AssertionError('health invoked the full market preview')
-    monkeypatch.setattr(core.candidates,'coverage',forbidden)
-    response=create_app(core).test_client().get('/api/health')
-    assert response.status_code==200,response.text
-    assert response.json['candidate_research']['coverage_check']=='NOT_PERFORMED_USE_UNIVERSE_COVERAGE'
 
 
 def test_repeated_concurrent_coverage_reuses_only_verified_compact_projection(product,monkeypatch):

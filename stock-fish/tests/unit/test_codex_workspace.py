@@ -1,4 +1,4 @@
-"""TEST_FIXTURE: physical resources, durable receipts and real process coordination."""
+"""TEST_FIXTURE: durable receipt locations and real process coordination."""
 from copy import deepcopy
 from concurrent.futures import ThreadPoolExecutor
 import json
@@ -46,6 +46,11 @@ class WorkspaceFixture(unittest.TestCase):
         path.write_text(json.dumps(profile))
         w.register_profile(path, self.registry)
         return w.load_runtime(profile["name"], self.registry)
+
+    def replace_database(self):
+        raw = self.db.read_bytes()
+        self.db.rename(self.data / "TEST_FIXTURE-original.db")
+        self.db.write_bytes(raw)
 
     def test_unconfigured_read_does_not_create_registry(self):
         with patch.dict(os.environ, {}, clear=True):
@@ -115,6 +120,36 @@ class WorkspaceFixture(unittest.TestCase):
         with self.assertRaisesRegex(w.WorkspaceError, "SHARED_RESOURCE_POLICY_CONFLICT"):
             self.register(changed)
 
+    def test_legacy_shared_root_policy_survives_changed_metadata(self):
+        runtime = self.register()
+        # Legacy registries have only the original physical resource claims.
+        for key in w._path_resources(self.profile):
+            (self.registry / "resources" / (key + ".json")).unlink()
+        saved_path = self.registry / "runtimes" / "TEST_FIXTURE.json"
+        saved = w._read(saved_path)
+        for item in saved["binding"].values():
+            item["device"] += 100
+            item["inode"] += 100
+        w._write(saved_path, saved, replace=True)
+        other_db = self.data / "TEST_FIXTURE-other.db"
+        other_db.write_bytes(b"TEST_FIXTURE")
+        changed = deepcopy(self.profile)
+        changed.update(name="TEST_FIXTURE-other-ledger", db_path=str(other_db))
+        changed["storage"]["max_managed_bytes"] *= 2
+        with self.assertRaisesRegex(w.WorkspaceError, "SHARED_RESOURCE_POLICY_CONFLICT"):
+            self.register(changed)
+        self.assertFalse((self.registry / "runtimes" / (changed["name"] + ".json")).exists())
+
+    def test_multiple_legacy_ledgers_at_one_location_are_not_silently_selected(self):
+        runtime = self.register()
+        saved = w._read(self.registry / "runtimes" / "TEST_FIXTURE.json")
+        saved["profile"]["name"] = "TEST_FIXTURE-second-legacy-ledger"
+        saved["binding"]["db_path"]["inode"] += 100
+        w._write(self.registry / "runtimes" / (saved["profile"]["name"] + ".json"), saved)
+        with self.assertRaisesRegex(w.WorkspaceError, "LEDGERS_REQUIRE_RECONCILIATION"):
+            self.register({**self.profile, "name": "TEST_FIXTURE-new-alias"})
+        self.assertEqual(w.load_runtime("TEST_FIXTURE", self.registry).directory, runtime.directory)
+
     def test_different_inputs_dates_and_strategies_do_not_reuse(self):
         runtime = self.register()
         identities = [{"input": "a", "date": "2026-10-23", "strategy": "frozen"},
@@ -164,12 +199,105 @@ class WorkspaceFixture(unittest.TestCase):
         with self.assertRaisesRegex(w.WorkspaceError, "DESTINATION_PROTECTED"):
             self.register()
 
-    def test_replaced_database_and_symlinked_state_denied(self):
+    def test_replaced_database_keeps_original_ledger_and_registration(self):
+        runtime = self.register()
+        runtime.run_once({"request": "saved"}, lambda: {"TEST_FIXTURE": True}, lambda r: True)
+        registration = self.registry / "runtimes" / "TEST_FIXTURE.json"
+        original = registration.read_bytes()
+        self.replace_database()
+        self.assertNotEqual(self.db.stat().st_ino, runtime.binding["db_path"]["inode"])
+        for directory in (self.state, self.reports):
+            directory.rename(directory.with_name(directory.name + "-TEST_FIXTURE-old"))
+            directory.mkdir()
+        runtime.check_binding()
+        loaded = self.register()
+        self.assertEqual(registration.read_bytes(), original)
+        self.assertEqual((loaded.scope, loaded.directory), (runtime.scope, runtime.directory))
+        self.assertEqual(loaded.resources, runtime.resources)
+        reused = loaded.run_once({"request": "saved"}, lambda: self.fail("duplicate"), lambda r: True)
+        self.assertTrue(reused["reused"])
+        self.assertFalse(w.runtime_status("TEST_FIXTURE", self.registry)["physical_binding_verified"])
+
+    def test_changed_device_metadata_keeps_failed_request_and_alias_ledger(self):
+        runtime = self.register()
+        with self.assertRaisesRegex(RuntimeError, "TEST_FIXTURE failure"):
+            runtime.run_once({"request": "failed"},
+                lambda: (_ for _ in ()).throw(RuntimeError("TEST_FIXTURE failure")), lambda r: True)
+        before = {p: p.read_bytes() for p in (runtime.directory / "operations").glob("*.json")}
+        binding = w._binding
+        def other_device(profile):
+            value = binding(profile)
+            for item in value.values():
+                item["device"] += 100
+                item["inode"] += 100
+            return value
+        with patch.object(w, "_binding", side_effect=other_device):
+            loaded = w.load_runtime("TEST_FIXTURE", self.registry)
+            alias = self.register({**self.profile, "name": "TEST_FIXTURE-after-remount"})
+            self.assertEqual((loaded.scope, alias.scope), (runtime.scope, runtime.scope))
+            self.assertEqual(alias.directory, runtime.directory)
+            for selected in (loaded, alias):
+                with self.assertRaisesRegex(w.WorkspaceError, "RECONCILE_NO_RETRY"):
+                    selected.run_once({"request": "failed"}, lambda: self.fail("unsafe retry"), lambda r: True)
+        self.assertEqual(before, {p: p.read_bytes() for p in before})
+
+    def test_replacement_then_new_name_reuses_and_coordinates_original(self):
+        first = self.register()
+        first.run_once({"request": "same"}, lambda: {"TEST_FIXTURE": True}, lambda r: True)
+        self.replace_database()
+        second = self.register({**self.profile, "name": "TEST_FIXTURE-new-name"})
+        self.assertEqual(first.directory, second.directory)
+        self.assertTrue(second.run_once({"request": "same"}, lambda: self.fail("duplicate"), lambda r: True)["reused"])
+        with first.exclusive(), self.assertRaisesRegex(w.WorkspaceError, "RUNTIME_BUSY"):
+            with second.exclusive():
+                self.fail("overlapping same-location runtimes")
+
+    def test_location_locks_join_different_historical_resource_keys(self):
+        first = self.register()
+        other_binding = deepcopy(first.binding)
+        for value in other_binding.values():
+            value["device"] += 100
+            value["inode"] += 100
+        second = w.Runtime(self.registry, self.profile, other_binding)
+        self.assertNotEqual(first.directory, second.directory)
+        self.assertFalse(set(w._resources(first.binding)) & set(w._resources(other_binding)))
+        with first.exclusive(), self.assertRaisesRegex(w.WorkspaceError, "RUNTIME_BUSY"):
+            with second.exclusive():
+                self.fail("different legacy keys bypassed location lock")
+
+    def test_python_same_content_replacement_keeps_invocation_and_scope(self):
+        source = self.data / "TEST_FIXTURE-source"
+        source.mkdir()
+        executable = self.data / "TEST_FIXTURE-python"
+        executable.write_text("#!/bin/sh\n# TEST_FIXTURE, never executed\n")
+        executable.chmod(0o700)
+        config = self.data / "TEST_FIXTURE-config.json"
+        config.write_text("{}")
+        profile = {key: deepcopy(value) for key, value in self.profile.items()
+                   if key not in ("base_url", "db_path")}
+        profile.update(backend="premarket", source_root=str(source), python=str(executable), config=str(config))
+        runtime = self.register(profile)
+        raw = executable.read_bytes()
+        executable.rename(executable.with_name("TEST_FIXTURE-old-python"))
+        executable.write_bytes(raw)
+        executable.chmod(0o700)
+        runtime.check_binding()
+        loaded = self.register(profile)
+        self.assertEqual(loaded.profile["python"], str(executable))
+        self.assertEqual(loaded.scope, runtime.scope)
+        executable.unlink()
+        executable.mkdir()
+        with self.assertRaisesRegex(w.WorkspaceError, "PYTHON_TARGET_TYPE_CHANGED"):
+            runtime.check_binding()
+
+    def test_invalid_types_and_redirected_state_remain_denied(self):
         runtime = self.register()
         self.db.rename(self.data / "original")
-        self.db.write_bytes(b"replacement TEST_FIXTURE")
-        with self.assertRaisesRegex(w.WorkspaceError, "PHYSICAL_IDENTITY_CHANGED"):
+        self.db.mkdir()
+        with self.assertRaisesRegex(w.WorkspaceError, "PATH_TYPE_CHANGED"):
             runtime.check_binding()
+        self.db.rmdir()
+        self.db.write_bytes(b"TEST_FIXTURE")
         moved = self.data / "moved-state"
         self.state.rename(moved)
         self.state.symlink_to(moved, target_is_directory=True)
@@ -223,6 +351,8 @@ class WorkspaceFixture(unittest.TestCase):
         child = self.child("runtime.run_once({'request':'crash'}, lambda: os._exit(17), lambda r: True)\n")
         out, err = child.communicate(timeout=10)
         self.assertEqual(child.returncode, 17, (out, err))
+        self.replace_database()
+        runtime = self.register({**self.profile, "name": "TEST_FIXTURE-after-crash"})
         with self.assertRaisesRegex(w.WorkspaceError, "RECONCILE_NO_RETRY"):
             runtime.run_once({"request": "crash"}, lambda: self.fail("duplicate after crash"), lambda r: True)
 

@@ -2,9 +2,9 @@
   "schema_version": "STANDALONE_PREMARKET_WORKFLOW_V1",
   "minimum_amount_cny": 300000000,
   "limits": {
-    "theme_read_bytes": 12884901888,
-    "max_requests": 768,
-    "max_seconds": null
+    "theme_read_bytes": 67108864,
+    "max_requests": 64,
+    "max_seconds": 240
   },
   "capture": {
     "include_industries": true,

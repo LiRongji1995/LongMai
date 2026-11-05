@@ -2,7 +2,6 @@
 .env
 .env.*
 !.env.example
-!.env.windows.example
 *.pem
 *.key
 credentials.json
@@ -52,3 +51,6 @@ go-core/bin/
 .claude/
 .DS_Store
 Thumbs.db
+
+# Historical local model data; Qlib implementation is retired.
+/qlib/

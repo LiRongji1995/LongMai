@@ -189,7 +189,7 @@ def test_projection_release_preserves_all_original_terminal_guards(archive, serv
         Path(archive['registry'][0]['path']) if target == 'source' else
         Path(archive['artifacts']['canonical-run.json.gz']['path']))
     path.write_bytes(path.read_bytes() + b' ')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         session.terminal()
 
 
@@ -247,7 +247,7 @@ def test_second_decode_same_json_different_original_bytes_rejected_before_parser
     path.write_bytes(gzip.compress(b' ' + raw, mtime=0))
     original = bridge._decompressed_bytes
     monkeypatch.setattr(bridge, '_decompressed_bytes', lambda *a, **k: pytest.fail('MUST_REJECT_CHANGED_GZIP_FIRST'))
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         bridge.authenticated_bridge_view(service, run_id=cert['run_id'], session=session, borrow_run=True)
     monkeypatch.setattr(bridge, '_decompressed_bytes', original)
     assert not session._borrowed_values

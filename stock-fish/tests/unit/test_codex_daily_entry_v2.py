@@ -167,10 +167,17 @@ class GatewayTests(unittest.TestCase):
             daily.execute(self.runtime, self.args)
         self.assertEqual(self.calls, 1)
 
-    def test_default_engine_original_and_opt_in_cannot_retry_same_request(self):
+    def test_default_engine_original_and_removed_candidate_is_rejected(self):
         self.assertEqual(self.args.engine, "original")
         daily.execute(self.runtime, self.args)
         self.args.engine = "shared"
+        with self.assertRaisesRegex(ValueError, "REMOVED_EXPERIMENTAL_ENGINE"):
+            daily.execute(self.runtime, self.args)
+        self.assertEqual(self.calls, 1)
+
+    def test_changed_key_cannot_retry_same_business_session(self):
+        daily.execute(self.runtime, self.args)
+        self.args.request_key = "TEST_FIXTURE_changed_key"
         with self.assertRaisesRegex(ValueError, "EXISTING_REQUEST_RECONCILE_NO_RETRY"):
             daily.execute(self.runtime, self.args)
         self.assertEqual(self.calls, 1)
@@ -194,21 +201,24 @@ class GatewayTests(unittest.TestCase):
                 daily.execute(self.runtime, self.args)
         self.assertEqual(self.calls, 1)
 
-    def test_archived_export_same_bytes_new_inode_rejected(self):
+    def test_archived_export_same_bytes_new_inode_reused(self):
         _, first = daily.execute(self.runtime, self.args)
         path = Path(first["receipt"]["job"]) / "all.csv"
         replacement = path.with_suffix(".replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
-        with self.assertRaisesRegex(ValueError, "PHYSICAL_IDENTITY_CHANGED"):
-            daily.execute(self.runtime, self.args)
+        _, reused = daily.execute(self.runtime, self.args)
+        self.assertTrue(reused["reused"])
+        self.assertEqual(reused["receipt"]["run_id"], first["receipt"]["run_id"])
         self.assertEqual(self.calls, 1)
 
-    def test_v1_commands_delegate_without_changing_arguments(self):
-        args = daily.parser().parse_args(["show", "--role", "all.csv"])
-        with patch.object(daily.legacy, "execute", return_value=(0, {"original": True})) as old:
+    def test_saved_view_command_uses_the_original_reader(self):
+        args = daily.parser().parse_args(["show", "--view-id", "TEST_FIXTURE_view", "--role", "all.csv"])
+        reader = Mock(return_value={"original": True})
+        with patch.object(daily._views(), "read_view", reader):
             self.assertEqual(daily.execute(self.runtime, args), (0, {"original": True}))
-        old.assert_called_once_with(self.runtime, args)
+        self.assertEqual(reader.call_args.args, (self.runtime, "TEST_FIXTURE_view"))
+        self.assertEqual(reader.call_args.kwargs["role"], "all.csv")
 
     def test_plan_is_read_only_and_not_implicit_run(self):
         args = daily.parser().parse_args(["premarket-plan"])
@@ -228,6 +238,80 @@ class GatewayTests(unittest.TestCase):
         result = json.loads(output.getvalue())
         self.assertEqual(result["entry_version"], daily.VERSION)
         self.assertEqual(result["command_exit_code"], 4)
+
+    def test_explicit_collection_records_under_same_business_guard_and_reuses(self):
+        self.args.collect_missing = True
+        self.admission.update(execution_admitted=False, collection_admitted=True)
+        planner = Mock(return_value=self.admission)
+        with patch.object(daily, "_plan", planner):
+            code, first = daily.execute(self.runtime, self.args)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(planner.call_count, 2)
+        self.assertTrue(all(call.kwargs == {"collect_missing": True} for call in planner.call_args_list))
+        record = json.loads(next((self.runtime.directory / "operations").glob("*.json")).read_text())
+        self.assertTrue(record["identity"]["explicit_missing_collection"])
+        self.assertEqual(record["identity"]["backend"], "premarket")
+        with patch.object(daily, "_plan", side_effect=AssertionError("NO_RECOLLECTION")):
+            _, reused = daily.execute(self.runtime, self.args)
+        self.assertTrue(reused["reused"])
+        self.assertEqual(self.calls, 1)
+        self.args.collect_missing = False
+        with self.assertRaisesRegex(ValueError, "EXISTING_REQUEST_RECONCILE_NO_RETRY"):
+            daily.execute(self.runtime, self.args)
+
+    def test_explicit_fixture_flag_reaches_both_locked_collection_admissions(self):
+        self.args.allow_test_fixture = True
+        self.args.collect_missing = True
+        self.admission.update(execution_admitted=False, collection_admitted=True)
+        with patch.object(daily, "_plan", return_value=self.admission) as planner:
+            code, first = daily.execute(self.runtime, self.args)
+        self.assertEqual(code, 2)
+        self.assertEqual(self.calls, 1)
+        self.assertEqual(planner.call_count, 2)
+        self.assertTrue(all(call.kwargs == {"collect_missing": True, "allow_test_fixture": True}
+                            for call in planner.call_args_list))
+
+    def test_collection_permission_does_not_change_ordinary_execution_gate(self):
+        self.admission.update(execution_admitted=False, collection_admitted=True)
+        code, value = daily.execute(self.runtime, self.args)
+        self.assertEqual(code, 4)
+        self.assertFalse(value["request_claimed"])
+        self.assertEqual(self.calls, 0)
+
+    def test_explicit_collection_rechecks_permission_under_lock(self):
+        self.args.collect_missing = True
+        admitted = dict(self.admission, execution_admitted=False, collection_admitted=True)
+        blocked = dict(admitted, collection_admitted=False)
+        with patch.object(daily, "_plan", side_effect=[admitted, blocked]):
+            with self.assertRaisesRegex(ValueError, "ADMISSION_CHANGED_BEFORE_EXECUTION"):
+                daily.execute(self.runtime, self.args)
+        self.assertEqual(self.calls, 0)
+
+    def test_explicit_collection_plan_is_readonly_and_passes_explicit_mode(self):
+        args = daily.parser().parse_args(["premarket-plan", "--collect-missing"])
+        with patch.object(daily, "_plan", return_value=self.admission) as planner:
+            code, value = daily.execute(self.runtime, args)
+        self.assertEqual(code, 0)
+        self.assertIs(value, self.admission)
+        planner.assert_called_once_with(self.runtime, collect_missing=True)
+        self.assertEqual(self.calls, 0)
+        self.assertFalse(self.runtime.directory.exists())
+
+    def test_explicit_collection_failure_stays_failed_after_flag_or_key_change(self):
+        self.args.collect_missing = True
+        self.admission.update(execution_admitted=False, collection_admitted=True)
+        with patch.object(daily, "_plan", return_value=self.admission),              patch.object(self.worker, "supervise", return_value=(4, {"status": "BUDGET_EXCEEDED"})) as worker:
+            with self.assertRaisesRegex(ValueError, "NO_AUTOMATIC_RETRY"):
+                daily.execute(self.runtime, self.args)
+            self.args.request_key = "TEST_FIXTURE_changed_key"
+            with self.assertRaisesRegex(ValueError, "EXISTING_REQUEST_RECONCILE_NO_RETRY"):
+                daily.execute(self.runtime, self.args)
+            self.args.collect_missing = False
+            with self.assertRaisesRegex(ValueError, "EXISTING_REQUEST_RECONCILE_NO_RETRY"):
+                daily.execute(self.runtime, self.args)
+        self.assertEqual(worker.call_count, 1)
+
 
 
 if __name__ == "__main__":

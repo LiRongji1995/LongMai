@@ -238,30 +238,3 @@ def test_key_evidence_retains_frozen_ma_values_nested_details_and_selected_setup
     for fact in ("9.83", "0.013", "735000000", "TEST_FIXTURE_MA_SOURCE", "TEST_FIXTURE_DETAIL_REF", "TEST_FIXTURE_DETAIL_HASH"):
         assert fact in report
     assert "原 run 来源凭据（非逐股归因）" in report
-
-
-def test_daily_research_html_is_read_only_and_uses_text_content_for_server_report():
-    from html.parser import HTMLParser
-    from pathlib import Path
-
-    class Elements(HTMLParser):
-        def __init__(self):
-            super().__init__()
-            self.tags = []
-        def handle_starttag(self, tag, attrs):
-            self.tags.append((tag, dict(attrs)))
-
-    source = (Path(__file__).resolve().parents[2] / "templates" / "daily_research.html").read_text(encoding="utf-8")
-    parser = Elements()
-    parser.feed(source)
-    by_id = {attrs["id"]: (tag, attrs) for tag, attrs in parser.tags if "id" in attrs}
-    assert by_id["query-mode"][0] == "select"
-    assert by_id["target-session"][1]["type"] == "date"
-    assert by_id["run-id"][1].get("disabled") is None and "disabled" in by_id["run-id"][1]
-    assert by_id["daily-report"][0] == "pre"
-    assert "/api/daily-research/report?" in source and "method: 'GET'" in source
-    assert "params.set(mode.value, value)" in source
-    assert "output.textContent = savedMarkdown" in source and "new Blob([savedMarkdown]" in source
-    assert "innerHTML" not in source and "localStorage" not in source and "sessionStorage" not in source
-    assert not any(tag == "script" and "src" in attrs for tag, attrs in parser.tags)
-    assert "method: 'POST'" not in source and "重新计算" not in source

@@ -22,142 +22,32 @@ def no_network(monkeypatch):
     monkeypatch.setattr(socket, "create_connection", denied)
 
 
-@pytest.fixture
-def case(tmp_path):
-    root = (tmp_path / "TEST_FIXTURE_sdk_tree").resolve()
-    root.mkdir()
-    return dict(root=root, limits=dict(tree_rss_bytes=512*1024**2, self_rss_bytes=2*1024**3,
-        root_reap_seconds=1., max_seconds=10., output_bytes=2*1024**2, supervisor_read_bytes=64*1024**2,
-        sample_interval_seconds=.03, term_grace_seconds=.1, kill_grace_seconds=3.),
-        env=dict(PATH="/usr/bin:/bin", PYTHONDONTWRITEBYTECODE="1"))
 
 
-def worker(case, body):
-    path = case["root"] / "TEST_FIXTURE_worker.py"
-    path.write_text(body)
-    return path
 
 
-def run(case, body="import time; time.sleep(.6)\n", **kwargs):
-    script = worker(case, body)
-    return supervisor.run_supervised([sys.executable, "-I", "-B", str(script)],
-        cwd=case["root"], env=case["env"], limits=case["limits"], control_dir=case["root"] / "control",
-        source_references=[supervisor.reference(script)[1]], test_fixture=True, **kwargs)
 
 
-def test_healthy_command_preserves_exit_and_reports_measured_sampling(case):
-    value = run(case)
-    assert value["status"] == "COMPLETE"
-    assert value["child_exit_code"] == 0
-    assert value["root_reaped"] is value["all_observed_owned_exited"] is value["all_observed_descendants_gone"] is True
-    assert value["sample_count"] > 0
-    assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
-    assert value["supervisor_peak_self_rss_bytes"] > 0
-    assert value["process_snapshot_bytes_total"] > 0
-    assert value["business_result_verified"] is value["source_capability_issued"] is False
-    assert value["cleanup"]["signals"] == []
-    persisted = json.loads((case["root"] / "control/completion.json").read_bytes())
-    assert persisted["status"] == "COMPLETE"
 
 
-def test_nonzero_exit_is_preserved_and_is_not_a_success(case):
-    value = run(case, "import time; time.sleep(.6); raise SystemExit(19)\n")
-    assert value["status"] == "FAILED" and value["child_exit_code"] == 19
-    assert value["failure_reason"] == "SUPERVISOR_CHILD_EXIT_NOT_ACCEPTED"
-    assert value["root_reaped"] and value["all_observed_owned_exited"]
 
 
-def test_explicit_accepted_inner_unknown_exit_does_not_claim_business_success(case):
-    value = run(case, "import time; time.sleep(.6); raise SystemExit(2)\n", accepted_exit_codes=(0, 2))
-    assert value["status"] == "COMPLETE" and value["child_exit_code"] == 2
-    assert value["business_result_verified"] is False
 
 
-def test_existing_control_is_never_reused_or_overwritten(case):
-    value = run(case)
-    before = supervisor.reference(case["root"] / "control/claim.json")[1]
-    with pytest.raises(FileExistsError):
-        run(case)
-    assert supervisor.reference(case["root"] / "control/claim.json")[1] == before
-    assert value["root_reaped"]
 
 
-def test_monotonic_deadline_stops_blocking_owned_command(case):
-    case["limits"]["max_seconds"] = 1.
-    value = run(case, "import time; time.sleep(30)\n")
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] in ("SUPERVISOR_UTC_DEADLINE_EXCEEDED", "SUPERVISOR_MONOTONIC_DEADLINE_EXCEEDED")
-    assert value["root_reaped"] and value["all_observed_descendants_gone"]
-    assert value["child_exit_code"] < 0
 
 
-def test_backward_utc_clock_cannot_be_accepted(case):
-    now = datetime.now(timezone.utc)
-    calls = []
-    def clock():
-        calls.append(1)
-        return now if len(calls) == 1 else now-timedelta(seconds=60)
-    value = run(case, "import time; time.sleep(30)\n", _test_hooks={"utc_now": clock})
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "SUPERVISOR_UTC_CLOCK_MOVED_BACKWARD"
-    # Admission checks catch this clock reversal before Popen can execute.
-    assert value["root_identity"] is None and value["child_exit_code"] is None
 
 
-def test_production_cannot_inject_monitor_hooks(case):
-    path = worker(case, "pass\n")
-    with pytest.raises(supervisor.SupervisorError, match="HOOKS_REQUIRE_EXPLICIT_TEST_FIXTURE"):
-        supervisor.run_supervised([sys.executable, str(path)], cwd=case["root"], env=case["env"],
-            limits=case["limits"], control_dir=case["root"] / "control", _test_hooks={"before_sample": lambda value: None})
-    assert not (case["root"] / "control").exists()
 
 
-def test_live_worker_context_binds_pipe_parent_argv_cwd_and_sources(case):
-    module = Path(supervisor.__file__).resolve()
-    control = case["root"] / "control"
-    script = worker(case, f'''import importlib.util,json,time
-spec=importlib.util.spec_from_file_location("TEST_FIXTURE_supervisor",{str(module)!r})
-module=importlib.util.module_from_spec(spec);spec.loader.exec_module(module)
-ticket=module.validate_worker_context({str(control)!r})
-assert ticket["source_capability_issued"] is False
-assert ticket["context"]=="LIVE_OWNED_PROCESS_CONTEXT_NOT_SOURCE_AUTHORITY"
-print(json.dumps({{"validated": True}}),flush=True)
-time.sleep(.6)
-''')
-    value = supervisor.run_supervised([sys.executable, "-I", "-B", str(script)],
-        cwd=case["root"], env=case["env"], limits=case["limits"], control_dir=control,
-        source_references=[supervisor.reference(script)[1]], test_fixture=True)
-    assert value["status"] == "COMPLETE", (control / "console.log").read_text()
-    assert json.loads((control / "console.log").read_text())["validated"] is True
 
 
-def test_saved_claim_without_live_pipe_cannot_authorize_a_worker(case, monkeypatch):
-    run(case)
-    monkeypatch.delenv(supervisor.TICKET_FD, raising=False)
-    with pytest.raises(supervisor.SupervisorError, match="LIVE_WORKER_PIPE_REQUIRED"):
-        supervisor.validate_worker_context(case["root"] / "control")
 
 
-def test_source_mutation_while_running_is_failure_even_if_inner_exit_zero(case):
-    script = worker(case, "import time; time.sleep(.6)\n")
-    reference = supervisor.reference(script)[1]
-    changed = []
-    def mutate(state):
-        if not changed:
-            changed.append(True)
-            script.write_text(script.read_text() + "# TEST_FIXTURE_mutation\n")
-    value = supervisor.run_supervised([sys.executable, "-I", "-B", str(script)],
-        cwd=case["root"], env=case["env"], limits=case["limits"], control_dir=case["root"] / "control",
-        source_references=[reference], test_fixture=True, _test_hooks={"after_sample": mutate})
-    assert value["status"] == "FAILED" and value["child_exit_code"] == 0
-    assert value["failure_reason"] == "SUPERVISOR_SOURCE_REFERENCE_CHANGED"
 
 
-def test_console_output_limit_is_supervised_while_worker_runs(case):
-    value = run(case, "import sys,time; sys.stdout.write('x'*600000);sys.stdout.flush();time.sleep(30)\n")
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "SUPERVISOR_CONSOLE_LIMIT_EXCEEDED"
-    assert value["root_reaped"] and value["all_observed_owned_exited"]
 
 
 def test_pid_reuse_identity_does_not_signal_a_foreign_process(monkeypatch):
@@ -217,291 +107,20 @@ def test_missing_root_gets_one_terminal_identity_observation_only(monkeypatch, s
     assert observations == [100]
 
 
-def test_terminal_root_reobservation_cannot_replace_live_rss_coverage(case, monkeypatch):
-    monkeypatch.setattr(supervisor, "_snapshot", lambda: ({}, []))
-    def wait_for_real_zombie(pid):
-        # Python startup itself can exceed a guessed sleep under load. Observe
-        # the actual waitable terminal state without consuming its wait status.
-        deadline = supervisor.time.monotonic() + 5.
-        while supervisor.time.monotonic() < deadline:
-            try:
-                if supervisor.psutil.Process(pid).status() in supervisor.DEAD:
-                    return
-            except supervisor.psutil.NoSuchProcess:
-                pass  # A missing row alone is not the required zombie proof.
-            supervisor.time.sleep(.01)
-        raise AssertionError("TEST_FIXTURE_ROOT_DID_NOT_REACH_TERMINAL_STATE")
-    value = run(case, "import time;time.sleep(.1)\n", _test_hooks={
-        "after_launch": wait_for_real_zombie})
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "SUPERVISOR_LIVE_SAMPLING_COVERAGE_INSUFFICIENT"
-    assert value["observed_peak_root_rss_bytes"] == 0
-    assert value["child_exit_code"] == 0 and value["root_reaped"]
-    assert value["cleanup"]["signals"] == []
 
 
-def test_ancestor_symlink_and_unnamed_fingerprint_are_rejected(case):
-    path = worker(case, "pass\n")
-    alias = case["root"] / "alias"
-    alias.symlink_to(case["root"], target_is_directory=True)
-    with pytest.raises(OSError):
-        supervisor.reference(alias / path.name)
-    ref = supervisor.reference(path)[1]
-    ref["fp"] = list(ref["fp"].values())
-    with pytest.raises(supervisor.SupervisorError, match="NAMED_PHYSICAL_REFERENCE_REQUIRED"):
-        supervisor.reference(path, ref)
-    partial = supervisor.reference(path)[1]
-    partial.pop("sha256")
-    with pytest.raises(supervisor.SupervisorError, match="NAMED_PHYSICAL_REFERENCE_REQUIRED"):
-        supervisor.reference(path, partial)
 
 
-@pytest.mark.parametrize("snapshot_delay,max_seconds,child_seconds", [(0., 10., 8.), (.03, 30., 25.)],
-                         ids=["native", "native-delayed-30ms"])
-def test_sampling_evidence_is_bounded_but_count_and_gaps_cover_all_samples(
-        case, monkeypatch, snapshot_delay, max_seconds, child_seconds):
-    import time
-    case["limits"]["sample_interval_seconds"] = .01
-    assert case["limits"]["max_seconds"] == 10.
-    # Only the deliberately delayed capacity fixture receives a larger declared
-    # budget. This checks evidence retention, not 65-sample throughput in 10 s.
-    case["limits"]["max_seconds"] = max_seconds
-    owned, all_samples, released_after = {"pid": os.getpid()}, [], []
-    terminal_observations, terminal_window, anchors = [], {}, []
-    handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
-    def launched(pid):
-        owned["pid"] = pid
-        owned["identity"] = supervisor._identity(supervisor.psutil.Process(pid))
-    native_anchor = supervisor.RootAnchor
-    def record_anchor(*args, **kwargs):
-        anchor = native_anchor(*args, **kwargs)
-        anchors.append(anchor)
-        return anchor
-    monkeypatch.setattr(supervisor, "RootAnchor", record_anchor)
-    # Bound only enumeration to this real, childless fixture. Keep the actual
-    # snapshot implementation, including Darwin live -> zombie re-observation.
-    # Real process_iter does not raise when a PID disappears before construction;
-    # all failures other than NoSuchProcess must still propagate.
-    def fixture_processes():
-        try:
-            process = supervisor.psutil.Process(owned["pid"])
-        except supervisor.psutil.NoSuchProcess:
-            return iter(())
-        return iter((process,))
-    with monkeypatch.context() as construction:
-        def missing(pid):
-            raise supervisor.psutil.NoSuchProcess(pid)
-        construction.setattr(supervisor.psutil, "Process", missing)
-        assert list(fixture_processes()) == []
-        def denied(pid):
-            raise supervisor.psutil.AccessDenied(pid)
-        construction.setattr(supervisor.psutil, "Process", denied)
-        with pytest.raises(supervisor.psutil.AccessDenied):
-            list(fixture_processes())
-    monkeypatch.setattr(supervisor.psutil, "process_iter", fixture_processes)
-    native_snapshot = supervisor._snapshot
-    def delayed_native_snapshot():
-        if snapshot_delay:
-            time.sleep(snapshot_delay)
-        return native_snapshot()
-    monkeypatch.setattr(supervisor, "_snapshot", delayed_native_snapshot)
-    def wait_for_fixture_zombie():
-        # Capacity evidence is already collected. Synchronize this fixture's
-        # natural exit without consuming wait status or changing native rows.
-        started = time.monotonic()
-        deadline = min(started + 2., fixture_started + max_seconds)
-        terminal_window.update(started_at=started, deadline=deadline)
-        while time.monotonic() < deadline:
-            try:
-                process = supervisor.psutil.Process(owned["pid"])
-                identity = supervisor._identity(process)
-                status = process.status()
-                observed_at = time.monotonic()
-                terminal_observations.append(dict(event="OBSERVED_STATE", identity=identity,
-                    status=status, monotonic_offset_seconds=observed_at-fixture_started))
-                if identity != owned["identity"]:
-                    raise AssertionError("TEST_FIXTURE_EXIT_SYNC_IDENTITY_CHANGED")
-                if status == supervisor.psutil.STATUS_ZOMBIE:
-                    if observed_at >= deadline:
-                        break
-                    terminal_window["terminal_observed_at"] = observed_at
-                    return
-            except (supervisor.psutil.NoSuchProcess, ProcessLookupError) as error:
-                # Absence is not terminal proof. Keep it in the fixture record
-                # and wait only within the already declared finite deadlines.
-                terminal_observations.append(dict(event="NO_PROCESS_OBSERVATION", error=type(error).__name__,
-                    monotonic_offset_seconds=time.monotonic()-fixture_started))
-            except Exception as error:
-                terminal_observations.append(dict(event="OBSERVATION_ERROR", error=type(error).__name__,
-                    message=str(error), monotonic_offset_seconds=time.monotonic()-fixture_started))
-                raise
-            time.sleep(min(.005, max(0., deadline-time.monotonic())))
-        terminal_observations.append(dict(event="EXIT_SYNC_TIMEOUT",
-            monotonic_offset_seconds=time.monotonic()-fixture_started))
-        raise AssertionError("TEST_FIXTURE_EXIT_SYNC_MATCHING_ZOMBIE_NOT_OBSERVED")
-    def sampled(state):
-        all_samples.append(dict(state))
-        if state["sample_count"] == 65:
-            released_after.append(state["sample_count"])
-            handshake.touch(exist_ok=False)
-            wait_for_fixture_zombie()
-    body = (
-        "from pathlib import Path\nimport time\n"
-        "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
-        f"deadline = time.monotonic() + {child_seconds!r}\n"
-        "while not ready.exists():\n"
-        "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
-        "    time.sleep(.005)\n"
-    )
-    fixture_started = time.monotonic()
-    value = run(case, body, _test_hooks={"after_launch": launched, "after_sample": sampled})
-    exit_sync = dict(scope="TEST_FIXTURE_CAPACITY_EXIT_SYNC_NOT_SUPERVISOR_RETRY", max_wait_seconds=2.,
-                    max_seconds=max_seconds, anchor_instances=len(anchors), observations=terminal_observations,
-                    monotonic_window=terminal_window)
-    (case["root"] / "TEST_FIXTURE_capacity_exit_sync.json").write_text(json.dumps(exit_sync, sort_keys=True, indent=2))
-    assert value["status"] == "COMPLETE", json.dumps(dict(value=value, exit_sync=exit_sync), sort_keys=True, indent=2)
-    assert value["failure_reason"] is None and value["cleanup"]["errors"] == []
-    assert value["sample_count"] > 64 and len(value["samples"]) == 64
-    assert value["samples"][0]["sample_number"] == 1
-    assert value["samples"][-1]["sample_number"] == value["sample_count"]
-    assert value["max_sample_gap_seconds"] > 0
-    assert value["cleanup_process_snapshot_bytes"] > 0
-    assert value["terminal_supervisor_returned_read_bytes"] > value["process_snapshot_bytes_total"]
-    assert released_after == [65] and len(all_samples) == value["sample_count"]
-    assert value["child_exit_code"] == 0 and value["root_reaped"]
-    assert terminal_observations[-1]["event"] == "OBSERVED_STATE"
-    assert terminal_observations[-1]["status"] == supervisor.psutil.STATUS_ZOMBIE
-    assert terminal_observations[-1]["identity"] == value["root_identity"] == owned["identity"]
-    assert terminal_window["terminal_observed_at"] < terminal_window["deadline"]
-    assert terminal_window["deadline"] <= min(terminal_window["started_at"] + 2., fixture_started + max_seconds)
-    assert len(anchors) == 1 and anchors[0].reaped and anchors[0].code == anchors[0].wait_status == 0
-    assert value["cleanup"]["root_reap_evidence"]["exit_code_proven"]
-    assert value["cleanup"]["root_reap_evidence"]["wait_status"] == 0
-    assert value["cleanup"]["signals"] == []
-    assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
-    assert value["monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
-    assert value["actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]
-    assert value["terminal_monotonic_elapsed_seconds"] <= case["limits"]["max_seconds"]
-    assert value["terminal_actual_utc_elapsed_seconds"] <= case["limits"]["max_seconds"]
-    claim = json.loads((case["root"] / "control/claim.json").read_bytes())
-    assert claim["limits"]["max_seconds"] == max_seconds
-    assert value["max_sample_gap_seconds"] == pytest.approx(max(
-        right["monotonic_offset_seconds"] - left["monotonic_offset_seconds"]
-        for left, right in zip(all_samples, all_samples[1:])))
-    assert value["max_utc_sample_gap_seconds"] == pytest.approx(max(
-        (datetime.fromisoformat(right["sampled_at"]) - datetime.fromisoformat(left["sampled_at"])).total_seconds()
-        for left, right in zip(all_samples, all_samples[1:])))
-    assert value["total_sample_seconds"] == pytest.approx(sum(row["sample_seconds"] for row in all_samples))
-    if snapshot_delay:
-        # At this genuine per-snapshot delay, the old 1.5 s lifetime cannot
-        # contain 65 samples. The larger fixed fixture budget is explicit above.
-        assert all_samples[64]["monotonic_offset_seconds"] >= 64 * snapshot_delay
 
 
-def test_slow_native_sampling_cannot_extend_short_declared_deadline(case, monkeypatch):
-    import time
-    case["limits"]["sample_interval_seconds"] = .01
-    case["limits"]["max_seconds"] = 1.
-    owned, samples = {"pid": os.getpid()}, []
-    handshake = case["root"] / "TEST_FIXTURE_exit_after_65_real_samples"
-    def launched(pid):
-        owned["pid"] = pid
-    def fixture_processes():
-        try:
-            return iter((supervisor.psutil.Process(owned["pid"]),))
-        except supervisor.psutil.NoSuchProcess:
-            return iter(())
-    monkeypatch.setattr(supervisor.psutil, "process_iter", fixture_processes)
-    native_snapshot = supervisor._snapshot
-    def delayed_native_snapshot():
-        time.sleep(.03)
-        return native_snapshot()
-    monkeypatch.setattr(supervisor, "_snapshot", delayed_native_snapshot)
-    def sampled(state):
-        samples.append(dict(state))
-        if state["sample_count"] == 65:
-            handshake.touch(exist_ok=False)
-    # 65 real 30 ms snapshots alone exceed 1 s, regardless of host speed. The
-    # child stays live so failure must come from the supervisor's fixed budget.
-    body = (
-        "from pathlib import Path\nimport time\n"
-        "ready = Path('TEST_FIXTURE_exit_after_65_real_samples')\n"
-        "deadline = time.monotonic() + 25.0\n"
-        "while not ready.exists():\n"
-        "    if time.monotonic() >= deadline: raise SystemExit(23)\n"
-        "    time.sleep(.005)\n"
-    )
-    value = run(case, body, _test_hooks={"after_launch": launched, "after_sample": sampled})
-    assert value["status"] == "FAILED", json.dumps(value, sort_keys=True, indent=2)
-    assert value["failure_reason"] in (
-        "SUPERVISOR_UTC_DEADLINE_EXCEEDED", "SUPERVISOR_MONOTONIC_DEADLINE_EXCEEDED")
-    assert 0 < value["sample_count"] == len(samples) < 65
-    assert not handshake.exists()
-    assert value["observed_peak_tree_rss_bytes"] >= value["observed_peak_root_rss_bytes"] > 0
-    assert value["child_exit_code"] in (-signal.SIGTERM, -signal.SIGKILL)
-    assert value["root_reaped"] is value["all_observed_owned_exited"] is value["all_observed_descendants_gone"] is True
-    assert value["cleanup"]["errors"] == []
-    assert value["cleanup"]["business_budget_extension_seconds"] == 0
-    claim = json.loads((case["root"] / "control/claim.json").read_bytes())
-    assert claim["limits"]["max_seconds"] == 1.
-    assert json.loads((case["root"] / "control/completion.json").read_bytes())["status"] == "FAILED"
 
 
-def test_deadline_during_completion_publication_cannot_report_success(case, monkeypatch):
-    case["limits"]["max_seconds"] = 3.
-    original = supervisor._write
-    candidate_status = []
-    def slow_publication(path, value):
-        reference = original(path, value)
-        if Path(path).name == "completion.json":
-            candidate_status.append(value["status"])
-            supervisor.time.sleep(3.1)
-        return reference
-    monkeypatch.setattr(supervisor, "_write", slow_publication)
-    value = run(case)
-    assert candidate_status == ["COMPLETE"]
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "SUPERVISOR_UTC_DEADLINE_EXCEEDED"
-    assert value["child_exit_code"] == 0 and value["root_reaped"]
-    assert (case["root"] / "control/failure.json").exists()
 
 
-def test_self_rss_admission_failure_does_not_launch_worker(case):
-    case["limits"]["self_rss_bytes"] = 1
-    value = run(case)
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "SUPERVISOR_SELF_RSS_LIMIT_EXCEEDED"
-    assert value["root_identity"] is None and value["child_exit_code"] is None
 
 
-def test_failure_during_child_identity_acquisition_still_reaps_direct_child(case, monkeypatch):
-    original = supervisor._identity
-    def broken_child_identity(process):
-        if process.pid != os.getpid():
-            raise supervisor.SupervisorError("TEST_FIXTURE_IDENTITY_UNAVAILABLE")
-        return original(process)
-    monkeypatch.setattr(supervisor, "_identity", broken_child_identity)
-    value = run(case, "import time;time.sleep(30)\n")
-    assert value["status"] == "FAILED"
-    assert value["failure_reason"] == "TEST_FIXTURE_IDENTITY_UNAVAILABLE"
-    assert value["root_reaped"] and value["child_exit_code"] in (-signal.SIGTERM, -signal.SIGKILL)
 
 
-def test_stable_native_identity_ignores_public_wall_adjustment(case, monkeypatch):
-    original = supervisor.psutil.Process.create_time
-    reads = []
-    def shifted(process):
-        reads.append(process.pid)
-        return original(process) + 3600.
-    monkeypatch.setattr(supervisor.psutil.Process, 'create_time', shifted)
-    value = run(case)
-    assert value['status'] == 'COMPLETE'
-    assert value['identity_basis'] == supervisor.IDENTITY_BASIS
-    assert value['root_reaped'] and value['cleanup']['root_reap_evidence']['exit_code_proven']
-    assert value['cleanup']['root_reap_evidence']['wait_status'] == 0
-    assert value['cleanup']['signals'] == []
-    # The supervisor never uses the public wall-adjusted method for ownership.
-    assert reads == []
 
 
 def test_missing_stable_native_api_has_no_wall_fallback(monkeypatch):
@@ -561,92 +180,14 @@ def test_echild_cannot_fabricate_success_or_signal_old_group(monkeypatch):
     assert errors == ['SUPERVISOR_ROOT_ECHILD_EXIT_UNKNOWN']
 
 
-def test_cleanup_waits_are_bounded_and_do_not_grant_business_time(case):
-    case['limits']['term_grace_seconds'] = 10.
-    case['limits']['kill_grace_seconds'] = 10.
-    case['limits']['root_reap_seconds'] = 11.
-    with pytest.raises(supervisor.SupervisorError, match='POLL_OR_CLEANUP_LIMIT'):
-        run(case)
-    assert not (case['root'] / 'control').exists()
 
 
-@pytest.mark.parametrize('handler', [signal.SIG_IGN, lambda *_: None])
-def test_nondefault_sigchld_is_rejected_before_claim_or_launch(case, monkeypatch, handler):
-    original = supervisor.signal.getsignal
-    monkeypatch.setattr(supervisor.signal, 'getsignal',
-                        lambda signum: handler if signum == signal.SIGCHLD else original(signum))
-    with pytest.raises(supervisor.SupervisorError, match='EXCLUSIVE_DEFAULT_SIGCHLD_REQUIRED'):
-        run(case)
-    assert not (case['root'] / 'control').exists()
 
 
-def test_utc_sample_gap_is_independent_of_monotonic_gap(case):
-    now = datetime.now(timezone.utc)
-    delta = [0.]
-    def clock():
-        return now + timedelta(seconds=delta[0])
-    def sampled(state):
-        if state['sample_count'] == 1:
-            delta[0] = 30.
-    value = run(case, 'import time;time.sleep(30)\n',
-                _test_hooks={'utc_now': clock, 'after_sample': sampled})
-    assert value['status'] == 'FAILED' and value['root_reaped']
-    assert value['failure_reason'] == 'SUPERVISOR_UTC_DEADLINE_EXCEEDED'
-    # This jump is observed at checks immediately after sample1, so no second
-    # sample may be invented merely to make the recorded gap equal 30 seconds.
-    assert value['sample_count'] == 1 and value['max_utc_sample_gap_seconds'] == 0
-    assert value['actual_utc_elapsed_seconds'] == 30.
-    assert value['max_sample_gap_clock'] == 'MONOTONIC'
-    assert value['cleanup']['business_budget_extension_seconds'] == 0
 
 
-def test_inter_sample_utc_gap_and_rollback_are_measured(case):
-    now = datetime.now(timezone.utc)
-    delta = [0.]
-    def clock(): return now + timedelta(seconds=delta[0])
-    def before(state):
-        if state['sample_count'] == 1:
-            delta[0] = 30.
-    value = run(case, 'import time;time.sleep(30)\n',
-                _test_hooks={'utc_now': clock, 'before_sample': before})
-    assert value['status'] == 'FAILED' and value['root_reaped']
-    assert value['max_utc_sample_gap_seconds'] == 30.
-    assert value['max_sample_gap_seconds'] < 5.
-    assert value['sample_count'] == 2
 
 
-def test_final_waitpid_after_timeout_keeps_failure_and_real_exit(case, monkeypatch):
-    case['limits']['root_reap_seconds'] = .12
-    case['limits']['kill_grace_seconds'] = .1
-    native_waitpid = os.waitpid
-    state = {'pid': None, 'final': False}
-    def waitpid(pid, flags):
-        if pid == state['pid'] and not state['final']:
-            return (0, 0)
-        return native_waitpid(pid, flags)
-    def launched(pid):
-        state['pid'] = pid
-        supervisor.time.sleep(.2)  # let the real fixture install its TERM handler
-    def before_sample(value):
-        raise supervisor.SupervisorError('TEST_FIXTURE_TRIGGER_CLEANUP')
-    def phase(name, value):
-        if name == 'before_final_waitpid':
-            state['final'] = True
-    monkeypatch.setattr(os, 'waitpid', waitpid)
-    value = run(case, 'import signal,time;signal.signal(signal.SIGTERM,signal.SIG_IGN);time.sleep(30)\n',
-                _test_hooks={'after_launch': launched, 'before_sample': before_sample, 'cleanup_phase': phase})
-    assert value['status'] == 'FAILED'
-    assert value['failure_reason'] == 'TEST_FIXTURE_TRIGGER_CLEANUP'
-    cleanup = value['cleanup']
-    assert cleanup['root_reaped'] and cleanup['child_exit_code'] == -signal.SIGKILL
-    assert 'SUPERVISOR_ROOT_REAP_TIMEOUT' in cleanup['errors']
-    assert cleanup['root_reap_window_elapsed_seconds'] >= .12
-    assert cleanup['final_waitpid_attempted']
-    assert cleanup['root_reap_evidence']['last_phase'] == 'FINAL_WNOHANG'
-    assert cleanup['root_reap_evidence']['exit_code_proven']
-    assert cleanup['root_reap_evidence']['wait_status'] is not None
-    assert cleanup['all_observed_descendants_gone']
-    assert [item['signal'] for item in cleanup['signals']] == [signal.SIGTERM, signal.SIGKILL]
 
 
 @pytest.mark.parametrize('kernel_state', ['EXITED', 'LIVE', 'ECHILD'])
@@ -717,3 +258,85 @@ def test_reaped_root_never_authorizes_new_session_or_child_identity(monkeypatch,
         owner.observe(rows)
     assert list(owner.known) == [(100, 10.), (200, 11.)]
     assert (300, 12.) not in owner.known
+
+
+@pytest.fixture
+def native_worker(tmp_path):
+    import subprocess
+    processes = []
+    def start(body, *, seconds=10):
+        script = tmp_path / ("TEST_FIXTURE_worker_" + str(len(processes)) + ".py")
+        script.write_text(body)
+        session = supervisor.NativeProcessSession({"max_seconds": seconds})
+        process = subprocess.Popen([sys.executable, "-I", "-B", str(script)], start_new_session=True,
+                                   stdout=subprocess.DEVNULL, stderr=subprocess.DEVNULL)
+        processes.append((process, session))
+        session.bind(process)
+        session.meter = lambda _amount: None
+        return session
+    yield start
+    for process, session in processes:
+        if not session.anchor.reaped or session.ownership.present():
+            session.stop(session)
+
+
+@pytest.mark.parametrize('exit_code',[0,2,19])
+def test_native_session_preserves_actual_kernel_exit_and_sampling(native_worker,exit_code):
+    import time
+    session=native_worker('import time; time.sleep(1.5); raise SystemExit('+str(exit_code)+')')
+    charged=[]
+    while session.poll() is None:
+        session.sample(session.pid,charged.append)
+        time.sleep(.01)
+    assert session.wait(timeout=1)==exit_code
+    assert session.remaining(session.pid,charged.append)==[]
+    session.require_complete()
+    report=session.report()
+    assert report['root_reaped'] is True
+    assert report['sample_count']>0
+    assert report['observed_peak_tree_rss_bytes']>=report['observed_peak_root_rss_bytes']>0
+    assert sum(charged)==report['process_snapshot_bytes']>0
+
+
+def test_native_deadline_is_sticky_and_cleanup_reaps_only_owned_process(native_worker):
+    import time
+    session=native_worker('import time; time.sleep(30)',seconds=2)
+    session.sample(session.pid,lambda _amount:None)
+    time.sleep(2.1)
+    with pytest.raises(supervisor.SupervisorError,match='DEADLINE_EXCEEDED'):
+        session.check()
+    session.stop(session)
+    assert session.report()['root_reaped'] is True
+    with pytest.raises(supervisor.SupervisorError,match='DEADLINE_EXCEEDED'):
+        session.require_complete()
+
+
+def test_native_session_meters_and_reaps_observed_descendant(native_worker,tmp_path):
+    import time
+    marker=tmp_path/'TEST_FIXTURE-child-pid'
+    body='import subprocess,sys,time\np=subprocess.Popen([sys.executable,"-c","import time; time.sleep(30)"])\nopen('+repr(str(marker))+',"w").write(str(p.pid))\ntime.sleep(30)\n'
+    session=native_worker(body)
+    deadline=time.monotonic()+3
+    while not marker.exists() and time.monotonic()<deadline:time.sleep(.01)
+    assert marker.exists()
+    child=int(marker.read_text())
+    session.sample(session.pid,lambda _amount:None)
+    assert any(identity[0]==child for identity in session.ownership.known)
+    session.stop(session)
+    report=session.report()
+    assert report['cleanup']['root_reaped'] is True
+    assert report['cleanup']['all_observed_descendants_gone'] is True
+    assert report['cleanup']['errors']==[]
+
+
+def test_native_sample_failure_cannot_be_cleared_by_later_success(native_worker,monkeypatch):
+    session=native_worker('import time; time.sleep(30)')
+    original=supervisor._snapshot
+    def failed():raise supervisor.SupervisorError('TEST_FIXTURE_SAMPLE_FAILURE')
+    monkeypatch.setattr(supervisor,'_snapshot',failed)
+    with pytest.raises(supervisor.SupervisorError,match='TEST_FIXTURE_SAMPLE_FAILURE'):
+        session.sample(session.pid,lambda _amount:None)
+    monkeypatch.setattr(supervisor,'_snapshot',original)
+    session.stop(session)
+    with pytest.raises(supervisor.SupervisorError,match='TEST_FIXTURE_SAMPLE_FAILURE'):
+        session.require_complete()

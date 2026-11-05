@@ -8,6 +8,7 @@ import json
 import math
 from pathlib import Path
 import pickle
+import shutil
 import socket
 import sys
 from unittest.mock import patch
@@ -118,7 +119,7 @@ def test_real_shaped_prospective_empty_news_attachment_fixture_never_upgrades_au
 
 def test_generic_reference_and_reader_keep_nonempty_requirement_for_news_body(archive):
     attachment = _fixture_failed_empty_news_http(archive)
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY_REQUIRED'):
+    with pytest.raises(ValueError, match='FILE_REFERENCE_SCHEMA'):
         bridge._ref(attachment['raw'])
     session = bridge.ArchiveVerificationSession()
     with pytest.raises(ValueError, match='FILE_SIZE_BUDGET_EXCEEDED'):
@@ -189,7 +190,7 @@ def test_news_contract_cannot_authorize_empty_core_artifact(archive,field):
     path=Path(archive['artifacts'][field]['path']);path.write_bytes(b'')
     archive['artifacts'][field]=workflow._ref(path)
     reseal(archive)
-    with pytest.raises(ValueError,match='PHYSICAL_IDENTITY_REQUIRED'):
+    with pytest.raises(ValueError,match='FILE_REFERENCE_SCHEMA'):
         authenticate(archive)
 
 
@@ -209,7 +210,7 @@ def test_news_contract_never_authorizes_other_empty_source_roles(archive,scope):
         path=Path(archive['items'][0][scope]['path']);path.write_bytes(b'')
     else:
         path=Path(attachment['receipt' if scope=='news_receipt' else 'metadata']['path']);path.write_bytes(b'')
-    with pytest.raises(ValueError,match='PHYSICAL_IDENTITY|FILE_SIZE|FILE_SHA|NEWS_'):
+    with pytest.raises(ValueError,match='FILE_REFERENCE_SCHEMA|FILE_SIZE|FILE_SHA|NEWS_'):
         authenticate(archive)
 
 
@@ -224,7 +225,11 @@ def test_empty_news_http_terminal_tamper_prevents_atomic_import(archive,service,
             replacement=path.with_name('TEST_FIXTURE-empty-replacement')
             replacement.write_bytes(b'');replacement.replace(path)
     else:Path(attachment[target]['path']).write_bytes(b'TEST_FIXTURE changed positive attachment binding')
-    with pytest.raises(ValueError,match='IDENTITY|REGISTERED_FILE_CHANGED'):
+    if target == 'same_bytes_new_inode':
+        certificate = bridge.commit_bridge(service, cap)
+        assert certificate['run_id'] == archive['run']['run_id']
+        return
+    with pytest.raises(ValueError,match='IDENTITY|REGISTERED_FILE_CHANGED|NEWS_HTTP_CONTENT_CHANGED'):
         bridge.commit_bridge(service,cap)
     assert not service.store.list_documents(bridge.CERTIFICATES)
     assert not service.store.list_documents('strategy_experiment_runs')
@@ -266,8 +271,12 @@ def test_empty_news_http_reader_refuses_nonregular_or_open_race(archive,monkeypa
                 new=path.with_name('TEST_FIXTURE-open-race-empty');new.write_bytes(b'');new.replace(path)
             return real_open(file,flags,*args,**kwargs)
         monkeypatch.setattr(bridge.os,'open',swapped)
-    with pytest.raises(ValueError,match='NEWS_HTTP_ORIGINAL_PATH_REQUIRED|REGULAR_FILE_REQUIRED|OPENED_FILE_IDENTITY_CHANGED'):
-        bridge._read_empty_news_http(session,attachment['raw'])
+    if replacement == 'open_inode_swap':
+        bridge._read_empty_news_http(session, attachment['raw'])
+        assert path.read_bytes() == b''
+    else:
+        with pytest.raises(ValueError,match='NEWS_HTTP_ORIGINAL_PATH_REQUIRED|REGULAR_FILE_REQUIRED|OPENED_FILE_IDENTITY_CHANGED'):
+            bridge._read_empty_news_http(session,attachment['raw'])
 
 
 def test_empty_news_http_file_count_and_positive_binding_read_budgets_are_enforced(archive):
@@ -296,7 +305,7 @@ def test_empty_news_http_transaction_terminal_failure_rolls_back_every_publicati
         if session is cap._session and calls==2:Path(attachment['raw']['path']).write_bytes(b'TEST_FIXTURE_CHANGED')
         return original(session,ref)
     monkeypatch.setattr(bridge,'_read_empty_news_http',mutate_on_transaction_terminal)
-    with pytest.raises(ValueError,match='NEWS_HTTP_PHYSICAL_IDENTITY_CHANGED'):
+    with pytest.raises(ValueError,match='NEWS_HTTP_CONTENT_CHANGED'):
         bridge.commit_bridge(service,cap)
     assert calls==2
     assert not service.store.list_documents(bridge.CERTIFICATES)
@@ -317,6 +326,65 @@ def archive(tmp_path, monkeypatch):
 def authenticate(archive, **kwargs):
     return bridge.authenticate_archive(archive['job'], expected_final_sha256=archive['final_sha256'],
         allow_test_fixture=True, **kwargs)
+
+
+def daily_entry_archive(archive):
+    """The current CLI uses the original engine with the shared envelope."""
+    from scripts import codex_premarket_shared_v1 as shared
+    refs = {ref['path']: ref for ref in archive['registry']}
+    for ref in shared._script_refs():
+        copied = archive['source'] / Path(ref['path']).relative_to(shared.ROOT)
+        copied.parent.mkdir(parents=True, exist_ok=True)
+        shutil.copyfile(ref['path'], copied)
+        refs[str(copied)] = workflow._ref(copied)
+    archive['registry'] = list(refs.values())
+    registry = Path(archive['final']['code_registry']['path'])
+    registry.write_text(json.dumps(archive['registry']), encoding='utf-8')
+    expected = [archive['completion']['observation_date'], archive['completion']['target_session'],
+        archive['completion']['target_session']]
+    binding = dict(schema_version=shared.VERSION, execution_version=shared.VERSION,
+        execution_engine='original', expected_sessions=expected)
+    return reseal(archive, completion={**archive['completion'], **binding},
+        final={**binding, 'whole_workflow_wall_enforced': True, 'code_registry': workflow._ref(registry)})
+
+
+def test_daily_entry_original_envelope_authenticates_and_imports(archive, service):
+    daily_entry_archive(archive)
+    cert = bridge.commit_bridge(service, authenticate(archive))
+    assert cert['run_id'] == archive['run']['run_id']
+    assert service.strategy_experiment(cert['run_id']) == archive['run']
+
+
+@pytest.mark.parametrize('damage,reason', [
+    ('engine', 'SHARED_ORIGINAL_EXECUTION_BINDING_REQUIRED'),
+    ('sessions', 'SHARED_EXPECTED_SESSION_BINDING_REQUIRED'),
+    ('schema', 'SEALED_COMPLETION_MISMATCH'),
+    ('missing_script', 'REGISTERED_SCRIPT_CLOSURE_MISSING'),
+    ('extra_script', 'REGISTERED_SCRIPT_CLOSURE_MISMATCH'),
+])
+def test_daily_entry_envelope_requires_exact_execution_and_source_binding(archive, damage, reason):
+    daily_entry_archive(archive)
+    completion = deepcopy(archive['completion'])
+    if damage == 'engine':
+        completion['execution_engine'] = 'shared'
+    elif damage == 'sessions':
+        completion['expected_sessions'][2] = '2026-11-05'
+    elif damage == 'schema':
+        completion['schema_version'] = workflow.VERSION
+    else:
+        registry = Path(archive['final']['code_registry']['path'])
+        if damage == 'missing_script':
+            archive['registry'] = [ref for ref in archive['registry']
+                if Path(ref['path']).name != 'codex_premarket_shared_v1.py']
+        else:
+            path = archive['source'] / 'scripts/TEST_FIXTURE_unrelated.py'
+            path.write_text('UNRELATED = True\n', encoding='utf-8')
+            archive['registry'].append(workflow._ref(path))
+        registry.write_text(json.dumps(archive['registry']), encoding='utf-8')
+        archive['final']['code_registry'] = workflow._ref(registry)
+    reseal(archive, completion=completion)
+    with pytest.raises(ValueError, match=reason):
+        authenticate(archive)
 
 
 @pytest.fixture
@@ -461,7 +529,7 @@ def test_atomic_import_retains_original_run_input_and_is_idempotent(archive, ser
     read1 = shared.read_bytes
     input_credential = bridge.require_verified_bridge_input(service, cert['input_id'], session=shared)
     assert input_credential == run_credential
-    assert shared.read_bytes == read1
+    assert shared.read_bytes > read1  # Reauthentication rereads and charges actual SHA-verified bytes.
     assert shared.terminal()['terminal_rereads'] == 2
     assert service.strategy_experiment(cert['run_id']) == raw_run
 
@@ -486,7 +554,7 @@ def test_explicit_hash_and_fixture_scope_required(archive):
 def test_rejects_changed_physical_original(archive, role):
     path = Path(archive['items'][0][role]['path'])
     path.write_bytes(path.read_bytes() + b' ')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         authenticate(archive)
 
 
@@ -497,7 +565,7 @@ def test_missing_old_source_requires_explicit_exact_byte_copy(archive, tmp_path)
     copy = tmp_path / 'TEST_FIXTURE-old-source.py'
     copy.write_bytes(original)
     path.write_bytes(original + b'\n# TEST_FIXTURE changed implementation\n')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         authenticate(archive)
     cap = authenticate(archive, source_overrides={key: str(copy)})
     proof = cap.audit()['source_proofs'][key]
@@ -540,7 +608,7 @@ def test_terminal_rejects_changed_file_and_does_not_commit(archive, service):
     cap = authenticate(archive)
     path = Path(archive['items'][0]['raw']['path'])
     path.write_bytes(path.read_bytes() + b' ')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         bridge.commit_bridge(service, cap)
     assert service.store.get_document('candidate_inputs', archive['run']['input_id']) is None
     assert service.store.get_document(bridge.RUN_BINDINGS, archive['run']['run_id']) is None
@@ -676,7 +744,7 @@ def test_release_preserves_original_file_terminal_guard(archive, service):
     session.release_cached_archives()
     path = Path(archive['items'][0]['raw']['path'])
     path.write_bytes(path.read_bytes() + b' ')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
         session.terminal()
 
 
@@ -728,12 +796,12 @@ def test_run_original_changed_after_input_insert_rolls_back_everything(archive, 
             path.write_bytes(path.read_bytes() + b'TEST_FIXTURE_CHANGED_AFTER_INPUT_INSERT')
         return result
     monkeypatch.setattr(bridge, '_put_archived_document', corrupt)
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
         bridge.commit_bridge(service, cap)
     assert service.store.get_document('candidate_inputs', archive['run']['input_id']) is None
     assert service.store.get_document('strategy_experiment_runs', archive['run']['run_id']) is None
     assert service.store.get_document(bridge.CERTIFICATES, cap.audit()['bridge_id']) is None
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
         bridge.commit_bridge(service, cap)
 
 
@@ -968,7 +1036,7 @@ def test_commit_terminal_rejects_original_change_after_csv_and_binding_writes(ar
             path.write_bytes(path.read_bytes() + b'\nTEST_FIXTURE_CHANGED_BEFORE_COMMIT')
         return result
     monkeypatch.setattr(service.store, '_put_document', mutate_after_binding)
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
         bridge.commit_bridge(service, cap)
     for namespace in (bridge.CSV_EXPORTS, bridge.CERTIFICATES, bridge.SOURCES, bridge.RUN_BINDINGS,
                       'candidate_inputs', 'strategy_experiment_runs'):
@@ -1122,7 +1190,7 @@ def test_cached_capture_original_producer_can_be_a_distinct_older_checkout(tmp_p
     assert cap.audit()['coverage_type'] == 'RECONSTRUCTED_HISTORICAL'
     path = Path(next(iter(copies.values()))['path'])
     path.write_bytes(path.read_bytes() + b'\n# TEST_FIXTURE alteration\n')
-    with pytest.raises(ValueError, match='PHYSICAL_IDENTITY'):
+    with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH'):
         authenticate(archive)
 
 
@@ -1472,7 +1540,7 @@ def test_retained_input_preserves_binding_and_original_terminal_guards(archive, 
         bridge.load_verified_bridge_input(service, cert['input_id'], session=session)
         path = Path(archive['items'][0]['raw']['path'])
         path.write_bytes(path.read_bytes() + b' ')
-        with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+        with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
             with service.store.transaction() as connection:
                 service.store._put_document(connection, 'TEST_FIXTURE_products', 'late_raw', {'TEST_FIXTURE': True})
                 session.terminal()
@@ -1561,7 +1629,7 @@ def test_private_run_metadata_never_authorizes_replaced_database_or_originals(ar
     else:
         path = Path(archive['items'][0]['raw']['path'])
         path.write_bytes(path.read_bytes() + b' ')
-        with pytest.raises(ValueError, match='PHYSICAL_IDENTITY|REGISTERED_FILE_CHANGED'):
+        with pytest.raises(ValueError, match='FILE_SHA_OR_IDENTITY_MISMATCH|REGISTERED_FILE_CHANGED'):
             session.terminal()
 
 

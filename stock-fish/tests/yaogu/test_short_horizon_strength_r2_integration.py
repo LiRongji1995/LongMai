@@ -15,9 +15,7 @@ import time
 
 import pytest
 
-from scripts import codex_research as entry
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu import candidate_service, stage_aware_momentum, strategy_experiments
 from stockfish_core.yaogu.contracts import MarketInput, digest
@@ -76,7 +74,7 @@ def wait_for_job(core, job_id):
 def r2_api(tmp_path, monkeypatch, request):
     bundle, cutoff = participation_fixture(getattr(request, "param", "above_threshold"))
     monkeypatch.setattr(candidate_service, "utc_now", lambda: cutoff)
-    core = ApplicationService(
+    core = ResearchService(
         root=tmp_path / "TEST_FIXTURE-R2-state",
         store=SQLiteStore(tmp_path / "TEST_FIXTURE-R2.sqlite3"),
         allow_test_fixture=True,
@@ -84,17 +82,14 @@ def r2_api(tmp_path, monkeypatch, request):
     )
     try:
         input_id = core.candidates.register_input(bundle, activate=False)
-        yield core, create_app(core).test_client(), input_id, bundle, cutoff
+        yield core, core.candidates, input_id, bundle, cutoff
     finally:
         core.close()
 
 
 def launch(core, client, input_id, strategy=R2):
-    response = client.post("/api/strategy-experiments/run", json={
-        "input_id": input_id, "strategy_id": strategy,
-    })
-    assert response.status_code == 202, response.get_data(as_text=True)
-    job = wait_for_job(core, response.json["job_id"])
+    accepted = client.submit_strategy_experiments(input_id=input_id, strategy_id=strategy)
+    job = wait_for_job(core, accepted["job_id"])
     assert job["state"] == "SUCCEEDED", job
     return job["result"]["run_id"]
 
@@ -136,9 +131,8 @@ def test_explicit_r2_job_is_single_strategy_and_keeps_prior_r1_and_active_v2(r2_
     assert r1_config.read_bytes() == config_bytes
     assert core.candidates._all("stage_aware_prospective_primary_runs") == []
     assert core.candidates._all("stage_aware_prospective_validation_epochs") == []
-    old_detail = client.get("/api/strategy-experiments/" + old_id + "/items/" + CONTINUATION)
-    assert old_detail.status_code == 200
-    assert old_detail.json["strategy_results"][R1] == [indexed(old, R1)[CONTINUATION]]
+    old_detail = client.strategy_experiment_item_detail(old_id, CONTINUATION)
+    assert old_detail["strategy_results"][R1] == [indexed(old, R1)[CONTINUATION]]
     assert launch(core, client, input_id) == run_id
     assert core.candidates.strategy_experiment(run_id) == saved
     assert len(core.candidates._all("strategy_experiment_runs")) == 2
@@ -201,21 +195,17 @@ def test_summary_detail_json_and_csv_keep_one_saved_run_and_participation_eviden
     rows = indexed(saved)
     selections = {"all": set(rows), "observation": {START, PULLBACK},
         "focus": set(), "unselected": set(rows)}
-    base = "/api/strategy-experiments/" + run_id
     for selection, ids in selections.items():
-        query = "?strategy_id=" + R2 + "&selection=" + selection
-        summary = client.get(base + "/summary" + query)
-        assert summary.status_code == 200, summary.get_data(as_text=True)
-        assert summary.json["run_id"] == run_id
-        assert summary.json["filtered_total"] == len(ids)
-        assert {row["instrument_id"] for row in summary.json["items"]} == ids
-        for row in summary.json["items"]:
+        summary = client.strategy_experiment_summary(run_id, strategy_id=R2, selection=selection)
+        assert summary["run_id"] == run_id
+        assert summary["filtered_total"] == len(ids)
+        assert {row["instrument_id"] for row in summary["items"]} == ids
+        for row in summary["items"]:
             assert row["participation_status"] == rows[row["instrument_id"]]["participation_status"]
             assert row["liquidity_status"] == rows[row["instrument_id"]]["liquidity_status"]
             assert row["style_status"] == rows[row["instrument_id"]]["style_status"]
-        response = client.get(base + "/export" + query + "&format=json")
-        assert response.status_code == 200, response.get_data(as_text=True)
-        document = response.json
+        response = json.loads(client.export_strategy_experiment_json(run_id, strategy_id=R2, selection=selection))
+        document = response
         assert document["run_id"] == run_id
         assert document["input_id"] == input_id
         assert document["decision_cutoff"] == saved["decision_cutoff"]
@@ -223,9 +213,8 @@ def test_summary_detail_json_and_csv_keep_one_saved_run_and_participation_eviden
         actual = document["results"][R2]["items"]
         assert actual == [row for row in saved["results"][R2]["items"] if row["instrument_id"] in ids]
         assert all(row["participation"] == rows[row["instrument_id"]]["participation"] for row in actual)
-        csv_response = client.get(base + "/export" + query + "&format=csv")
-        assert csv_response.status_code == 200, csv_response.get_data(as_text=True)
-        reader = csv.DictReader(io.StringIO(csv_response.get_data(as_text=True).lstrip("\ufeff")))
+        csv_response = client.export_strategy_experiment_csv(run_id, strategy_id=R2, selection=selection)
+        reader = csv.DictReader(io.StringIO(csv_response.lstrip("\ufeff")))
         assert {"participation_status", "participation_peak_turnover_fraction", "liquidity_status", "style_status", "feature_version",
                 "dynamic_reference_cny", "amount_to_dynamic_reference", "dynamic_liquidity_soft_score",
                 "liquidity_selection_gate"}.issubset(reader.fieldnames)
@@ -255,9 +244,8 @@ def test_summary_detail_json_and_csv_keep_one_saved_run_and_participation_eviden
             assert row["feature_version"] == FEATURE
             assert row["selected_focus"] == "False"
     for iid, expected in rows.items():
-        response = client.get(base + "/items/" + iid)
-        assert response.status_code == 200
-        assert response.json["strategy_results"][R2] == [expected]
+        response = client.strategy_experiment_item_detail(run_id, iid)
+        assert response["strategy_results"][R2] == [expected]
     assert core.candidates.strategy_experiment(run_id) == saved
 
 
@@ -283,12 +271,10 @@ def test_missing_participation_remains_unknown_in_saved_detail_and_export(r2_api
     assert row["decision_status"] == "UNKNOWN"
     assert row["research_selected"] is False
     assert all(observation["turnover_fraction"] is None for observation in row["participation"]["observations"])
-    detail = client.get("/api/strategy-experiments/" + run_id + "/items/" + CONTINUATION)
-    assert detail.status_code == 200
-    assert detail.json["strategy_results"][R2] == [row]
-    response = client.get("/api/strategy-experiments/" + run_id + "/export?strategy_id=" + R2 + "&selection=all&format=json")
-    assert response.status_code == 200
-    delivered = next(x for x in response.json["results"][R2]["items"] if x["instrument_id"] == CONTINUATION)
+    detail = client.strategy_experiment_item_detail(run_id, CONTINUATION)
+    assert detail["strategy_results"][R2] == [row]
+    response = json.loads(client.export_strategy_experiment_json(run_id, strategy_id=R2, selection="all"))
+    delivered = next(x for x in response["results"][R2]["items"] if x["instrument_id"] == CONTINUATION)
     assert delivered["participation"] == row["participation"]
 
 
@@ -321,9 +307,8 @@ def test_current_amount_is_soft_context_and_preserves_r1_missing_fact_boundaries
         exact = Fraction(amount)
         assert row["liquidity"]["value"] == {"numerator": exact.numerator, "denominator": exact.denominator}
         assert row["r1_research_selected"] is True
-    response = client.get("/api/strategy-experiments/" + run_id + "/export?strategy_id=" + R2 + "&selection=all&format=json")
-    assert response.status_code == 200
-    delivered = next(x for x in response.json["results"][R2]["items"] if x["instrument_id"] == START)
+    response = json.loads(client.export_strategy_experiment_json(run_id, strategy_id=R2, selection="all"))
+    delivered = next(x for x in response["results"][R2]["items"] if x["instrument_id"] == START)
     assert delivered["liquidity"] == row["liquidity"]
 
 
@@ -356,12 +341,10 @@ def test_current_amount_parent_seen_after_cutoff_is_unknown_with_verified_prior_
     assert row["style_status"] == "PASS"
     assert row["liquidity"]["value"] is None
     assert row["research_selected"] is False
-    detail = client.get("/api/strategy-experiments/" + run_id + "/items/" + START)
-    assert detail.status_code == 200
-    assert detail.json["strategy_results"][R2] == [row]
-    response = client.get("/api/strategy-experiments/" + run_id + "/export?strategy_id=" + R2 + "&selection=all&format=json")
-    assert response.status_code == 200
-    delivered = next(x for x in response.json["results"][R2]["items"] if x["instrument_id"] == START)
+    detail = client.strategy_experiment_item_detail(run_id, START)
+    assert detail["strategy_results"][R2] == [row]
+    response = json.loads(client.export_strategy_experiment_json(run_id, strategy_id=R2, selection="all"))
+    delivered = next(x for x in response["results"][R2]["items"] if x["instrument_id"] == START)
     assert delivered["liquidity"] == row["liquidity"]
 
 
@@ -389,71 +372,14 @@ def test_activity_received_after_cutoff_cannot_become_saved_participation_author
     assert observation["status"] == "UNKNOWN"
     assert observation["turnover_fraction"] is None
     assert observation["reason_codes"]
-    detail = client.get("/api/strategy-experiments/" + run_id + "/items/" + START)
-    assert detail.status_code == 200
-    assert detail.json["strategy_results"][R2] == [row]
+    detail = client.strategy_experiment_item_detail(run_id, START)
+    assert detail["strategy_results"][R2] == [row]
 
 
-def test_registry_and_cli_select_explicit_version_without_default_active_switch(r2_api, monkeypatch):
-    core, client, input_id, _, _ = r2_api
-    specs = client.get("/api/strategy-experiments/specs")
-    assert specs.status_code == 200
-    ids = {row["strategy_id"] for row in specs.json}
+def test_registry_keeps_explicit_version_and_rejects_unknown_strategy(r2_api):
+    core, service, input_id, _, _ = r2_api
+    ids = {row["strategy_id"] for row in service.strategy_specs()}
     assert {R1, R2, "STAGE_AWARE_MOMENTUM_V2"}.issubset(ids)
-    for strategy in (R1, R2):
-        parsed = entry.parser().parse_args(["run", "--strategy", strategy, "--input-id", input_id])
-        assert parsed.strategy == strategy and parsed.input_id == input_id
-        for command in ("export", "report"):
-            parsed = entry.parser().parse_args([command, "TEST_FIXTURE_SAVED_RUN", "--profile", strategy])
-            assert parsed.profile == strategy
-        parsed = entry.parser().parse_args(["select", "--profile", strategy])
-        assert parsed.profile == strategy
-        with pytest.raises(SystemExit):
-            entry.parser().parse_args(["run", "--strategy", strategy])
-    default = entry.parser().parse_args(["export", "TEST_FIXTURE_SAVED_RUN"])
-    assert default.profile == entry.PV
-    monkeypatch.setattr(entry, "calendar_context", lambda *_args: {"role": "TEST_FIXTURE"})
-
-    class NoRequest:
-        def get(self, *_args, **_kwargs):
-            raise AssertionError("mismatched explicit profiles reached an API")
-
-    mismatched = entry.parser().parse_args(["run", "--strategy", R2, "--profile", R1, "--input-id", input_id])
-    with pytest.raises(entry.ResearchError, match="PROFILE_AND_EXPLICIT_STRATEGY_MISMATCH"):
-        entry.execute(mismatched, NoRequest())
-    rejection = client.post("/api/strategy-experiments/run", json={
-        "input_id": input_id, "strategy_id": "UNREGISTERED_TEST_FIXTURE_R2",
-    })
-    assert rejection.status_code == 400
+    with pytest.raises(ValueError):
+        service.submit_strategy_experiments(input_id=input_id, strategy_id="UNREGISTERED_TEST_FIXTURE_R2")
     assert core.candidates._all("strategy_experiment_runs") == []
-
-
-def test_cli_checks_native_exports_but_cannot_publish_fixture_as_daily_research(r2_api, tmp_path):
-    core, api, input_id, _, _ = r2_api
-    run_id = launch(core, api, input_id)
-
-    class LocalSavedClient:
-        base_url = "TEST_FIXTURE_LOCAL_FLASK_CLIENT"
-
-        def raw(self, path, payload=None):
-            assert payload is None
-            response = api.get(path)
-            assert response.status_code == 200, response.get_data(as_text=True)
-            return response.data
-
-        def get(self, path, payload=None):
-            assert payload is None
-            response = api.get(path)
-            assert response.status_code == 200, response.get_data(as_text=True)
-            return response.json
-
-    client = LocalSavedClient()
-    for selection, expected in (("all", 4), ("observation", 2), ("focus", 0), ("unselected", 4)):
-        exports = entry.official_exports(client, run_id, R2, selection)
-        assert exports[0]["export_view"]["filtered_total"] == expected
-        assert exports[0]["coverage_type"] == "TEST_FIXTURE"
-        output = tmp_path / ("DO_NOT_PUBLISH_TEST_FIXTURE_R2_" + selection)
-        with pytest.raises(entry.ResearchError, match="NON_REAL_OR_UNVERIFIABLE_INPUT_NOT_FOR_DAILY_RESEARCH"):
-            entry.save_bundle(client, exports, output, strategy_id=R2)
-        assert not output.exists()
-    assert core.candidates.strategy_experiment(run_id)["decision_cutoff"] == r2_api[-1].isoformat()

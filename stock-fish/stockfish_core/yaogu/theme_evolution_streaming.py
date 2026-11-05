@@ -36,7 +36,7 @@ def source_identity():
     """Bind execution code as well as the unchanged exact numerical rules."""
     from .short_horizon_participation import short_horizon_source_identity
     hashes = dict(short_horizon_source_identity()['source_file_hashes'])
-    paths = (Path(__file__), Path(base.__file__), base.CONFIG_PATH, base.SPEC_PATH,
+    paths = (Path(__file__), Path(base.__file__), base.CONFIG_PATH,
              Path(__file__).with_name('theme_market_stream.py'),
              Path(__file__).with_name('evidence_audit_spool.py'),
              Path(__file__).with_name('history_artifacts.py'),

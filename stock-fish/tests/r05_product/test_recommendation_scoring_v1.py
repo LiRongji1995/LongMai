@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import pytest
 from copy import deepcopy
 from datetime import datetime
 from zoneinfo import ZoneInfo
@@ -285,11 +286,10 @@ def test_focus_empty_day_counts_in_signal_coverage_but_not_rolling_mean():
 
 
 def test_recommendation_score_api_reads_saved_revision_and_does_not_accept_formula_overrides(tmp_path):
-    from stockfish_core.api import create_app
-    from stockfish_core.service import ApplicationService
+    from tests.support.local_service import ResearchService
     from stockfish_core.storage import SQLiteStore
 
-    core = ApplicationService(root=tmp_path / "state", store=SQLiteStore(tmp_path / "score.sqlite3"),
+    core = ResearchService(root=tmp_path / "state", store=SQLiteStore(tmp_path / "score.sqlite3"),
                               allow_test_fixture=True, data_dir=tmp_path / "no_model")
     try:
         run = _run([_row(f"S{i:02d}", "FOCUS" if i < 15 else "WATCH", rank=i + 1) for i in range(30)])
@@ -297,30 +297,14 @@ def test_recommendation_score_api_reads_saved_revision_and_does_not_accept_formu
         score = build_score_revision(run, labels, datetime(2026, 9, 15, 20, 30, tzinfo=SH))
         core.store.put_document("strategy_experiment_runs", run["run_id"], run)
         core.store.put_document("recommendation_score_revisions", score["score_run_id"], score)
-        client = create_app(core).test_client()
-
-        scope = "&validation_epoch_id=" + score["validation_epoch_id"]
-        latest = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1" + scope)
-        overridden = client.get("/api/recommendation-scores/latest?tier=FOCUS_SCORE&horizon=1&random_basket_count=1" + scope)
-        by_run = client.get("/api/recommendation-scores/" + run["run_id"] + "?tier=FOCUS_SCORE&horizon=1" + scope)
-
-        assert latest.status_code == overridden.status_code == by_run.status_code == 200
-        assert latest.json["latest"]["score_spec_id"] == SCORE_SPEC_ID
-        assert latest.json["latest"]["records"][0]["random_basket_count"] == DEFAULT_RANDOM_BASKETS
-        assert overridden.json["latest"]["records"][0]["random_basket_count"] == DEFAULT_RANDOM_BASKETS
-        assert by_run.json["items"][0]["signal_run_id"] == run["run_id"]
+        latest = core.candidates.latest_recommendation_scores(tier="FOCUS_SCORE", horizon=1,
+                                                            validation_epoch_id=score["validation_epoch_id"])
+        by_run = core.candidates.recommendation_scores_for_run(run["run_id"], tier="FOCUS_SCORE", horizon=1,
+                                                              validation_epoch_id=score["validation_epoch_id"])
+        assert latest["latest"]["score_spec_id"] == SCORE_SPEC_ID
+        assert latest["latest"]["records"][0]["random_basket_count"] == DEFAULT_RANDOM_BASKETS
+        assert by_run["items"][0]["signal_run_id"] == run["run_id"]
+        with pytest.raises(TypeError):
+            core.candidates.latest_recommendation_scores(random_basket_count=1)
     finally:
         core.close()
-
-
-def test_ui_uses_saved_score_api_without_client_side_scoring_formula():
-    from pathlib import Path
-
-    root = Path(__file__).resolve().parents[2]
-    html = (root / "static" / "index.html").read_text(encoding="utf-8")
-    js = (root / "static" / "core.js").read_text(encoding="utf-8")
-
-    assert "策略成绩 / Recommendation Score" in html
-    assert "/api/recommendation-scores/latest" in js
-    assert "Math.random" not in js
-    assert "random_basket_count" not in js

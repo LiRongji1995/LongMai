@@ -17,7 +17,7 @@ from tests.r05_product.test_stage_aware_momentum_v1 import (
     _with_high_activity_weakening_target,
     _with_high_level_repair_target,
 )
-from tests.r05_product.test_theme_capital_trend_v1 import _clocks, _days, trend_bundle
+from tests.support.stage_market_fixture import _clocks, _days, trend_bundle
 from tests.yaogu.fixtures import TZ
 
 

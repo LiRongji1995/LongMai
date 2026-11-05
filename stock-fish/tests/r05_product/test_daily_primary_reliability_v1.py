@@ -11,11 +11,9 @@ from zoneinfo import ZoneInfo
 
 import pytest
 
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.contracts import digest
-from stockfish_core.yaogu.scheduler import CandidateScheduler
 from tests.yaogu.fixtures import make_bundle
 
 TZ = ZoneInfo("Asia/Shanghai")
@@ -49,7 +47,7 @@ def _core(tmp_path, monkeypatch, bundle, *, now=None):
     )
     clock = now or cutoff
     monkeypatch.setattr(module, "utc_now", clock if callable(clock) else lambda: clock)
-    core = ApplicationService(
+    core = ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "service.sqlite3"),
         allow_test_fixture=True,
@@ -63,7 +61,7 @@ def _empty_core(tmp_path, monkeypatch, *, now):
     import stockfish_core.yaogu.candidate_service as module
 
     monkeypatch.setattr(module, "utc_now", now if callable(now) else lambda: now)
-    return ApplicationService(
+    return ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "service.sqlite3"),
         allow_test_fixture=True,
@@ -158,7 +156,7 @@ def _scenario_evidence(name, *, core, accepted=None, job=None, attempt=None, tra
         "http": {
             "accepted_status_code": getattr(accepted, "status_code", None),
             "export_status_code": getattr(export_response, "status_code", None),
-            "export_bytes": len(export_response.data) if export_response is not None else None,
+            "export_bytes": len(export_response.encode("utf-8")) if export_response is not None else None,
         },
         "attempt": attempt,
         "trace": trace.snapshot() if trace is not None else None,
@@ -174,16 +172,14 @@ def _scenario_evidence(name, *, core, accepted=None, job=None, attempt=None, tra
 
 
 def _run_daily_primary(core, input_id=None, body=None, *, job_wait_timeout=20):
-    client = create_app(core).test_client()
     payload = {"input_id": input_id} if body is None and input_id is not None else (body or {})
-    accepted = client.post("/api/daily-primary/run", json=payload)
-    assert accepted.status_code == 202, accepted.text
-    trace = core.candidates.daily_traces.get(accepted.headers["X-Daily-Trace-Id"])
-    job = _wait_job(core, accepted.json["job_id"], timeout=job_wait_timeout)
+    accepted = core.candidates.submit_daily_primary_strategy(**payload)
+    trace = None
+    job = _wait_job(core, accepted["job_id"], timeout=job_wait_timeout)
     attempt = _attempt(core, job["job_id"])
     export_response = None
     if job["state"] == "SUCCEEDED" and (job.get("result") or {}).get("run_id"):
-        export_response = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/export")
+        export_response = core.candidates.export_strategy_experiment_json(job["result"]["run_id"])
     return accepted, job, attempt, trace, export_response
 
 
@@ -199,7 +195,7 @@ def test_scenario_a_complete_required_data_becomes_ready(tmp_path, monkeypatch):
         assert attempt["persistence_completed"] is True
         assert attempt["export_completed"] is True
         assert attempt["recommendation_published"] is True
-        assert export_response.status_code == 200
+        assert json.loads(export_response)["run_id"] == job["result"]["run_id"]
         _scenario_evidence("scenario_a_complete_required_data", core=core, accepted=accepted,
                            job=job, attempt=attempt, trace=trace, export_response=export_response)
     finally:
@@ -225,45 +221,13 @@ def test_scenario_b_initially_missing_refresh_succeeds(tmp_path, monkeypatch):
         assert evaluations[-1]["readiness"]["global_required_ready"] is True
         assert attempt["refresh_actions"][0]["status"] == "COMPLETE"
         assert attempt["strategy_started"] is True
-        assert export_response.status_code == 200
+        assert json.loads(export_response)["run_id"] == job["result"]["run_id"]
         _scenario_evidence("scenario_b_refresh_succeeds", core=core, accepted=accepted,
                            job=job, attempt=attempt, trace=trace, export_response=export_response)
     finally:
         core.close()
 
 
-def test_scenario_b2_real_refresh_implementation_registers_expected_session(tmp_path, monkeypatch):
-    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
-    expected = date(2026, 9, 18)
-    ready, _ = make_bundle(7, session_count=260)
-    ready = _bundle_ending_on(ready, expected)
-    clock = _MutableClock(request_started)
-    core = _empty_core(tmp_path, monkeypatch, now=clock)
-    try:
-        scheduler = CandidateScheduler(core.candidates, capture=lambda *_args: ready, clock=clock)
-        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
-        action = attempt["refresh_actions"][0]
-        evaluations = attempt["readiness_evaluations"]
-
-        assert scheduler.custom_capture is True
-        assert job["state"] == "SUCCEEDED", job
-        assert attempt["final_status"] == "READY"
-        assert evaluations[0]["readiness"]["global_required_ready"] is False
-        assert evaluations[-1]["freshness"]["freshness_status"] == "FRESH"
-        assert action["status"] == "COMPLETE"
-        assert action["target_observation_date"] == str(expected)
-        assert action["observation_date"] == str(expected)
-        assert action["refresh_implementation_path"].startswith("CandidateService._daily_primary_incremental_refresh")
-        assert action["scheduler_capture_invoked"] is True
-        assert attempt["input_id"] == action["input_id"]
-        assert attempt["expected_observation_session"] == str(expected)
-        assert attempt["strategy_started"] is True
-        assert export_response.status_code == 200
-        _scenario_evidence("scenario_b2_real_refresh_implementation", core=core, accepted=accepted,
-                           job=job, attempt=attempt, trace=trace, export_response=export_response,
-                           extra={"refresh_action": action})
-    finally:
-        core.close()
 
 
 def test_scenario_c_required_data_never_ready_does_not_start_strategy(tmp_path, monkeypatch):
@@ -295,40 +259,6 @@ def test_scenario_c_required_data_never_ready_does_not_start_strategy(tmp_path, 
         core.close()
 
 
-def test_scenario_g_stale_but_complete_input_refreshes_expected_session(tmp_path, monkeypatch):
-    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
-    stale_day = date(2026, 9, 17)
-    expected = date(2026, 9, 18)
-    ready, _ = make_bundle(7, session_count=260)
-    stale = _bundle_ending_on(ready, stale_day)
-    fresh = _bundle_ending_on(ready, expected)
-    clock = _MutableClock(request_started)
-    core, stale_input_id, _ = _core(tmp_path, monkeypatch, stale, now=clock)
-    try:
-        CandidateScheduler(core.candidates, capture=lambda *_args: fresh, clock=clock)
-        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
-        initial = attempt["readiness_evaluations"][0]
-        action = attempt["refresh_actions"][0]
-
-        assert job["state"] == "SUCCEEDED", job
-        assert initial["readiness"]["freshness"]["freshness_status"] == "STALE_INPUT"
-        assert "OBSERVATION_SESSION_STALE" in [
-            row["code"] for row in initial["readiness"]["blocking_requirements"]
-        ]
-        assert initial["readiness"]["global_required_ready"] is False
-        assert action["target_observation_date"] == str(expected)
-        assert action["target_observation_date"] != str(stale_day)
-        assert attempt["input_id"] != stale_input_id
-        assert attempt["observation_date"] == str(expected)
-        assert attempt["freshness"]["freshness_status"] == "FRESH"
-        assert attempt["final_status"] == "READY"
-        assert attempt["strategy_started"] is True
-        assert export_response.status_code == 200
-        _scenario_evidence("scenario_g_stale_but_complete", core=core, accepted=accepted,
-                           job=job, attempt=attempt, trace=trace, export_response=export_response,
-                           extra={"initial_input_id": stale_input_id, "refresh_action": action})
-    finally:
-        core.close()
 
 
 def test_scheduled_evening_rejects_stale_complete_input(tmp_path, monkeypatch):
@@ -370,42 +300,6 @@ def test_scheduled_evening_rejects_stale_complete_input(tmp_path, monkeypatch):
         core.close()
 
 
-def test_scenario_h_refresh_visibility_sets_actual_decision_cutoff(tmp_path, monkeypatch):
-    request_started = datetime(2026, 9, 21, 10, 0, tzinfo=TZ)
-    visible_at = datetime(2026, 9, 21, 10, 7, tzinfo=TZ)
-    expected = date(2026, 9, 18)
-    ready, _ = make_bundle(7, session_count=260)
-    ready = _capture_visible_at(_bundle_ending_on(ready, expected), visible_at)
-    clock = _MutableClock(request_started)
-    core = _empty_core(tmp_path, monkeypatch, now=clock)
-
-    def delayed_capture(*_args):
-        clock.current = visible_at
-        return ready
-
-    try:
-        CandidateScheduler(core.candidates, capture=delayed_capture, clock=clock)
-        accepted, job, attempt, trace, export_response = _run_daily_primary(core, body={})
-        action = attempt["refresh_actions"][0]
-        actual = datetime.fromisoformat(attempt["actual_decision_cutoff"])
-        visible = datetime.fromisoformat(action["refreshed_data_visible_at"])
-
-        assert job["state"] == "SUCCEEDED", job
-        assert attempt["request_started_at"] == request_started.isoformat()
-        assert attempt["actual_decision_cutoff"] != attempt["request_started_at"]
-        assert action["capture_started_at"] == request_started.isoformat()
-        assert action["capture_completed_at"] == visible_at.isoformat()
-        assert actual >= visible
-        assert actual == visible_at
-        run = core.candidates.strategy_experiment(job["result"]["run_id"])
-        assert run["decision_cutoff"] == visible_at.isoformat()
-        assert run["prospective_validation"]["actual_decision_cutoff"] == visible_at.isoformat()
-        assert export_response.status_code == 200
-        _scenario_evidence("scenario_h_refresh_cutoff_visibility", core=core, accepted=accepted,
-                           job=job, attempt=attempt, trace=trace, export_response=export_response,
-                           extra={"refresh_action": action, "strategy_decision_cutoff": run["decision_cutoff"]})
-    finally:
-        core.close()
 
 
 def test_scenario_d_subset_incomplete_becomes_unknown_not_rejected(tmp_path, monkeypatch):

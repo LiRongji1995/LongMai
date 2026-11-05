@@ -1,1 +1,0 @@
-"""Versioned immutable data contracts."""

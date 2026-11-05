@@ -308,8 +308,8 @@ def test_pending_projection_keeps_post_ledger_terminal_and_entire_batch_rollback
     before = {key: setup.store.get_document_bytes('strategy_experiment_runs', key) for key in ids}
     job, ledger = completed(setup, ids)
     assert changed == [job['job_id']] and job['state'] == 'FAILED' and ledger is None
-    assert any(('REGISTERED_FILE_CHANGED' in error or 'PHYSICAL_IDENTITY' in error)
-               if late == 'raw' else 'BORROWED_RUN_CHANGED' in error for error in errors)
+    assert any(error == 'R2_ARCHIVE_BRIDGE_FILE_SHA_OR_IDENTITY_MISMATCH'
+               if late == 'raw' else 'BORROWED_RUN_CHANGED' in error for error in errors), errors
     assert_no_products(setup)
     assert all(event['state'] != 'SUCCEEDED' for event in setup.service.jobs.events(job['job_id']))
     assert {key: setup.store.get_document_bytes('strategy_experiment_runs', key) for key in ids} == before

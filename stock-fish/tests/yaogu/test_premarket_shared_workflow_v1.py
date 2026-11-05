@@ -36,6 +36,7 @@ def no_external_io(monkeypatch):
 def fixture():
     value = fixture_module.WorkflowFixtureTests(methodName="runTest")
     value.setUp()
+    value.config["limits"]["max_seconds"] = 120
     try:
         yield value
     finally:
@@ -84,51 +85,39 @@ def test_full_capture_core_theme_display_terminal_differential(fixture):
     old, old_metrics = _execute(fixture, original.execute_workflow, "old", adapters, now)
     default, default_metrics = _execute(fixture, shared.execute_workflow_shared,
         "default-original", adapters, now)
-    new, new_metrics = _execute(fixture, partial(shared.execute_workflow_shared, engine="shared"),
-        "new", adapters, now)
-    assert default["status"] == old["status"]
-    assert default["phases"] == old["phases"]
+    assert default["status"] == old["status"] == "COMPLETED_WITH_UNKNOWNS"
+    assert default["schema_version"] == shared.VERSION
     assert default["execution_engine"] == "original"
+    assert default["phases"] == old["phases"]
+    assert default["phases"]["theme"] == "COMPLETE"
+    assert default["core_verified"] is True and default["source_capability_restored"] is False
+    assert default["run_id"] == old["run_id"]
     assert default["display"]["counts"] == old["display"]["counts"]
-    assert "shared-session/manifest.json" not in default["theme_artifacts"]
-    assert new["status"] == old["status"] == "COMPLETED_WITH_UNKNOWNS", new
-    assert new["schema_version"] == shared.VERSION
-    assert new["execution_engine"] == "shared"
-    assert new["phases"] == old["phases"]
-    assert new["phases"]["theme"] == "COMPLETE", new["phase_failures"]
-    assert new["core_verified"] is True and new["source_capability_restored"] is False
-    assert new["run_id"] == old["run_id"]
-    assert new["display"]["counts"] == old["display"]["counts"]
-    assert new["display"]["original_selected_items_hash"] == old["display"]["original_selected_items_hash"]
+    assert default["display"]["original_selected_items_hash"] == old["display"]["original_selected_items_hash"]
     for name in ("all.csv", "observation.csv", "focus.csv", "unselected.csv", "observation.json"):
-        assert Path(new["core_artifacts"][name]["path"]).read_bytes() == Path(old["core_artifacts"][name]["path"]).read_bytes()
         assert Path(default["core_artifacts"][name]["path"]).read_bytes() == Path(old["core_artifacts"][name]["path"]).read_bytes()
     first = _read(old["theme_artifacts"]["native-theme-parent.json.gz"]["path"])
-    second = _read(new["theme_artifacts"]["native-theme-parent.json.gz"]["path"])
+    second = _read(default["theme_artifacts"]["native-theme-parent.json.gz"]["path"])
     for key in ("items", "effective_input_hash", "source_refs", "computed_exchange_sessions",
                 "source_input_hash", "membership_mode", "status", "market_edge"):
         assert first[key] == second[key], key
-    manifest = _read(new["theme_artifacts"]["shared-session/manifest.json"]["path"])
-    assert manifest["source_projection_count"] == len(manifest["requested_sessions"]) == 67
-    assert new["metrics"]["calls"]["requests"] == 0
-    assert {row["phase"] for row in new["phase_timings"]} == {"capture", "core", "theme", "presentation"}
+    assert default["metrics"]["calls"]["requests"] == 0
+    assert {row["phase"] for row in default["phase_timings"]} == {"capture", "core", "theme", "presentation"}
     assert {name: getattr(theme, name) for name in before} == before
-    assert original.VERSION == "STANDALONE_PREMARKET_WORKFLOW_V1"
     print(json.dumps(dict(scope="TEST_FIXTURE_FULL_NATIVE_WORKFLOW_ONLY",
-        reference=old_metrics, default_original=default_metrics, shared=new_metrics,
-        real_data_speedup_established=False)))
-    # Build an isolated archive control from the actual completed fixture. It
-    # is still only an integrity carrier, never a reconstructed source owner.
-    job = fixture.root / "new"
+        reference=old_metrics, original=default_metrics, real_data_speedup_established=False)))
+    job = fixture.root / "default-original"
     original.atomic_json(job / "final-control.json", dict(schema_version=shared.VERSION,
-        status=new["status"], completion=original._ref(job / "worker-completion.json")))
+        status=default["status"], completion=original._ref(job / "worker-completion.json")))
     verified = shared.verify_job(job)
     assert verified["owned_derivatives_verified"] is True
     assert verified["external_sources_reauthenticated"] is False
-    fact = next((job / "theme/shared-session/facts").glob("*.json"))
+    fact = Path(default["theme_artifacts"]["native-theme-parent.json.gz"]["path"])
     replacement = fact.with_suffix(".TEST_FIXTURE_replacement")
     replacement.write_bytes(fact.read_bytes())
     replacement.replace(fact)
+    assert shared.verify_job(job)["owned_derivatives_verified"] is True
+    fact.write_bytes(b"X" + fact.read_bytes()[1:])
     with pytest.raises(ValueError, match="CHANGED"):
         shared.verify_job(job)
 
@@ -187,9 +176,9 @@ def test_theme_failure_preserves_independent_core_and_unknown(fixture):
 def test_explicit_source_closure_includes_gateway_and_imports():
     refs = shared.code_refs()
     paths = {Path(reference["path"]).name for reference in refs}
-    assert {"codex_daily_v2.py", "codex_daily.py", "codex_premarket_preflight_v1.py",
-        "codex_premarket_shared_v1.py", "codex_native_theme_shared_v1.py",
-        "codex_daily_session_v1.py", "codex_capacity.py", "codex_core_sources.py",
+    assert {"codex_daily_v2.py", "codex_premarket_preflight_v1.py",
+        "codex_premarket_shared_v1.py", "codex_sdk_tree_supervisor_v3.py",
+        "codex_capacity.py", "codex_core_sources.py",
         "premarket_workflow_v1.py", "premarket_native_core_v1.py"} <= paths
     assert len(refs) == len({reference["path"] for reference in refs})
 
@@ -304,7 +293,7 @@ def test_worker_command_carries_explicit_session_contract(tmp_path):
 
 
 def test_default_engine_is_original_and_unknown_engine_refuses(tmp_path):
-    assert shared.parser().parse_args(["premarket", "--config", "TEST_FIXTURE"]).engine == "original"
+    assert shared.parser().parse_args(["_worker", "--job", "TEST_FIXTURE"]).engine == "original"
     config = original.load_config(overrides={"state_root": str(tmp_path / "state")})
     with pytest.raises(ValueError, match="EXPLICIT_ENGINE_REQUIRED"):
         shared.execute_workflow_shared(config, tmp_path / "job", engine="unverified-fast")

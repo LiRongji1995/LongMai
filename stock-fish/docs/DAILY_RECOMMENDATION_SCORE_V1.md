@@ -78,6 +78,5 @@ R12 使用 `SCHEDULED_2030_ACTUAL_COMPLETION`，protocol 为 `SCHEDULED_TRIGGER_
 
 R11 截止 2026-09-08 12:24 上海时间，数据库中没有已保存 `recommendation_score_revisions`。因此 latest score 为 `NO_SCORE_REVISION/N/A`，official prospective score days 为 0，reconstructed historical score days 为 0。交付 scorecard 位于 `stock-fish/reports/codex/r11_validation_scoring_20260908_20260908_122302/recommendation-score/`。
 
-以上仅为 R11 历史状态，不代表 R12 的 live service、数据覆盖或信号数量。R12 代码验证见 [R12_SCORE_INTEGRITY_REPORT](archive/stock-fish/docs/R12_SCORE_INTEGRITY_REPORT.md)，本轮真实数据与调度状态以 R12 prospective/history 报告为准。
 
 `MARKET_EDGE=NOT_ESTABLISHED` 继续成立。任何 score 历史都只能作为策略健康证据，不能自动改变 `STAGE_AWARE_MOMENTUM_V2` 的阈值、setup、资金/题材规则或调度行为。

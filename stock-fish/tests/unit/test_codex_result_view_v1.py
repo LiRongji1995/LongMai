@@ -135,16 +135,19 @@ class SavedViewFixture(unittest.TestCase):
     def test_any_export_tamper_rejects_even_summary_read(self):
         first, _ = self.publish()
         Path(self.artifacts["focus.csv"]["path"]).write_bytes(b"TEST_FIXTURE_FORGED_FOCUS\n")
-        with self.assertRaisesRegex(view.ResultViewError, "PHYSICAL_IDENTITY_CHANGED"):
+        with self.assertRaisesRegex(view.ResultViewError, "ORIGINAL_HASH_CHANGED"):
             self.read(first)
 
-    def test_same_bytes_replacement_is_not_original_export(self):
+    def test_same_bytes_replacement_preserves_saved_export(self):
         first, _ = self.publish()
         path = Path(self.artifacts["all.csv"]["path"])
         raw = path.read_bytes()
-        path.unlink(); path.write_bytes(raw)
-        with self.assertRaisesRegex(view.ResultViewError, "PHYSICAL_IDENTITY_CHANGED"):
-            self.read(first)
+        replacement = path.with_name("TEST_FIXTURE_same_bytes_replacement")
+        replacement.write_bytes(raw)
+        replacement.replace(path)
+        result = self.read(first)
+        self.assertTrue(result["all_five_exports_verified_now"])
+        self.assertEqual(result["summary"], first["summary"])
 
     def test_key_is_private_and_missing_key_never_regenerated_for_existing_view(self):
         first, _ = self.publish()
@@ -230,7 +233,7 @@ class SavedViewFixture(unittest.TestCase):
             self.original.write_bytes(b"TEST_FIXTURE_MUTATED_DURING_AUTH")
             return deepcopy(self.authenticated)
         with patch.object(archive_v1, "reuse_archive", side_effect=mutate):
-            with self.assertRaisesRegex(view.ResultViewError, "PHYSICAL_IDENTITY_CHANGED"):
+            with self.assertRaisesRegex(view.ResultViewError, "ORIGINAL_HASH_CHANGED"):
                 view.publish_view(self.runtime, self.archive_id, profile=self.profile, allow_test_fixture=True)
         self.assertEqual(list((self.report / "result-views-v1").glob("*.json")), [])
 

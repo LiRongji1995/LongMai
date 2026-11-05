@@ -388,7 +388,7 @@ def test_real_fixture_pair_reuses_two_full_normalizations_and_keeps_late_guards(
         runs, _, _ = closure._authenticated(requested, input_id, session, retain_input=True)
         assert [run['run_id'] for run in runs] == requested
         if late_change == 'source':
-            with pytest.raises(ValueError, match='REGISTERED_FILE_CHANGED|ORIGINAL_PHYSICAL_IDENTITY_CHANGED'):
+            with pytest.raises(ValueError, match='R2_ARCHIVE_BRIDGE_FILE_SHA_OR_IDENTITY_MISMATCH'):
                 session.terminal()
         else:
             audit = session.terminal()

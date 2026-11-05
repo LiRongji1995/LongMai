@@ -3,8 +3,7 @@ from decimal import Decimal
 import json
 import time
 
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.provider_requests import validate_request
 from stockfish_core.yaogu.provider_requests_worker import tushare_request
@@ -74,27 +73,20 @@ def test_pv_observation_formula_and_missing_are_separate():
     assert any(row["instrument_id"] == "TEST002" for row in result["missing"])
 
 
-def test_strategy_experiment_bundle_keeps_s2_s3_from_rewriting_s1():
+def test_personal_strategy_bundle_keeps_pv_and_active_v2():
     bundle, cutoff = boosted_bundle()
     result = run_strategy_experiments(bundle, cutoff=cutoff)
-    pv = result["results"]["PV_OBSERVATION_V1"]
-    dna = result["results"]["DNA_RERANK_V1"]
-    theme = result["results"]["THEME_CONTEXT_V1"]
-    assert pv["top_ids"]
-    assert dna["base_strategy_id"] == "PV_OBSERVATION_V1"
-    assert theme["base_strategy_id"] == "PV_OBSERVATION_V1"
-    # F10: missing DNA must retain its actual empty set, never borrow PV names.
-    assert result["comparison"]["strategies"][1]["top_ids"] == dna["top_ids"]
-    assert result["comparison"]["strategies"][1]["top_ids_source"] == "ACTUAL_STRATEGY"
+    assert set(result["results"]) == {"PV_OBSERVATION_V1", "STAGE_AWARE_MOMENTUM_V2"}
+    assert result["results"]["PV_OBSERVATION_V1"]["top_ids"]
     assert result["parameter_status"] == "INITIAL_HYPOTHESIS_NOT_MARKET_VALIDATED"
 
 
-def test_strategy_experiment_api_uses_registered_market_input(tmp_path, monkeypatch):
+def test_strategy_experiment_service_uses_registered_market_input(tmp_path, monkeypatch):
     import stockfish_core.yaogu.candidate_service as candidate_module
 
     bundle, cutoff = boosted_bundle()
     monkeypatch.setattr(candidate_module, "utc_now", lambda: cutoff)
-    core = ApplicationService(
+    core = ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "r05.sqlite3"),
         allow_test_fixture=True,
@@ -102,38 +94,23 @@ def test_strategy_experiment_api_uses_registered_market_input(tmp_path, monkeypa
     )
     try:
         input_id = core.candidates.register_input(bundle, activate=False)
-        client = create_app(core).test_client()
-        specs = client.get("/api/strategy-experiments/specs")
-        assert specs.status_code == 200 and {row["strategy_id"] for row in specs.json} >= {"PV_OBSERVATION_V1", "DAILY_V1"}
-        accepted = client.post("/api/strategy-experiments/run", json={"input_id": input_id})
-        assert accepted.status_code == 202
-        job = wait(core, accepted.json["job_id"])
+        service = core.candidates
+        assert {row["strategy_id"] for row in service.strategy_specs()} >= {"PV_OBSERVATION_V1", "DAILY_V1"}
+        job = wait(core, service.submit_strategy_experiments(input_id=input_id)["job_id"])
         assert job["state"] == "SUCCEEDED", job
-        saved = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/summary")
-        assert saved.status_code == 200
-        assert saved.json["results"]["PV_OBSERVATION_V1"]["top_ids"]
-        assert saved.json["items"]
-        detail = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/items/" + saved.json["items"][0]["instrument_id"])
-        assert detail.status_code == 200
-        assert "PV_OBSERVATION_V1" in detail.json["strategy_results"]
-        exported = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/export?format=csv")
-        assert exported.status_code == 200
-        assert "selected_focus" in exported.get_data(as_text=True)
-        outcome_job = wait(core, client.post("/api/strategy-experiments/" + job["result"]["run_id"] + "/outcomes", json={"horizons": [1, 2, 3, 4, 5, 10, 20]}).json["job_id"])
-        assert outcome_job["state"] == "SUCCEEDED", outcome_job
-        outcomes = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/outcomes")
-        assert outcomes.status_code == 200 and outcomes.json
-        tracking_job = wait(core, client.post("/api/strategy-experiments/" + job["result"]["run_id"] + "/tracking", json={"horizons": [1, 2, 3, 4, 5, 10, 20]}).json["job_id"])
-        assert tracking_job["state"] == "SUCCEEDED", tracking_job
-        review = client.get("/api/strategy-experiments/" + job["result"]["run_id"] + "/review")
-        assert review.status_code == 200
-        assert review.json["market_edge"] == "NOT_ESTABLISHED"
-        latest_feedback = client.get("/api/research-feedback/latest")
-        assert latest_feedback.status_code == 200
-        assert latest_feedback.json["schema_version"] == "R05_RESEARCH_FEEDBACK_V2"
-        comparison = client.get("/api/strategy-comparison/latest")
-        assert comparison.status_code == 200
-        assert comparison.json["comparison_version"] == "R05_STRATEGY_COMPARISON_V1"
+        run_id = job["result"]["run_id"]
+        saved = service.strategy_experiment_summary(run_id)
+        assert saved["results"]["PV_OBSERVATION_V1"]["top_ids"]
+        assert saved["items"]
+        detail = service.strategy_experiment_item_detail(run_id, saved["items"][0]["instrument_id"])
+        assert "PV_OBSERVATION_V1" in detail["strategy_results"]
+        assert "selected_focus" in service.export_strategy_experiment_csv(run_id)
+        for submit in (service.submit_strategy_outcomes, service.submit_strategy_tracking):
+            outcome_job = wait(core, submit(run_id, horizons=[1,2,3,4,5,10,20])["job_id"])
+            assert outcome_job["state"] == "SUCCEEDED", outcome_job
+        assert service.strategy_outcomes(run_id)
+        assert service.strategy_review(run_id)["market_edge"] == "NOT_ESTABLISHED"
+        assert service.latest_strategy_comparison()["comparison_version"] == "PERSONAL_DAILY_COMPARISON_V1"
     finally:
         core.close()
 

@@ -7,6 +7,8 @@ An unsuccessful/unfinished request is retained and is never retried implicitly.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 from contextlib import contextmanager
 from copy import deepcopy
 from dataclasses import dataclass
@@ -265,14 +267,14 @@ class CaptureCache:
         raw, ref = self.budget.read(path, expected=expected.get('sha256') if expected else None,
                                     limit=limit or self.config.get('source_file_bytes', 16 * 1024**2))
         actual = dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw), fp=before)
-        _need(_fp(path) == before and before['st_size'] == len(raw) and
-              all(ref[key] == actual[key] for key in actual), 'BUDGET_READ_PHYSICAL_REFERENCE_MISMATCH')
+        _need(before['st_size'] == len(raw) and content_reference_equal(ref, actual),
+              'BUDGET_READ_CONTENT_REFERENCE_MISMATCH')
         if expected:
-            for key in ('sha256', 'bytes', 'fp'):
+            for key in ('sha256', 'bytes'):
                 if key in expected:
                     _need(expected[key] == actual[key], 'ORIGINAL_' + key.upper() + '_CHANGED')
         prior = self._known.get(str(path))
-        _need(prior is None or prior == actual, 'ORIGINAL_7FP_OR_SHA_CHANGED')
+        _need(prior is None or content_reference_equal(prior, actual), 'ORIGINAL_7FP_OR_SHA_CHANGED')
         self._known[str(path)] = actual
         return raw, actual
 
@@ -339,13 +341,13 @@ class CaptureCache:
             return
         path = Path(locator['path'])
         _need((path.is_relative_to(self.root / 'locators') if locator['owned'] else
-               path == Path(locator['archive_root']) / 'cache' / 'raw') and _fp(path, link=True) == locator['fp']
+               path == Path(locator['archive_root']) / 'cache' / 'raw') and path.is_symlink()
               and os.readlink(path) == locator['target']
               and path.resolve(strict=True) == Path(locator['target']), 'ORIGINAL_LOCATOR_CHANGED')
         expected = {str(item) for item in (path.parent, path.parent.parent,
                     Path(locator['archive_root']), Path(locator['target']))}
-        _need(set(locator['directories']) == expected and all(self._directory_identity(directory) == identity
-              for directory, identity in locator['directories'].items()), 'ORIGINAL_LOCATOR_DIRECTORY_CHANGED')
+        _need(set(locator['directories']) == expected and all(Path(directory).is_dir()
+              for directory in locator['directories']), 'ORIGINAL_LOCATOR_DIRECTORY_CHANGED')
 
     @staticmethod
     def _directory_identity(path):
@@ -489,7 +491,10 @@ class CaptureCache:
             _need(spec.business_session == _stamp(current['first_seen_at']).astimezone(SH).date().isoformat(),
                   'CURRENT_CACHE_SOURCE_ACTUAL_FIRST_SEEN_SESSION_CHANGED')
         for key in current:
-            _need(current[key] == value[key], 'CACHED_CAPTURE_METADATA_CHANGED:' + key)
+            if key == 'verification_locator':
+                # Locator stat fields describe the historical filesystem only.
+                continue
+            _need(content_equal(current[key], value[key]), 'CACHED_CAPTURE_METADATA_CHANGED:' + key)
         self._validate_locator(value.get('verification_locator'))
         return result
 

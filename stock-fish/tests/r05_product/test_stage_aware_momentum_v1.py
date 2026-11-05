@@ -8,7 +8,7 @@ from stockfish_core.yaogu.stage_aware_momentum import (
     run_stage_aware_momentum,
 )
 from stockfish_core.yaogu.strategy_experiments import run_pv_focus_preview, run_pv_observation, run_strategy_experiments
-from tests.r05_product.test_theme_capital_trend_v1 import _clocks, _days, _fund, trend_bundle
+from tests.support.stage_market_fixture import _clocks, _days, _fund, trend_bundle
 
 
 def _payload(bundle):

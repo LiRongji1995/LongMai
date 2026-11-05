@@ -574,11 +574,13 @@ def test_terminal_serialized_flag_cannot_replace_live_callable(tmp_path):
 
 def test_new_spec_and_old_helper_whole_identity_are_both_explicit():
     identity = streamed.source_identity()
-    for suffix in ('theme_evolution_streaming_v2.py', 'THEME_EVOLUTION_STREAMING_V2.md',
+    for suffix in ('theme_evolution_streaming_v2.py', 'theme_evolution.py',
                    'evidence_audit_spool_v2.py', 'theme_evolution_streaming.py'):
         names = [name for name in identity['source_file_hashes'] if name.endswith(suffix)]
         assert len(names) == 1
         assert hashlib.sha256((base.ROOT/names[0]).read_bytes()).hexdigest() == identity['source_file_hashes'][names[0]]
+    assert identity['spec_revision'] == 'THEME_EVOLUTION_STREAMING_R2_SPEC_1'
+    assert identity['numeric_rule_source_identity'] == base.source_identity()
     assert identity['legacy_helper_source_identity'] == legacy.source_identity()
     assert identity['journal_schema_version'] == journal_module.VERSION
 

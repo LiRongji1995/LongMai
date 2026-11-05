@@ -1,3 +1,0 @@
-# Docker-only WSGI server. Core runtime pins remain verified separately.
-gunicorn==23.0.0
-akshare==1.18.94

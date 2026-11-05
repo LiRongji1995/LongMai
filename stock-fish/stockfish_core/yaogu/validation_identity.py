@@ -39,7 +39,7 @@ def validation_identity_for_run(run: dict[str, Any]) -> dict[str, Any]:
         "countability_policy": "R12_DATED_EVALUATED_INTEGRITY_PERSISTED_V1",
         "history_separation": "RECONSTRUCTED_NEVER_PROSPECTIVE",
         "protocol_source_hash": digest({name: hashlib.sha256(Path(__file__).with_name(name).read_bytes()).hexdigest()
-                                        for name in ("validation_identity.py", "scheduler.py", "candidate_service.py")}),
+                                        for name in ("validation_identity.py", "strategy_experiments.py", "candidate_service.py")}),
     }
     identity = {
         "strategy_id": STRATEGY_ID,

@@ -9,7 +9,6 @@ import tempfile
 import unittest
 from unittest.mock import patch
 
-from scripts import codex_research as entry
 from stockfish_core.yaogu import economic_direction_display as display
 from stockfish_core.yaogu import economic_direction_explanation_v1 as producer
 from stockfish_core.yaogu.history_artifacts import digest_json_stream
@@ -23,7 +22,7 @@ class EconomicDirectionDisplayTest(unittest.TestCase):
         self.root = Path(self.temp.name)
         def forbidden(*args, **kwargs):
             raise AssertionError('TEST_FIXTURE_NO_EXTERNAL_IO_OR_API')
-        for target in ('socket.socket.connect', 'sqlite3.connect', 'scripts.codex_research.Client'):
+        for target in ('socket.socket.connect', 'sqlite3.connect'):
             guard = patch(target, forbidden)
             guard.start(); self.addCleanup(guard.stop)
         saved, original = parent(self.root)
@@ -165,30 +164,7 @@ class EconomicDirectionDisplayTest(unittest.TestCase):
             with self.assertRaisesRegex(ValueError, 'ARCHIVE_CHANGED'):
                 self.read()
 
-    def test_cli_offline_full_delivery_and_no_overwrite(self):
-        destination = self.root / 'delivery'
-        argv = ['economic-direction-display', '--attachment', str(self.attachment),
-            '--grouped-parent', str(self.parent.path), '--as-of', self.as_of,
-            '--output', str(destination)]
-        with patch('builtins.print'):
-            self.assertEqual(entry.main(argv), 0)
-            before = {p: p.read_bytes() for p in destination.iterdir()}
-            self.assertEqual(entry.main(argv), 2)
-        self.assertEqual({p: p.read_bytes() for p in before}, before)
-        result = json.loads((destination / 'display.json').read_text())
-        self.assertEqual(result['observation_count'], 3)
-        self.assertEqual(result['network_DB_SDK_selector_calls'], 0)
 
-    def test_cli_invalid_pair_creates_no_delivery(self):
-        destination = self.root / 'must-not-exist'
-        changed = json.loads(self.attachment.read_text())
-        changed['frozen_run_binding']['run_id'] = 'TEST_FIXTURE_DIFFERENT_RUN'
-        self.write_attachment(changed)
-        with patch('builtins.print'):
-            self.assertEqual(entry.main(['economic-direction-display', '--attachment', str(self.attachment),
-                '--grouped-parent', str(self.parent.path), '--as-of', self.as_of,
-                '--output', str(destination)]), 2)
-        self.assertFalse(destination.exists())
 
 
 if __name__ == '__main__':

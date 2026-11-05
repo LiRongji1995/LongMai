@@ -17,7 +17,6 @@ from .research_context_artifacts import SourceArtifactReader
 from .visibility import SH
 
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = ROOT / 'docs/INDUSTRY_SINA_CONTEXT_V1.md'
 VERSION = 'CURRENT_SINA_INDUSTRY_CONTEXT_V1'
 DEFINITION = 'CURRENT_SINA_INDUSTRY_DIRECTORY_COUNT_AND_ORIGINAL_MEMBERS_V1'
 FIELD_VERSION = 'AKSHARE_1.18.94_SINA_INDUSTRY_ORIGINAL_COUNT_PAGES_V1'
@@ -42,7 +41,6 @@ def source_identity():
              'contracts.py', 'visibility.py', 'history_artifacts.py')
     files = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest()
              for path in (Path(__file__).with_name(name) for name in names)}
-    files[str(SPEC.relative_to(ROOT))] = hashlib.sha256(SPEC.read_bytes()).hexdigest()
     identity = dict(implementation_version=VERSION, feature_version=DEFINITION,
                     source_file_hashes=files, supported_field_version=FIELD_VERSION,
                     explicit_opt_in=True, default_source_reader_unchanged=True)

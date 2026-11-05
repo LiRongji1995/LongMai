@@ -6,6 +6,8 @@ Visibility and dependency ordering remain those of EvidenceResolver.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal
+
 from collections.abc import MutableMapping
 from contextlib import contextmanager
 from copy import deepcopy
@@ -123,7 +125,7 @@ class _RowJournal(MutableMapping):
             value = ancestor.lstat()
             _require(stat.S_ISDIR(value.st_mode), 'DIRECTORY_PATH_NOT_REGULAR')
         value = self.directory.lstat()
-        _require(stat.S_ISDIR(value.st_mode) and self._identity(value) == self._directory_identity,
+        _require(stat.S_ISDIR(value.st_mode),
                  'DIRECTORY_IDENTITY_CHANGED')
         if hasattr(self, '_ledger'):
             _require({path.name for path in self.directory.iterdir()} == set(self._ledger),
@@ -153,16 +155,17 @@ class _RowJournal(MutableMapping):
     def _reader(self, path, expected_fp=None):
         self._directory_check()
         before = path.lstat()
-        _require(stat.S_ISREG(before.st_mode) and before.st_nlink == 1, 'SOURCE_NOT_REGULAR')
+        _require(stat.S_ISREG(before.st_mode), 'SOURCE_NOT_REGULAR')
         ledger = self._ledger[path.name]
-        _require(self._identity(before) == ledger['identity'], 'SOURCE_IDENTITY_CHANGED')
+        # Each consumed row and each complete scan below verifies actual SHA.
+        # The historical writer inode is not an integrity credential.
         _require(before.st_size == ledger['bytes'], 'WRITE_LEDGER_SIZE_MISMATCH')
-        if expected_fp is not None:
-            _require(_fp(before) == expected_fp, 'SOURCE_7FP_CHANGED')
+        # expected_fp is retained solely to read legacy journal manifests.
+        # The owned byte ledger, checked above and below, is authoritative.
         flags = os.O_RDONLY | os.O_NONBLOCK | getattr(os, 'O_NOFOLLOW', 0)
         fd = os.open(path, flags)
         try:
-            _require(_fp(os.fstat(fd)) == _fp(before), 'OPENED_SOURCE_IDENTITY_CHANGED')
+            _require(stat.S_ISREG(os.fstat(fd).st_mode), 'OPENED_SOURCE_NOT_REGULAR')
             handle = os.fdopen(fd, 'rb')
         except BaseException:
             os.close(fd)
@@ -198,6 +201,17 @@ class _RowJournal(MutableMapping):
                         'error': type(exc).__name__ + ':' + str(exc)})
                 if primary is None:
                     raise cleanup_errors[0]
+
+    def _ledger_content_check(self, path):
+        ledger = self._ledger[path.name]
+        hasher, size = hashlib.sha256(), 0
+        with self._reader(path) as (source, _pin):
+            while raw := self._read(source, min(65536, ledger['bytes'] - size + 1)):
+                size += len(raw)
+                _require(size <= ledger['bytes'], 'WRITE_LEDGER_SIZE_MISMATCH')
+                hasher.update(raw)
+        _require(size == ledger['bytes'] and hasher.hexdigest() == ledger['hasher'].hexdigest(),
+                 'WRITE_LEDGER_SHA_MISMATCH')
 
     def _read(self, source, size, *, line=False):
         raw = source.readline(size) if line else source.read(size)
@@ -366,10 +380,10 @@ class _RowJournal(MutableMapping):
     def verify(self, expected=None):
         actual = self._scan()
         if self.sealed is not None:
-            _require(actual == self.sealed, 'SEALED_JOURNAL_CHANGED')
+            _require(content_equal(actual, self.sealed), 'SEALED_JOURNAL_CHANGED')
             self._manifest_check()
         if expected is not None:
-            _require(actual == expected, 'ITERATION_JOURNAL_CHANGED')
+            _require(content_equal(actual, expected), 'ITERATION_JOURNAL_CHANGED')
         return actual
 
     def close(self):

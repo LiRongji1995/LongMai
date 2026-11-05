@@ -9,6 +9,7 @@ from tests.yaogu.test_premarket_capture_cache_v1 import FixtureBudget, FixtureEx
 from scripts import codex_premarket_preflight_v1 as preflight
 from scripts import codex_core_sources as sources
 from stockfish_core.yaogu import premarket_capture_cache_v1 as native
+from stockfish_core.yaogu.premarket_runtime_v1 import BudgetExceeded
 
 
 class PreflightTests(Base):
@@ -56,6 +57,44 @@ class PreflightTests(Base):
 
     def refs(self):
         return {str(path): sources.original._reference(path) for path in self.root.rglob("*") if path.is_file()}
+
+    def complete_without_latest_market(self):
+        add = self.add
+        def other_sources(endpoint, parameters, day, **options):
+            if endpoint == "market_daily" and day == self.observed:
+                return None
+            return add(endpoint, parameters, day, **options)
+        with patch.object(self, "add", side_effect=other_sources):
+            self.complete()
+        self.online_collection()
+        return native.RequestSpec("market_daily", dict(date=self.observed), self.observed,
+                                  role="FULL_MARKET_CONTEXT")
+
+    def test_explicit_collection_accepts_only_latest_market_missing_with_known_master(self):
+        self.complete_without_latest_market()
+        value = self.plan(collect_missing=True)
+        self.assertTrue(value["collection_admitted"], value["collection_reasons"])
+        self.assertFalse(value["execution_admitted"])
+        rows = [row for stage in value["stages"] for row in stage["requests"] if row["status"] == "MISSING"]
+        self.assertEqual([(row["request_spec"]["endpoint"], row["request_spec"]["business_session"])
+                          for row in rows], [("market_daily", self.observed)])
+
+    def test_explicit_collection_latest_market_unfinished_is_not_missing(self):
+        spec = self.complete_without_latest_market()
+        attempt = self.cache.root / "raw" / spec.key
+        attempt.mkdir()
+        (attempt / "TEST_FIXTURE-unfinished").write_bytes(b"retained failure")
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_SOURCE_NOT_RETRYABLE:"+spec.key, value["collection_reasons"])
+
+    def test_explicit_collection_future_latest_market_is_not_missing(self):
+        spec = self.complete_without_latest_market()
+        cutoff = datetime.now(timezone.utc)
+        self.cache.capture_one(spec)
+        value = self.plan(collect_missing=True, _now=cutoff)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_SOURCE_NOT_RETRYABLE:"+spec.key, value["collection_reasons"])
 
     def test_blocked_still_reports_official_factors_and_all_67_sessions_without_payload_reads(self):
         prior = self.core[-2]
@@ -108,12 +147,15 @@ class PreflightTests(Base):
             value = self.plan()
         self.assertIn("REGISTERED_STORAGE_CAPACITY_BLOCKED", value["reasons"])
 
-    def test_same_bytes_new_inode_is_rejected_for_authenticated_calendar(self):
+    def test_calendar_same_bytes_replacement_passes_and_tamper_fails(self):
         path = Path(self.calendar.metadata["raw"]["path"])
         replacement = path.with_name("TEST_FIXTURE-replacement")
         replacement.write_bytes(path.read_bytes())
         replacement.replace(path)
-        with self.assertRaises(ValueError):
+        self.plan()
+        raw = path.read_bytes()
+        path.write_bytes(b"X" + raw[1:])
+        with self.assertRaisesRegex(BudgetExceeded, '^FILE_SHA256_CHANGED$'):
             self.plan()
 
     def test_tampered_content_addressed_index_is_rejected(self):
@@ -171,6 +213,140 @@ class PreflightTests(Base):
         self.assertEqual(value["totals"]["sdk_reserved"], 3)
         self.assertFalse(value["totals"]["total_exact"])
         self.assertTrue(value["totals"]["unknown_components"])
+
+
+    def online_collection(self):
+        self.config(capture=dict(offline=False), limits=dict(max_requests=512,
+            max_sdk_calls=10000, max_http_attempts=32768, cache_bytes=1024**3, output_bytes=4*1024**2))
+
+    def test_explicit_collection_authenticates_present_history_without_writes(self):
+        self.online_collection()
+        self.add("market_daily", dict(date=self.core[0]), self.core[0], role="FULL_MARKET_CONTEXT")
+        before = self.refs()
+        with patch.object(native.CaptureCache, "capture_one", side_effect=AssertionError("NO_WRITE")):
+            value = self.plan(collect_missing=True)
+        self.assertTrue(value["collection_admitted"], value["collection_reasons"])
+        self.assertFalse(value["execution_admitted"])
+        self.assertFalse(value["full_premarket_ready"])
+        self.assertEqual(value["source_authentication"]["authenticated_original_count"], 2)
+        self.assertEqual(value["network_calls"], 0)
+        self.assertEqual(value["strategy_calls"], 0)
+        self.assertEqual(before, self.refs())
+
+    def test_ordinary_online_missing_plan_does_not_expand_authentication(self):
+        self.online_collection()
+        self.add("market_daily", dict(date=self.core[0]), self.core[0], role="FULL_MARKET_CONTEXT")
+        value = self.plan()
+        self.assertFalse(value["collection_admitted"])
+        self.assertEqual(value["collection_reasons"], ["EXPLICIT_MISSING_COLLECTION_PLAN_REQUIRED"])
+        self.assertEqual(value["source_authentication"]["authenticated_original_count"], 1)
+
+    def test_explicit_collection_rejects_tampered_old_market_while_latest_missing(self):
+        self.online_collection()
+        record = self.add("market_daily", dict(date=self.core[0]), self.core[0], role="FULL_MARKET_CONTEXT")
+        path = Path(record.metadata["raw"]["path"])
+        raw = path.read_bytes()
+        path.write_bytes(b"X"+raw[1:])
+        with self.assertRaisesRegex(BudgetExceeded, "FILE_SHA256_CHANGED"):
+            self.plan(collect_missing=True)
+
+    def test_explicit_collection_authenticates_complete_prior_listing_before_new_parents(self):
+        self.online_collection()
+        self.add("stock_basic_all", {}, self.local, role="CURRENT_BASIC_ATTEMPT", current=True)
+        before = self.refs()
+        with patch.object(native.CaptureCache, "capture_one", side_effect=AssertionError("NO_WRITE")):
+            value = self.plan(collect_missing=True)
+        self.assertTrue(value["collection_admitted"], value["collection_reasons"])
+        self.assertEqual(value["source_authentication"]["authenticated_original_count"], 2)
+        self.assertEqual(value["network_calls"], 0)
+        self.assertEqual(before, self.refs())
+
+    def test_explicit_collection_rejects_tampered_prior_listing_before_new_parents(self):
+        self.online_collection()
+        record = self.add("stock_basic_all", {}, self.local, role="CURRENT_BASIC_ATTEMPT", current=True)
+        path = Path(record.metadata["raw"]["path"])
+        raw = path.read_bytes()
+        path.write_bytes(b"X"+raw[1:])
+        before_calls = len(self.executor.calls)
+        with patch.object(native.CaptureCache, "capture_one", side_effect=AssertionError("NO_WRITE")):
+            with self.assertRaisesRegex(BudgetExceeded, "FILE_SHA256_CHANGED"):
+                self.plan(collect_missing=True)
+        self.assertEqual(len(self.executor.calls), before_calls)
+
+    def test_explicit_collection_rejects_unfinished_request(self):
+        self.online_collection()
+        spec = native.RequestSpec("market_daily", dict(date=self.observed), self.observed,
+                                  role="FULL_MARKET_CONTEXT")
+        directory = self.cache.root / "raw" / spec.key
+        directory.mkdir()
+        (directory / "TEST_FIXTURE-unfinished").write_text("unfinished")
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_SOURCE_NOT_RETRYABLE:"+spec.key, value["collection_reasons"])
+
+    def test_explicit_collection_rejects_existing_failed_qualification(self):
+        self.online_collection()
+        self.executor.basic_failure = True
+        self.add("stock_basic_all", {}, self.local, role="CURRENT_BASIC_ATTEMPT", current=True)
+        self.complete()
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertTrue(any(reason.startswith("COLLECTION_SOURCE_NOT_RETRYABLE:")
+                            for reason in value["collection_reasons"]))
+
+    def test_explicit_collection_requires_existing_authenticated_calendar(self):
+        self.online_collection()
+        for path in (self.cache.root / "index").glob("*/*.json"):
+            path.unlink()
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_AUTHENTICATED_CALENDAR_REQUIRED", value["collection_reasons"])
+        self.assertEqual(value["network_calls"], 0)
+
+    def test_explicit_collection_rejects_unexplained_unknown_dependency(self):
+        self.online_collection()
+        actual = preflight._scope
+        def unknown(*args):
+            value = actual(*args)
+            value["stages"][0]["unknown_dependencies"].append("TEST_FIXTURE_UNEXPLAINED")
+            return value
+        with patch.object(preflight, "_scope", side_effect=unknown):
+            value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_UNEXPLAINED_SCOPE:CURRENT_OFFICIAL", value["collection_reasons"])
+
+    def test_diagnostic_cache_uses_registered_writer_ceiling_without_changing_writer(self):
+        self.online_collection()
+        root, inventory = sources._existing_cache(self.state / "cache")
+        inventory = dict(inventory, logical_bytes=300*1024**2)
+        with patch.object(sources, "_existing_cache", return_value=(root, inventory)):
+            value = self.plan()
+        self.assertEqual(value["read_only_diagnostic_limits"]["cache_bytes"], 1024**3)
+        self.assertEqual(value["original_writer_limits"]["cache_bytes"], 1024**3)
+        self.assertFalse(value["diagnostic_limits_authorize_writer"])
+
+    def test_explicit_collection_cannot_bypass_capacity_or_known_budget(self):
+        self.online_collection()
+        with patch.object(self.runtime, "preflight", return_value=dict(allowed=False,
+                reason_codes=["TEST_FIXTURE_CAPACITY"])):
+            value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("REGISTERED_STORAGE_CAPACITY_BLOCKED", value["collection_reasons"])
+        self.config(capture=dict(offline=False), limits=dict(max_requests=1, cache_bytes=1024**3))
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("KNOWN_REQUEST_COST_EXCEEDS_ORIGINAL_LIMIT:max_requests", value["collection_reasons"])
+
+    def test_explicit_collection_rejects_offline_and_retry_policy(self):
+        self.config(capture=dict(offline=False, retry_failed=True),
+                    limits=dict(max_requests=512, max_sdk_calls=10000, max_http_attempts=32768))
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_RETRY_POLICY_FORBIDDEN", value["collection_reasons"])
+        self.config(capture=dict(offline=True))
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("COLLECTION_ONLINE_POLICY_REQUIRED", value["collection_reasons"])
 
     def test_cost_is_per_security_not_date_range(self):
         for start in ("1990-01-01", self.observed):

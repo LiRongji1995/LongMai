@@ -1,129 +1,81 @@
 # 使用说明
 
-**2026-11-05 工程修复交付（未启用，远端验收待补）：**[共同请求权威、恢复与研究隔离实施记录](stock-fish/docs/REMEDIATION_20261105.md)提供新的主动执行树、事务防重、多代恢复、持久阶段计量、标签隔离及专项 CI 映射。新执行树通过精确输入清单和责任层接线约束旧兼容入口；原已认证源码与登记保持。**源码发布不代表实际登记启用；旧运行路径的缺口尚不能据此宣布消除。**启用前须完成完整历史导入、有限预算及环境预检并取得明确切换授权；不能直接用下面历史命令重试旧失败。连续 20 个真实交易日、真实执行来源与独立投资验证未完成，`MARKET_EDGE=NOT_ESTABLISHED`。
+默认让 Codex 操作。唯一主入口为 `stock-fish/scripts/codex_daily_v2.py`；以下 `python` 指已登记的项目解释器。全局 `--runtime NAME`、`--registry-root PATH` 放在子命令之前。沿用现有登记及默认实例，不为每次聊天创建配置或账本。
 
-新增[架构、交付与量化评价优化V1](stock-fish/docs/ARCHITECTURE_OPTIMIZATION_DELIVERY_V1.md)：提供内外层原生监督V3、统一运行/交付/覆盖审阅、冻结研究与条件评价、显式组件清单、存储实验、根级CI和新目录恢复演练。旧策略/核心及默认original入口保持。当前环境七步复验通过，但原登记物理身份变化仍阻塞真实准入；最新完整盘前、连续20交易日、真实执行证据和独立投资验证未通过，源码发布不切换服务或重试旧请求。
-
-新增[SDK 子进程树监督 V2 与本轮盘前验收记录](stock-fish/docs/SDK_TREE_SUPERVISED_CURRENT_PREMARKET_V2.md)：监督与回收采用版本化修复，保留实际执行的 V1 原件。11 月 2 日固定请求已补齐当前日历、原主板范围 3,194 只/64 批完整复权并生成核心产物，但后续流程因采样超时与 UTC 总限时失败，根进程当时的回收未获确认；10 项题材 PARTIAL 保留，完整盘前尚未通过。V2 仅完成隔离工程验收，未重跑真实业务；原三小时预算、登记、策略、历史结果与全部失败记录保持，未切换服务。
-
-新增[原失败请求显式复权恢复 V1](stock-fish/docs/EXPLICIT_FACTOR_FAILURE_RECOVERY_V1.md)：28→29 原主板范围 3,194 只/64 批来源已补齐，复用 800 只、真实补采 2,394 只；194 项工程检查和独立原生回查通过。沿用原登记与累计预算，旧失败、策略和历史结果保留。新首见时间不追认历史 PIT；SDK 子树 RSS 监督与最新完整盘前交付仍待完成，边界见记录。
-
-新增[复权采集V3](stock-fish/docs/FACTOR_FULL_WINDOW_CHECKPOINT_V3.md)：可要求核验新来源bundle并规划全新交易日的完整复权采集。Codex使用原恢复登记、固定request-key及original全流程；计划不采集，旧失败不因升级自动重试。旧缺首见时间资料不能补钟成有效历史。
-
-新增[P0诊断入口](stock-fish/docs/P0_DAILY_RELIABILITY_AND_EVALUATION_V1.md)：可以要求“核对某次盘前失败与完整交付状态”“审计原run全池及UNKNOWN分母”“查看R2执行评价还缺哪些证据”。Codex调用 `codex_p0.py delivery/ledger/coverage/execution-readiness`，只读原件并可保存新私有报告；不重试旧请求、不改原名单。缺后验输入仅记NOT_PROVIDED，不声称系统从未运行；执行资料不足保持BLOCKED_DATA。
-
-**2026-10-28 恢复现状：**原 daily/review 环境已重新验收，137 份旧采集元数据已按真实原件重认，并以显式恢复登记运行 original 全流程；旧 default 与失败记录保留。26→27 已完成完整复权和原核心，后续题材阶段触全流程限时；28→29 在复权采集遇到部分失败和缺原始首见时间，与合盖休眠重叠，尚无完整清单。真实提速比例仍未测得。详见[环境恢复、真实执行与性能边界](stock-fish/docs/PREMARKET_ENVIRONMENT_RECOVERY_V1.md)。
-
-默认 `codex_daily_v2.py premarket` 保留原题材执行器；`--engine shared` 是显式共享计算候选。小样本全流程曾测得回退，因此没有将其自动设为默认，也没有据此宣称真实新清单提速。
-
-盘前新清单由Codex先执行 [完整盘前准入](stock-fish/docs/PREMARKET_SHARED_EXECUTION_V1.md)，核对最新交易日、全部来源缺口和原预算；通过后调用完整工作流。失败或不明请求保留原标识，不自动重试。已保存清单继续走原 `codex_daily.py show`，保留其原日期。
-
-读取已有名单时，Codex 使用 [统一执行入口](stock-fish/docs/SYSTEM_EXECUTION_PIPELINE_V1.md) 的 `show`：保留原名单、原日期和原导出，显示最后一次完整来源认证时间。首次使用先对原归档完整认证并封存小视图，此后查询约1秒；这表示保存成果通过本次完整性核对，不代表今天行情已经更新。需要重新审计来源时使用 `audit`。
-
-`plan` 会区分可复用结果与缺失的新交易日资料；UNKNOWN不会自动变成空名单，也不会自动续采或重试。新题材计算和后验按显式命令执行，继续使用同一登记环境和原预算。
-
-现在可以直接说“用登记的日常环境读取已有清单”“继续同一个盘前任务”或“检查数据占用”。Codex 按[共享入口协议](stock-fish/docs/CODEX_CHAT_WORKSPACE_V1.md)使用固定登记表和共享报告目录；同一业务请求在新聊天里沿用相同请求标识。先查询，确认缺新资料才在原预算内启动一次工作；进行中跟踪原 job，失败或提交不明不自动再跑。
-
-旧大数据清理后，本机固定的 daily/review 58 包环境已恢复并通过验收，Codex 已将它登记为聊天默认实例 `shared-daily`，你无需手工重新安装或登记。新聊天先核对登记位置和容量，再复用同一环境。环境可用不代表行情齐备或当天清单已生成；有界行情增量与原核心计算复用的范围、真实小样本结果见[第二阶段说明](stock-fish/docs/SHARED_RUNTIME_INCREMENTAL_V1.md)。没有复制旧大库或切换生产服务，第一阶段隔离测量继续保留在共享协议中。
-
-使用名单先核对观察日、目标交易日、实际取得时间、资料截止与原run。已封存的10月23日观察以10月26日为目标，实际于上海10月24日处理；原观察池和3亿元展示子集分别保留，不追认原当日准时盘前交付。题材FAILED、新闻PARTIAL、正式FOCUS为0、DAILY_V1未知等状态保持。
-
-原 run 详情、导出与后验分别查询；缺结果保留 UNKNOWN/null，不计零收益。新增[日期化输入与数值 H1](stock-fish/docs/DATED_IDENTITY_NUMERIC_H1_20261024.md)已独立复算 15→16 的原全池 3,041 只及观察 25 只，19 日及后续身份缺口保持。标价变化不等于成交收益或策略优势；真实工程链使用显式 900 秒档位，默认 300 秒性能尚未达标。具体范围见[当前状态](CURRENT_STATUS.md)。
-
-## 直接提出请求
-
-在本项目的 Codex 对话中，你可以说：
-
-- “读取最近一次保存名单，说明观察日期和资料缺口。”
-- “解释这只股票为什么入选或没有入选。”
-- “看看昨天关注的股票后来怎样了。”
-- “比较两个保存名单的变化。”
-- “导出这个运行的完整名单。”
-
-日常先复用已有结果。需要补资料或重新计算时，核对实际实例、数据日期和预算后再执行。请求名单不自动授权改策略、发布代码或切换服务。
-
-已明确选择新的短线强势研究时，可说“按 SHORT_HORIZON_STRENGTH_R1 读取或计算某日盘前观察清单”。该版本区分强启动、强势延续和强势段后的首次回撤，说明见[当前策略](CURRENT_STRATEGY.md)。研究观察名单有独立选择标记，不能把其数量称为正式 FOCUS；完整运行仍保留未通过和未知的证券。旧日期用新规则回算时标明事后研究，不冒充当时已经发出的预测。
-
-2026-10-10起本次授权的盘前研究采用 `SHORT_HORIZON_STRENGTH_R2`，按概念或板块分组并展示由强到弱的已验证指标。题材阶段、高位风险和资料缺口分开；资料未知不强行排序成弱题材。动态成交额是参考线，不是5亿元硬筛。旧日期回算保留当时资料截止，今天取得的历史数据不冒充当时已取得。
-
-盘前清单和板块概念研究报告都只重点展示交易活跃、有独立当日主线依据、且包含符合冻结选股标准个股的方向。通过已有两日阶段确认且仍走强/发酵的列为确认主线；首日候选条件已经通过的列为“发酵观察，尚未确认”，不能隐藏，也不能冒充确认。原活跃条件与两日确认仍通过但出现分歧的另列“活跃主线，出现分歧”，风险独立展示。内部微概念标签须归并、核验，不全部展开为主线。主线活跃依据使用经过原始来源认证的成分指标；供应商篮子完整仍不代表经济题材覆盖完整。无题材来源时报告明确提示“主线识别不可用”，不会把未知写成无主线。未形成题材合力的合格个股归模型组；非主线只作为解释轮动、协同或资金争夺的必要背景。历史报告按当时业务日和规则核验主线资格；固定当前成分回看另列，不称过去主线全覆盖。具体见[覆盖与早期观察诊断](stock-fish/docs/THEME_OBSERVATION_DIAGNOSTICS_V1.md)。
-
-年度复盘由Codex自主交叉核对政策、公司披露、不同原创媒体和逐日行情，保留来源冲突及周期起止缺口，不需要用户逐轮审查。新闻线索不直接成为合格股票或主线，复盘发现的问题另存修复假设并做跨周期验证。规范见[主线周期复盘标准](stock-fish/docs/MAINLINE_CYCLE_RESEARCH_STANDARD_V1.md)；完整年度完成情况与工程测试、投资验证分别报告。
-
-年度正文统一放在[2026年以来短线总报告](stock-fish/docs/2026_SHORT_TERM_MAINLINE_REPORT.md)，持续补充主线变化、资金与参与趋势、反证和模型反馈，不再分成多个阶段报告。当前完整周期和历史盘前验证仍有缺口，完成程度以正文披露为准。
-
-需要完整交付已经保存的R2名单时，可使用[完整交付入口V2](stock-fish/docs/SAVED_R2_COMPLETE_DELIVERY_V2.md) `deliver-saved-r2`。它核对原运行、输入和真实来源，保留所有原观察股及正式导出，再生成题材与业务解释；资料不足的股票仍在模型或未知组中展示。若新解释归档读取时发生文件状态变化，原来源及实现再次验真后交付完整原模型名单，解释标为UNKNOWN，失败附件留在非交付审计目录；原身份、内容或时间错误仍拒绝。原选股截止、新解释截止和展示时间分别记录，早于原结果可见时点不会显示候选。该入口不重新选股，当前成员回看必须显式标注；真实完整V2协调和连续每日自动交付仍需单独验收。
-
-若保存来源只有真实RAW和物理回执、没有规范化结果包装，可显式使用[完整流式交付V3](stock-fish/docs/SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md) `deliver-saved-r2-stream`，传入原run、run-manifest、input、新版sources-manifest、context-cutoff和新output目录。它核验原件并请求原日历最后67个会话，缺日保留UNKNOWN，仍交付全部原观察股。它不重新选股，也不能恢复历史盘前可见性；当前成员回看须显式选择 `CURRENT_COHORT_BACKVIEW`。各次真实运行和连续自动交付的验收状态见[当前状态](CURRENT_STATUS.md)。
-
-主线研究还要看资金增速、上涨及合格家数、集中度、持续时间和相对市场表现的变化，不能只报静态成交额或形态。席位、梯队及催化缺来源时明确未知；[报道事件附件](stock-fish/docs/THEME_EVENT_EVIDENCE_V1.md)目前是初始解释能力，尚未每日默认生效，也不会因新闻热度增加入选股票。
-
-看游资参与时区分榜单出现次数、同披露的提供方编码、渠道和自然人。[席位原件附件](stock-fish/docs/LHB_SEAT_EVIDENCE_V1.md)恢复SDK遗漏编码并保留重复证据，单位/窗口未知时不报资金评分。同期上证、深成指、创业板与全市场等权参考分别注明来源和截止；新取得的历史指数只作新研究情境，不悄悄填入旧名单。
-
-看放量时同时看上涨比例、中位涨幅和集中度；看反包时区分个别核心股与整体主线修复。题材相对市场优势收窄，也可能来自市场广度回暖，需要核对题材自身变化。趋势研究将交易家数与规则合格家数分列，未经跨周期检验的联合信号不成为预测分数。[历史换手修复](stock-fish/docs/HISTORICAL_REPLAY_TURNOVER_V1.md)是新的显式研究版本，保留旧结果，默认日常任务未自动启用。
-
-[市场事实附件V1](stock-fish/docs/MARKET_DESCRIPTIVE_CONTEXT_V1.md)提供全市场成交、上涨比例、中位日变化、分化、换手与头部成交集中度的来源绑定序列，并使用排除当日的前20交易日金额基准。它是单独调用的研究能力，当前未自动出现在每日保存run中；图表覆盖到10月9日的年内183个交易日，不表示整个2026年已结束或历史情绪周期已验证。报告会分别列数据覆盖、正式组件验证和投资验证。
-
-[市场解释附件V1](stock-fish/docs/MARKET_EXPLANATION_V1.md)可由Codex显式生成，并附在同一原run的完整研究报告或日报中，显示过去1/3/5交易日变化和斜率，以及放量却参与收窄等反证。来源和附件实际生成时间晚于报告截止时不展示为当时已知；未知不补零。附件不会调整原名单或评分，也不把全市场交易家数称为合格主线参与股数。默认服务自动生成和多情绪周期投资验证仍待完成。
-
-## 看结果时抓住五件事
-
-日期化身份补证仅创建新的后验 input，不改变原名单和原价格。当前 16 日身份可支持一段 H1 数值；19 日不能从 16 日身份延伸。源目录／owner 改变时必须重新完整登记，私有 seal JSON 不能复制成新运行凭据。
-
-对同一服务库已保存的 R1/R2 清单，可明确请求“用已登记的后验 input 检查这个 run 的 H1、H2、H3、H5、H10”。新[后验观察版本](stock-fish/docs/SHORT_HORIZON_OUTCOME_V1.md)保存逐会话跟踪、成熟度、资料缺口与描述性复盘，个股详情同步读取；旧清单不重写。缺日历或行情是 UNKNOWN，已知尚未收盘是 PENDING，不能补零。指标是标价变化，不能当成实际 T+1 成交收益。
-
-完整 standalone 封存归档可经[可信衔接与每日后验入口](stock-fish/docs/RUNTIME_R2_CLOSURE_DELIVERY_V1.md)鉴证后接入明确选择的服务库，再用当日精确 input 观察原 run。需要原件、原代码字节、封存 SHA 和五份正式导出；单个 JSON 不足。待办查询保留全部原观察对象，只有全池 H1/H2/H3/H5/H10 均成熟才关闭；缺资料会继续显示 UNKNOWN。当前是显式运行入口，未自动启用新的采集、定时任务或生产服务。
-
-| 要看什么 | 为什么 |
-|---|---|
-| 观察日和资料截止 | 判断是否仍是旧数据 |
-| 全部数量与焦点数量 | 焦点是额外条件通过者，数量由规则决定 |
-| 入选理由、缺失资料和反证 | 理解判断依据及什么变化会使判断失效 |
-| 运行编号 run_id | 回到同一份原始名单、详情和导出 |
-| 后续观察是否成熟 | 缺失或未成熟不能计作零收益 |
-
-FOCUS 表示满足当前焦点条件，WATCH 表示继续观察，REJECTED 表示未通过，UNKNOWN 表示关键资料不足。这些是研究分类；R1 的 CORE_PASS 使用自己的研究口径，不能直接当作 V2 焦点。
-
-## 网页和终端
-
-历史 R2 独立终端接口保留供审计；新写任务需先完成本文首部的主动树预检与显式启用，不能直接复用旧入口：
+## 状态与盘前研究
 
 ```sh
-# 历史接口示例已停止作为新写任务建议；使用实施记录中的主动树预检与显式启用流程。
+python stock-fish/scripts/codex_daily_v2.py doctor
+python stock-fish/scripts/codex_daily_v2.py status
+python stock-fish/scripts/codex_daily_v2.py operations
+python stock-fish/scripts/codex_daily_v2.py premarket-plan
 ```
 
-旧实现自动确定真实观察日和下一交易日、验真缓存并补采、计算原R2及67会话题材、保存完整原导出，再生成成交额≥3亿元的TXT/JSON/CSV。当前行业/概念与经济主线分别标明，缺证据的单列未知。它不依赖网页服务、Codex或LLM；输出路径及最终状态在终端显示。首次采集可能数小时，零自动重试。配置模板、默认较小预算、退出码和恢复见[独立终端盘前研究](stock-fish/docs/STANDALONE_PREMARKET_WORKFLOW_V1.md)。默认主动V2不受此显式R2入口影响。一次真实暖缓存执行已完成原R2、完整67会话和最终验收，退出2表示 `COMPLETED_WITH_UNKNOWNS`，仍须查看来源与研究未知；全新冷启动、Windows和连续交易日可靠性尚未验收。
-
-网页读取既有 Python 服务的保存结果，地址以实际配置为准。[部署维护](DEPLOYMENT.md)说明如何核对实例。
-
-Go 候选工具支持查询、解释、导出、比较和复盘。已有包与新候选包各有自己的身份和检查记录；使用你的明确配置和保存运行：
+先看实际观察日、目标日、资料截止、逐阶段缺口和原预算。状态正常不代表行情或 DAILY_V1 就绪。计划允许执行且本次已有采集授权时才运行：
 
 ```sh
-stockfish --version
-stockfish --help
-stockfish doctor --config CONFIG --format json
-stockfish picks --config CONFIG --run-id RUN --format table
-stockfish explain SECURITY --config CONFIG --run-id RUN --format markdown
+python stock-fish/scripts/codex_daily_v2.py premarket \
+  --observation-date YYYY-MM-DD --target-session YYYY-MM-DD \
+  --request-key ORIGINAL_REQUEST_KEY
 ```
 
-CONFIG、RUN、SECURITY 都需替换为自己的实际值。上面的查询不启动研究或在线采集。系统主动核心为V2，终端本地配置另有策略偏好；init省略--strategy时默认保存R1偏好，要用V2请明确传--strategy v2。已有配置用doctor核对preferred_strategy。完整命令、导出格式和写入复盘的条件见[终端详细说明](stock-fish-go/delivery/USER_GUIDE.md)。
+只有 original 流程，复用有效原件，连接采集、原核心、题材解释、正式导出及终验。失败或提交不明不自动重试；换 key、版本或同会话参数不能重开旧请求。缺数据与预算不足保留原原因，不能靠凑数量形成清单。
 
-## 更新和失败时怎么办
+需要更新明确缺失的数据时，仍使用这一流程，先只读检查补缺准入：
 
-需要新行情、后续标签或重新计算时明确提出更新请求。旧结果保留，失败和资料不足会单独说明；连续每日更新目前尚未验证可靠，查询也仍比原定目标慢，见[当前状态](CURRENT_STATUS.md)。
+```sh
+python stock-fish/scripts/codex_daily_v2.py premarket-plan --collect-missing
+python stock-fish/scripts/codex_daily_v2.py premarket \
+  --observation-date YYYY-MM-DD --target-session YYYY-MM-DD \
+  --request-key ORIGINAL_REQUEST_KEY --collect-missing
+```
 
-服务未运行时先核对已有部署；缺资料时仍可读取历史结果并注明日期。备份和恢复见[部署维护](DEPLOYMENT.md)。Codex 的调用与保存约定见[日常研究协议](stock-fish/docs/CODEX_DAILY_RESEARCH.md)。
+只有计划的 `collection_admitted` 成立且本次采集已获授权时，才执行第二条命令。已保存的必需来源先按SHA与实际可见时间认证；只补真正MISSING及其明确父依赖，不把失败、不明或未来来源当缺失。使用原登记预算、请求账本和进程监督；换flag也不能重试旧失败。必须已有可认证交易日历，计划准入不保证供应商请求最终成功。普通历史查询不使用此flag。
 
-## 检查题材覆盖与旧资料时间
+## 已保存成果、历史与导出
 
-可明确请求核验[Sina行业代理](stock-fish/docs/INDUSTRY_SINA_CONTEXT_V1.md)的目录、成员完整性和题材覆盖，再按同一保存名单补充分类。目录或成员采集完成后，还需当日活跃证据才能称为主线；计数冲突、来源失败和经济覆盖不足会单独列出。
+```sh
+python stock-fish/scripts/codex_daily_v2.py views
+python stock-fish/scripts/codex_daily_v2.py show --view-id VIEW_ID
+python stock-fish/scripts/codex_daily_v2.py export --view-id VIEW_ID --role all.csv --output NEW_FILE.csv
+python stock-fish/scripts/codex_daily_v2.py show --job EXISTING_JOB_DIRECTORY
+```
 
-旧日期复算可显式使用[原始父来源时间研究桥](stock-fish/docs/ORIGINAL_PARENT_ASOF_LATE_DERIVATION_V1.md)。它保存当前实际派生时间，并核对父资料是否已在原截止前取得；后取得的行情、公告、日历和题材资料保留新截止，旧名单与旧缺口可追溯。这些显式研究能力尚未接入默认每日服务。
+view 查看验证本地封签和五份原导出，保留原日期及最后完整认证时间，明确本次没有重新认证供应商来源。`--job` 核验指定原任务及其控制件，不把部分阶段成功当成完整交付。`export` 只写新文件，不覆盖旧报告。可选 role 用 `show --help` 查看。
 
-历史复盘出现来源UNKNOWN时，可请求[复权值事实V2](stock-fish/docs/HISTORICAL_FACTOR_VALUE_FACTS_V2.md)核验完整逐股值与原审计祖先。来源修复引起的名单变化应单独解释，不能直接归为资金撤退或情绪转弱；历史重建、当时盘前可见性和投资验证分别报告。
+SQLite 中的原研究结果：
 
-可请求对同一保存清单补充[经济方向业务解释](stock-fish/docs/ECONOMIC_DIRECTION_EXPLANATION_V1.md)：正式业务材料已证的电池或消费关系单列，原子题材阶段与模型完整保留。业务联系与当日资金炒作分别判断；小范围观察股金额不能代表整个板块或用于整体强度排序。资料取得时间、报告期、参股关系、项目终止及其他主营业务会一起列明，未知关系保留，不按股票名字或行业硬排除。
+```sh
+python stock-fish/scripts/codex_daily_v2.py history --db EXISTING_DB --state EXISTING_STATE
+python stock-fish/scripts/codex_daily_v2.py history --db EXISTING_DB --state EXISTING_STATE \
+  --run-id ORIGINAL_RUN --format csv --output NEW_FILE.csv
+```
 
-保存的经济方向附件现在可由Codex使用[归档展示V1](stock-fish/docs/ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md)交付完整清单，原业务解释、子题材阶段与模型项并列保留。该显式入口核对实际显示索引和资料时间，早于真实可见时刻不会显示晚到内容；输出到新私有目录，原名单和评分保持。它不自动生成当日新附件，连续每日交付仍需另验收。
+历史查询不重新选股。旧结果中的淘汰策略字段仍按原 JSON 只读保留。
 
-最新日采集与首次核心执行采用显式[有界入口V1](stock-fish/docs/FIRST_RUN_LATEST_CAPTURE_V1.md)：先核最新已闭市日缺口，只补原始所需请求；25日核心来源与67会话题材附件分阶段，UNKNOWN保留。`latest-plan/latest-sync`、`core-sources-plan/core-sources-build`和`core-first-run`均走已登记共享环境；新执行档位不改旧配置、策略、原件或已存run。首次计算与缓存复用分别验收，完整复权缺口仍须原来源补齐。
+## 对明确输入研究与后验
+
+对已有、已通过来源校验的输入运行 PV 与主动 V2，并单列冻结 DAILY 可用性：
+
+```sh
+python stock-fish/scripts/codex_daily_v2.py research \
+  --db EXISTING_DB --state EXISTING_STATE --input-id AUTHENTICATED_INPUT \
+  --request-key ORIGINAL_REQUEST_KEY
+python stock-fish/scripts/codex_daily_v2.py research-outcomes \
+  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN
+```
+
+追加后验须显式加 `--update --input-id AUTHENTICATED_INPUT --request-key ORIGINAL_REQUEST_KEY`；观察仍缺失或未成熟时保留 UNKNOWN/PENDING，不当零收益。`jobs --db ... --state ...` 查看已保存作业状态。
+
+R2 原生归档和后验由同入口 `outcomes` 分发：
+
+```sh
+python stock-fish/scripts/codex_daily_v2.py outcomes r2-daily-plan \
+  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN --input-id AUTHENTICATED_INPUT
+python stock-fish/scripts/codex_daily_v2.py outcomes --request-key ORIGINAL_REQUEST_KEY r2-daily-run \
+  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN --input-id AUTHENTICATED_INPUT
+```
+
+仅保留 `r2-archive-verify/import`、`r2-daily-plan/pending/run/status`。归档导入同样须在 `outcomes` 后先提供 `--request-key`，并显式给原任务目录及 `--expected-final-sha256`；完整认证缺原代码字节或证据时拒绝。旧失败、过时输入、来源不齐或不满足标签时间的请求不会被换入口补跑。日常不运行全历史回测。
+
+备份、恢复及登记方法见 [DEPLOYMENT](DEPLOYMENT.md)。本轮实际验证范围见 [CURRENT_STATUS](CURRENT_STATUS.md)。

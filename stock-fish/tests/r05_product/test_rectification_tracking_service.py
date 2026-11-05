@@ -1,3 +1,4 @@
+import json
 """R05 synthetic engineering tests, no market-performance claims."""
 from datetime import timedelta
 from decimal import Decimal as D
@@ -5,9 +6,8 @@ import csv, io, time
 import pytest
 from tests.yaogu.fixtures import make_bundle
 from stockfish_core.yaogu.strategy_tracking import evaluate_strategy_experiment_outcomes as evaluate, build_strategy_tracking as track, build_strategy_feedback_report as review
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
-from stockfish_core.api import create_app
 
 
 def test_item_detail_filters_unrelated_labels_before_deserialization(tmp_path, monkeypatch):
@@ -104,7 +104,7 @@ def test_unknown_volume_and_report_logical_revisions():
 def service(tmp_path,monkeypatch):
     import stockfish_core.yaogu.candidate_service as module
     b,t=make_bundle(1);monkeypatch.setattr(module,'utc_now',lambda:t)
-    core=ApplicationService(root=tmp_path/'state',store=SQLiteStore(tmp_path/'test.sqlite3'),allow_test_fixture=True,data_dir=tmp_path/'no_model')
+    core=ResearchService(root=tmp_path/'state',store=SQLiteStore(tmp_path/'test.sqlite3'),allow_test_fixture=True,data_dir=tmp_path/'no_model')
     core.candidates.register_input(b,activate=False)
     yield core,b,t
     core.close()
@@ -154,37 +154,11 @@ def test_latest_outcome_input_and_http_view_consistency(service):
     labels={row['horizon']:row for row in s.strategy_outcomes(r['run_id'])}
     assert all(row['signal_input_id']==old_id and row['input_id']!=old_id for row in labels.values())
     assert labels[1]['metrics']['close_reference_change'] is not None and labels[61]['status']=='NOT_MATURED'
-    client=create_app(service=core).test_client();path='/api/strategy-experiments/'+r['run_id']
-    summary=client.get(path+'/summary?selection=focus&page_size=1');exported=client.get(path+'/export?format=json&strategy_id=PV_OBSERVATION_V1&selection=focus')
-    assert summary.status_code==200 and exported.status_code==200
-    assert summary.json['items'][0]['instrument_id']==exported.json['results']['PV_OBSERVATION_V1']['items'][0]['instrument_id']
-    assert client.post(path+'/outcomes',json={'horizons':[True]}).status_code==400
+    summary=s.strategy_experiment_summary(r['run_id'],selection='focus',page_size=1)
+    exported=json.loads(s.export_strategy_experiment_json(r['run_id'],strategy_id='PV_OBSERVATION_V1',selection='focus'))
+    assert summary['items'][0]['instrument_id']==exported['results']['PV_OBSERVATION_V1']['items'][0]['instrument_id']
 
 
-def test_scheduler_drains_beyond_100_and_failed_attempt_retries_with_backoff(service,monkeypatch):
-    from stockfish_core.yaogu.scheduler import CandidateScheduler
-    core,b,t=service;s=core.candidates
-    pending=[{'run_id':f'OLD_{i:03d}','observation_date':str(b.sessions[-3]),'horizons':[1,61]} for i in range(105)]
-    monkeypatch.setattr(s,'pending_strategy_research',lambda:pending)
-    jobs={};submitted=[]
-    monkeypatch.setattr(core.jobs,'get',lambda job_id:jobs.get(job_id))
-    def submit(run_id,input_id,*,horizons,job_id):
-        assert horizons==[1,61]
-        submitted.append((run_id,job_id));jobs[job_id]={'job_id':job_id,'state':'SUCCEEDED'};return jobs[job_id]
-    monkeypatch.setattr(s,'submit_strategy_tracking',submit)
-    # TEST_FIXTURE starts after the missed 20:30 primary capture. Background
-    # draining must exercise the real guard outside an outstanding primary.
-    background_start=t.replace(hour=21,minute=30)
-    scheduler=CandidateScheduler(s,clock=lambda:background_start)
-    assert not scheduler._primary_blocks_background(background_start)
-    for _ in range(21):scheduler.schedule_strategy_research(background_start)
-    assert len(submitted)==105 and {r for r,_ in submitted}=={p['run_id'] for p in pending}
-    first=submitted[0][1];jobs[first]['state']='FAILED'
-    assert not scheduler.schedule_strategy_research(background_start+timedelta(seconds=10))
-    retried=scheduler.schedule_strategy_research(background_start+timedelta(seconds=61))
-    assert len(retried)==1 and retried[0]['attempt']==1
-    assert retried[0]['run_id']=='OLD_000' and retried[0]['job_id'].endswith('_retry_1')
-    assert len(s._all('candidate_schedule_events'))==106
 
 
 def test_legacy_projection_migration_is_append_only_and_assessed(service):
@@ -231,11 +205,10 @@ def test_normal_summary_and_review_never_read_full_run_or_full_report(service,mo
         assert namespace not in {'strategy_experiment_runs','strategy_research_reviews'}
         return original(namespace,key)
     monkeypatch.setattr(core.store,'get_document',spy)
-    client=create_app(core).test_client();base='/api/strategy-experiments/'+r['run_id']
-    assert client.get(base+'/summary?page_size=1').status_code==200
-    actual=client.get(base+'/review')
-    assert actual.status_code==200 and actual.json['counts']['mature']==1
-    assert 'revision_selection' not in actual.json and actual.json['full_report_available']
+    s.strategy_experiment_summary(r['run_id'],page_size=1)
+    actual=s.strategy_review(r['run_id'])
+    assert actual['counts']['mature']==1
+    assert 'revision_selection' not in actual and actual['full_report_available']
 
 
 def test_non_pv_strategies_do_not_borrow_pv_episode_denominator():

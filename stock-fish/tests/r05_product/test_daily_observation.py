@@ -9,7 +9,6 @@ import json
 
 import pytest
 
-from stockfish_core.api import create_app
 from stockfish_core.observed_data import exchange_calendar_2026
 from stockfish_core.yaogu.daily_observation import observation_report
 from stockfish_core.yaogu.daily_research_outcomes import evaluate_daily_research_outcomes
@@ -255,20 +254,16 @@ def test_future_or_naive_cutoff_is_rejected():
         observation_report(probe, as_of='2026-09-21T20:00:00')
 
 
-def test_api_includes_markdown_and_invalid_queries_are_read_only(consumer):
+def test_local_observation_includes_markdown_and_queries_are_read_only(consumer):
     core, snapshot, _, _ = consumer()
-    client = create_app(core).test_client()
-    path = '/api/daily-research/observation'
     before = fingerprint(core)
-    response = client.get(path, query_string={'target_session': snapshot['identity']['target_session'], 'days': 20})
-    assert response.status_code == 200, response.text
-    assert response.json['current']['run_id'] == snapshot['identity']['run_id']
-    assert response.json['read_only'] is True
-    assert 'Daily Observation Monitor' in response.json['markdown']
-    for query in ({'days': 21}, {'days': 'abc'}, {'run_id': 'TEST_FIXTURE_RUN'},
-                  {'as_of': '2099-01-01T00:00:00+08:00'}, {'target_session': 'not-a-date'},
-                  {'format': 'markdown'}):
-        assert client.get(path, query_string=query).status_code == 400
+    response = observation_report(core.candidates, target_session=snapshot['identity']['target_session'], days=20)
+    assert response['current']['run_id'] == snapshot['identity']['run_id']
+    assert response['read_only'] is True
+    assert 'Daily Observation Monitor' in response['markdown']
+    for query in ({'days': 21}, {'days': 'abc'}, {'as_of': '2099-01-01T00:00:00+08:00'}, {'target_session': 'not-a-date'}):
+        with pytest.raises((ValueError, TypeError)):
+            observation_report(core.candidates, **query)
     assert fingerprint(core) == before
 
 

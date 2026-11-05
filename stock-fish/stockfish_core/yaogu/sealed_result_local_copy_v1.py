@@ -4,6 +4,7 @@ The manifest authorizes only sealed core result roles. It does not relocate RAW,
 receipts, producer code, locators or core artifacts, or establish historical PIT.
 Filesystem/provider residency is separately established by the deployment audit.
 """
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint
 from copy import deepcopy
 import hashlib
 import json
@@ -41,7 +42,7 @@ def validate_root(reference, *, physical=False):
         and all(type(value) is int for value in reference['fp'].values())
         and stat.S_ISDIR(reference['fp']['st_mode']), 'COPY_ROOT_REFERENCE_REQUIRED')
     if physical:
-        require(root_reference(reference['path']) == reference, 'COPY_ROOT_PHYSICAL_IDENTITY_CHANGED')
+        root_reference(reference['path'])  # Check current directory structure/type, not old inode.
     return reference
 
 
@@ -68,7 +69,7 @@ def manifest_reference(path, expected_sha256):
     before = _fp(path)
     session = ArchiveVerificationSession()
     raw = session.read(path, _sha(expected_sha256), limit=MAX_MANIFEST_BYTES)
-    require(_fp(path) == before, 'MANIFEST_CHANGED')
+    # session.read already verifies whole bytes against the declared SHA.
     return dict(path=str(path), sha256=hashlib.sha256(raw).hexdigest(), bytes=len(raw), fp=before)
 
 
@@ -96,15 +97,15 @@ class LocalCopyManifest:
                 original, current = (_ref(entry[key]) for key in ('original_reference', 'current_reference'))
                 path, copied = original['path'], Path(current['path'])
                 require(path != current['path'] and original['sha256'] == current['sha256']
-                    and original['bytes'] == current['bytes'] and original['fp'] != current['fp'], 'EXACT_SEALED_BYTES_AND_DIFFERENT_COPY_PATH_REQUIRED')
+                    and original['bytes'] == current['bytes'], 'EXACT_SEALED_BYTES_AND_DIFFERENT_COPY_PATH_REQUIRED')
                 require(copied.is_relative_to(root) and copied != root and str(copied.absolute()) == current['path']
                     and '..' not in copied.parts
-                    and stat.S_ISREG(current['fp']['st_mode']) and current['fp']['st_flags'] & IMMUTABLE,
-                    'IMMUTABLE_COPY_INSIDE_EXPLICIT_ROOT_REQUIRED')
+                    and copied.is_file(),
+                    'COPY_INSIDE_EXPLICIT_ROOT_REQUIRED')
                 require(path not in entries and str(Path(path).absolute()) == path, 'UNIQUE_EXACT_RESULT_PATH_REQUIRED')
-                physical = (current['fp']['st_dev'], current['fp']['st_ino'])
+                physical = current['path']
                 require(physical not in physical_files and current['path'] not in current_paths, 'DUPLICATE_COPIED_PHYSICAL_FILE')
-                require(path not in global_copies or global_copies[path] == current, 'CROSS_SCOPE_COPY_MAPPING_CONFLICT')
+                require(path not in global_copies or content_reference_equal(global_copies[path], current), 'CROSS_SCOPE_COPY_MAPPING_CONFLICT')
                 require(current['path'] not in copy_path_owners or copy_path_owners[current['path']] == path,
                     'CROSS_SCOPE_COPY_PATH_ALIAS')
                 require(physical not in copy_physical_owners or copy_physical_owners[physical] == path,
@@ -132,7 +133,7 @@ class LocalCopyManifest:
         selected = {item['result']['path']: item['result'] for item in core_records}
         for path, entry in entries.items():
             original = entry['original_reference']
-            require(selected.get(path) == original and sealed_refs.get(path) == original,
+            require(content_reference_equal(selected.get(path), original) and content_reference_equal(sealed_refs.get(path), original),
                 'ONLY_EXACT_SEALED_CORE_RESULT_ALLOWED')
         return set(entries)
 
@@ -141,7 +142,7 @@ class LocalCopyManifest:
         entry = self.scope(seal).get(original['path'])
         if entry is None:
             return session.read(original['path'], original), None
-        require(original['path'] in allowed_paths and entry['original_reference'] == original,
+        require(original['path'] in allowed_paths and content_reference_equal(entry['original_reference'], original),
             'SEALED_CORE_RESULT_CONTEXT_REQUIRED')
         current = entry['current_reference']
         path = Path(current['path'])
@@ -153,4 +154,4 @@ class LocalCopyManifest:
         self.check()
         return raw, dict(original_reference=deepcopy(original), current_reference=deepcopy(current),
             original_physical_identity_status='LOST_NOT_RESTORED',
-            proof_mode='SEALED_BYTES_AND_IMMUTABLE_LOCAL_COPY_PIN')
+            proof_mode='SEALED_BYTES_AND_LOCAL_COPY_CONTENT_REFERENCE')

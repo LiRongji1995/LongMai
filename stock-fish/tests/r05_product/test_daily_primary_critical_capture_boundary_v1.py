@@ -7,8 +7,7 @@ import time
 import pytest
 from pathlib import Path
 
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.contracts import MarketInput, digest
 from stockfish_core.yaogu.data_pipeline import (
@@ -32,10 +31,8 @@ def _wait_job(core, job_id, *, timeout=20):
 
 
 def _run_daily_primary(core, input_id):
-    client = create_app(core).test_client()
-    accepted = client.post("/api/daily-primary/run", json={"input_id": input_id})
-    assert accepted.status_code == 202, accepted.text
-    job = _wait_job(core, accepted.json["job_id"])
+    accepted = core.candidates.submit_daily_primary_strategy(input_id=input_id)
+    job = _wait_job(core, accepted["job_id"])
     attempt = core.store.get_document(
         "daily_primary_attempts",
         "daily_primary_attempt_" + digest({"job_id": job["job_id"]}),
@@ -47,7 +44,7 @@ def _service(tmp_path, monkeypatch, *, now):
     import stockfish_core.yaogu.candidate_service as module
 
     monkeypatch.setattr(module, "utc_now", lambda: now)
-    return ApplicationService(
+    return ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "service.sqlite3"),
         allow_test_fixture=True,

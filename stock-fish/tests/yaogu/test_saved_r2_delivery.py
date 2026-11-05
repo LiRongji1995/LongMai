@@ -7,7 +7,6 @@ from pathlib import Path
 
 import pytest
 
-from scripts import codex_research as cli
 from stockfish_core.yaogu import saved_r2_delivery as delivery
 from stockfish_core.yaogu.contracts import MarketInput, SourceReceipt
 from stockfish_core.yaogu.history_artifacts import digest_json_stream, digest_market_input
@@ -156,7 +155,6 @@ def forbidden_external(monkeypatch):
     from stockfish_core.yaogu import strategy_experiments, short_horizon_participation, short_horizon_strength
     monkeypatch.setattr(socket.socket, 'connect', reject)
     monkeypatch.setattr(sqlite3, 'connect', reject)
-    monkeypatch.setattr(cli, 'Client', reject)
     monkeypatch.setattr(strategy_experiments, 'run_short_horizon_strategy', reject)
     monkeypatch.setattr(short_horizon_participation, 'run_short_horizon_strength', reject)
     monkeypatch.setattr(short_horizon_strength, 'run_short_horizon_strength', reject)
@@ -412,14 +410,6 @@ def test_explicit_early_asof_keeps_only_original_visible_model_rows(tmp_path, mo
     assert '600001.SH' not in ''.join(path.read_text() for path in (tmp_path/'too_old').iterdir())
 
 
-def test_offline_cli_uses_generic_paths_and_does_not_construct_client(tmp_path, capsys):
-    _, cutoff, _, _, _, paths = fixture(tmp_path)
-    argv = ['deliver-saved-r2', '--run', str(paths['run']), '--run-manifest', str(paths['manifest']),
-        '--input', str(paths['input']), '--sources-manifest', str(paths['sources']),
-        '--context-cutoff', cutoff.isoformat(), '--output', str(tmp_path/'cli')]
-    assert cli.main(argv) == 0
-    assert json.loads(capsys.readouterr().out)['observation_count'] == 13
-    assert cli.main(argv) == 2
 
 
 def mutate_real_archive_read(monkeypatch, target, *, original_source=None):

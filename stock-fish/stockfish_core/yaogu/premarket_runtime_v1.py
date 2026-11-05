@@ -6,6 +6,8 @@ output. It deliberately makes no kernel-I/O or startup-import accounting claim.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 import builtins
 from contextlib import contextmanager
 from datetime import datetime, timezone
@@ -420,7 +422,7 @@ class Budget:
                     any(type(value) is not int for value in expected['fp'].values()) or \
                     type(expected['bytes']) is not int or expected['bytes'] < 0 or \
                     expected['fp']['st_size'] != expected['bytes']:
-                self._fail('INVALID_PHYSICAL4_REFERENCE')
+                self._fail('INVALID_FILE_REFERENCE_SCHEMA')
             declared_sha = expected['sha256']
         else:
             if expected is not None and not isinstance(expected, str):
@@ -454,7 +456,7 @@ class Budget:
             self._fail('FILE_CHANGED_DURING_READ')
         if isinstance(expected, str) and ref['sha256'] != expected:
             self._fail('FILE_SHA256_CHANGED')
-        if isinstance(expected, dict) and ref != expected:
+        if isinstance(expected, dict) and not content_reference_equal(ref, expected):
             self._fail('FILE_REFERENCE_CHANGED')
         self.check('read')
         return raw, ref

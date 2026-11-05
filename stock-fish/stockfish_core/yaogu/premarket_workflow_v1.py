@@ -1,17 +1,17 @@
-"""One local command: capture originals, run unchanged R2, attach themes, export.
+"""Internal premarket execution and saved artifact verification.
 
-This explicit research entry does not alter DAILY_PRIMARY_FAST or SAM V2.
-It requires neither the Codex application nor a running HTTP service or LLM.
+The public CLI owns the request ledger. Its sole native process supervisor
+supplies mandatory sampling and cleanup callbacks to this execution loop.
 """
 from __future__ import annotations
 
-import argparse
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 from datetime import datetime, timezone, time as wall_time
 import hashlib
 import json
 import os
 from pathlib import Path
-import signal
 import subprocess
 import sys
 import time
@@ -42,7 +42,7 @@ def _ref(path, read_meter=None):
 
 
 def _verify(reference, read_meter=None):
-    if set(reference) != {'path','sha256','bytes','fp'} or _ref(reference['path'],read_meter) != reference:
+    if set(reference) != {'path','sha256','bytes','fp'} or not content_reference_equal(_ref(reference['path'],read_meter), reference):
         raise ValueError('ARCHIVED_REFERENCE_CHANGED')
 
 
@@ -70,8 +70,7 @@ def _code_refs(read_meter=None):
     # Whole package closure, not only files already imported by this process.
     package = Path(__file__).resolve().parents[1]
     application = package.parent
-    paths = {*package.rglob('*.py'), application/'scripts/stockfish.py',
-        application/'premarket', application/'premarket.ps1'}
+    paths = {*package.rglob('*.py'), application/'scripts/codex_daily_v2.py'}
     return [_ref(path,read_meter) for path in sorted(paths)]
 
 
@@ -304,69 +303,13 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
             theme_confirmation='UNKNOWN' if phases['theme'] != 'COMPLETE' else 'SEE_ORIGINAL_CONTEXT')
 
 
-def _tree_sample(pid, read_meter=None):
-    """Actual resident bytes of this worker and its live descendants."""
-    if os.name == 'posix':
-        result = subprocess.run(['ps','-axo','pid=,ppid=,rss='],check=True,
-            stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=5)
-        if read_meter is not None:
-            read_meter(len(result.stdout.encode('utf-8')))
-        rows = [tuple(map(int,line.split())) for line in result.stdout.splitlines() if line.strip()]
-        descendants = {pid}
-        while True:
-            expanded = descendants | {child for child,parent,_ in rows if parent in descendants}
-            if expanded == descendants: break
-            descendants = expanded
-        if not any(child == pid and rss > 0 for child,_,rss in rows):
-            raise RuntimeError('ACTIVE_WORKER_RSS_UNAVAILABLE')
-        return sum(rss*1024 for child,_,rss in rows if child in descendants)
-    try:
-        import psutil
-        parent = psutil.Process(pid)
-        processes = [parent]+parent.children(recursive=True)
-        return sum(process.memory_info().rss for process in processes if process.is_running())
-    except ImportError:
-        raise RuntimeError('WINDOWS_TREE_RSS_REQUIRES_PROJECT_REQUIREMENTS_REVIEW_PSUTIL') from None
 
 
-def _owned_group_members(pid, read_meter=None):
-    if os.name != 'posix':
-        return []
-    result = subprocess.run(['ps','-axo','pid=,pgid=,stat='],check=True,
-        stdout=subprocess.PIPE,stderr=subprocess.DEVNULL,text=True,timeout=5)
-    if read_meter is not None:
-        read_meter(len(result.stdout.encode('utf-8')))
-    return [int(parts[0]) for line in result.stdout.splitlines()
-        if len(parts := line.split()) >= 3 and int(parts[1]) == pid
-        and not parts[2].startswith('Z')]
 
 
-def _stop_owned(process):
-    if process.poll() is not None and os.name != 'posix': return
-    if os.name == 'posix':
-        try: os.killpg(process.pid,signal.SIGTERM)
-        except ProcessLookupError: pass
-    else:
-        import psutil
-        for child in psutil.Process(process.pid).children(recursive=True): child.terminate()
-        process.terminate()
-    try:
-        process.wait(timeout=5)
-    except subprocess.TimeoutExpired:
-        if os.name == 'posix': os.killpg(process.pid,signal.SIGKILL)
-        else:
-            import psutil
-            for child in psutil.Process(process.pid).children(recursive=True): child.kill()
-            process.kill()
-        process.wait(timeout=5)
-    if os.name == 'posix':
-        # The worker owns this new session. A worker that exits first must not
-        # leave an SDK descendant writing into the cache after the lock drops.
-        try: os.killpg(process.pid,signal.SIGKILL)
-        except ProcessLookupError: pass
 
 
-def supervise(config, *, progress=True, worker_command=None):
+def supervise(config, *, sample_tree, remaining_owned, stop_owned, progress=True, worker_command=None):
     state = Path(config['state_root']).resolve()
     state.mkdir(parents=True,exist_ok=True)
     with JobLock(state/'premarket.lock'):
@@ -399,7 +342,7 @@ def supervise(config, *, progress=True, worker_command=None):
                     env=environment,cwd=package_root,start_new_session=os.name=='posix')
                 last = 0
                 while process.poll() is None:
-                    try: peak = max(peak,_tree_sample(process.pid,charge))
+                    try: peak = max(peak,sample_tree(process.pid,charge))
                     except Exception:
                         if process.poll() is None: raise
                     elapsed = time.monotonic()-started
@@ -409,7 +352,7 @@ def supervise(config, *, progress=True, worker_command=None):
                     if directory_bytes(job) > config['limits']['output_bytes']: violation='OUTPUT_LIMIT_EXCEEDED'
                     if (job/'worker-console.txt').stat().st_size > 524288: violation='CONSOLE_LIMIT_EXCEEDED'
                     if violation:
-                        _stop_owned(process); break
+                        stop_owned(process); break
                     if progress and elapsed-last >= 10:
                         phase = _read_control(job/'metrics.json',charge).get('phase','starting') if (job/'metrics.json').exists() else 'starting'
                         print(f'[{phase}] 已运行 {elapsed:.0f}秒；任务 {job.name}',flush=True)
@@ -417,7 +360,7 @@ def supervise(config, *, progress=True, worker_command=None):
                     time.sleep(.5)
                 actual_exit = process.wait()
             if violation: raise BudgetExceeded(violation)
-            if _owned_group_members(process.pid,charge):
+            if remaining_owned(process.pid,charge):
                 raise RuntimeError('OWNED_DESCENDANTS_REMAIN_AFTER_WORKER_EXIT')
             if actual_exit not in (0,2,3,4): raise RuntimeError('WORKER_EXTERNAL_EXIT_'+str(actual_exit))
             completion = _read_control(job/'worker-completion.json',charge)
@@ -442,7 +385,7 @@ def supervise(config, *, progress=True, worker_command=None):
             unique_sources = {}
             for reference in completion.get('validation_references',[]):
                 previous = unique_sources.setdefault(reference['path'],reference)
-                if previous != reference: raise RuntimeError('WORKER_SOURCE_REFERENCE_CONFLICT')
+                if not content_reference_equal(previous, reference): raise RuntimeError('WORKER_SOURCE_REFERENCE_CONFLICT')
             for reference in unique_sources.values(): _verify(reference,charge)
             if completion.get('news') is not None:
                 _verify(completion['news']['metadata'],charge)
@@ -479,8 +422,8 @@ def supervise(config, *, progress=True, worker_command=None):
                 terminal.append(completion['news']['metadata'])
             for reference in terminal:
                 if (str(Path(reference['path']).resolve(strict=True)) != reference['path']
-                        or fingerprint(reference['path']) != reference['fp']):
-                    raise ValueError('FINAL_SOURCE_OR_ARTIFACT_PHYSICAL_IDENTITY_CHANGED')
+                        or not content_reference_equal(dict(path=reference['path'], **content_fingerprint(reference['path'], charge)), reference)):
+                    raise ValueError('FINAL_SOURCE_OR_ARTIFACT_CONTENT_CHANGED')
             result['supervisor_returned_read_bytes'] = supervisor_read
             _seal(job/'final-control.json',result)
             atomic_json(state/'latest-job.json',dict(job=str(job),final=_ref(job/'final-control.json')))
@@ -488,7 +431,7 @@ def supervise(config, *, progress=True, worker_command=None):
         except BaseException as error:
             cleanup_error = None
             if process is not None:
-                try: _stop_owned(process)
+                try: stop_owned(process)
                 except Exception as cleanup:
                     cleanup_error = dict(type=type(cleanup).__name__,reason=str(cleanup)[:1000])
             result = dict(schema_version=VERSION,status='BUDGET_EXCEEDED' if isinstance(error,BudgetExceeded) else 'FAILED',error=dict(type=type(error).__name__,
@@ -521,59 +464,3 @@ def verify_job(path):
     return dict(schema_version=VERSION,status=final['status'],job=str(job),
         archived_bytes_verified=True,currentness_recomputed=False,
         source_authority_restored=False,display=final.get('display'))
-
-
-def parser():
-    result = argparse.ArgumentParser(description='独立本地R2盘前研究；不需要Codex或Web服务')
-    commands = result.add_subparsers(dest='command',required=True)
-    run = commands.add_parser('premarket',help='一次执行采集、R2、67日题材与3亿元展示')
-    run.add_argument('--config',help='私有JSON配置；不读取应用LLM或API凭据')
-    run.add_argument('--state-root',help='私有缓存与产物目录')
-    run.add_argument('--seed-sources',action='append',help='导入既有原件清单，可多次指定')
-    run.add_argument('--offline',action='store_true',default=None,help='只用已认证缓存，缺资料明确失败')
-    run.add_argument('--retry-failed',action='store_true',default=None,help='显式允许失败逻辑请求本次新增一次attempt')
-    run.add_argument('--theme-read-gib',type=int,help='本次题材实际返回读取上限，默认4；全67日可能需12')
-    run.add_argument('--max-seconds',type=int,help='总秒数；0显式表示不设总时间上限；单接口仍最多90秒')
-    run.add_argument('--max-requests',type=int,help='本次新逻辑请求上限；不自动扩大')
-    run.add_argument('--minimum-amount-cny',type=int,help='仅展示筛选，默认300000000')
-    run.add_argument('--quiet',action='store_true',help='只打印终态JSON')
-    status = commands.add_parser('premarket-status',help='读取任务终态；不授予来源能力')
-    status.add_argument('job',help='原任务目录')
-    verify = commands.add_parser('premarket-verify',help='核验归档展示原字节；不伪装最新结果')
-    verify.add_argument('job')
-    worker = commands.add_parser('_worker',help=argparse.SUPPRESS)
-    worker.add_argument('--job',required=True)
-    return result
-
-
-def main(argv=None):
-    args = parser().parse_args(argv)
-    try:
-        if args.command == '_worker':
-            job=Path(args.job)
-            value=execute_workflow(_read_control(job/'configuration.json'),job)
-            return dict(COMPLETE=0,COMPLETED_WITH_UNKNOWNS=2,FAILED=3,BUDGET_EXCEEDED=4)[value['status']]
-        if args.command == 'premarket-status':
-            print(json.dumps(_read_control(Path(args.job)/'final-control.json'),ensure_ascii=False))
-            return 0
-        if args.command == 'premarket-verify':
-            print(json.dumps(verify_job(args.job),ensure_ascii=False)); return 0
-        limits = {}
-        if args.theme_read_gib is not None: limits['theme_read_bytes']=args.theme_read_gib*GIB
-        if args.max_seconds is not None:
-            if args.max_seconds < 0: raise ValueError('NONNEGATIVE_TOTAL_SECONDS_REQUIRED')
-            limits['max_seconds']=args.max_seconds or None
-        if args.max_requests is not None: limits['max_requests']=args.max_requests
-        capture = {key:getattr(args,key) for key in ('offline','retry_failed') if getattr(args,key) is not None}
-        config=load_config(args.config,dict(state_root=args.state_root,seed_sources=args.seed_sources,
-            minimum_amount_cny=args.minimum_amount_cny,limits=limits,capture=capture))
-        code,value=supervise(config,progress=not args.quiet)
-        print(json.dumps(value,ensure_ascii=False)); return code
-    except Exception as error:
-        print(json.dumps(dict(status='FAILED_BEFORE_EXECUTION',error=type(error).__name__,
-            reason=str(error)[:1500]),ensure_ascii=False),file=sys.stderr)
-        return 3
-
-
-if __name__ == '__main__':
-    raise SystemExit(main())

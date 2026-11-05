@@ -311,7 +311,7 @@ def test_service_api_jobs_persist_three_products_idempotently_without_legacy_wri
     core, client, input_id, original, cutoff = r2_api
     run_id = launch(core, client, input_id)
     saved = deepcopy(core.candidates.strategy_experiment(run_id))
-    pending = client.get('/api/strategy-experiments/' + run_id + '/outcomes').json
+    pending = client.strategy_outcomes(run_id)
     assert pending['schema_version'] == VERSION and pending['status'] == 'PENDING'
     bundle, evaluated = future_input(original)
     outcome_id = core.candidates.register_input(bundle, activate=False)
@@ -320,34 +320,31 @@ def test_service_api_jobs_persist_three_products_idempotently_without_legacy_wri
     monkeypatch.setattr(candidate_service, 'utc_now', lambda: evaluated)
     monkeypatch.setattr(core.candidates, '_all', lambda *_: (_ for _ in ()).throw(AssertionError('full namespace scan')))
     for endpoint in ('outcomes', 'tracking'):
-        response = client.post('/api/strategy-experiments/' + run_id + '/' + endpoint,
-                               json={'input_id': outcome_id})
-        assert response.status_code == 202, response.get_data(as_text=True)
-        completed = wait_for_job(core, response.json['job_id'])
+        response = getattr(client, 'submit_strategy_' + endpoint)(run_id, outcome_id)
+        completed = wait_for_job(core, response['job_id'])
         assert completed['state'] == 'SUCCEEDED', completed
         monkeypatch.setattr(candidate_service, 'utc_now', lambda: evaluated + timedelta(seconds=10))
     for endpoint, namespace in NAMESPACES.items():
-        response = client.get('/api/strategy-experiments/' + run_id + '/' + endpoint)
-        assert response.status_code == 200, response.get_data(as_text=True)
-        assert response.json['status'] == 'AVAILABLE'
-        assert response.json['revision_count'] == 1
-        assert response.json['evaluated_at'] == evaluated.isoformat()
+        response = getattr(client, 'strategy_' + endpoint)(run_id)
+        assert response['status'] == 'AVAILABLE'
+        assert response['revision_count'] == 1
+        assert response['evaluated_at'] == evaluated.isoformat()
         assert len(core.store.documents_for_run(namespace, run_id)) == 1
     assert core.candidates.strategy_experiment(run_id) == saved
     assert core.store.get_document_bytes('candidate_inputs', input_id) == original_bytes
     assert core.store.get_document_bytes('candidate_inputs', outcome_id) == outcome_bytes
-    detail = client.get('/api/strategy-experiments/' + run_id + '/items/' + START)
-    assert detail.status_code == 200
-    assert detail.json['outcomes'] == [r for r in core.candidates.strategy_outcomes(run_id)['items'] if r['instrument_id'] == START]
-    assert detail.json['short_horizon_observation']['outcomes']['revision_id'] == core.candidates.strategy_outcomes(run_id)['revision_id']
-    assert detail.json['short_horizon_observation']['tracking']['schema_version'] == VERSION
-    assert len(detail.json['tracking']) == 1
+    detail = client.strategy_experiment_item_detail(run_id, START)
+    assert detail['outcomes'] == [r for r in core.candidates.strategy_outcomes(run_id)['items'] if r['instrument_id'] == START]
+    assert detail['short_horizon_observation']['outcomes']['revision_id'] == core.candidates.strategy_outcomes(run_id)['revision_id']
+    assert detail['short_horizon_observation']['tracking']['schema_version'] == VERSION
+    assert len(detail['tracking']) == 1
     for namespace in ('strategy_research_pending', 'strategy_research_horizon_requests',
                       'strategy_trading_session_observations', 'strategy_tracking_runs',
                       'research_episodes', 'research_episode_observations', 'recommendation_score_revisions',
                       'stage_aware_prospective_primary_runs'):
         assert core.store.list_document_metadata(namespace) == []
-    assert client.post('/api/strategy-experiments/' + run_id + '/outcomes', json={}).status_code == 400
+    with pytest.raises(ValueError):
+        client.submit_strategy_outcomes(run_id)
 
 
 def test_service_new_input_creates_revision_scoped_to_original_run(r2_api, monkeypatch):

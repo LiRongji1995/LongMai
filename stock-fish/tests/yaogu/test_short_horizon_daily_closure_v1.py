@@ -488,36 +488,56 @@ def test_cancel_after_evaluation_before_commit_publishes_no_products_or_ledger(s
     assert setup.cycle.status(job['job_id'])['ledger'] is None
 
 
-def test_failed_job_retries_explicitly_with_same_cutoff_and_bounded_chain(setup, monkeypatch):
-    actual = closure.evaluate
-    monkeypatch.setattr(closure, 'evaluate', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('TEST_FIXTURE_FAILURE')))
+@pytest.mark.parametrize('fails', [False, True])
+def test_source_revision_keeps_first_request_cutoff_failure_and_products(setup, monkeypatch, fails):
+    if fails:
+        monkeypatch.setattr(closure, 'evaluate', lambda *a, **kw: (_ for _ in ()).throw(RuntimeError('TEST_FIXTURE_FAILURE')))
     first = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
-    assert first['state'] == 'FAILED'
-    assert setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'] == first['job_id']
-    assert setup.cycle.status(first['job_id'])['ledger'] is None
-    second = finished(setup.service, setup.cycle.retry(first['job_id'])['job_id'])
-    assert second['state'] == 'FAILED' and second['attempt'] == 2
-    assert setup.cycle.retry(first['job_id'])['job_id'] == second['job_id']
-    third = finished(setup.service, setup.cycle.retry(second['job_id'])['job_id'])
-    assert third['state'] == 'FAILED' and third['attempt'] == 3
-    with pytest.raises(JobConflict, match='retry limit'):
-        setup.cycle.retry(third['job_id'])
+    assert first['state'] == ('FAILED' if fails else 'SUCCEEDED')
+    first_events = setup.service.jobs.events(first['job_id'])
+    products = {name: setup.store.list_documents(name) for name in NAMESPACES.values()}
+    setup.now[0] += timedelta(minutes=10)
+    monkeypatch.setattr(closure, '_policy_identity', lambda: {'version': closure.VERSION, 'source_hash': 'TEST_FIXTURE_REVISED_SOURCE'})
+    revised = setup.cycle.plan([setup.run['run_id']], setup.input_id)
+    assert revised['job_id'] != first['job_id']
+    again = setup.cycle.submit([setup.run['run_id']], setup.input_id)
+    assert again == first
+    assert again['payload']['evaluated_at'] == first['payload']['evaluated_at']
+    assert setup.service.jobs.events(first['job_id']) == first_events
+    assert len(setup.service.jobs.list(kind=closure.JOB_KIND)) == 1
+    assert {name: setup.store.list_documents(name) for name in NAMESPACES.values()} == products
+    if fails:
+        assert all(value == [] for value in products.values())
+        assert setup.cycle.status(first['job_id'])['ledger'] is None
+    assert not hasattr(setup.cycle, 'retry')
+
+
+def test_overlapping_prior_batch_is_not_silently_reexecuted(setup):
+    first = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
+    second = extra_run(setup, '_TEST_FIXTURE_OVERLAPPING')
+    before = setup.service.jobs.list()
+    with pytest.raises(JobConflict, match='prior overlapping outcome request'):
+        setup.cycle.submit([setup.run['run_id'], second['run_id']], setup.input_id)
+    assert setup.service.jobs.list() == before
+    assert setup.service.jobs.get(first['job_id']) == first
+
+
+@pytest.mark.parametrize('state', ['FAILED', 'QUEUED', 'RUNNING', 'SUCCEEDED'])
+@pytest.mark.parametrize('kind', ['strategy_outcomes', 'strategy_tracking'])
+def test_legacy_outcome_job_is_not_reexecuted_by_current_closure(setup, state, kind):
+    old = setup.service.jobs.create(kind, {
+        'run_id': setup.run['run_id'], 'input_id': setup.input_id,
+        'evaluated_at': setup.evaluated.isoformat()}, job_id='TEST_FIXTURE_LEGACY_OUTCOME')
+    with setup.store.transaction() as connection:
+        connection.execute('UPDATE jobs SET state=? WHERE job_id=?', (state, old['job_id']))
+    before = setup.service.jobs.get(old['job_id'])
+    events = setup.service.jobs.events(old['job_id'])
+    with pytest.raises(JobConflict, match='prior legacy outcome request requires explicit reconciliation'):
+        setup.cycle.submit([setup.run['run_id']], setup.input_id)
+    assert setup.service.jobs.list() == [before]
+    assert setup.service.jobs.events(old['job_id']) == events
+    assert setup.store.list_documents(closure.LEDGERS) == []
     assert all(rows(setup, namespace) == [] for namespace in NAMESPACES.values())
-    monkeypatch.setattr(closure, 'evaluate', actual)
-
-
-def test_failure_retry_can_publish_without_altering_first_attempt(setup, monkeypatch):
-    actual = closure.evaluate
-    monkeypatch.setattr(closure, 'evaluate', lambda *args, **kwargs: (_ for _ in ()).throw(RuntimeError('TEST_FIXTURE_FAILURE')))
-    first = finished(setup.service, setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'])
-    monkeypatch.setattr(closure, 'evaluate', actual)
-    second = finished(setup.service, setup.cycle.retry(first['job_id'])['job_id'])
-    assert second['state'] == 'SUCCEEDED'
-    assert second['payload'] == first['payload']
-    assert setup.service.jobs.get(first['job_id'])['state'] == 'FAILED'
-    assert setup.cycle.status(first['job_id'])['ledger'] is None
-    assert setup.cycle.status(second['job_id'])['ledger']['root_job_id'] == first['job_id']
-    assert setup.cycle.submit([setup.run['run_id']], setup.input_id)['job_id'] == second['job_id']
 
 
 def test_untrusted_input_and_run_limit_fail_before_job_creation(setup):
@@ -631,7 +651,7 @@ def test_raw_change_during_publication_rolls_back_every_run(setup, tmp_path, mon
     job = finished(setup.service, setup.cycle.submit(run_ids, setup.input_id)['job_id'])
     assert changed and job['state'] == 'FAILED', job
     assert job['error']['type'] == 'ValueError'
-    assert any('REGISTERED_FILE_CHANGED' in reason or 'PHYSICAL_IDENTITY' in reason for reason in verification_failures)
+    assert any('REGISTERED_FILE_CHANGED' in reason or 'FILE_SHA_OR_IDENTITY_MISMATCH' in reason for reason in verification_failures)
     assert all(setup.store.list_documents(namespace) == [] for namespace in NAMESPACES.values())
     assert setup.cycle.status(job['job_id'])['ledger'] is None
     assert all(event['state'] != 'SUCCEEDED' for event in setup.service.jobs.events(job['job_id']))
@@ -793,27 +813,24 @@ def test_second_run_failure_keeps_entire_batch_unpublished(setup, monkeypatch):
 
 
 @pytest.mark.parametrize('state', ['QUEUED', 'RUNNING', 'CANCEL_REQUESTED'])
-def test_explicit_retry_recovers_only_selected_orphan(setup, state):
+def test_existing_orphan_is_retained_without_recovery_or_execution(setup, state):
     request = setup.cycle.plan([setup.run['run_id']], setup.input_id)['request']
     original = setup.service.jobs.create(closure.JOB_KIND, request, job_id=request['root_job_id'])
     other = setup.service.jobs.create('TEST_FIXTURE_UNRELATED', {'coverage_type': 'TEST_FIXTURE'})
-    other_events = setup.service.jobs.events(other['job_id'])
     if state != 'QUEUED':
         with setup.store.transaction() as connection:
             connection.execute('UPDATE jobs SET state=?,owner_id=?,cancel_requested=? WHERE job_id=?',
                 (state, 'TEST_FIXTURE_PREVIOUS_PROCESS', int(state == 'CANCEL_REQUESTED'), original['job_id']))
             setup.service.jobs._event(connection, original['job_id'], state, 0, {'coverage_type': 'TEST_FIXTURE'})
+    before = setup.service.jobs.get(original['job_id'])
     previous_events = setup.service.jobs.events(original['job_id'])
-    retry = finished(setup.service, setup.cycle.retry(original['job_id'])['job_id'])
-    assert retry['state'] == 'SUCCEEDED', retry
-    previous = setup.service.jobs.get(original['job_id'])
-    assert previous['payload'] == original['payload']
-    assert previous['state'] == ('CANCELLED' if state == 'CANCEL_REQUESTED' else 'INTERRUPTED')
-    events = setup.service.jobs.events(original['job_id'])
-    assert events[:-1] == previous_events
-    assert events[-1]['detail']['target_only_recovery'] is True
+    other_events = setup.service.jobs.events(other['job_id'])
+    again = setup.cycle.submit([setup.run['run_id']], setup.input_id)
+    assert again == before
+    assert setup.service.jobs.events(original['job_id']) == previous_events
     assert setup.service.jobs.get(other['job_id']) == other
     assert setup.service.jobs.events(other['job_id']) == other_events
+    assert all(rows(setup, namespace) == [] for namespace in NAMESPACES.values())
 
 
 def oversized_request(setup):
@@ -832,17 +849,7 @@ def test_recomputed_request_hash_cannot_bypass_worker_batch_budget(setup):
     assert setup.cycle.status(job['job_id'])['ledger'] is None
 
 
-def test_orphan_budget_refusal_does_not_change_target_or_events(setup):
-    request = oversized_request(setup)
-    job = setup.service.jobs.create(closure.JOB_KIND, request, job_id=request['root_job_id'])
-    events = setup.service.jobs.events(job['job_id'])
-    with pytest.raises(ValueError, match='RUN_LIMIT_EXCEEDED_NO_TRUNCATION'):
-        setup.cycle.retry(job['job_id'])
-    assert setup.service.jobs.get(job['job_id']) == job
-    assert setup.service.jobs.events(job['job_id']) == events
-
-
-def test_current_process_active_job_is_not_orphan_recoverable(setup, monkeypatch):
+def test_current_process_active_job_is_not_started_twice(setup, monkeypatch):
     entered, resume = threading.Event(), threading.Event()
     actual = closure.evaluate
 
@@ -857,8 +864,7 @@ def test_current_process_active_job_is_not_orphan_recoverable(setup, monkeypatch
         assert entered.wait(5)
         before = setup.service.jobs.get(job['job_id'])
         events = setup.service.jobs.events(job['job_id'])
-        with pytest.raises(JobConflict, match='active current-process'):
-            setup.cycle.retry(job['job_id'])
+        assert setup.cycle.submit([setup.run['run_id']], setup.input_id) == before
         assert setup.service.jobs.get(job['job_id']) == before
         assert setup.service.jobs.events(job['job_id']) == events
     finally:
@@ -867,8 +873,11 @@ def test_current_process_active_job_is_not_orphan_recoverable(setup, monkeypatch
 
 
 @pytest.mark.parametrize('fault', ['different_store', 'closed', 'no_job_service'])
-def test_target_recovery_requires_real_live_matching_owner(setup, tmp_path, fault):
-    request = setup.cycle.plan([setup.run['run_id']], setup.input_id)['request']
+def test_submission_requires_real_live_matching_owner(setup, tmp_path, fault):
+    # Authenticate a real plan before swapping owners. A new empty DB would
+    # otherwise fail the separate read-only input check before reaching writes.
+    plan = setup.cycle.plan([setup.run['run_id']], setup.input_id)
+    request = plan['request']
     jobs = setup.service.jobs
     original = jobs.create(closure.JOB_KIND, request, job_id=request['root_job_id'])
     events = jobs.events(original['job_id'])
@@ -880,7 +889,7 @@ def test_target_recovery_requires_real_live_matching_owner(setup, tmp_path, faul
         else:
             setup.service.jobs = SimpleNamespace(get=jobs.get)
         with pytest.raises(JobConflict, match='active matching job-service lock'):
-            setup.cycle.retry(original['job_id'])
+            setup.cycle._submit_plan(plan)
     finally:
         setup.service.store, setup.service.jobs = setup.store, jobs
     assert jobs.get(original['job_id']) == original

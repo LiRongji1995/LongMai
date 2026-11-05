@@ -6,7 +6,10 @@ not the market-data vendor. Files remain necessary for subsequent daily work.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint
+
 from collections import Counter
+import ast
 from copy import deepcopy
 from datetime import date, datetime, timezone
 import gzip
@@ -280,7 +283,7 @@ def _ref(value):
     _sha(value['sha256'])
     _require(type(value['bytes']) is int and value['bytes'] > 0 and isinstance(value['fp'], dict)
         and set(value['fp']) == set(_FP) and all(type(v) is int for v in value['fp'].values())
-        and value['bytes'] == value['fp']['st_size'], 'PHYSICAL_IDENTITY_REQUIRED')
+        and value['bytes'] == value['fp']['st_size'], 'FILE_REFERENCE_SCHEMA')
     return value
 
 
@@ -332,7 +335,7 @@ class ArchiveVerificationSession:
         self._restoration.check()
         _require(self._restoration_reference is None or self._local_copy_reference is None, 'SOURCE_PROTOCOL_CHANGED')
         selected = self._local_copy_reference if self._local_copy_reference is not None else self._restoration_reference
-        _require(self._restoration.identity['manifest_reference'] == selected,
+        _require(content_equal(self._restoration.identity['manifest_reference'], selected),
                  'SOURCE_PROTOCOL_CHANGED')
         _require((self._local_copy_reference is not None) ==
                  (self._restoration.identity['profile'] == 'SEALED_RESULT_LOCAL_COPY_V1'), 'SOURCE_PROTOCOL_CHANGED')
@@ -352,13 +355,8 @@ class ArchiveVerificationSession:
         prior = self.files.get(str(path))
         if isinstance(expected, dict):
             _ref(expected)
-            _require(str(path) == expected['path'] and before == expected['fp'], 'ORIGINAL_PHYSICAL_IDENTITY_CHANGED')
-        if prior:
-            _require(prior['fp'] == before, 'REGISTERED_FILE_CHANGED')
-        if not retain and prior and not force:
-            checksum = expected['sha256'] if isinstance(expected, dict) else expected
-            _require(checksum is None or checksum == prior['sha256'], 'FILE_SHA_MISMATCH')
-            return None
+            _require(str(path) == expected['path'], 'REFERENCE_PATH_MISMATCH')
+        # A previous stat fingerprint cannot authorize skipping a byte read.
         if prior is None:
             _require(len(self.files) < self.max_files and self.unique_bytes + before['st_size'] <= self.max_unique_bytes,
                 'SESSION_UNIQUE_FILE_BUDGET_EXCEEDED')
@@ -369,8 +367,7 @@ class ArchiveVerificationSession:
         descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
         with os.fdopen(descriptor, 'rb') as handle:
             opened = os.fstat(handle.fileno())
-            _require(stat.S_ISREG(opened.st_mode) and
-                {key: getattr(opened, key, 0) for key in _FP} == before, 'OPENED_FILE_IDENTITY_CHANGED')
+            _require(stat.S_ISREG(opened.st_mode), 'OPENED_FILE_IDENTITY_CHANGED')
             while True:
                 self.check()
                 chunk = handle.read(1024**2)
@@ -387,12 +384,12 @@ class ArchiveVerificationSession:
             'FILE_CHANGED_DURING_READ')
         actual = dict(path=str(path), sha256=digest.hexdigest(), bytes=count, fp=before)
         if expected is not None:
-            _require(actual == expected if isinstance(expected, dict) else actual['sha256'] == _sha(expected),
+            _require(content_reference_equal(actual, expected) if isinstance(expected, dict) else actual['sha256'] == _sha(expected),
                 'FILE_SHA_OR_IDENTITY_MISMATCH')
-        _require(prior is None or prior == actual, 'REGISTERED_FILE_CHANGED')
+        _require(prior is None or content_reference_equal(prior, actual), 'REGISTERED_FILE_CHANGED')
         if prior is None:
             self.unique_bytes += count
-        self.files[str(path)] = actual
+        self.files.setdefault(str(path), actual)
         self.check()
         return b''.join(pieces) if retain else None
 
@@ -403,7 +400,7 @@ class ArchiveVerificationSession:
         for contract in self._news_http_attachment_contracts.values():
             for item in contract['empty_http_attachments']:
                 ref = item['raw_reference']
-                _require(ref['path'] not in expected_empty or expected_empty[ref['path']] == ref,
+                _require(ref['path'] not in expected_empty or content_equal(expected_empty[ref['path']], ref),
                     'NEWS_EMPTY_HTTP_REFERENCE_CONFLICT')
                 expected_empty[ref['path']] = ref
         _require(expected_empty == self._empty_news_http_files, 'NEWS_EMPTY_HTTP_REGISTRY_CHANGED')
@@ -495,23 +492,23 @@ def _read_empty_news_http(session, expected):
     path = original.resolve(strict=True)
     _require(str(path) == expected['path'] and not original.is_symlink(), 'NEWS_HTTP_ORIGINAL_PATH_REQUIRED')
     before = _fp(path)
-    _require(before == expected['fp'] and before['st_size'] == 0, 'NEWS_HTTP_PHYSICAL_IDENTITY_CHANGED')
+    _require(before['st_size'] == 0, 'NEWS_HTTP_CONTENT_CHANGED')
     prior = session.files.get(str(path))
-    _require(prior is None or prior == expected, 'REGISTERED_FILE_CHANGED')
+    _require(prior is None or content_reference_equal(prior, expected), 'REGISTERED_FILE_CHANGED')
     if prior is None:
         _require(len(session.files) < session.max_files, 'SESSION_UNIQUE_FILE_BUDGET_EXCEEDED')
     descriptor = os.open(path, os.O_RDONLY | getattr(os, 'O_NONBLOCK', 0) | getattr(os, 'O_NOFOLLOW', 0))
     with os.fdopen(descriptor, 'rb') as handle:
         opened = os.fstat(handle.fileno())
-        _require(stat.S_ISREG(opened.st_mode) and
-            {key: getattr(opened, key, 0) for key in _FP} == before, 'OPENED_FILE_IDENTITY_CHANGED')
+        _require(stat.S_ISREG(opened.st_mode), 'OPENED_FILE_IDENTITY_CHANGED')
         session.check()
         chunk = handle.read(1)
         session.read_bytes += len(chunk)
         _require(session.read_bytes <= session.max_total_read_bytes, 'SESSION_TOTAL_READ_BUDGET_EXCEEDED')
         _require(chunk == b'' and hashlib.sha256(chunk).hexdigest() == expected['sha256'],
             'NEWS_HTTP_EMPTY_EOF_REQUIRED')
-    _require(_fp(path) == before and original.resolve(strict=True) == path, 'FILE_CHANGED_DURING_READ')
+    _require(content_fingerprint(path) == dict(sha256=expected['sha256'], bytes=0)
+        and original.resolve(strict=True) == path, 'FILE_CHANGED_DURING_READ')
     session.files[str(path)] = deepcopy(expected)
     session.check()
 
@@ -628,7 +625,7 @@ def _sealed_news_http_attachments(session, job, checksum, final, completion):
     for item in empty_items:
         ref = item['raw_reference']
         previous = session._empty_news_http_files.get(ref['path'])
-        _require(previous is None or previous == ref, 'NEWS_EMPTY_HTTP_REFERENCE_CONFLICT')
+        _require(previous is None or content_equal(previous, ref), 'NEWS_EMPTY_HTTP_REFERENCE_CONFLICT')
         session._empty_news_http_files[ref['path']] = deepcopy(ref)
         _read_empty_news_http(session, ref)
     return contract
@@ -654,25 +651,32 @@ def _decompress(raw, session):
     return _json(_decompressed_bytes(raw, session))
 
 
-def _source_map(session, registry, overrides, run):
+def _source_map(session, registry, overrides, run, *, shared_workflow=False):
     _require(isinstance(registry, list) and registry and len(registry) <= 2048, 'CODE_REGISTRY_REQUIRED')
     originals = {}
     for value in registry:
         _ref(value)
         _require(value['path'] not in originals, 'DUPLICATE_CODE_REFERENCE')
         originals[value['path']] = value
-    launchers = [Path(p).parent for p in originals if Path(p).name == 'premarket']
+    # Historical registries keep their exact original launcher set. New work
+    # binds the single daily CLI; this never substitutes current files for old
+    # source hashes or executes archived source bytes.
+    current_launchers = [Path(p).parents[1] for p in originals
+        if Path(p).name == 'codex_daily_v2.py' and Path(p).parent.name == 'scripts']
+    launchers = current_launchers or [Path(p).parent for p in originals if Path(p).name == 'premarket']
     _require(len(launchers) == 1, 'ORIGINAL_SOURCE_ROOT_AMBIGUOUS')
     root = launchers[0]
     by_name = {}
     for path, value in originals.items():
         _require(Path(path).is_relative_to(root), 'SOURCE_PATH_OUTSIDE_ORIGINAL_ROOT')
         name = Path(path).relative_to(root).as_posix()
-        _require(name in {'premarket', 'premarket.ps1', 'scripts/stockfish.py'}
+        _require(name in {'premarket', 'premarket.ps1', 'scripts/stockfish.py', 'scripts/codex_daily_v2.py'}
+            or shared_workflow and name.startswith('scripts/') and name.endswith('.py')
             or name.startswith('stockfish_core/') and name.endswith('.py'), 'CODE_REGISTRY_PATH_INVALID')
         by_name[name] = value
-    required = {'premarket', 'premarket.ps1', 'scripts/stockfish.py',
-        'stockfish_core/yaogu/premarket_workflow_v1.py', 'stockfish_core/yaogu/premarket_native_core_v1.py',
+    launchers_required = ({'scripts/codex_daily_v2.py'} if current_launchers else
+        {'premarket', 'premarket.ps1', 'scripts/stockfish.py'})
+    required = launchers_required | {'stockfish_core/yaogu/premarket_workflow_v1.py', 'stockfish_core/yaogu/premarket_native_core_v1.py',
         'stockfish_core/yaogu/strategy_experiments.py'} | set(_NORMALIZER_FILES)
     _require(required <= set(by_name), 'NATIVE_IMPLEMENTATION_CLOSURE_MISSING')
     frozen = run.get('source_file_hashes')
@@ -685,21 +689,48 @@ def _source_map(session, registry, overrides, run):
             _require(by_name[name]['sha256'] == checksum, 'STRATEGY_VS_WORKER_SOURCE_MISMATCH')
     _require(digest_json_stream(frozen) == run['source_hash'], 'STRATEGY_SOURCE_HASH_MISMATCH')
     _require(isinstance(overrides, dict) and set(overrides) <= (set(by_name) | set(frozen)), 'UNREGISTERED_SOURCE_OVERRIDE')
-    proofs = {}
+    proofs, script_bytes = {}, {}
     for name in sorted(set(by_name) | set(frozen)):
         original = by_name.get(name)
         expected = original['sha256'] if original else frozen[name]
+        retain_script = shared_workflow and name in by_name and name.startswith('scripts/')
         if name in overrides:
             _require(isinstance(overrides[name], str) and Path(overrides[name]).is_absolute(), 'ABSOLUTE_SOURCE_OVERRIDE_REQUIRED')
             path = Path(overrides[name]).resolve(strict=True)
-            session.read(path, expected, limit=16 * 1024**2, retain=False)
+            raw = session.read(path, expected, limit=16 * 1024**2, retain=retain_script)
             mode = 'EXPLICIT_COPY_CONTENT_PROOF_NOT_ORIGINAL_PHYSICAL_OWNER'
         else:
             path = root / name
-            session.read(path, original or expected, limit=16 * 1024**2, retain=False)
+            raw = session.read(path, original or expected, limit=16 * 1024**2, retain=retain_script)
             mode = 'ORIGINAL_PHYSICAL_REFERENCE' if original else 'ORIGINAL_DECLARED_CONTENT_ONLY'
         proofs[name] = dict(original_reference=deepcopy(original), original_sha256=expected,
             current_reference=deepcopy(session.files[str(path.resolve())]), proof_mode=mode)
+        if retain_script:
+            script_bytes[name] = raw
+    if shared_workflow:
+        # Reconstruct the frozen static script closure from authenticated bytes,
+        # never import or execute an archived launcher or trust today's tree.
+        pending = {'scripts/' + name + '.py' for name in (
+            'codex_daily_v2', 'codex_premarket_shared_v1', 'codex_premarket_preflight_v1')}
+        seen = set()
+        while pending:
+            name = pending.pop()
+            if name in seen:
+                continue
+            _require(name in script_bytes, 'REGISTERED_SCRIPT_CLOSURE_MISSING')
+            seen.add(name)
+            for node in ast.walk(ast.parse(script_bytes[name], filename=name)):
+                modules = set()
+                if isinstance(node, ast.Import):
+                    modules = {item.name for item in node.names if item.name.startswith('scripts.')}
+                elif isinstance(node, ast.ImportFrom):
+                    _require(not node.level, 'REGISTERED_SCRIPT_RELATIVE_IMPORT_UNSUPPORTED')
+                    if node.module == 'scripts':
+                        modules = {'scripts.' + item.name for item in node.names}
+                    elif node.module and node.module.startswith('scripts.'):
+                        modules = {node.module}
+                pending.update(name.replace('.', '/') + '.py' for name in modules)
+        _require(seen == set(script_bytes), 'REGISTERED_SCRIPT_CLOSURE_MISMATCH')
     current_root = Path(__file__).resolve().parents[2]
     for name in _NORMALIZER_FILES:
         session.read(current_root / name, by_name[name]['sha256'], limit=16 * 1024**2, retain=False)
@@ -716,7 +747,7 @@ def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff,
     documents = {}
     for role in ('result', 'raw', 'receipt'):
         reference = _ref(item[role])
-        _require(sealed_refs.get(reference['path']) == reference, 'UNSEALED_CORE_' + role.upper())
+        _require(content_reference_equal(sealed_refs.get(reference['path']), reference), 'UNSEALED_CORE_' + role.upper())
         if role == 'result' and restoration_context is not None:
             seal, allowed, used, proofs = restoration_context
             raw, restoration = session._restoration.read_result(session, seal, reference, allowed, used)
@@ -771,12 +802,12 @@ def _trio(session, item, sealed_refs, receipts, source_proofs, coverage, cutoff,
             _ref(ref)
             key = 'stockfish_core/yaogu/' + Path(ref['path']).name
             proof = source_proofs.get(key)
-            _require(sealed_refs.get(ref['path']) == ref and ref['sha256'] == expected[Path(ref['path']).name],
+            _require(content_reference_equal(sealed_refs.get(ref['path']), ref) and ref['sha256'] == expected[Path(ref['path']).name],
                 'ORIGINAL_PRODUCER_BINDING_MISMATCH')
             # Cached captures can have an older producer in a distinct worker
             # checkout. Its original proof is independent of this job's core
             # implementation epoch; never substitute a same-named newer file.
-            if proof is None or proof['original_reference'] != ref:
+            if proof is None or not content_equal(proof['original_reference'], ref):
                 session.read(ref['path'], ref, limit=16 * 1024**2, retain=False)
     if item.get('verification_locator') is not None:
         session.locators.append(_LocatorBinding(item['verification_locator']))
@@ -854,7 +885,12 @@ def _bridge_identity(session):
     # Import and projection dependencies are intentionally conservative: a
     # package implementation change requires explicit new bridge verification.
     paths = list((root / 'stockfish_core').rglob('*.py'))
-    paths += list((root / 'config').glob('*.yaml')) + list((root / 'config').glob('*.json'))
+    paths += [root / 'config' / name for name in (
+        'yaogu_v1.defaults.yaml', 'r05_strategy_experiments.yaml',
+        'r05_completion_requirements.yaml', 'r05_source_lock.json',
+        'stage_aware_momentum_v2.yaml', 'theme_capital_trend_v1.yaml',
+        'short_horizon_strength_r1.yaml', 'short_horizon_strength_r2.yaml',
+        'theme_evolution_r1.yaml')]
     files = {}
     for path in sorted(paths):
         session.read(path, limit=16 * 1024**2, retain=False)
@@ -933,7 +969,9 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
         return cap
     final_raw = session.read(job / 'final-control.json', checksum, limit=64 * 1024)
     final = _json(final_raw)
-    _require(final.get('schema_version') == 'STANDALONE_PREMARKET_WORKFLOW_V1'
+    workflow_schema = final.get('schema_version')
+    shared_workflow = workflow_schema == 'CODEX_PREMARKET_SHARED_WORKFLOW_V1'
+    _require(workflow_schema in {'STANDALONE_PREMARKET_WORKFLOW_V1', 'CODEX_PREMARKET_SHARED_WORKFLOW_V1'}
         and final.get('status') in {'COMPLETE', 'COMPLETED_WITH_UNKNOWNS'}
         and final.get('external_worker_exit_code') in {0, 2}
         and all(final.get(key) is True for key in ('external_worker_reaped', 'core_verified',
@@ -944,11 +982,23 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     controls = {key: _json(session.read(_ref(final[key])['path'], final[key], limit=16 * 1024**2))
         for key in ('configuration', 'code_registry', 'completion')}
     completion = controls['completion']
-    _require(completion.get('schema_version') == 'STANDALONE_PREMARKET_WORKFLOW_V1'
+    _require(completion.get('schema_version') == workflow_schema
         and completion.get('status') == final['status'] and completion.get('core_verified') is True
         and completion.get('strategy_id') == STRATEGY and completion.get('business_database_written') is False
         and completion.get('source_capability_serialized') is False
         and stamp(completion['completed_at']) <= stamp(final['final_sealed_at']), 'SEALED_COMPLETION_MISMATCH')
+    if shared_workflow:
+        expected = final.get('expected_sessions')
+        _require(final.get('execution_engine') == completion.get('execution_engine') == 'original'
+            and final.get('whole_workflow_wall_enforced') is True
+            and final.get('execution_version') == completion.get('execution_version') == workflow_schema,
+            'SHARED_ORIGINAL_EXECUTION_BINDING_REQUIRED')
+        _require(type(expected) is list and len(expected) == 3
+            and all(type(value) is str for value in expected)
+            and expected == completion.get('expected_sessions')
+            and expected[:2] == [completion.get('observation_date'), completion.get('target_session')]
+            and [date.fromisoformat(value).isoformat() for value in expected] == expected
+            and expected[0] < expected[1], 'SHARED_EXPECTED_SESSION_BINDING_REQUIRED')
     artifacts = completion.get('core_artifacts')
     _require(isinstance(artifacts, dict) and set(artifacts) == _ARTIFACTS, 'COMPLETE_EIGHT_CORE_ARTIFACTS_REQUIRED')
     for name, ref in artifacts.items():
@@ -984,7 +1034,8 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
     _require(run.get('content_hash') == manifest.get('canonical_content_hash')
         and run.get('run_id') == completion.get('run_id') and run.get('observation_date') == completion.get('observation_date')
         and run.get('target_session') == completion.get('target_session'), 'COMPLETION_CORE_IDENTITY_MISMATCH')
-    root, source_registry, source_proofs = _source_map(session, controls['code_registry'], overrides, run)
+    root, source_registry, source_proofs = _source_map(session, controls['code_registry'], overrides, run,
+        shared_workflow=shared_workflow)
     cutoff = stamp(run['decision_cutoff'])
     _require(cutoff <= stamp(run['generated_at']) <= stamp(completion['completed_at']), 'ORIGINAL_RUN_TIME_ORDER_INVALID')
     news_http_attachments = _sealed_news_http_attachments(session, job, checksum, final, completion)
@@ -994,7 +1045,7 @@ def authenticate_archive(job_dir, *, expected_final_sha256, source_overrides=Non
             _empty_news_http_ref(ref)
         else:
             _ref(ref)
-        _require(ref['path'] not in sealed_refs or sealed_refs[ref['path']] == ref, 'SEALED_SOURCE_REFERENCE_CONFLICT')
+        _require(ref['path'] not in sealed_refs or content_equal(sealed_refs[ref['path']], ref), 'SEALED_SOURCE_REFERENCE_CONFLICT')
         sealed_refs[ref['path']] = ref
     _require(final.get('source_reference_count') == len(completion['validation_references']), 'SEALED_SOURCE_COUNT_MISMATCH')
     # This summary is only a locator. Its entries acquire authority exclusively
@@ -1491,7 +1542,7 @@ def _verified_second_run_decode(proof, session):
         'GENUINE_INVOCATION_VIEW_REQUIRED')
     _require(proof.get('source_protocol_context') == session.source_protocol(), 'VERIFIED_VIEW_SOURCE_PROTOCOL_CHANGED')
     ref = _ref(proof['run_reference'])
-    _require(session.files.get(ref['path']) == ref, 'STRICTLY_AUTHENTICATED_RUN_REFERENCE_REQUIRED')
+    _require(content_reference_equal(session.files.get(ref['path']), ref), 'STRICTLY_AUTHENTICATED_RUN_REFERENCE_REQUIRED')
     session.check()
     raw = _decompressed_bytes(session.read(ref['path'], ref), session)
     session.check()

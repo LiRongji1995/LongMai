@@ -1,7 +1,7 @@
 """Whole saved strategy results must not allocate a second complete JSON string."""
 import pytest
 
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu import candidate_service, history_artifacts
 from stockfish_core.yaogu.contracts import digest
@@ -10,7 +10,7 @@ from tests.yaogu.fixtures import make_bundle
 
 @pytest.fixture
 def isolated_service(tmp_path):
-    core = ApplicationService(root=tmp_path / "TEST_FIXTURE_stream_state",
+    core = ResearchService(root=tmp_path / "TEST_FIXTURE_stream_state",
                               store=SQLiteStore(tmp_path / "TEST_FIXTURE_stream.sqlite3"),
                               allow_test_fixture=True)
     bundle, cutoff = make_bundle(3)

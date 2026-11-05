@@ -1,3 +1,4 @@
+from pathlib import Path
 """Isolated TEST_FIXTURE originals; no endpoint, DB or selector invocation."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
@@ -385,5 +386,7 @@ def test_source_identity_binds_new_adapter_spec_and_frozen_dependencies():
     files = identity['source_file_hashes']
     assert len(identity['source_hash']) == 64
     assert files['stockfish_core/yaogu/industry_sina_context_v1.py']
-    assert files['docs/INDUSTRY_SINA_CONTEXT_V1.md']
     assert files['stockfish_core/yaogu/research_context_artifacts.py']
+    assert len(files) == 8
+    root = Path(__file__).resolve().parents[2]
+    assert all(hashlib.sha256((root / name).read_bytes()).hexdigest() == sha for name, sha in files.items())

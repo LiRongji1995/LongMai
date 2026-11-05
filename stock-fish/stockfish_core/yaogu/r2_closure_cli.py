@@ -21,84 +21,46 @@ from .short_horizon_resource_profiles_v1 import (
     VERIFICATION_RESOURCE_PROFILES, resolve_verification_profile, session_options)
 
 
-ARCHIVE_COMMANDS = frozenset({'r2-archive-verify', 'r2-archive-import', 'r2-daily-cycle'})
-REPLAY_COMMANDS = frozenset({'r2-closed-session-plan', 'r2-closed-session-run',
-    'r2-closed-session-status', 'r2-closed-session-retry'})
-LATE_COMMANDS = frozenset({'r2-late-completed-plan', 'r2-late-completed-run',
-    'r2-late-completed-status', 'r2-late-completed-retry'})
-RESTORED_COMMANDS = frozenset({'r2-restored-daily-plan', 'r2-restored-daily-run',
-    'r2-restored-daily-status', 'r2-restored-daily-retry'})
-LOCAL_COPY_COMMANDS = frozenset({'r2-local-copy-late-plan', 'r2-local-copy-late-run',
-    'r2-local-copy-late-status', 'r2-local-copy-late-retry'})
-DATED_LATE_COMMANDS = frozenset({'r2-dated-late-plan', 'r2-dated-late-run',
-    'r2-dated-late-status', 'r2-dated-late-retry'})
-DATED_REGISTER_COMMAND = 'r2-dated-input-register'
-DATED_COMMANDS = DATED_LATE_COMMANDS | frozenset({DATED_REGISTER_COMMAND})
-COMMANDS = ARCHIVE_COMMANDS | REPLAY_COMMANDS | LATE_COMMANDS | RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
-    'r2-daily-run', 'r2-daily-status', 'r2-daily-retry'})
+ARCHIVE_COMMANDS = frozenset({'r2-archive-verify', 'r2-archive-import'})
+COMMANDS = ARCHIVE_COMMANDS | frozenset({'r2-daily-plan', 'r2-daily-pending',
+    'r2-daily-run', 'r2-daily-status'})
 
 
 def parser():
     result = argparse.ArgumentParser(description=__doc__)
     commands = result.add_subparsers(dest='command', required=True)
-    for command_name in sorted(COMMANDS):
-        command = commands.add_parser(command_name)
-        name = command_name.replace('r2-restored-daily-', 'r2-daily-').replace('r2-local-copy-late-', 'r2-late-completed-').replace('r2-dated-late-', 'r2-late-completed-')
-        if command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS or name in ARCHIVE_COMMANDS:
-            protocols = (('SEALED_RESULT_LOCAL_COPY_V1',) if command_name in DATED_COMMANDS else
-                         ('SEALED_RESULT_BYTES_RESTORED_V1', 'SEALED_RESULT_LOCAL_COPY_V1'))
-            command.add_argument('--source-protocol', choices=protocols,
-                required=command_name in RESTORED_COMMANDS | LOCAL_COPY_COMMANDS | DATED_COMMANDS)
-            command.add_argument('--restoration-manifest', type=Path, required=command_name in RESTORED_COMMANDS)
-            command.add_argument('--restoration-manifest-sha256', required=command_name in RESTORED_COMMANDS)
-            command.add_argument('--local-copy-manifest', type=Path, required=command_name in LOCAL_COPY_COMMANDS | DATED_COMMANDS)
-            command.add_argument('--local-copy-manifest-sha256', required=command_name in LOCAL_COPY_COMMANDS | DATED_COMMANDS)
-        if command_name == DATED_REGISTER_COMMAND:
-            command.add_argument('--base-input-id', required=True, help='Exact authenticated price-base archive input ID')
-            command.add_argument('--identity-input-id', action='append', required=True,
-                help='Exact authenticated capture-day identity archive input ID; repeat explicitly')
+    for name in sorted(COMMANDS):
+        command = commands.add_parser(name)
         if name in ARCHIVE_COMMANDS:
             command.add_argument('archive', type=Path, help='Exact original sealed premarket job directory')
-            command.add_argument('--expected-final-sha256', required=True,
-                help='Explicit pinned SHA256 of original final-control.json')
+            command.add_argument('--expected-final-sha256', required=True)
             command.add_argument('--source-overrides', type=Path,
-                help='Original source bytes mapping; does not execute archived code')
+                help='Explicit original source bytes mapping; archived code is never executed')
+            command.add_argument('--source-protocol',
+                choices=('SEALED_RESULT_BYTES_RESTORED_V1', 'SEALED_RESULT_LOCAL_COPY_V1'))
+            command.add_argument('--restoration-manifest', type=Path)
+            command.add_argument('--restoration-manifest-sha256')
+            command.add_argument('--local-copy-manifest', type=Path)
+            command.add_argument('--local-copy-manifest-sha256')
         if name != 'r2-archive-verify':
-            command.add_argument('--db', type=Path, required=True, help='Existing explicitly selected service database')
-            command.add_argument('--state', type=Path, required=True, help='Existing corresponding service state directory')
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle',
-                    'r2-closed-session-plan', 'r2-closed-session-run',
-                    'r2-late-completed-plan', 'r2-late-completed-run'}:
+            command.add_argument('--db', type=Path, required=True)
+            command.add_argument('--state', type=Path, required=True)
+        if name in {'r2-daily-plan', 'r2-daily-run'}:
             command.add_argument('--run-id', action='append', required=True)
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-cycle', 'r2-daily-retry',
-                    'r2-closed-session-plan', 'r2-closed-session-run', 'r2-closed-session-retry',
-                    'r2-late-completed-plan', 'r2-late-completed-run', 'r2-late-completed-retry'}:
             command.add_argument('--max-runs', type=int, default=5)
-        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-pending',
-                    'r2-closed-session-plan', 'r2-closed-session-run',
-                    'r2-late-completed-plan', 'r2-late-completed-run'}:
-            command.add_argument('--input-id', required=True, help='Exact newly authenticated archive input ID')
-        if name in {'r2-closed-session-plan', 'r2-closed-session-run',
-                    'r2-late-completed-plan', 'r2-late-completed-run', 'r2-daily-cycle'}:
-            command.add_argument('--business-session', type=date.fromisoformat, required=name != 'r2-daily-cycle')
-            command.add_argument('--knowledge-cutoff', required=name != 'r2-daily-cycle',
-                help='Explicit timezone-aware evidence cutoff; never changes the execution clock')
+        if name in {'r2-daily-plan', 'r2-daily-run', 'r2-daily-pending'}:
+            command.add_argument('--input-id', required=True,
+                help='Exact authenticated archive input; no latest-input guessing')
         if name == 'r2-daily-pending':
             command.add_argument('--limit', type=int, default=100)
             command.add_argument('--offset', type=int, default=0)
-        if name in {'r2-daily-status', 'r2-daily-retry', 'r2-closed-session-status', 'r2-closed-session-retry',
-                    'r2-late-completed-status', 'r2-late-completed-retry'}:
+        if name == 'r2-daily-status':
             command.add_argument('job_id')
-        if name in {'r2-daily-run', 'r2-daily-retry', 'r2-daily-cycle',
-                    'r2-closed-session-run', 'r2-closed-session-retry',
-                    'r2-late-completed-run', 'r2-late-completed-retry'}:
-            command.add_argument('--wait-seconds', type=float, default=120,
-                help='Wait budget, 1..3600 seconds; expiry cancels only newly started work')
-        if name not in {'r2-daily-status', 'r2-closed-session-status', 'r2-late-completed-status'}:
-            command.add_argument('--verification-profile', choices=VERIFICATION_RESOURCE_PROFILES,
-                help='Explicit archive/session resource profile; separate from --wait-seconds; default remains 300 seconds')
-        command.add_argument('--allow-test-fixture', action='store_true',
-            help='Only for an explicitly marked isolated TEST_FIXTURE directory')
+        if name == 'r2-daily-run':
+            command.add_argument('--wait-seconds', type=float, default=120)
+        if name != 'r2-daily-status':
+            command.add_argument('--verification-profile', choices=VERIFICATION_RESOURCE_PROFILES)
+        command.add_argument('--allow-test-fixture', action='store_true')
     return result
 
 
@@ -230,6 +192,12 @@ def _candidate_view(store, jobs, state, allow_test_fixture):
     service.store, service.jobs = store, jobs
     service.root = state / 'yaogu'
     service.allow_test_fixture = allow_test_fixture
+    service._coverage_lock = RLock()
+    service._coverage_projection_cache = None
+    from .e2e_tracing import TraceRegistry
+    from .evidence_service import EvidenceService
+    service.daily_traces = TraceRegistry(store)
+    service.public_evidence = EvidenceService(store, allow_test_fixture=allow_test_fixture)
     return service
 
 
@@ -320,54 +288,28 @@ def _safe_error(exc):
 
 
 def execute(args):
+    if args.command not in COMMANDS:
+        raise ValueError('UNSUPPORTED_RETIRED_OUTCOME_COMMAND')
     _fixture_boundary(args)
-    restored_daily = args.command in RESTORED_COMMANDS
-    local_copy_late = args.command in LOCAL_COPY_COMMANDS
-    dated_late = args.command in DATED_LATE_COMMANDS
-    dated_register = args.command == DATED_REGISTER_COMMAND
-    if restored_daily:
-        args.command = args.command.replace('r2-restored-daily-', 'r2-daily-')
-    if local_copy_late:
-        args.command = args.command.replace('r2-local-copy-late-', 'r2-late-completed-')
-    if dated_late:
-        args.command = args.command.replace('r2-dated-late-', 'r2-late-completed-')
-    restoration_ref = None
-    local_copy_ref = None
-    protocol = getattr(args, 'source_protocol', None)
-    restoration_arguments = [getattr(args, key, None) for key in ('restoration_manifest', 'restoration_manifest_sha256')]
-    copy_arguments = [getattr(args, key, None) for key in ('local_copy_manifest', 'local_copy_manifest_sha256')]
-    if protocol is not None or any(value is not None for value in restoration_arguments + copy_arguments):
-        if protocol == 'SEALED_RESULT_BYTES_RESTORED_V1' and all(value is not None for value in restoration_arguments) and all(value is None for value in copy_arguments):
-            from .sealed_result_restoration_v1 import manifest_reference
-            restoration_ref = manifest_reference(*restoration_arguments)
-        elif protocol == 'SEALED_RESULT_LOCAL_COPY_V1' and all(value is not None for value in copy_arguments) and all(value is None for value in restoration_arguments):
-            from .sealed_result_local_copy_v1 import manifest_reference
-            local_copy_ref = manifest_reference(*copy_arguments)
-        else:
-            raise ValueError('EXPLICIT_SOURCE_PROTOCOL_AND_PINNED_MANIFEST_REQUIRED')
-    if ((restored_daily and restoration_ref is None)
-            or ((local_copy_late or dated_late or dated_register) and local_copy_ref is None)):
-        raise ValueError('EXPLICIT_COMMAND_SOURCE_PROTOCOL_MISMATCH')
-    source_options = ({'local_copy_manifest_ref': local_copy_ref} if local_copy_ref is not None else
-                      {'restoration_manifest_ref': restoration_ref} if restoration_ref is not None else {})
-    if args.command == 'r2-daily-cycle':
-        late_arguments = (getattr(args, 'business_session', None), getattr(args, 'knowledge_cutoff', None))
-        if local_copy_ref is not None and any(value is None for value in late_arguments):
-            raise ValueError('LOCAL_COPY_CYCLE_EXPLICIT_LATE_SESSION_AND_CUTOFF_REQUIRED')
-        if local_copy_ref is None and any(value is not None for value in late_arguments):
-            raise ValueError('LOCAL_COPY_CYCLE_PROTOCOL_REQUIRED_FOR_LATE_ARGUMENTS')
     verification_profile = getattr(args, 'verification_profile', None)
     resource_policy = resolve_verification_profile(verification_profile)
     closure_options = ({'verification_profile': verification_profile} if resource_policy is not None else {})
     if hasattr(args, 'wait_seconds') and not 1 <= args.wait_seconds <= 3600:
         raise ValueError('WAIT_SECONDS_MUST_BE_1_TO_3600')
-    if dated_register:
-        from .dated_identity_outcome_closure_v1 import register_input
-        with service_context(args, writable=True) as service:
-            return 0, register_input(service, base_input_id=args.base_input_id,
-                identity_input_ids=args.identity_input_id, local_copy_manifest_ref=local_copy_ref,
-                **closure_options)
     if args.command in ARCHIVE_COMMANDS:
+        source_options = {}
+        protocol = getattr(args, 'source_protocol', None)
+        restoration = [getattr(args, key, None) for key in ('restoration_manifest', 'restoration_manifest_sha256')]
+        local_copy = [getattr(args, key, None) for key in ('local_copy_manifest', 'local_copy_manifest_sha256')]
+        if protocol is not None or any(value is not None for value in restoration + local_copy):
+            if protocol == 'SEALED_RESULT_BYTES_RESTORED_V1' and all(value is not None for value in restoration) and all(value is None for value in local_copy):
+                from .sealed_result_restoration_v1 import manifest_reference
+                source_options = {'restoration_manifest_ref': manifest_reference(*restoration)}
+            elif protocol == 'SEALED_RESULT_LOCAL_COPY_V1' and all(value is not None for value in local_copy) and all(value is None for value in restoration):
+                from .sealed_result_local_copy_v1 import manifest_reference
+                source_options = {'local_copy_manifest_ref': manifest_reference(*local_copy)}
+            else:
+                raise ValueError('EXPLICIT_SOURCE_PROTOCOL_AND_PINNED_MANIFEST_REQUIRED')
         from .short_horizon_archive_bridge_v1 import authenticate_archive, commit_bridge, ArchiveVerificationSession
         authentication_kwargs = session_options(verification_profile)
         authentication_kwargs.update(source_options)
@@ -382,76 +324,19 @@ def execute(args):
             return 0, ({**audit, 'verification_resource_profile': resource_policy}
                        if resource_policy is not None else audit)
         with service_context(args, writable=True) as service:
-            imported = commit_bridge(service, capability,
-                **source_options)
-            if resource_policy is not None:
-                imported = {**imported, 'verification_resource_profile': resource_policy}
-            if args.command == 'r2-archive-import':
-                return 0, imported
-            # Import and observation are two durable stages. A failed daily
-            # job never pretends the successful archive import was rolled back.
-            try:
-                # Daily planning/worker reauthenticate independently. Do not
-                # retain the import session's large run across those stages.
-                import gc
-                del capability
-                gc.collect()
-                from .short_horizon_daily_closure_v1 import ShortHorizonDailyClosure, RestoredResultDailyClosure, LocalCopyLateCompletedSessionClosure
-                if local_copy_ref is not None and (args.business_session is None or args.knowledge_cutoff is None):
-                    raise ValueError('LOCAL_COPY_CYCLE_EXPLICIT_LATE_SESSION_AND_CUTOFF_REQUIRED')
-                closure_type = (LocalCopyLateCompletedSessionClosure if local_copy_ref is not None else
-                                RestoredResultDailyClosure if restoration_ref is not None else ShortHorizonDailyClosure)
-                closure = closure_type(service, max_runs=args.max_runs, **closure_options,
-                    **source_options)
-                job = (closure.submit_late(args.run_id, imported['input_id'], business_session=args.business_session,
-                           evaluated_at=args.knowledge_cutoff) if local_copy_ref is not None else
-                       closure.submit(args.run_id, imported['input_id']))
-                code, result = _job_wait(service, closure, job, args.wait_seconds)
-                return code, {'status': 'ARCHIVE_IMPORTED_CLOSURE_FINISHED' if code == 0
-                    else 'ARCHIVE_IMPORTED_CLOSURE_INCOMPLETE', 'bridge': imported, 'closure': result}
-            except KeyboardInterrupt:
-                return 130, {'status': 'ARCHIVE_IMPORTED_CLOSURE_INTERRUPTED', 'bridge': imported,
-                    'reason': 'USER_INTERRUPTED', **_cancel_owned(service.jobs)}
-            except Exception as exc:
-                return 3, {'status': 'ARCHIVE_IMPORTED_CLOSURE_FAILED', 'bridge': imported,
-                    **_safe_error(exc)}
-    from .short_horizon_daily_closure_v1 import ShortHorizonDailyClosure, ClosedSessionClosure, LateCompletedSessionClosure, RestoredResultDailyClosure, LocalCopyLateCompletedSessionClosure
-    write = args.command in {'r2-daily-run', 'r2-daily-retry',
-        'r2-closed-session-run', 'r2-closed-session-retry', 'r2-late-completed-run', 'r2-late-completed-retry'}
-    with service_context(args, writable=write) as service:
-        if dated_late:
-            from .dated_identity_outcome_closure_v1 import DatedIdentityLateClosure
-        closure_type = (DatedIdentityLateClosure if dated_late else
-                        LocalCopyLateCompletedSessionClosure if local_copy_late else
-                        RestoredResultDailyClosure if restored_daily else
-                        LateCompletedSessionClosure if args.command in LATE_COMMANDS else
-                        ClosedSessionClosure if args.command in REPLAY_COMMANDS else ShortHorizonDailyClosure)
-        closure = closure_type(service, max_runs=getattr(args, 'max_runs', 5), **closure_options,
-            **source_options)
-        if args.command in {'r2-late-completed-plan', 'r2-late-completed-run'}:
-            arguments = dict(business_session=args.business_session, evaluated_at=args.knowledge_cutoff)
-            if args.command == 'r2-late-completed-plan':
-                return 0, closure.plan_late(args.run_id, args.input_id, **arguments)
-            job = closure.submit_late(args.run_id, args.input_id, **arguments)
-            return _job_wait(service, closure, job, args.wait_seconds)
-        if args.command in {'r2-closed-session-plan', 'r2-closed-session-run'}:
-            arguments = dict(business_session=args.business_session, evaluated_at=args.knowledge_cutoff)
-            if args.command == 'r2-closed-session-plan':
-                return 0, closure.plan_replay(args.run_id, args.input_id, **arguments)
-            job = closure.submit_replay(args.run_id, args.input_id, **arguments)
-            return _job_wait(service, closure, job, args.wait_seconds)
+            imported = commit_bridge(service, capability, **source_options)
+            return 0, ({**imported, 'verification_resource_profile': resource_policy}
+                       if resource_policy is not None else imported)
+    from .short_horizon_daily_closure_v1 import ShortHorizonDailyClosure
+    with service_context(args, writable=args.command == 'r2-daily-run') as service:
+        closure = ShortHorizonDailyClosure(service, max_runs=getattr(args, 'max_runs', 5), **closure_options)
         if args.command == 'r2-daily-plan':
             return 0, closure.plan(args.run_id, args.input_id)
         if args.command == 'r2-daily-pending':
             return 0, closure.pending(args.input_id, limit=args.limit, offset=args.offset)
-        if args.command in {'r2-daily-status', 'r2-closed-session-status', 'r2-late-completed-status'}:
+        if args.command == 'r2-daily-status':
             return 0, closure.status(args.job_id)
-        if args.command in {'r2-daily-retry', 'r2-closed-session-retry', 'r2-late-completed-retry'}:
-            job = closure.retry(args.job_id)
-        else:
-            job = closure.submit(args.run_id, args.input_id)
-        # This process holds the sole job-service lock; other active processes
-        # are rejected before any mutable database construction.
+        job = closure.submit(args.run_id, args.input_id)
         return _job_wait(service, closure, job, args.wait_seconds)
 
 

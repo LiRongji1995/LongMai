@@ -11,15 +11,10 @@ from unittest.mock import patch
 
 from scripts import codex_core_archive as archive_v1
 from scripts import codex_core_archive_v2 as archive
-from scripts import codex_compact_core as core_v1
-from scripts import codex_compact_core_v2 as core
-from scripts import codex_compact_artifacts as compact
 from scripts import codex_verification_v2 as verification
-from scripts import codex_first_core_v2 as first_core
 from scripts import codex_workspace as workspace
 from stockfish_core.yaogu import short_horizon_archive_bridge_v1 as bridge
 from tests.unit import test_codex_core_archive as archive_fixture
-from tests.unit import test_codex_compact_core as core_fixture
 
 
 class BufferAndDiagnosticTests(unittest.TestCase):
@@ -143,7 +138,7 @@ class ArchiveV2Tests(unittest.TestCase):
             self.reuse(old)
 
     test_resealed_evidence_cannot_omit_raw_dependency = archive_fixture.ArchiveTests.test_resealed_evidence_cannot_omit_raw_dependency
-    test_same_bytes_replacement_changes_physical_identity = archive_fixture.ArchiveTests.test_same_bytes_replacement_changes_physical_identity
+    test_same_bytes_replacement_reuses_but_content_tamper_fails = archive_fixture.ArchiveTests.test_same_bytes_replacement_reuses_but_content_tamper_fails
     test_query_date_cutoff_and_manifest_must_match = archive_fixture.ArchiveTests.test_query_date_cutoff_and_manifest_must_match
     test_tight_read_budget_never_normalizes_or_creates_big_file = archive_fixture.ArchiveTests.test_tight_read_budget_never_normalizes_or_creates_big_file
 
@@ -159,131 +154,3 @@ class ArchiveV2Tests(unittest.TestCase):
             self.register()
         self.assertFalse({item["raw"]["path"] for item in self.items} & set(calls))
         self.assertIs(bridge._trio, saved)
-
-
-class CompactV2Tests(core_fixture.Base):
-    def setUp(self):
-        super().setUp()
-        items, observed, target, cutoff = core_fixture.captures(
-            self.root / "TEST_FIXTURE-originals", sessions=60, history=False)
-        self.request(items, observed, target, cutoff.isoformat())
-    archive = core_fixture.CompactCoreTests.archive
-
-    def execute(self, manifest=None):
-        return core.execute_compact_core(self.runtime, manifest or self.manifest,
-            profile=core.PROFILE, allow_test_fixture=True)
-
-    def test_each_logical_artifact_consumed_once_and_original_storage_guards_remain(self):
-        logical_reads = Counter()
-        original_read = compact.CompactArchive.read_artifact
-        def read(reader, role, **kwargs):
-            logical_reads[role] += 1
-            return original_read(reader, role, **kwargs)
-        first = self.execute()
-        before = {str(p): core.original._reference(p) for p in self.root.rglob("*") if p.is_file()}
-        with patch.object(compact.CompactArchive, "read_artifact", read):
-            again = self.execute()
-        self.assertEqual(logical_reads, Counter({role: 1 for role in compact.CORE_FILES}))
-        self.assertEqual(first["summary"], again["summary"])
-        self.assertEqual(before, {str(p): core.original._reference(p) for p in self.root.rglob("*") if p.is_file()})
-        self.assertEqual(again["verification_v2_metrics"]["stages"]["compact_final_physical_sha"]["calls"], 1)
-        self.assertIs(core_v1.compact.CompactArchive, compact.CompactArchive)
-
-    test_corrupt_compressed_output_rejected = core_fixture.CompactCoreTests.test_corrupt_compressed_output_rejected
-    test_changed_raw_does_not_recompute = core_fixture.CompactCoreTests.test_changed_raw_does_not_recompute
-    def test_failed_pack_preserves_native_files_and_does_not_retry(self):
-        with patch.object(core._compact_reader, "compact_owned", side_effect=RuntimeError("TEST_FIXTURE pack interrupted")):
-            with self.assertRaisesRegex(RuntimeError, "pack interrupted"):
-                self.execute()
-        self.assertEqual(len(list(self.report.rglob("canonical-run.json.gz"))), 1)
-        with self.assertRaisesRegex(workspace.WorkspaceError, "STATE_UNKNOWN_RECONCILE_NO_RETRY"):
-            self.execute()
-
-    def test_missing_semantic_role_cannot_finalize(self):
-        result = self.execute()
-        _, evidence = self.archive(result)
-        candidate = verification.single_pass_archive_class(compact)(evidence["compact_manifest"])
-        ticket = candidate.verify_all()
-        self.assertEqual(ticket["status"], "PENDING_COMPLETE_SEMANTIC_CONSUMPTION")
-        for role in compact.CORE_FILES - {"all.csv"}:
-            candidate.read_artifact(role, max_bytes=64 * verification.MIB)
-        with self.assertRaisesRegex(ValueError, "COMPLETE_EIGHT_SEMANTIC_ROLES"):
-            candidate.finish()
-
-    def test_late_output_change_is_rejected_by_complete_physical_terminal(self):
-        result = self.execute()
-        _, evidence = self.archive(result)
-        candidate = verification.single_pass_archive_class(compact)(evidence["compact_manifest"])
-        candidate.verify_all()
-        for role in compact.CORE_FILES:
-            candidate.read_artifact(role, max_bytes=64 * verification.MIB)
-        path = Path(candidate.manifest["artifacts"]["all.csv"]["stored_reference"]["path"])
-        path.write_bytes(path.read_bytes() + b"TEST_FIXTURE_LATE_CHANGE")
-        with self.assertRaises(ValueError):
-            candidate.finish()
-
-    def test_explicit_source_adapter_requires_exact_physical_reference(self):
-        result = self.execute()
-        _, evidence = self.archive(result)
-        calls = []
-        def verify(bad_reference):
-            candidate = verification.single_pass_archive_class(compact)(evidence["compact_manifest"])
-            candidate.verify_all()
-            manifest = json.loads(candidate.read_artifact("manifest.json", max_bytes=16 * verification.MIB))
-            meter = core.original._InvocationBudget()
-            def read(path, *, expected, maximum):
-                reference, raw = core.original._read_file(path, maximum, retain=True)
-                meter.charge(len(raw))  # explicit adapter owns its returned bytes
-                calls.append((path, expected))
-                if bad_reference:
-                    reference = dict(reference, sha256="0" * 64)
-                return raw, reference
-            core._verify_logical_core(candidate, evidence["original_logical_artifacts"],
-                manifest, evidence["summary"], self.value, meter, source_read=read)
-        verify(False)
-        self.assertTrue(calls)
-        with self.assertRaisesRegex(ValueError, "ORIGINAL_TRIO_CHANGED"):
-            verify(True)
-
-    def test_supervised_v2_worker_uses_new_profile_and_reuses(self):
-        first = core.supervised_command(self.runtime, self.manifest, profile=core.PROFILE, allow_test_fixture=True)
-        second = core.supervised_command(self.runtime, self.manifest, profile=core.PROFILE, allow_test_fixture=True)
-        self.assertEqual(first["status"], "RECORDED")
-        self.assertEqual(second["status"], "REUSED")
-        self.assertEqual(second["selector_calls"], 0)
-        self.assertTrue(second["external_supervision"]["reaped"])
-        self.assertIn("verification_v2_metrics", second)
-
-    def test_first_core_reference_and_c128_profiles_bind_v2_and_restore_encoders(self):
-        from stockfish_core.yaogu import history_artifacts, premarket_native_core_v1
-        saved = (history_artifacts.digest_market_input, premarket_native_core_v1.digest_market_input)
-        results = []
-        for profile in first_core.PROFILES:
-            first = first_core.execute_child(self.runtime, self.manifest, profile=profile,
-                allow_test_fixture=True, _fixture_in_process=True)
-            again = first_core.execute_child(self.runtime, self.manifest, profile=profile,
-                allow_test_fixture=True, _fixture_in_process=True)
-            self.assertEqual(first["status"], "RECORDED")
-            self.assertEqual(again["status"], "REUSED")
-            self.assertEqual(again["selector_calls"], 0)
-            self.assertTrue(again["encoding_bindings_restored"])
-            self.assertIn("compact_final_physical_sha", again["verification_v2_metrics"]["stages"])
-            self.assertEqual(first["first_core_execution"]["execution_profile"], profile)
-            results.append(first)
-        self.assertEqual(results[0]["summary"]["input_hash"], results[1]["summary"]["input_hash"])
-        self.assertNotEqual(results[0]["operation_id"], results[1]["operation_id"])
-        self.assertEqual(saved, (history_artifacts.digest_market_input, premarket_native_core_v1.digest_market_input))
-
-    def test_supervised_first_core_v2_pins_source_and_keeps_lookup_empty(self):
-        result = first_core.supervised_command(self.runtime, self.manifest,
-            profile=first_core.OPTIMIZED, allow_test_fixture=True)
-        self.assertEqual(result["status"], "RECORDED")
-        self.assertEqual(result["first_core_execution"]["execution_profile"], first_core.OPTIMIZED)
-        self.assertTrue(result["encoding_bindings_restored"])
-        self.assertTrue(result["external_supervision"]["reaped"])
-        directory = Path(result["external_supervision"]["control_directory"])
-        self.assertFalse((directory / "empty-pycache-lookup").exists())
-
-
-if __name__ == "__main__":
-    unittest.main()

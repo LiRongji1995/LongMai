@@ -7,7 +7,6 @@ empty results, downloads, constructs a market input, or executes a strategy.
 """
 from __future__ import annotations
 
-import argparse
 from copy import deepcopy
 from datetime import date, datetime, time as wall_time, timedelta, timezone
 import hashlib
@@ -20,6 +19,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from stockfish_core.file_integrity import (
+    content_equal, content_reference_equal, content_fingerprint, verify_content_reference,
+)
 
 from scripts import codex_core as original
 from scripts import codex_workspace as workspace
@@ -339,7 +342,7 @@ def _request_constraints(request):
     for capture in captures:
         for reference in [capture[key] for key in ("result", "raw", "receipt")] + capture.get("producer_files", []):
             previous = references.setdefault(reference["path"], reference)
-            if previous != reference:
+            if not content_equal(previous, reference):
                 conflicts.append(reference["path"])
     size = len(workspace._canonical(request))
     total = sum(reference["bytes"] for reference in references.values())
@@ -354,160 +357,9 @@ def _request_constraints(request):
     if total > 256*MIB:
         violations.append("UNIQUE_ORIGINALS_EXCEED_256_MIB")
     if conflicts:
-        violations.append("CONFLICTING_PHYSICAL_SOURCE_REFERENCES")
+        violations.append("CONFLICTING_CONTENT_SOURCE_REFERENCES")
     return dict(compatible=not violations, violations=violations, capture_count=len(captures),
                 manifest_bytes=size, unique_original_bytes=total,
                 target_consumers="EXPLICIT_COMPACT_OR_FIRST_CORE_NOT_LEGACY_SMALL_PROFILE",
                 maximum_captures=256, maximum_manifest_bytes=original.MAX_MANIFEST,
                 maximum_individual_original_bytes=16*MIB, maximum_unique_original_bytes=256*MIB)
-
-def execute(runtime, *, identity_policy, operation="plan", profile=PROFILE, limits=None,
-            allow_test_fixture=False, as_of=None, _now=None):
-    """Plan exact source gaps or write a legal frozen request from all originals.
-
-    Both operations are strictly offline. Build refuses unresolved required sources.
-    Native identity policy preserves qualification unknowns in the frozen normalizer;
-    legacy policy also refuses original collector qualification gaps. It writes a request and
-    its evidence, and does not restore a native owner or declare a complete list.
-    """
-    _need(operation in ("plan", "build"), "CORE_SOURCE_OPERATION_REQUIRED")
-    _need(profile == PROFILE, "CORE_SOURCE_EXPLICIT_PROFILE_REQUIRED")
-    _need(identity_policy in (NATIVE_IDENTITY, LEGACY_IDENTITY), "CORE_SOURCE_EXPLICIT_IDENTITY_POLICY_REQUIRED")
-    _need(runtime is not None and runtime.profile.get("backend") == "premarket", "CORE_SOURCE_REGISTERED_RUNTIME_REQUIRED")
-    _need(_now is None or allow_test_fixture, "CORE_SOURCE_REAL_CLOCK_OVERRIDE_FORBIDDEN")
-    from stockfish_core.yaogu.premarket_capture_cache_v1 import CaptureCache
-    from stockfish_core.yaogu.premarket_runtime_v1 import Budget
-    policy = _limits(limits)
-    with runtime.exclusive():
-        runtime.check_binding()
-        prepared = original.premarket._prepared(runtime.profile)
-        _need(prepared["source"] == ROOT and Path(sys.executable).absolute() == prepared["python"],
-              "CORE_SOURCE_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
-        budget = Budget(policy, cache_dir=prepared["state"] / "cache")
-        root, inventory = _existing_cache(prepared["state"] / "cache")
-        _need(inventory["logical_bytes"] <= policy["cache_bytes"], "CORE_SOURCE_READONLY_CACHE_CAP_EXCEEDED")
-        budget.check("inventory_complete")
-        actual_now = _now or datetime.now(timezone.utc)
-        if as_of is not None:
-            _need(type(as_of) is str, "CORE_SOURCE_EXPLICIT_AWARE_AS_OF_REQUIRED")
-            try:
-                instant = datetime.fromisoformat(as_of.replace("Z", "+00:00"))
-            except ValueError:
-                raise SourcesError("CORE_SOURCE_EXPLICIT_AWARE_AS_OF_REQUIRED") from None
-        else:
-            instant = actual_now
-        _need(instant.tzinfo is not None and instant.utcoffset() is not None, "CORE_SOURCE_AWARE_CLOCK_REQUIRED")
-        _need(instant <= actual_now, "CORE_SOURCE_FUTURE_AS_OF_FORBIDDEN")
-        with budget.phase("capture"), budget.meter_files():
-            snapshot = original._snapshot(runtime.profile)
-            implementation = original._reference(Path(__file__).resolve())
-            configuration, _ = original._control(prepared["config"], 65536)
-            config = configuration.get("capture", {})
-            _need(type(config) is dict, "CORE_SOURCE_CAPTURE_CONFIG_REQUIRED")
-            config = dict(config, offline=True, retry_failed=False,
-                          request_timeout_seconds=policy["request_timeout_seconds"],
-                          request_http_attempts=policy["request_http_attempts"],
-                          max_http_requests_per_request=policy["request_http_attempts"],
-                          allow_test_fixture=allow_test_fixture)
-            cache = CaptureCache(root, budget, config=config, executor=_no_network)
-            index = _Index(cache, instant, allow_test_fixture)
-            result = _collect(index, config, identity_policy)
-            captures = result.pop("captures")
-            constraints = None
-            if "observation_date" in result and result.get("remaining_core_dependencies") != "NOT_EVALUATED":
-                candidate = dict(schema_version=original.INPUT_VERSION, captures=captures,
-                    observation_date=result["observation_date"], target_session=result["target_session"],
-                    cutoff=instant.isoformat(), coverage_type="TEST_FIXTURE" if allow_test_fixture else "PROSPECTIVE_CAPTURED")
-                constraints = _request_constraints(candidate)
-                if not constraints["compatible"]:
-                    result["core_ready_to_run"] = False
-                    result["status"] = "BLOCKED_NATIVE_REQUEST_CONSTRAINTS"
-            result["native_request_constraints"] = constraints
-            result["required_factor_policy"] = "COMPLETE_ORIGINAL_FULL_WINDOW_REQUIRED_BY_THIS_PROFILE"
-            references = cache.terminal()
-            _need(snapshot == original._snapshot(runtime.profile)
-                  and implementation == original._reference(Path(__file__).resolve()),
-                  "CORE_SOURCE_IMPLEMENTATION_CHANGED")
-            runtime.check_binding()
-            if "calendar_currentness" in result:
-                from stockfish_core.yaogu.premarket_workflow_v1 import _latest_gate
-                calendar = next(value for value in captures if value["endpoint"] == "calendar")
-                _latest_gate(index.verify(calendar)["rows"], result["observation_date"], result["target_session"],
-                             instant if as_of is not None else (_now or datetime.now(timezone.utc)))
-            result.update(schema_version=VERSION, profile=profile, operation=operation,
-                planned_at=instant.isoformat(), actual_planning_started_at=actual_now.isoformat(),
-                clock_mode="EXPLICIT_HISTORICAL_REPLAY" if as_of is not None else "CURRENT_LATEST",
-                identity_policy=identity_policy, network_calls=0, strategy_calls=0, source_capability_issued=False,
-                full_premarket_ready=False, daily_v1_readiness="UNKNOWN_NOT_EXECUTED",
-                original_capture_count=len(captures), cache_logical_bytes=inventory["logical_bytes"],
-                added_cache_logical_bytes=0, index_entries_scanned=len(index.entries),
-                distinct_request_lookups=index.query_count, authenticated_original_count=len(index.checked),
-                later_originals_not_visible_at_cutoff=index.later_originals,
-                missing_request_count=sum(row["status"] == "MISSING" for row in result["requests"]),
-                missing_request_count_scope=result.get("gap_scope", "CALENDAR_ONLY"),
-                unfinished_request_count=sum(row["status"] == "UNFINISHED_NO_IMPLICIT_RETRY" for row in result["requests"]),
-                limits=policy)
-            if operation == "build":
-                _need(result["core_ready_to_run"], "CORE_SOURCE_BUILD_BLOCKED_SEE_PLAN")
-                cutoff = (instant if as_of is not None else (_now or datetime.now(timezone.utc))).isoformat()
-                request = dict(schema_version=original.INPUT_VERSION, captures=captures,
-                    observation_date=result["observation_date"], target_session=result["target_session"],
-                    cutoff=cutoff, coverage_type="TEST_FIXTURE" if allow_test_fixture else "PROSPECTIVE_CAPTURED")
-                _need(_request_constraints(request)["compatible"], "CORE_SOURCE_NATIVE_REQUEST_CONSTRAINTS")
-                evidence = dict(schema_version=VERSION, plan=result, implementation=snapshot,
-                    coordinator=implementation, validation_references=references,
-                    source_authority_restored=False, strategy_executed=False)
-                size = len(workspace._canonical(request)) + len(workspace._canonical(evidence))
-                _need(size <= policy["output_bytes"], "CORE_SOURCE_CONTROL_OUTPUT_LIMIT")
-                admission = runtime.preflight(expected_growth_bytes=policy["output_bytes"],
-                                              destination=Path(runtime.profile["report_root"]))
-                _need(admission.get("allowed") is True, "CORE_SOURCE_CAPACITY_BLOCKED")
-                job = Path(runtime.profile["report_root"]) / ("core-sources-"+uuid.uuid4().hex)
-                workspace._directory(job, create=True)
-                workspace._write(job / "core-request.json", request)
-                workspace._write(job / "source-plan-evidence.json", evidence)
-                result["manifest"] = original._reference(job / "core-request.json", policy["output_bytes"])
-                result["evidence"] = original._reference(job / "source-plan-evidence.json", policy["output_bytes"])
-                result["written_control_bytes"] = sum(result[key]["bytes"] for key in ("manifest", "evidence"))
-                result["status"] = "BUILT_ORIGINAL_CORE_REQUEST_NOT_EXECUTED"
-            from stockfish_core.yaogu.premarket_capture_cache_v1 import _fp
-            terminal_refs = [*references, implementation, snapshot["configuration"], snapshot["python"],
-                             *snapshot["source_references"], *snapshot["strategy_support"], *snapshot["coordinator_sources"]]
-            for reference in terminal_refs:
-                _need(_fp(Path(reference["path"])) == reference["fp"], "CORE_SOURCE_TERMINAL_PHYSICAL_IDENTITY_CHANGED")
-            budget.check("source_plan_return", force=True)
-            result["metrics"] = budget.metrics
-            return result
-
-
-def plan(runtime, **kwargs):
-    return execute(runtime, operation="plan", **kwargs)
-
-
-def build(runtime, **kwargs):
-    return execute(runtime, operation="build", **kwargs)
-
-
-def main(argv=None):
-    parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--runtime")
-    parser.add_argument("--registry-root")
-    parser.add_argument("operation", choices=("plan", "build"))
-    parser.add_argument("--profile", required=True, choices=(PROFILE,))
-    parser.add_argument("--identity-policy", required=True, choices=(NATIVE_IDENTITY, LEGACY_IDENTITY))
-    parser.add_argument("--as-of", help="Explicit historical source cutoff; never claims current latest readiness")
-    parser.add_argument("--allow-test-fixture", action="store_true")
-    args = parser.parse_args(argv)
-    try:
-        value = execute(workspace.load_runtime(args.runtime, args.registry_root), operation=args.operation,
-                        profile=args.profile, identity_policy=args.identity_policy, as_of=args.as_of,
-                        allow_test_fixture=args.allow_test_fixture)
-        print(json.dumps(value, ensure_ascii=False, allow_nan=False))
-        return 0
-    except (ValueError, RuntimeError, OSError) as error:
-        print(json.dumps(dict(status="FAILED", error_type=type(error).__name__, reason=str(error)), ensure_ascii=False))
-        return 2
-
-
-if __name__ == "__main__":
-    raise SystemExit(main())

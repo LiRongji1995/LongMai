@@ -21,7 +21,6 @@ from . import short_horizon_strength as r1
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / 'config/short_horizon_strength_r2.yaml'
-SPEC_PATH = ROOT / 'docs/SHORT_HORIZON_STRENGTH_R2.md'
 CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
 SHORT_HORIZON_ID = STRATEGY_ID = CONFIG['strategy_id']
 IMPLEMENTATION_VERSION = CONFIG['implementation_version']
@@ -402,9 +401,9 @@ replace the immutable R1 input, and remain subject to the same actual cutoff.
 def short_horizon_source_identity():
     base = r1.short_horizon_source_identity()
     hashes = dict(base['source_file_hashes'])
-    for path in (Path(__file__), CONFIG_PATH, SPEC_PATH, Path(__file__).with_name('short_horizon_profiles.py'),
+    for path in (Path(__file__), CONFIG_PATH, Path(__file__).with_name('short_horizon_profiles.py'),
                  Path(__file__).with_name('theme_evolution.py'), ROOT / 'config/theme_evolution_r1.yaml',
-                 ROOT / 'docs/THEME_EVOLUTION_R1.md', Path(__file__).with_name('research_context_artifacts.py')):
+                 Path(__file__).with_name('research_context_artifacts.py')):
         hashes[str(path.relative_to(ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
     policy = {'id': SELECTION_POLICY_ID, 'base_strategy_id': r1.STRATEGY_ID,
               'participation': CONFIG['participation'], 'liquidity': CONFIG['liquidity'],
@@ -415,7 +414,7 @@ def short_horizon_source_identity():
     return {'implementation_version': IMPLEMENTATION_VERSION, 'spec_revision': SPEC_REVISION,
             'feature_version': FEATURE_VERSION, 'source_hash': digest(hashes),
             'source_file_hashes': hashes, 'config_hash': digest({'r2': CONFIG, 'base_r1': r1.CONFIG}),
-            'spec_hash': hashes[str(SPEC_PATH.relative_to(ROOT))],
+            'spec_hash': hashes[str(CONFIG_PATH.relative_to(ROOT))],
             'selection_policy_hash': digest(policy), 'base_r1_source_identity': base}
 
 

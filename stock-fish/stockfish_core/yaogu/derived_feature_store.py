@@ -12,12 +12,9 @@ from fractions import Fraction
 import hashlib
 import json
 import logging
-import os
 from pathlib import Path
 import sqlite3
-import subprocess
 import time
-import tempfile
 
 from ..common import utc_now
 from ..storage import IntegrityError, SQLiteStore
@@ -45,7 +42,6 @@ CONTEXT_STATS_KEY = "R15_DERIVED_FEATURE_STATS"
 LEGACY_CONTEXT_STATS_KEY = "R14_DERIVED_FEATURE_STATS"
 MISSING = object()
 SOURCE_BATCH_INSTRUMENTS = 250
-GO_FAST_PATH_SOURCE_BATCH_INSTRUMENTS = 4000
 CACHE_LIFECYCLE_CATEGORIES = (
     "CACHE_HIT",
     "NEW",
@@ -100,46 +96,6 @@ MATERIALIZED_FAMILIES = ("PRICE_BASE", "ROLLING_PRICE", "ACTIVITY")
 
 def _json(value):
     return json.dumps(value, sort_keys=True, ensure_ascii=False, separators=(",", ":"), default=str, allow_nan=False)
-
-
-def _flag_enabled(name):
-    return str(os.environ.get(name, "")).strip().lower() in {"1", "true", "yes", "on"}
-
-
-def go_fast_path_enabled():
-    return _flag_enabled("STOCKFISH_GO_FAST_PATH") or _flag_enabled("GO_FAST_PATH")
-
-
-def _positive_int_env(name, default):
-    try:
-        value = int(str(os.environ.get(name, "")).strip() or default)
-    except (TypeError, ValueError):
-        return default
-    return value if value > 0 else default
-
-
-def _batch_instrument_limit():
-    if go_fast_path_enabled():
-        return _positive_int_env("STOCKFISH_GO_FAST_PATH_BATCH_INSTRUMENTS", GO_FAST_PATH_SOURCE_BATCH_INSTRUMENTS)
-    return SOURCE_BATCH_INSTRUMENTS
-
-
-def _go_core_executable():
-    configured = os.environ.get("STOCKFISH_GO_CORE_EXE")
-    if configured:
-        path = Path(configured)
-        if path.exists():
-            return path
-    repo_root = Path(__file__).resolve().parents[3]
-    suffix = ".exe" if os.name == "nt" else ""
-    candidates = (
-        repo_root / "go-core" / "bin" / f"stockfish-go-core{suffix}",
-        repo_root / "go-core" / f"stockfish-go-core{suffix}",
-    )
-    for path in candidates:
-        if path.exists():
-            return path
-    return None
 
 
 def _payload_hash(value):
@@ -1051,84 +1007,6 @@ def _selected_compact_bars(ctx, source_sessions, instrument_ids, *, source_view=
             for iid in instrument_ids for session in source_sessions if (iid, _date_text(session)) in selected}
 
 
-def _go_decimal(value):
-    if value is None:
-        return None
-    if isinstance(value, Decimal):
-        return str(value) if value.is_finite() else None
-    return str(value)
-
-
-def _go_pair(value):
-    if value is None:
-        return None
-    try:
-        return int(value[0]), int(value[1])
-    except (TypeError, ValueError, IndexError):
-        return None
-
-
-def _go_runtime_row(row):
-    return (
-        tuple(_go_pair(value) for value in row.get("returns") or ()),
-        tuple(_go_pair(value) for value in row.get("amount_change") or ()),
-        tuple(_go_pair(value) for value in row.get("ma") or ()),
-        tuple(reason or None for reason in row.get("ma_reasons") or ()),
-    )
-
-
-def _go_fast_path_runtime_rows(ctx, sessions, target_sessions, instrument_ids, source_view):
-    executable = _go_core_executable()
-    if executable is None:
-        raise RuntimeError("STOCKFISH_GO_FAST_PATH_ENABLED_BUT_GO_CORE_BINARY_NOT_FOUND")
-    selected = _selected_compact_bars(ctx, sessions, instrument_ids, source_view=source_view)
-    rows = []
-    for (iid, session), row in sorted(selected.items()):
-        rows.append({
-            "instrument_id": iid,
-            "session": _date_text(session),
-            "comparable_close": _go_decimal(row.get("comparable_close")),
-            "comparable_basis": row.get("comparable_basis") or "",
-            "amount_cny": _go_decimal(row.get("amount_cny")),
-            "turnover_fraction": _go_decimal(row.get("turnover_fraction")),
-        })
-    request = {
-        "sessions": [_date_text(session) for session in ctx.sessions],
-        "target_sessions": [_date_text(session) for session in target_sessions],
-        "instruments": list(instrument_ids),
-        "rows": rows,
-    }
-    timeout = float(os.environ.get("STOCKFISH_GO_FAST_PATH_TIMEOUT_SECONDS", "120"))
-    go_root = Path(__file__).resolve().parents[3] / "go-core"
-    with tempfile.TemporaryDirectory(prefix="stockfish_go_fast_path_") as tmp:
-        tmp = Path(tmp)
-        input_path = tmp / "derived-input.json"
-        output_path = tmp / "derived-output.json"
-        input_path.write_text(_json(request), encoding="utf-8")
-        completed = subprocess.run(
-            [str(executable), "--derived-input", str(input_path), "--derived-output", str(output_path)],
-            cwd=go_root,
-            check=False,
-            capture_output=True,
-            text=True,
-            timeout=timeout,
-        )
-        if completed.returncode != 0:
-            raise RuntimeError("GO_FAST_PATH_DERIVED_RUNTIME_FAILED:" + (completed.stderr or completed.stdout)[-2000:])
-        response = json.loads(output_path.read_text(encoding="utf-8"))
-    runtime_rows = {
-        (row["instrument_id"], _date_text(row["session"])): _go_runtime_row(row)
-        for row in response.get("rows") or ()
-    }
-    stats = dict(response.get("stats") or {})
-    stats.update({
-        "input_json_bytes": len(_json(request).encode("utf-8")),
-        "output_runtime_rows": len(runtime_rows),
-        "binary": str(executable),
-    })
-    return runtime_rows, stats
-
-
 def _same_basis(rows):
     basis = rows[0].get("comparable_basis") if rows else None
     closes = [_frac(row.get("comparable_close")) for row in rows]
@@ -1273,11 +1151,7 @@ def _ensure_stage_aware_derived_features_batch(ctx, store: DerivedFeatureStore, 
         for source_session in _source_session_range(ctx, session, family)
     }, key=session_positions.__getitem__)
     source_view_started = time.perf_counter()
-    go_runtime = go_fast_path_enabled()
-    if go_runtime:
-        from .source_resolution import runtime_price_source_view as price_source_view
-    else:
-        from .source_resolution import canonical_price_source_view as price_source_view
+    from .source_resolution import canonical_price_source_view as price_source_view
 
     with measured_stage("SOURCE_RESOLUTION", item_count=len(source_sessions) * len(instrument_ids)) as span:
         source_view = price_source_view(ctx, source_sessions, instrument_ids)
@@ -1286,110 +1160,6 @@ def _ensure_stage_aware_derived_features_batch(ctx, store: DerivedFeatureStore, 
             "last_instrument": instrument_ids[-1] if instrument_ids else None}
     after_source_view = time.perf_counter()
     wanted = {(iid, _date_text(session)) for iid in instrument_ids for session in sessions}
-    if go_runtime:
-        dependency_plan_started = time.perf_counter()
-        with measured_stage("DEPENDENCY_PLANNING", item_count=len(sessions) * len(instrument_ids)) as span:
-            span["metadata"] = {
-                "status": "BYPASSED_BY_GO_FAST_PATH_RUNTIME_FACTS",
-                "reason": "GO_CORE_COMPUTES_MECHANICAL_ROLLING_FACTS_FROM_CANONICAL_SOURCE_VIEW",
-                "target_sessions": len(sessions),
-                "instrument_count": len(instrument_ids),
-            }
-        after_dependency_plan = time.perf_counter()
-        with measured_stage("CACHE_LOOKUP", item_count=len(wanted)) as span:
-            span["cache_stats"] = {"status": "BYPASSED_BY_GO_FAST_PATH_RUNTIME_FACTS"}
-        after_lookup = time.perf_counter()
-        go_started = time.perf_counter()
-        with measured_stage("FEATURE_COMPUTATION", item_count=len(wanted)) as span:
-            cached, go_stats = _go_fast_path_runtime_rows(ctx, source_sessions, sessions, instrument_ids, source_view)
-            span["metadata"] = {"engine": "go-core", **go_stats}
-        after_write = time.perf_counter()
-        ctx.scalar_cache[CONTEXT_KEY] = cached
-        lifecycle = {category: 0 for category in CACHE_LIFECYCLE_CATEGORIES}
-        lifecycle["NEW"] = len(wanted)
-        stats = {
-            "store_version": STORE_VERSION,
-            "feature_spec_version": FEATURE_SPEC_VERSION,
-            "mode": mode,
-            "identity": identity,
-            "legacy_store": {"store_version": LEGACY_STORE_VERSION, "read_policy": "IGNORED_READ_ONLY"},
-            "target_sessions": [_date_text(session) for session in sessions],
-            "eligible_count": len(instrument_ids),
-            "requested_feature_rows": len(wanted),
-            "cache_hits": 0,
-            "cache_misses": len(wanted),
-            "built_rows": len(cached),
-            "reused": 0,
-            "full_row_reused": 0,
-            "partial_family_reused_rows": 0,
-            "new_rows": len(wanted),
-            "newly_computed": len(cached),
-            "newly_built": len(cached),
-            "invalidated": 0,
-            "invalidated_rows": 0,
-            "missing_cache_rows": 0,
-            "integrity_conflicts": 0,
-            "family_cache": {
-                "requested": len(wanted) * len(MATERIALIZED_FAMILIES),
-                "hits": 0,
-                "misses": len(wanted) * len(MATERIALIZED_FAMILIES),
-                "inserted": 0,
-                "reused_existing_on_put": 0,
-                "invalidated": 0,
-                "by_family": {
-                    family: {
-                        "requested": len(wanted),
-                        "hits": 0,
-                        "misses": len(wanted),
-                        "lifecycle": dict(lifecycle),
-                    }
-                    for family in MATERIALIZED_FAMILIES
-                },
-                "lifecycle": dict(lifecycle),
-            },
-            "row_lifecycle": {
-                "requested_rows": len(wanted),
-                "full_row_reused": 0,
-                "partial_family_reused": 0,
-                "new_rows": len(wanted),
-                "invalidated_rows": 0,
-                "missing_cache_rows": 0,
-                "corrupt_or_conflict_rows": 0,
-                "unknown_rows": 0,
-            },
-            "cache_lifecycle_policy": "GO_FAST_PATH_RUNTIME_ONLY_NO_DERIVED_CACHE_WRITE",
-            "cache_hit_rate": 0.0 if wanted else None,
-            "reuse_ratio": 0.0 if wanted else None,
-            "bytes_read": go_stats.get("input_json_bytes"),
-            "bytes_written": None,
-            "timing_seconds": {
-                "pre_cache_hit": after_lookup - started,
-                "source_resolution": after_source_view - source_view_started,
-                "dependency_plan": after_dependency_plan - dependency_plan_started,
-                "lookup": after_lookup - after_dependency_plan,
-                "build_missing_setup": 0.0,
-                "build_and_write_missing_chunks": after_write - go_started,
-                "build_missing": after_write - go_started,
-                "write_missing": 0.0,
-                "total": after_write - started,
-            },
-            "incremental_semantics": "GO_FAST_PATH_RUNTIME_FACTS_FROM_CANONICAL_SOURCE_VIEW_WITH_PYTHON_FALLBACK",
-            "authority": "GO_CORE_MECHANICAL_FACTS_FROM_PIT_RESOLVED_MARKET_INPUT_SOURCE_VIEW",
-            "source_work_counters": source_view.get("work_counters", {}),
-            "dependency_work_counters": {"bypassed_by_go_fast_path": len(wanted)},
-            "go_fast_path": {"enabled": True, **go_stats},
-            "unsupported_domains": [
-                "PIT source resolution remains Python",
-                "source dependency persistence/cache write remains Python fallback only",
-                "strategy interpretation remains Python",
-            ],
-        }
-        for key, value in list(ctx.scalar_cache.items()):
-            if isinstance(key, tuple) and key and key[0] in {"R16_CANONICAL_PRICE_SOURCE_VIEW", "GO_FAST_RUNTIME_PRICE_SOURCE_VIEW"} and value is source_view:
-                del ctx.scalar_cache[key]
-        ctx.scalar_cache[CONTEXT_STATS_KEY] = stats
-        ctx.scalar_cache[LEGACY_CONTEXT_STATS_KEY] = stats
-        return stats
     dependency_plan_started = time.perf_counter()
     with measured_stage("DEPENDENCY_PLANNING", item_count=len(sessions) * len(instrument_ids)) as span:
         dependency_plan = dependency_plan_for_context(ctx, sessions, instrument_ids, source_view=source_view)
@@ -1531,7 +1301,7 @@ def ensure_stage_aware_derived_features(ctx, store: DerivedFeatureStore, *, inpu
     """
     started = time.perf_counter()
     ids = list(ctx.eligible_ids)
-    batch_limit = _batch_instrument_limit()
+    batch_limit = SOURCE_BATCH_INSTRUMENTS
     batches = [ids[left:left + batch_limit]
                for left in range(0, len(ids), batch_limit)] or [[]]
     cached, combined, lookups = {}, None, {}

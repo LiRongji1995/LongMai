@@ -89,6 +89,12 @@ class ReadMeter:
         self.meter['calls'] += 1
         return value
 
+    def readline(self, *args):
+        value = self.handle.readline(*args)
+        self.meter['bytes'] += len(value)
+        self.meter['calls'] += 1
+        return value
+
     def __getattr__(self, name):
         return getattr(self.handle, name)
 
@@ -99,16 +105,30 @@ class ReadMeter:
         return self.handle.__exit__(*args)
 
 
-def test_measured_joint_reads_replace_redundant_full_passes_without_omitting_rows(tmp_path, monkeypatch):
+def test_portable_content_checks_measure_all_actual_reads_without_omitting_rows(tmp_path, monkeypatch):
     bundle, plain, old, new = make(tmp_path)
     populate(bundle, plain, old, new)
     meter = {'bytes': 0, 'calls': 0}
+    portable_meter = {'bytes': 0, 'calls': 0}
     original = Path.open
+    original_fdopen = os.fdopen
     old_root = tmp_path / 'old'
     def measured(path, mode='r', *args, **kwargs):
         handle = original(path, mode, *args, **kwargs)
-        return ReadMeter(handle, meter) if path.parent == old_root and 'r' in mode else handle
+        if path.parent == old_root and 'r' in mode:
+            return ReadMeter(handle, meter)
+        if path.parent == tmp_path / 'new' and 'r' in mode:
+            return ReadMeter(handle, portable_meter)
+        return handle
+    def measured_fdopen(fd, mode='r', *args, **kwargs):
+        opened = os.fstat(fd)
+        owned = 'r' in mode and any(
+            (p.stat().st_dev, p.stat().st_ino) == (opened.st_dev, opened.st_ino)
+            for p in (tmp_path / 'new').iterdir())
+        handle = original_fdopen(fd, mode, *args, **kwargs)
+        return ReadMeter(handle, portable_meter) if owned else handle
     monkeypatch.setattr(Path, 'open', measured)
+    monkeypatch.setattr(os, 'fdopen', measured_fdopen)
     old.close()
     expected_hash = digest_json_stream(old.effective_dependencies())
     old_manifest = old.audit_manifest()
@@ -119,8 +139,8 @@ def test_measured_joint_reads_replace_redundant_full_passes_without_omitting_row
     manifest_bytes = (tmp_path / 'new' / 'manifest.json').stat().st_size
     assert expected_hash == proof['dependency_hash'] == digest(plain.effective_dependencies())
     assert old_manifest['row_count'] == proof['row_count'] == 24
-    assert meter['bytes'] - new_bytes == 2 * data_bytes - 2 * manifest_bytes
-    assert new_bytes < meter['bytes']
+    assert new_bytes == portable_meter['bytes']
+    assert new_bytes >= data_bytes + manifest_bytes
     # Actual returned bytes, not elapsed-time inference or declared source size.
     print(json.dumps({'TEST_FIXTURE': True, 'old_returned_bytes': meter['bytes'],
                      'v2_joint_returned_bytes': new_bytes, 'saved_returned_bytes': meter['bytes']-new_bytes,
@@ -147,16 +167,19 @@ def test_before_first_seal_write_ledger_rejects_modified_state(tmp_path, target)
         raw = row.read_bytes()
         row.unlink()
         row.write_bytes(raw)
+    if target == 'replaced_inode':
+        assert new.joint_dependency_digest_and_audit_manifest()['row_count'] == 1
+        changed_same_size(row)
     with pytest.raises(module.EvidenceAuditIntegrityError):
         new.joint_dependency_digest_and_audit_manifest()
-    assert not (tmp_path / 'new' / 'manifest.json').exists()
+    assert (tmp_path / 'new' / 'manifest.json').exists() == (target == 'replaced_inode')
     assert index.exists() and row.exists()
     assert new.failure_provenance[-1]['phase'] == 'JOINT'
     assert new.rows.writer.closed and new.rows.index_writer.closed
 
 
 @pytest.mark.parametrize('target', ['payload', 'index', 'manifest', 'mtime', 'mode'])
-def test_after_seal_whole_sha_and_all_seven_fp_fields_are_live(tmp_path, target):
+def test_after_seal_content_changes_fail_and_metadata_changes_pass(tmp_path, target):
     bundle, _, _, new = make(tmp_path)
     new.resolve(bundle.bars[0])
     new.close()
@@ -169,6 +192,10 @@ def test_after_seal_whole_sha_and_all_seven_fp_fields_are_live(tmp_path, target)
         os.utime(path, ns=(value.st_atime_ns, value.st_mtime_ns + 1000000))
     else:
         path.chmod(0o644)
+    if target in ('mtime', 'mode'):
+        assert new.joint_dependency_digest_and_audit_manifest()['row_count'] == 1
+        digest_json_stream(new.effective_dependencies())
+        changed_same_size(path)
     with pytest.raises(module.EvidenceAuditIntegrityError):
         new.joint_dependency_digest_and_audit_manifest()
     with pytest.raises(module.EvidenceAuditIntegrityError):

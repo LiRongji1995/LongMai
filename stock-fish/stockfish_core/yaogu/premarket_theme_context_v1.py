@@ -5,6 +5,8 @@ this invocation's source authority. Price math and the theme FSM are unchanged.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 from copy import deepcopy
 from datetime import datetime, timezone
 import gzip
@@ -70,7 +72,7 @@ class _FreshThemeBinding:
         self.stream.validate_binding(bundle, cutoff)
         for reference in self.journal:
             _, actual = state['registry'].budget.read(reference['path'], expected=reference)
-            if actual != reference:
+            if not content_reference_equal(actual, reference):
                 raise ValueError('PREMARKET_THEME_JOURNAL_CHANGED')
         return True
 

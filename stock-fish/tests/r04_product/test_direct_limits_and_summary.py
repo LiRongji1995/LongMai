@@ -3,8 +3,7 @@ import json
 import subprocess
 import time
 
-from stockfish_core.api import create_app
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 from stockfish_core.yaogu.candidate_service import CandidateRequest
 from stockfish_core.yaogu.data_pipeline import MainboardPipeline
@@ -269,7 +268,7 @@ def test_summary_endpoint_is_paged_and_full_export_stays_immutable(tmp_path, mon
 
     bundle, cutoff = make_bundle(80)
     monkeypatch.setattr(candidate_module, "utc_now", lambda: cutoff)
-    core = ApplicationService(
+    core = ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "summary.sqlite3"),
         allow_test_fixture=True,
@@ -281,30 +280,27 @@ def test_summary_endpoint_is_paged_and_full_export_stays_immutable(tmp_path, mon
         job = wait(core, submitted["job_id"])
         assert job["state"] == "SUCCEEDED", job
         run_id = job["result"]["candidate_run_id"]
-        client = create_app(core).test_client()
-        full = client.get("/api/candidate-runs/" + run_id)
-        summary = client.get("/api/candidate-runs/" + run_id + "/summary?page_size=50")
-        assert full.status_code == 200 and summary.status_code == 200
-        assert summary.json["view"] == "SUMMARY_V1"
-        assert len(summary.json["items"]) == 50
-        assert summary.json["filtered_total"] == len(full.json["items"])
-        assert "source_refs" not in summary.json
-        assert len(json.dumps(summary.json, ensure_ascii=False)) < len(json.dumps(full.json, ensure_ascii=False)) / 2
-        overview = client.get("/api/candidate-runs/" + run_id + "/summary?selection=display&page_size=50")
-        assert overview.status_code == 200
-        assert overview.json["filtered_total"] == len(full.json["display_ids"])
-        family = full.json["items"][0]["primary_family"]
-        family_summary = client.get("/api/candidate-runs/" + run_id + "/summary?family=" + family + "&page_size=10")
-        assert family_summary.status_code == 200
-        assert family_summary.json["filtered_total"] == sum(1 for item in full.json["items"] if item["primary_family"] == family)
-        assert all(item["primary_family"] == family for item in family_summary.json["items"])
+        service = core.candidates
+        full = service.get_run(run_id).model_dump(mode="json")
+        summary = service.run_summary(run_id, page_size=50)
+        assert summary["view"] == "SUMMARY_V1"
+        assert len(summary["items"]) == 50
+        assert summary["filtered_total"] == len(full["items"])
+        assert "source_refs" not in summary
+        assert len(json.dumps(summary, ensure_ascii=False)) < len(json.dumps(full, ensure_ascii=False)) / 2
+        overview = service.run_summary(run_id, selection="display", page_size=50)
+        assert overview["filtered_total"] == len(full["display_ids"])
+        family = full["items"][0]["primary_family"]
+        family_summary = service.run_summary(run_id, family=family, page_size=10)
+        assert family_summary["filtered_total"] == sum(1 for item in full["items"] if item["primary_family"] == family)
+        assert all(item["primary_family"] == family for item in family_summary["items"])
         original_get_run = core.candidates.get_run
         core.candidates.get_run = lambda _run_id: (_ for _ in ()).throw(AssertionError("summary must use projection"))
-        projected = client.get("/api/candidate-runs/" + run_id + "/summary?page_size=10")
-        assert projected.status_code == 200 and len(projected.json["items"]) == 10
+        projected = service.run_summary(run_id, page_size=10)
+        assert len(projected["items"]) == 10
         core.candidates.get_run = original_get_run
-        detail = client.get("/api/candidate-runs/" + run_id + "/items/TEST000")
-        assert detail.status_code == 200 and detail.json["item"] == full.json["items"][0]
-        assert client.get("/api/candidate-runs/" + run_id + "/export?format=json").json == full.json
+        detail = service.item_detail(run_id,"TEST000")
+        assert detail["item"] == full["items"][0]
+        assert service.get_run(run_id).model_dump(mode="json") == full
     finally:
         core.close()

@@ -1,4 +1,2 @@
-# Python 3.12; includes the retained legacy adapters exercised by the offline suite.
 -r requirements.txt
--r requirements-core.txt
 pytest==9.1.1

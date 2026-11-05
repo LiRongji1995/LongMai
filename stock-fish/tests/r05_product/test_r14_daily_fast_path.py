@@ -7,9 +7,8 @@ import time
 import pytest
 
 from tests.yaogu.fixtures import make_bundle
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
-from stockfish_core.api import create_app
 from stockfish_core.yaogu.candidate_service import CandidateRequest
 from stockfish_core.yaogu.contracts import digest
 from stockfish_core.yaogu.derived_feature_store import (
@@ -49,7 +48,6 @@ def _wait_job(core, job_id, *, timeout=10):
 
 def test_daily_fast_path_does_not_execute_research_arms(tmp_path, monkeypatch):
     import stockfish_core.yaogu.strategy_experiments as module
-    import stockfish_core.yaogu.theme_capital_trend as theme_capital_module
 
     def forbidden(*_args, **_kwargs):
         raise AssertionError("research arm entered the daily primary path")
@@ -57,16 +55,9 @@ def test_daily_fast_path_does_not_execute_research_arms(tmp_path, monkeypatch):
     for name in (
         "run_pv_observation",
         "run_pv_focus_preview",
-        "run_dna_rerank",
-        "run_theme_context",
+        "run_short_horizon_strategy",
     ):
         monkeypatch.setattr(module, name, forbidden)
-    for name in (
-        "run_theme_capital_trend",
-        "run_theme_capital_trend_technical_only",
-        "run_simple_trend_template",
-    ):
-        monkeypatch.setattr(theme_capital_module, name, forbidden)
 
     bundle, cutoff = make_bundle(7)
     result = run_active_daily_strategy(
@@ -145,7 +136,7 @@ def _service(tmp_path, monkeypatch):
 
     bundle, cutoff = make_bundle(7, session_count=260)
     monkeypatch.setattr(module, "utc_now", lambda: cutoff)
-    core = ApplicationService(
+    core = ResearchService(
         root=tmp_path / "state",
         store=SQLiteStore(tmp_path / "service.sqlite3"),
         allow_test_fixture=True,
@@ -197,26 +188,23 @@ def test_daily_primary_persists_compact_summary_and_expands_detail(tmp_path, mon
         core.close()
 
 
-def test_daily_primary_api_runs_fast_path_and_research_api_keeps_full_suite(tmp_path, monkeypatch):
+def test_saved_daily_fast_path_and_current_research_preserve_confirmed_strategies(tmp_path, monkeypatch):
     core, input_id, _bundle, _cutoff = _service(tmp_path, monkeypatch)
     try:
-        client = create_app(core).test_client()
 
-        daily_accepted = client.post("/api/daily-primary/run", json={"input_id": input_id})
-        assert daily_accepted.status_code == 202
-        daily_job = _wait_job(core, daily_accepted.json["job_id"])
+        daily_accepted = core.candidates.submit_daily_primary_strategy(input_id=input_id)
+        daily_job = _wait_job(core, daily_accepted["job_id"])
         assert daily_job["state"] == "SUCCEEDED", daily_job
         daily_run = core.store.get_document("strategy_experiment_runs", daily_job["result"]["run_id"])
         assert daily_run["execution_profile"] == "DAILY_PRIMARY_FAST"
         assert set(daily_run["results"]) == {"STAGE_AWARE_MOMENTUM_V2"}
 
-        research_accepted = client.post("/api/strategy-experiments/run", json={"input_id": input_id})
-        assert research_accepted.status_code == 202
-        research_job = _wait_job(core, research_accepted.json["job_id"])
+        research_accepted = core.candidates.submit_strategy_experiments(input_id=input_id)
+        research_job = _wait_job(core, research_accepted["job_id"])
         assert research_job["state"] == "SUCCEEDED", research_job
         research_run = core.store.get_document("strategy_experiment_runs", research_job["result"]["run_id"])
-        assert research_run["execution_profile"] == "RESEARCH_FULL"
-        assert {"PV_OBSERVATION_V1", "DNA_RERANK_V1", "THEME_CONTEXT_V1", "STAGE_AWARE_MOMENTUM_V2"} <= set(
+        assert research_run["execution_profile"] == "PERSONAL_DAILY_RESEARCH_V1"
+        assert {"PV_OBSERVATION_V1", "STAGE_AWARE_MOMENTUM_V2"} == set(
             research_run["results"]
         )
     finally:

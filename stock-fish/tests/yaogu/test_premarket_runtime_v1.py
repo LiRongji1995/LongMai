@@ -114,25 +114,30 @@ class RuntimeFixture(unittest.TestCase):
         with self.assertRaisesRegex(runtime.BudgetExceeded, 'PHASE_EXIT_CHECK_FAILED:OSError'):
             other.check('primary_caught_cannot_hide_unavailable_exit_check')
 
-    def test_physical_four_and_all_seven_fingerprint_fields_are_enforced(self):
+    def test_legacy_fingerprint_is_metadata_and_content_is_enforced(self):
         _, reference = runtime.Budget().read(self.path)
         self.assertEqual(set(reference), {'path', 'sha256', 'bytes', 'fp'})
-        self.assertEqual(set(reference['fp']), set(runtime.FP_KEYS))
-        raw, actual = runtime.Budget().read(self.path, expected=reference)
+        for key in set(runtime.FP_KEYS) - {'st_size'}:
+            copied = deepcopy(reference)
+            copied['fp'][key] += 1
+            with self.subTest(key=key):
+                raw, _ = runtime.Budget().read(self.path, expected=copied)
+                self.assertEqual(raw, self.payload)
+        replacement = self.path.with_suffix('.replacement')
+        replacement.write_bytes(self.payload)
+        os.replace(replacement, self.path)
+        raw, _ = runtime.Budget().read(self.path, expected=reference)
         self.assertEqual(raw, self.payload)
-        self.assertEqual(actual, reference)
-        for key in runtime.FP_KEYS:
-            bad = deepcopy(reference)
-            bad['fp'][key] += 1
-            budget = runtime.Budget()
-            with self.subTest(key=key), self.assertRaises(runtime.BudgetExceeded):
-                budget.read(self.path, expected=bad)
-            with self.assertRaises(runtime.BudgetExceeded):
-                budget.check('caught_read_error_cannot_pass')
+        self.path.write_bytes(b'X' + self.payload[1:])
+        budget = runtime.Budget()
+        with self.assertRaisesRegex(runtime.BudgetExceeded, 'SHA256|REFERENCE'):
+            budget.read(self.path, expected=reference)
+        with self.assertRaises(runtime.BudgetExceeded):
+            budget.check('content_failure_stays_sticky')
         for mutate in (lambda r: r['fp'].pop('st_flags'),
                        lambda r: r['fp'].update(extra=1),
                        lambda r: r.pop('fp'),
-                       lambda r: r.update(extra='not-a-physical-reference')):
+                       lambda r: r.update(extra='not-a-file-reference')):
             bad = deepcopy(reference)
             mutate(bad)
             with self.assertRaisesRegex(runtime.BudgetExceeded, 'REFERENCE'):

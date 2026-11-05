@@ -1,4 +1,0 @@
-# Compatibility entry: preserves the original full core dependency set.
-# New minimal daily installations use requirements-daily.txt.
--r requirements-rules.txt
--r requirements-qlib.txt

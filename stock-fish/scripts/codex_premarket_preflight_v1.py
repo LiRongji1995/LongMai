@@ -234,13 +234,93 @@ def _scope(index, config, writer_limits, raw_entries):
                 stages=stages, reasons=reasons, source_plan=core, factor_inventory=inventory)
 
 
-def plan(runtime, *, allow_test_fixture=False, _now=None):
+def _collection_reasons(result, configuration, reasons, *, calendar_available, authenticated=False):
+    """Separate bounded missing-source permission from complete-source readiness.
+
+    Unknown scope is admitted only when an explicitly missing parent explains
+    it. Every source already present must be authenticated before admission.
+    The original collector still reserves each newly discovered exact stage.
+    """
+    stages = {stage["name"]: stage for stage in result["stages"]}
+    permitted_stages = {"CURRENT_OFFICIAL", "CORE_MARKET_25", "THEME_MARKET_ADDITIONAL_42",
+        "FULL_ANCHORED_FACTORS", "QUALIFICATION", "CURRENT_THEME_DIRECTORIES",
+        "WHOLE_CURRENT_THEME_MEMBERS"}
+    permitted_reasons = {"ORIGINAL_CORE_SOURCES_NOT_READY", "WHOLE_SOURCE_GRAPH_NOT_AUTHENTICATED"}
+    permitted_reasons.update(prefix+stage for prefix in ("SOURCE_GAPS:", "UNKNOWN_SCOPE:")
+                             for stage in permitted_stages)
+    blocked = [reason for reason in reasons if reason not in permitted_reasons]
+    capture = configuration.get("capture", {})
+    if not calendar_available:
+        blocked.append("COLLECTION_AUTHENTICATED_CALENDAR_REQUIRED")
+    if capture.get("offline", False):
+        blocked.append("COLLECTION_ONLINE_POLICY_REQUIRED")
+    if capture.get("retry_failed", False):
+        blocked.append("COLLECTION_RETRY_POLICY_FORBIDDEN")
+    if configuration["seed_sources"]:
+        blocked.append("COLLECTION_SEED_IMPORT_NOT_ADMITTED")
+
+    def missing(stage, endpoint=None, session=None):
+        return any(row["status"] == "MISSING"
+            and (endpoint is None or row["request_spec"]["endpoint"] == endpoint)
+            and (session is None or row["request_spec"]["business_session"] == session)
+            for row in stages.get(stage, {}).get("requests", []))
+
+    current_missing = missing("CURRENT_OFFICIAL")
+    market_missing = missing("CORE_MARKET_25")
+    latest_missing = missing("CORE_MARKET_25", session=result.get("observation_date"))
+    factor_parent_missing = current_missing or latest_missing
+    allowed_unknown = {
+        ("FULL_ANCHORED_FACTORS", "CURRENT_MASTER_AND_OFFICIAL_REQUIRED_FOR_EXACT_SECURITY_SCOPE"): factor_parent_missing,
+        ("QUALIFICATION", "CURRENT_RAW_UNION_AND_OFFICIAL_REQUIRED_FOR_EXACT_LISTING_GAPS"): current_missing or market_missing,
+    }
+    for endpoint in ("industry_list_sina", "concept_list_sina"):
+        allowed_unknown[("WHOLE_CURRENT_THEME_MEMBERS", "COMPLETE_"+endpoint.upper()+"_REQUIRED_FOR_MEMBER_SCOPE")] = missing("CURRENT_THEME_DIRECTORIES", endpoint)
+    allowed_statuses = {"AVAILABLE", "MISSING"}
+    if not authenticated:
+        allowed_statuses.update({"CACHED_COMPLETE_UNAUTHENTICATED", "RAW_ONLY_INDEX_CANDIDATE_NOT_AUTHENTICATED"})
+    for stage in result["stages"]:
+        if stage["name"] not in permitted_stages | {"CALENDAR", "OPTIONAL_NEWS"}:
+            blocked.append("COLLECTION_UNSUPPORTED_STAGE:"+stage["name"])
+        for row in stage["requests"]:
+            if row["status"] not in allowed_statuses:
+                reason = ("COLLECTION_SOURCE_NOT_RETRYABLE:" if row["status"] in {
+                    "INCOMPLETE_NO_IMPLICIT_RETRY", "UNFINISHED_NO_IMPLICIT_RETRY", "NOT_VISIBLE_AT_CUTOFF"}
+                    else "COLLECTION_EXISTING_SOURCE_NOT_AUTHENTICATED:")
+                blocked.append(reason+row["request_key"])
+        for dependency in stage["unknown_dependencies"]:
+            if not allowed_unknown.get((stage["name"], dependency), False):
+                blocked.append("COLLECTION_UNEXPLAINED_SCOPE:"+stage["name"])
+    source = result.get("source_plan") or {}
+    permitted_dependencies = {
+        "OLDER_24_SESSION_ORIGINALS_NOT_EVALUATED": latest_missing or current_missing,
+        "LISTING_AND_FULL_FACTOR_SCOPE_NOT_EVALUATED": latest_missing or current_missing,
+        "COMPLETE_MARKET_AND_OFFICIAL_ORIGINALS_REQUIRED_FOR_EXACT_LISTING_GAPS": market_missing or current_missing,
+        "CURRENT_MASTER_AND_OFFICIAL_ORIGINALS_REQUIRED_FOR_EXACT_FACTOR_SCOPE": factor_parent_missing,
+        "BASIC_FALLBACK_SCOPE_AWAITS_CURRENT_BASIC_ALL_RESULT": missing("QUALIFICATION", "stock_basic_all"),
+    }
+    for dependency in source.get("dependencies", []):
+        if not permitted_dependencies.get(dependency, False):
+            blocked.append("COLLECTION_UNEXPLAINED_CORE_DEPENDENCY:"+dependency)
+    qualification = source.get("qualification_diagnostics") or {}
+    if qualification.get("future_listing_codes") or qualification.get("current_roster_positive_outDate_conflicts"):
+        blocked.append("COLLECTION_EXISTING_QUALIFICATION_CONFLICT")
+    if qualification.get("missing_positive_listing_codes") and not (
+            current_missing or market_missing or missing("QUALIFICATION")):
+        blocked.append("COLLECTION_UNRESOLVED_POSITIVE_LISTING")
+    constraints = source.get("native_request_constraints")
+    if constraints is not None and not constraints.get("compatible", False):
+        blocked.append("COLLECTION_EXISTING_SOURCE_CONSTRAINTS_INCOMPATIBLE")
+    return sorted(set(blocked))
+
+
+def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False):
     """Never collect, create files, retry, run a strategy, or expand its limits."""
-    from stockfish_core.yaogu.premarket_capture_cache_v1 import CaptureCache, RequestSpec, _config
+    from stockfish_core.yaogu.premarket_capture_cache_v1 import CaptureCache, RequestSpec, _config, _stamp
     from stockfish_core.yaogu.premarket_runtime_v1 import Budget
     from stockfish_core.yaogu.premarket_workflow_v1 import _latest_gate, load_config
     _need(runtime.profile.get("backend") == "premarket", "PREFLIGHT_REGISTERED_PREMARKET_REQUIRED")
     _need(_now is None or allow_test_fixture, "PREFLIGHT_REAL_CLOCK_OVERRIDE_FORBIDDEN")
+    _need(type(collect_missing) is bool, "PREFLIGHT_EXPLICIT_COLLECTION_MODE_REQUIRED")
     runtime.check_binding()
     prepared = original.premarket._prepared(runtime.profile)
     _need(prepared["source"] == ROOT and Path(sys.executable).absolute() == prepared["python"],
@@ -253,6 +333,7 @@ def plan(runtime, *, allow_test_fixture=False, _now=None):
     writer = dict(configuration["limits"])
     root, inventory = sources._existing_cache(prepared["state"] / "cache")
     diagnostic = dict(sources.LIMITS)
+    diagnostic["cache_bytes"] = max(diagnostic["cache_bytes"], writer["cache_bytes"])
     _need(inventory["logical_bytes"] <= diagnostic["cache_bytes"], "PREFLIGHT_READONLY_CACHE_LIMIT_EXCEEDED")
     budget = Budget(diagnostic, cache_dir=root)
     now = _now or datetime.now(timezone.utc)
@@ -308,11 +389,16 @@ def plan(runtime, *, allow_test_fixture=False, _now=None):
         capacity = runtime.preflight(expected_growth_bytes=growth)
         if not capacity["allowed"]:
             reasons.append("REGISTERED_STORAGE_CAPACITY_BLOCKED")
-        # Only a completely available graph proceeds to whole-source checks.
-        # A blocked attempt remains cheap: 67-session payloads are not expanded
-        # merely to rediscover a known budget or dependency failure.
-        if not reasons:
+        # Ordinary readiness remains cheap when blocked. Explicit collection
+        # planning authenticates every present dependency before allowing only
+        # genuine missing requests; it still performs no network or writes.
+        collection_reasons = (_collection_reasons(result, configuration, reasons,
+            calendar_available=calendar is not None) if collect_missing else
+            ["EXPLICIT_MISSING_COLLECTION_PLAN_REQUIRED"])
+        if not reasons or not collection_reasons:
             for row in rows.values():
+                if row["status"] == "MISSING":
+                    continue
                 if row["status"] == "RAW_ONLY_INDEX_CANDIDATE_NOT_AUTHENTICATED":
                     recipe = cache.context_recipe(row["request_spec"]["endpoint"], row["request_spec"]["business_session"])
                     _need(recipe is not None, "PREFLIGHT_RAW_RECIPE_DISAPPEARED")
@@ -321,9 +407,21 @@ def plan(runtime, *, allow_test_fixture=False, _now=None):
                     _, _, status = index.lookup(RequestSpec(**row["request_spec"]))
                     _need(status == "AVAILABLE", "PREFLIGHT_ORIGINAL_SOURCE_NOT_COMPLETE")
                     row.update(status="AVAILABLE", authentication="ORIGINAL_SOURCE_AUTHENTICATED")
+            if collect_missing:
+                # The collector consults all visible complete prior listing
+                # references even when current market/official parents are new.
+                # Authenticate these before allowing any missing request.
+                for value in index.entries:
+                    if (value["endpoint"] in ("stock_basic", "stock_basic_all")
+                            and value["status"] == "COMPLETE" and value["pagination_complete"]
+                            and _stamp(value["completed_at"]) <= index.instant):
+                        index.verify(value)
         unresolved = sum(row["status"] != "AVAILABLE" for row in rows.values())
         if unresolved:
             reasons.append("WHOLE_SOURCE_GRAPH_NOT_AUTHENTICATED")
+        if collect_missing:
+            collection_reasons = _collection_reasons(result, configuration, reasons,
+                calendar_available=calendar is not None, authenticated=True)
         cache.terminal()
         _need(before == original._snapshot(runtime.profile)
               and implementations == [original._reference(Path(row["path"])) for row in implementations],
@@ -339,7 +437,11 @@ def plan(runtime, *, allow_test_fixture=False, _now=None):
         result.update(schema_version=VERSION, planned_at=now.isoformat(),
             status="ADMITTED_FOR_BOUNDED_EXECUTION" if not reasons else "BLOCKED",
             execution_admitted=not reasons, reasons=sorted(set(reasons)),
+            collection_admitted=collect_missing and not collection_reasons,
+            collection_reasons=collection_reasons, explicit_missing_collection_plan=collect_missing,
+            collection_policy="ORIGINAL_COLLECTOR_PER_STAGE_ADMISSION_NO_RETRY",
             original_writer_limits=writer, cache_inventory=inventory, capacity=capacity,
+            diagnostic_cache_ceiling_source="MAX_FIXED_DIAGNOSTIC_AND_REGISTERED_WRITER_LIMIT",
             read_only_diagnostic_limits=diagnostic, diagnostic_limits_authorize_writer=False,
             totals={**totals, "scope":"KNOWN_MISSING_PLUS_BOUNDED_OPTIONAL_NEWS", "unknown_components":unknown,
                     "total_exact":not unknown and not news_calls and all(row["status"] in ("AVAILABLE", "MISSING") for row in rows.values()),

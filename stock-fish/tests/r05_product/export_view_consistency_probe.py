@@ -4,13 +4,13 @@ Run directly: python -m pytest -q tests/r05_product/export_view_consistency_prob
 """
 import csv,io,json
 import pytest
-from stockfish_core.service import ApplicationService
+from tests.support.local_service import ResearchService
 from stockfish_core.storage import SQLiteStore
 
 
 @pytest.fixture
 def service(tmp_path):
-    core=ApplicationService(root=tmp_path/'state',store=SQLiteStore(tmp_path/'fixture.sqlite3'),allow_test_fixture=True,data_dir=tmp_path/'no_model')
+    core=ResearchService(root=tmp_path/'state',store=SQLiteStore(tmp_path/'fixture.sqlite3'),allow_test_fixture=True,data_dir=tmp_path/'no_model')
     yield core.candidates
     core.close()
 

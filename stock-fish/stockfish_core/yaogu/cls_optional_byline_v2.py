@@ -32,7 +32,7 @@ _ISSUED = weakref.WeakValueDictionary()
 
 def source_identity():
     root = Path(__file__).resolve().parents[2]
-    paths = (Path(__file__), root / 'docs/CLS_NEXT_DATA_OPTIONAL_BYLINE_V2.md',
+    paths = (Path(__file__),
              Path(__file__).with_name('theme_event_evidence.py'),
              Path(__file__).with_name('contracts.py'),
              Path(__file__).with_name('history_artifacts.py'),

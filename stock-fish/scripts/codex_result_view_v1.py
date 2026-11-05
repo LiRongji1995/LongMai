@@ -26,6 +26,10 @@ import uuid
 ROOT = Path(__file__).resolve().parents[1]
 if str(ROOT) not in sys.path:
     sys.path.insert(0, str(ROOT))
+
+from stockfish_core.file_integrity import (
+    content_equal, content_reference_equal, content_fingerprint, verify_content_reference,
+)
 from scripts import codex_workspace as workspace
 
 VERSION = "CODEX_RESULT_VIEW_V1"
@@ -104,23 +108,21 @@ def _reference(value, *, maximum=None):
     _hex(value["sha256"])
     _need(type(value["bytes"]) is int and value["bytes"] >= 0 and type(value["fp"]) is dict
           and set(value["fp"]) == set(FP_KEYS) and all(type(v) is int for v in value["fp"].values())
-          and value["bytes"] == value["fp"]["st_size"], "VIEW_REFERENCE_PHYSICAL_IDENTITY")
+          and value["bytes"] == value["fp"]["st_size"], "VIEW_REFERENCE_SCHEMA")
     if maximum is not None:
         _need(value["bytes"] <= maximum, "VIEW_EXPORT_SIZE_LIMIT")
     return value
 
 
 def _metadata(reference):
+    """Recheck complete bytes, including old seals containing physical metadata."""
     reference = _reference(reference)
-    path = _path(reference["path"])
-    with workspace._directory_fd(path.parent) as parent:
-        value = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
-        _regular(value)
-        _need(_fp(value) == reference["fp"], "VIEW_ORIGINAL_PHYSICAL_IDENTITY_CHANGED")
+    _read_file(reference["path"], maximum=max(reference["bytes"], 1),
+               expected=reference, retain=False)
 
 
 def _read_file(path, *, maximum, expected=None, retain=True, private=False):
-    """No-follow fd read, byte cap, hash and seven-field identity before/after."""
+    """No-follow bounded read; persisted references bind bytes, not inodes."""
     path = _path(path)
     if expected is not None:
         _reference(expected, maximum=maximum)
@@ -128,14 +130,14 @@ def _read_file(path, *, maximum, expected=None, retain=True, private=False):
     with workspace._directory_fd(path.parent) as parent:
         before_path = os.stat(path.name, dir_fd=parent, follow_symlinks=False)
         _regular(before_path, private=private)
+        if expected is not None:
+            _need(before_path.st_size == expected["bytes"], "VIEW_ORIGINAL_HASH_CHANGED")
         _need(before_path.st_size <= maximum, "VIEW_FILE_SIZE_LIMIT")
         fd = os.open(path.name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent)
         try:
             before = os.fstat(fd)
             _regular(before, private=private)
             _need(_fp(before) == _fp(before_path), "VIEW_FILE_CHANGED_DURING_READ")
-            if expected is not None:
-                _need(_fp(before) == expected["fp"], "VIEW_ORIGINAL_PHYSICAL_IDENTITY_CHANGED")
             digest, size = hashlib.sha256(), 0
             output = bytearray() if retain else None
             while True:
@@ -155,7 +157,7 @@ def _read_file(path, *, maximum, expected=None, retain=True, private=False):
                   and size == before.st_size, "VIEW_FILE_CHANGED_DURING_READ")
             reference = dict(path=str(path), sha256=digest.hexdigest(), bytes=size, fp=_fp(after))
             if expected is not None:
-                _need(reference == expected, "VIEW_ORIGINAL_HASH_CHANGED")
+                _need(content_reference_equal(reference, expected), "VIEW_ORIGINAL_HASH_CHANGED")
             return output, reference
         finally:
             os.close(fd)
@@ -412,7 +414,7 @@ def publish_view(runtime, archive_id, *, profile, allow_test_fixture=False,
     _need(type(allow_test_fixture) is bool, "VIEW_FIXTURE_FLAG_MUST_BE_BOOLEAN")
     _need(profile in PROFILES, "VIEW_EXPLICIT_ARCHIVE_PROFILE_REQUIRED")
     binding = _runtime(runtime)
-    _need(Path(sys.executable).absolute() == Path(runtime.profile["python"])
+    _need(workspace.interpreter_path(sys.executable) == Path(runtime.profile["python"])
           and Path(runtime.profile["source_root"]) == ROOT, "VIEW_REGISTERED_EXECUTION_REQUIRED")
     identity = _identity(binding, archive_id, profile, allow_test_fixture)
     view_id = _sha(identity)

@@ -5,6 +5,8 @@ This coordinator does not call a selector, SDK, HTTP client, or business store.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 from collections import Counter
 from copy import deepcopy
 from datetime import date, datetime, timezone
@@ -94,11 +96,11 @@ class _Registry:
             _require(sha == _hash(expected), 'FILE_SHA_MISMATCH')
         record = dict(path=str(path), sha256=sha, **state)
         prior = self.files.get(str(path))
-        _require(prior is None or prior == record, 'REGISTERED_SOURCE_CHANGED')
+        _require(prior is None or content_reference_equal(prior, record), 'REGISTERED_SOURCE_CHANGED')
         if prior is None:
             self.total_bytes += len(raw)
             _require(self.total_bytes <= MAX_TOTAL_SOURCE_BYTES, 'TOTAL_SOURCE_BYTE_BUDGET_EXCEEDED')
-        self.files[str(path)] = record
+        self.files.setdefault(str(path), record)
         return raw
 
     def registered(self, value, base):
@@ -121,10 +123,8 @@ def source_identity():
         'short_horizon_participation.py', 'short_horizon_strength.py',
         'contracts.py', 'history_artifacts.py', 'visibility.py', 'candidate_service.py')
     files = [Path(__file__).with_name(name) for name in names]
-    files.extend((root / 'scripts/codex_research.py', root / 'config/theme_evolution_r1.yaml',
-        root / 'docs/THEME_EVOLUTION_R1.md', root / 'docs/THEME_OBSERVATION_DIAGNOSTICS_V1.md',
-        root / 'docs/ECONOMIC_DIRECTION_EXPLANATION_V1.md', root / 'docs/ECONOMIC_DIRECTION_ARCHIVED_DISPLAY_V1.md',
-        root / 'docs' / (VERSION + '.md')))
+    files.append(root / 'stockfish_core/file_integrity.py')
+    files.extend((root / 'scripts/codex_daily_v2.py', root / 'config/theme_evolution_r1.yaml'))
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest() for path in files}
     return dict(version=VERSION, feature_version=FEATURE_VERSION, source_revision=SOURCE_REVISION, source_file_hashes=hashes,
                 source_hash=digest_json_stream(hashes), parameter_status='UNVALIDATED',

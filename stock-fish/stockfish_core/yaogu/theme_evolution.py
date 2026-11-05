@@ -23,7 +23,6 @@ from .visibility import EvidenceResolver, SH, clock_visible, stamp
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / 'config/theme_evolution_r1.yaml'
-SPEC_PATH = ROOT / 'docs/THEME_EVOLUTION_R1.md'
 CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
 STRATEGY_ID = CONFIG['strategy_id']
 FEATURE_VERSION = CONFIG['feature_version']
@@ -225,7 +224,7 @@ def evaluate_day(features, previous=None, history=(), previous_stage=None):
 
 
 def source_identity():
-    paths = (Path(__file__), CONFIG_PATH, SPEC_PATH)
+    paths = (Path(__file__), CONFIG_PATH)
     hashes = {str(path.relative_to(ROOT)): hashlib.sha256(path.read_bytes()).hexdigest() for path in paths}
     return {'implementation_version': CONFIG['implementation_version'], 'feature_version': FEATURE_VERSION,
         'spec_revision': CONFIG['spec_revision'], 'config_hash': digest(CONFIG),

@@ -187,35 +187,3 @@ def test_tushare_price_factor_limit_receipts_are_consumed_by_pv():
     assert bar.limit_verified and bar.limit_up==11 and len(bar.source_refs)>=3
     pv=run_pv_observation(bundle,cutoff=now+timedelta(seconds=2))
     assert [x['instrument_id'] for x in pv['items']]==['600000.SH']
-
-
-def test_compose_explicit_secret_mapping_and_shell_needs_no_host_python():
-    root=Path(__file__).resolve().parents[2]
-    compose=(root/'docker-compose.yml').read_text(encoding='utf-8')
-    shell=(root/'start-stockrecommendation-docker.sh').read_text(encoding='utf-8')
-    assert 'TUSHARE_TOKEN: "${TUSHARE_TOKEN:-}"' in compose
-    assert 'TUSHARE_PRO_TOKEN: "${TUSHARE_PRO_TOKEN:-}"' in compose
-    assert 'if python' not in shell and 'python -c' not in shell
-    assert shell.index('backup --database')<shell.index('compose build')
-
-
-@pytest.mark.skipif(os.name!='nt',reason='Windows native-command regression')
-def test_powershell_build_failure_cannot_pass_using_old_healthy_container(tmp_path):
-    root=Path(__file__).resolve().parents[2]
-    script=tmp_path/'start.ps1';script.write_text((root/'Start-StockRecommendation-Docker.ps1').read_text(encoding='utf-8'),encoding='utf-8')
-    (tmp_path/'.env.docker.local').write_text('STOCKFISH_API_KEY=TEST_FIXTURE_SECRET_NOT_REAL\n',encoding='utf-8')
-    wrapper=tmp_path/'wrapper.ps1'
-    wrapper.write_text('''$ErrorActionPreference='Stop'
-function global:docker {
- param([Parameter(ValueFromRemainingArguments=$true)][string[]]$A)
- $global:LASTEXITCODE=0
- if ($A -contains 'build') {$global:LASTEXITCODE=7;return 'TEST_BUILD_FAILURE'}
- if ($A -contains 'running') {return 'stockfish'}
- if ($A -contains 'inspect') {return 'healthy'}
- return 'TEST_FIXTURE'
-}
-& (Join-Path $PSScriptRoot 'start.ps1')
-''',encoding='utf-8')
-    value=subprocess.run(['pwsh','-NoProfile','-File',str(wrapper)],capture_output=True,text=True,encoding='utf-8',timeout=20)
-    assert value.returncode!=0 and 'exit 7' in value.stderr
-    assert 'as healthy' not in value.stdout and 'TEST_FIXTURE_SECRET_NOT_REAL' not in value.stdout+value.stderr

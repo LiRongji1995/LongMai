@@ -1,12 +1,5 @@
-# R05 frozen runtime identities bind original file bytes, including line endings.
-# Keep these audited files byte-exact in Git; do not renormalize the frozen spec.
+# Preserve retained frozen configuration and original source bytes.
 config/yaogu_v1.defaults.yaml -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-scripts/r05_weekly_replay.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-stockfish_core/yaogu/candidate_api.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 stockfish_core/yaogu/candidate_service.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 stockfish_core/yaogu/provider_normalization.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-stockfish_core/yaogu/scheduler.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 stockfish_core/yaogu/strategy_tracking.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
-# ACTIVE_RUNTIME_V1 also binds this original LF blob. Root *.ps1 eol=crlf
-# must not transform the frozen preimage on a fresh checkout.
-premarket.ps1 -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol

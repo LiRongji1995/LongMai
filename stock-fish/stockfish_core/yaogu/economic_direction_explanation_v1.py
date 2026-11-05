@@ -23,7 +23,6 @@ FEATURE_VERSION = 'FINITE_OFFICIAL_BUSINESS_RELATIONS_PRESERVED_NATIVE_SUBTHEMES
 NODE_CONTRACT = 'CURRENT_WHOLE_COUNTED_PROVIDER_NODE_V2'
 MAX_FILE_BYTES = 8 * 1024**2
 ROOT = Path(__file__).resolve().parents[2]
-SPEC = ROOT / 'docs' / 'ECONOMIC_DIRECTION_EXPLANATION_V1.md'
 DIRECTIONS = ('BATTERY', 'RETAIL_CONSUMPTION')
 CATEGORIES = ('confirmed_mainlines', 'fermentation_watch', 'active_divergence_mainlines')
 CAPTURE_CLOCKS = ('request_started_at', 'response_header_seen_at', 'body_saved_at', 'request_completed_at')
@@ -102,10 +101,8 @@ def _read(file):
 
 
 def _fp(file):
-    _read(file)
-    s = Path(file.path).stat()
-    return dict(sha256=file.sha256, bytes=s.st_size, mtime_ns=s.st_mtime_ns,
-                inode=s.st_ino, device=s.st_dev, mode=s.st_mode)
+    raw = _read(file)
+    return dict(sha256=file.sha256, bytes=len(raw))
 
 
 def source_identity():
@@ -113,7 +110,6 @@ def source_identity():
              'historical_replay.py', 'historical_replay_turnover.py')
     files = {str(p.relative_to(ROOT)): hashlib.sha256(p.read_bytes()).hexdigest()
              for p in (Path(__file__).with_name(name) for name in names)}
-    files[str(SPEC.relative_to(ROOT))] = hashlib.sha256(SPEC.read_bytes()).hexdigest()
     identity = dict(implementation_version=VERSION, feature_version=FEATURE_VERSION,
                     counted_node_contract=NODE_CONTRACT, source_file_hashes=files,
                     source_capability_issued=False, explicit_opt_in=True)

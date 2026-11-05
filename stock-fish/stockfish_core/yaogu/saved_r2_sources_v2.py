@@ -34,7 +34,7 @@ def _require(condition, reason):
 
 def source_identity():
     root = Path(__file__).resolve().parents[2]
-    paths = [Path(__file__), Path(__file__).with_name('providers.py'),
+    paths = [root / 'stockfish_core/file_integrity.py', Path(__file__), Path(__file__).with_name('providers.py'),
         Path(__file__).with_name('provider_normalization.py'),
         Path(__file__).with_name('saved_r2_delivery.py'),
         Path(__file__).with_name('historical_replay.py'),
@@ -43,8 +43,7 @@ def source_identity():
         Path(__file__).with_name('short_horizon_strength.py'),
         Path(__file__).with_name('contracts.py'),
         Path(__file__).with_name('history_artifacts.py'),
-        Path(__file__).with_name('visibility.py'),
-        root / 'docs/SAVED_R2_COMPLETE_STREAM_DELIVERY_V3.md']
+        Path(__file__).with_name('visibility.py')]
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
         for path in paths}
     return dict(version=VERSION, schema_version=SOURCES_SCHEMA,

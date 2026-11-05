@@ -42,10 +42,27 @@ class SourcesTests(Base):
         self.executor.calls.clear()
         self.assertNotIn("provider", self.calendar.metadata)
 
-    def execute_sources(self, operation="plan", **kwargs):
-        return sources.execute(self.runtime, operation=operation, profile=sources.PROFILE,
-            identity_policy=kwargs.pop("identity_policy", sources.NATIVE_IDENTITY),
-            allow_test_fixture=True, **kwargs)
+    def execute_sources(self, *, identity_policy=sources.NATIVE_IDENTITY, _now=None,
+                        limits=None, allow_test_fixture=True):
+        # The removed standalone builder is replaced by the actual read-only
+        # helpers consumed by whole-workflow preflight; never write a manifest.
+        from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+        policy = sources._limits(limits)
+        now = _now or datetime.now(timezone.utc)
+        budget = Budget(policy, cache_dir=self.cache.root)
+        with budget.phase("capture"), budget.meter_files():
+            cache = cache_module.CaptureCache(self.cache.root, budget,
+                config=dict(allow_test_fixture=allow_test_fixture, offline=True, retry_failed=False),
+                executor=sources._no_network)
+            index = sources._Index(cache, now, allow_test_fixture)
+            result = sources._collect(index, {}, identity_policy)
+            cache.terminal()
+            result.update(original_capture_count=len(result["captures"]),
+                missing_request_count=sum(row["status"] == "MISSING" for row in result["requests"]),
+                unfinished_request_count=sum(row["status"] == "UNFINISHED_NO_IMPLICIT_RETRY" for row in result["requests"]),
+                full_premarket_ready=False, network_calls=0, strategy_calls=0,
+                distinct_request_lookups=index.query_count, native_request_constraints=None)
+            return result
 
     def files(self):
         return {str(path): original._reference(path) for path in self.state.rglob("*") if path.is_file()}
@@ -70,21 +87,6 @@ class SourcesTests(Base):
         self.assertFalse(self.executor.calls)
         self.assertFalse(list(self.report.iterdir()))
 
-    def test_build_legal_frozen_request_preserves_all_source_rows(self):
-        before = self.files()
-        value = self.execute_sources("build")
-        request, _ = original._request(Path(value["manifest"]["path"]), True)
-        self.assertEqual(len(request["captures"]), 56)
-        self.assertEqual(request["observation_date"], self.observed)
-        self.assertEqual(request["target_session"], self.target)
-        self.assertEqual(request["coverage_type"], "TEST_FIXTURE")
-        self.assertEqual({item["receipt_id"] for item in request["captures"]},
-                         {self.calendar.receipt_id, self.basic.receipt_id, self.factor.receipt_id,
-                          *(record.receipt_id for record in self.records)})
-        self.assertEqual(value["status"], "BUILT_ORIGINAL_CORE_REQUEST_NOT_EXECUTED")
-        self.assertEqual(before, self.files())
-        self.assertEqual(len(list(self.report.rglob("*.json"))), 2)
-        self.assertFalse(value["full_premarket_ready"])
 
     def test_unknown_listing_is_preserved_only_in_explicit_native_policy(self):
         # A current positive-basic source genuinely contains only mainboard codes.
@@ -98,9 +100,7 @@ class SourcesTests(Base):
         self.assertEqual(native["qualification_diagnostics"]["missing_positive_listing_codes"], ["sh.688001"])
         self.assertEqual(native["qualification_diagnostics"]["RAW_union_count"], 2)
         self.assertFalse(any(row["request_spec"]["endpoint"] == "stock_basic" for row in native["requests"]))
-        built = self.execute_sources("build")
-        request = json.loads(Path(built["manifest"]["path"]).read_bytes())
-        self.assertIn(alternate.receipt_id, {row["receipt_id"] for row in request["captures"]})
+        self.assertIn(alternate.receipt_id, {row["receipt_id"] for row in native["captures"]})
         strict = self.execute_sources(identity_policy=sources.LEGACY_IDENTITY)
         self.assertFalse(strict["core_ready_to_run"])
         self.assertTrue(any(row["status"] == "UNFINISHED_NO_IMPLICIT_RETRY" for row in strict["requests"]))
@@ -112,8 +112,6 @@ class SourcesTests(Base):
         self.assertFalse(value["core_ready_to_run"])
         self.assertFalse(value["qualification_diagnostics"]["exact_missing_scope"])
         self.assertEqual(value["unfinished_request_count"], 1)
-        with self.assertRaisesRegex(sources.SourcesError, "BUILD_BLOCKED"):
-            self.execute_sources("build")
         self.assertFalse(list(self.report.iterdir()))
 
     def test_exact_new_factor_required_no_tail_or_previous_day_substitution(self):
@@ -168,8 +166,6 @@ class SourcesTests(Base):
             self.assertEqual(result["unfinished_request_count"], 1)
             self.assertEqual(result["distinct_request_lookups"], 2)
             self.assertFalse(result["core_ready_to_run"])
-            with self.assertRaisesRegex(sources.SourcesError, "BUILD_BLOCKED"):
-                self.execute_sources("build")
         self.assertEqual(before, self.files())
         self.assertFalse(list(self.report.iterdir()))
 
@@ -213,29 +209,8 @@ class SourcesTests(Base):
                 self.execute_sources()
         self.assertFalse(list(self.report.iterdir()))
 
-    def test_historical_as_of_explicit_and_future_rejected(self):
-        cutoff = datetime.now(timezone.utc).isoformat()
-        value = self.execute_sources(as_of=cutoff)
-        self.assertEqual(value["clock_mode"], "EXPLICIT_HISTORICAL_REPLAY")
-        self.assertEqual(value["planned_at"], cutoff)
-        with self.assertRaisesRegex(sources.SourcesError, "FUTURE_AS_OF"):
-            self.execute_sources(as_of=(datetime.now(timezone.utc)+timedelta(days=1)).isoformat())
-        with self.assertRaisesRegex(sources.SourcesError, "AWARE_CLOCK"):
-            self.execute_sources(as_of="2026-10-25T15:00:00")
 
-    def test_unknown_identity_profile_and_limits_rejected(self):
-        with self.assertRaisesRegex(sources.SourcesError, "EXPLICIT_IDENTITY_POLICY"):
-            self.execute_sources(identity_policy="guess")
-        with self.assertRaisesRegex(sources.SourcesError, "LIMIT_EXCEEDS_CAP"):
-            self.execute_sources(limits={"cache_bytes": sources.LIMITS["cache_bytes"]+1})
-        with self.assertRaisesRegex(sources.SourcesError, "READONLY_CACHE_CAP"):
-            self.execute_sources(limits={"cache_bytes": 1})
 
-    def test_build_capacity_rejected_without_output(self):
-        with patch.object(self.runtime, "preflight", return_value={"allowed": False}):
-            with self.assertRaisesRegex(sources.SourcesError, "CAPACITY_BLOCKED"):
-                self.execute_sources("build")
-        self.assertFalse(list(self.report.iterdir()))
 
     def test_changed_original_rejected_no_repair(self):
         path = Path(self.factor.metadata["raw"]["path"])
@@ -258,11 +233,11 @@ class SourcesTests(Base):
 
     def test_fixture_sources_cannot_enter_real_mode(self):
         with self.assertRaisesRegex(sources.SourcesError, "REAL_AND_FIXTURE"):
-            sources.plan(self.runtime, profile=sources.PROFILE, identity_policy=sources.NATIVE_IDENTITY)
+            self.execute_sources(allow_test_fixture=False)
 
-    def test_read_bound_is_sticky_before_build(self):
+    def test_read_bound_is_sticky_before_source_planning(self):
         with self.assertRaisesRegex(RuntimeError, "READ_LIMIT_EXCEEDED"):
-            self.execute_sources("build", limits={"capture_read_bytes": 1})
+            self.execute_sources(limits={"capture_read_bytes": 1})
         self.assertFalse(list(self.report.iterdir()))
 
 
@@ -291,4 +266,4 @@ class SourceRequestConstraintsTests(unittest.TestCase):
         self.assertIn("MANIFEST_EXCEEDS_2_MIB", sources._request_constraints(request)["violations"])
         request = self.request(count=2)
         request["captures"][1]["raw"] = dict(request["captures"][0]["raw"], bytes=2)
-        self.assertIn("CONFLICTING_PHYSICAL_SOURCE_REFERENCES", sources._request_constraints(request)["violations"])
+        self.assertIn("CONFLICTING_CONTENT_SOURCE_REFERENCES", sources._request_constraints(request)["violations"])

@@ -25,7 +25,6 @@ IMPLEMENTATION_VERSION = 'THEME_EVOLUTION_STREAMING_EXACT_JOINT_AUDIT_V2'
 FEATURE_VERSION = 'THEME_EVOLUTION_STREAMED_EXACT_CONTEXT_V2'
 SPEC_REVISION = 'THEME_EVOLUTION_STREAMING_R2_SPEC_1'
 SCHEMA_VERSION = 'THEME_EVOLUTION_STREAMED_CONTEXT_V2'
-SPEC_PATH = base.ROOT / 'docs' / 'THEME_EVOLUTION_STREAMING_V2.md'
 HISTORY_RETAINED_SESSIONS = legacy.HISTORY_RETAINED_SESSIONS
 _binding = legacy._binding
 _selected_bars = legacy._selected_bars
@@ -36,7 +35,7 @@ _features = legacy._features
 def source_identity():
     """Pin the new execution/spec, real journal, and every old helper source."""
     hashes = dict(legacy.source_identity()['source_file_hashes'])
-    for path in (Path(__file__), SPEC_PATH, Path(__file__).with_name('evidence_audit_spool_v2.py')):
+    for path in (Path(__file__), Path(__file__).with_name('evidence_audit_spool_v2.py')):
         hashes[str(path.relative_to(base.ROOT))] = hashlib.sha256(path.read_bytes()).hexdigest()
     return {'implementation_version': IMPLEMENTATION_VERSION,
             'feature_version': FEATURE_VERSION, 'spec_revision': SPEC_REVISION,

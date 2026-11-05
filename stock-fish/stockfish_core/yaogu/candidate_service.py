@@ -860,63 +860,9 @@ class CandidateService(DailyResearchMixin):
             'serialization': 'JSON_ALLOW_NAN_FALSE',
         }
 
-    def _daily_primary_incremental_refresh(self, *, target_observation_date, cutoff, trace, prior_readiness):
-        scheduler = getattr(self, 'scheduler', None)
-        if scheduler is None:
-            return {'status': 'SKIPPED', 'reason': 'SCHEDULER_NOT_CONFIGURED'}
-        now = scheduler.clock() if hasattr(scheduler, 'clock') else utc_now()
-        archive = self.root / 'daily_primary_refreshes' / ('refresh_' + digest({
-            'target_observation_date': target_observation_date,
-            'cutoff': cutoff.isoformat(),
-            'requested_at': now.isoformat(),
-        }))
-        if getattr(scheduler, 'custom_capture', False):
-            scheduler.last_capture_report = None
-            bundle = scheduler.capture(archive, now)
-            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler.capture'
-        else:
-            from .data_pipeline import CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL
-            target_date = date.fromisoformat(target_observation_date) if target_observation_date else None
-            scheduler.last_capture_report = None
-            bundle = scheduler._capture(archive, now, None, purpose=CAPTURE_PURPOSE_DAILY_PRIMARY_CRITICAL,
-                                        observation_date=target_date)
-            implementation_path = 'CandidateService._daily_primary_incremental_refresh -> CandidateScheduler._capture -> MainboardPipeline.capture(DAILY_PRIMARY_CRITICAL)'
-        capture_completed_at = scheduler.clock() if hasattr(scheduler, 'clock') else utc_now()
-        capture_report = getattr(scheduler, 'last_capture_report', None) or {}
-        fast_decision = capture_report.get('daily_primary_fast_decision')
-        visible_at = self._max_evidence_clock(bundle) or capture_completed_at
-        actual_decision_cutoff = max(cutoff, capture_completed_at, visible_at)
-        if target_observation_date and str(bundle.observation_date) != target_observation_date:
-            return {'status': 'NO_MATCHING_INPUT', 'reason': 'REFRESH_OBSERVATION_DATE_MISMATCH',
-                    'target_observation_date': target_observation_date,
-                    'refreshed_observation_date': str(bundle.observation_date),
-                    'capture_purpose': 'DAILY_PRIMARY_CRITICAL',
-                    'refresh_implementation_path': implementation_path,
-                    'scheduler_capture_invoked': True,
-                    'fast_decision': fast_decision,
-                    'fast_decision_early_return': bool(fast_decision and fast_decision.get('decision') == 'NOT_READY'
-                                                        and fast_decision.get('sufficient')),
-                    'capture_started_at': now.isoformat(),
-                    'capture_completed_at': capture_completed_at.isoformat(),
-                    'refreshed_data_visible_at': visible_at.isoformat(),
-                    'actual_decision_cutoff': actual_decision_cutoff.isoformat()}
-        input_id = self.register_input(bundle, activate=False)
-        return {'status': 'COMPLETE', 'input_id': input_id,
-                'target_observation_date': target_observation_date,
-                'observation_date': str(bundle.observation_date),
-                'coverage_type': bundle.coverage_type,
-                'capture_purpose': 'DAILY_PRIMARY_CRITICAL',
-                'refresh_implementation_path': implementation_path,
-                'scheduler_class': type(scheduler).__name__,
-                'scheduler_capture_invoked': True,
-                'fast_decision': fast_decision,
-                'fast_decision_early_return': bool(fast_decision and fast_decision.get('decision') == 'NOT_READY'
-                                                    and fast_decision.get('sufficient')),
-                'capture_started_at': now.isoformat(),
-                'capture_completed_at': capture_completed_at.isoformat(),
-                'refreshed_data_visible_at': visible_at.isoformat(),
-                'actual_decision_cutoff': actual_decision_cutoff.isoformat(),
-                'prior_readiness_final': (prior_readiness or {}).get('final_readiness')}
+    def _daily_primary_incremental_refresh(self, **kwargs):
+        # Collection is explicit through the registered main workflow.
+        return {'status': 'SKIPPED', 'reason': 'EXPLICIT_REGISTERED_CAPTURE_REQUIRED'}
 
     def _resolve_daily_primary_worker_input(self, payload):
         requested_date = date.fromisoformat(payload['requested_observation_date']) if payload.get('requested_observation_date') else None
@@ -1037,18 +983,14 @@ class CandidateService(DailyResearchMixin):
                                           scheduler_job_id=None, capture_timing=None):
         from .strategy_experiments import run_strategy_experiments, strategy_comparison
         result=run_strategy_experiments(bundle,cutoff=cutoff,config=config)
-        result['execution_profile']='RESEARCH_FULL'
+        result['execution_profile']='PERSONAL_DAILY_RESEARCH_V1'
         result['input_id']=input_id
         result['generated_at']=utc_now().isoformat()
         latest=self._latest_input_publication(input_id)
         daily_summary=self.run_summary(latest.run_id,page_size=1) if latest is not None else None
         result['comparison']=strategy_comparison(daily_summary,result['results']['PV_OBSERVATION_V1'],
-            result['results']['DNA_RERANK_V1'],result['results']['THEME_CONTEXT_V1'],
-            result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'),
-            [value for key,value in result.get('results',{}).items()
-             if key in {'THEME_CAPITAL_TREND_TECHNICAL_ONLY_V1','THEME_CAPITAL_TREND_V1',
-                        'SIMPLE_TREND_TEMPLATE_REFERENCE_V1','STAGE_AWARE_MOMENTUM_V1',
-                        'STAGE_AWARE_MOMENTUM_V2'}])
+            result['results']['STAGE_AWARE_MOMENTUM_V2'],
+            result.get('selection_results',{}).get('PV_FOCUS_PREVIEW_V0.1'))
         from .strategy_tracking import _visible_bars
         frozen_bars = _visible_bars(bundle, cutoff)
         if latest is not None:
@@ -1426,7 +1368,7 @@ class CandidateService(DailyResearchMixin):
         failed_capture_days = set()
         not_ready_primary_days = set()
         # A failed capture has no signal row, but remains operational evidence.
-        from .scheduler import SH
+        from .visibility import SH
         for job in self._all('candidate_schedule_events'):
             if job.get('validation_epoch_id') == selected_id and job.get('market_session') == 'EVENING' and job.get('status') != 'MISSED_SERVICE_OFFLINE':
                 attempt_day = datetime.fromisoformat(job['scheduled_at']).astimezone(SH).date().isoformat()
@@ -1475,7 +1417,7 @@ class CandidateService(DailyResearchMixin):
             def write(connection):
                 self._write_strategy_result(connection, result, created_at=payload['cutoff'])
             return ctx.complete(terminal, write)
-        ctx.update(.25,'运行量价观察控制组、股性复排和题材上下文实验')
+        ctx.update(.25,'运行量价观察与阶段感知主动V2；冻结DAILY对照单列')
         result = self._build_strategy_experiment_result(payload['input_id'], bundle, cutoff, config,
             market_session=payload.get('market_session'), validation_role=payload.get('validation_role', 'MANUAL_OR_REPLAY'),
             primary_signal_cutoff=payload.get('primary_signal_cutoff'), scheduler_job_id=payload.get('scheduler_job_id'))

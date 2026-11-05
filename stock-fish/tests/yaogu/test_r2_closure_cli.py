@@ -240,15 +240,16 @@ def test_native_archive_to_daily_cli_without_mocking_authentication(tmp_path, mo
     now = datetime.fromisoformat('2026-09-15T14:00:00+00:00')
     monkeypatch.setattr(daily, 'ShortHorizonDailyClosure',
         lambda service, **kwargs: real_closure(service, clock=lambda: now, **kwargs))
-    cycle_args = cli.parser().parse_args(['r2-daily-cycle', str(latest['job']),
-        '--expected-final-sha256', latest['final_sha256'], '--run-id', cert['run_id'], *common])
-    code, result = cli.execute(cycle_args)
+    code, latest_cert = cli.execute(cli.parser().parse_args(['r2-archive-import', str(latest['job']),
+        '--expected-final-sha256', latest['final_sha256'], *common]))
+    assert code == 0 and latest_cert['input_id'] == latest['run']['input_id']
+    daily_args = cli.parser().parse_args(['r2-daily-run', '--run-id', cert['run_id'],
+        '--input-id', latest_cert['input_id'], *common])
+    code, result = cli.execute(daily_args)
     assert code == 0, result
-    assert result['status'] == 'ARCHIVE_IMPORTED_CLOSURE_FINISHED'
-    assert result['bridge']['input_id'] == latest['run']['input_id']
-    job_id = result['closure']['job']['job_id']
-    assert result['closure']['job']['state'] == 'SUCCEEDED'
-    ledger = result['closure']['ledger']
+    job_id = result['job']['job_id']
+    assert result['job']['state'] == 'SUCCEEDED'
+    ledger = result['ledger']
     assert ledger['run_ids'] == [cert['run_id']] and ledger['input_id'] == latest['run']['input_id']
     assert ledger['runs'][0]['due_horizons'] == list(HORIZONS)
     with cli.service_context(args) as service:
@@ -274,74 +275,6 @@ def test_native_archive_to_daily_cli_without_mocking_authentication(tmp_path, mo
         '--input-id', latest['run']['input_id'], *common]))
     assert code == 0 and pending['indexed_run_total'] == 2
     assert args.db.read_bytes() == frozen_db
-    code, repeat = cli.execute(cycle_args)
-    assert code == 0 and repeat['closure']['job']['job_id'] == job_id
-    assert repeat['closure']['ledger'] == ledger
-
-
-def test_cycle_releases_import_reference_cycle_before_daily_authentication(tmp_path, monkeypatch):
-    import weakref
-    from stockfish_core.yaogu import short_horizon_archive_bridge_v1 as bridge
-    from stockfish_core.yaogu import short_horizon_daily_closure_v1 as daily
-    args = arguments(tmp_path, allow_test_fixture=True)
-    (args.state / 'TEST_FIXTURE_ONLY').write_text('TEST_FIXTURE\n')
-    SQLiteStore(args.db)
-    references = []
-    class ImportCapability:
-        pass
-    def authenticate(*a, **k):
-        cap = ImportCapability()
-        cap.session_cache = [cap]
-        references.append(weakref.ref(cap))
-        return cap
-    imported = {'input_id': 'TEST_FIXTURE_INPUT', 'bridge_id': 'TEST_FIXTURE_BRIDGE'}
-    monkeypatch.setattr(bridge, 'authenticate_archive', authenticate)
-    monkeypatch.setattr(bridge, 'commit_bridge', lambda *a: imported)
-    def submit(*a, **k):
-        assert references[0]() is None
-        raise ValueError('TEST_FIXTURE_DAILY_AUTHENTICATION_REMAINS_REQUIRED')
-    monkeypatch.setattr(daily.ShortHorizonDailyClosure, 'submit', submit)
-    command = cli.parser().parse_args(['r2-daily-cycle', str(tmp_path / 'TEST_FIXTURE_ARCHIVE'),
-        '--expected-final-sha256', '0' * 64, '--run-id', 'TEST_FIXTURE_RUN',
-        '--db', str(args.db), '--state', str(args.state), '--allow-test-fixture'])
-    code, result = cli.execute(command)
-    assert code == 3 and result['bridge'] == imported
-    assert result['reason'] == 'TEST_FIXTURE_DAILY_AUTHENTICATION_REMAINS_REQUIRED'
-
-
-def test_cycle_preserves_import_if_daily_current_input_gate_fails(tmp_path):
-    from tests.support.short_horizon_archive_fixture import fixture_archive
-    from stockfish_core.yaogu import short_horizon_archive_bridge_v1 as bridge
-    archive = fixture_archive(tmp_path / 'TEST_FIXTURE_OLD')
-    args = arguments(tmp_path, allow_test_fixture=True)
-    (args.state / 'TEST_FIXTURE_ONLY').write_text('TEST_FIXTURE\n')
-    SQLiteStore(args.db)
-    command = cli.parser().parse_args(['r2-daily-cycle', str(archive['job']),
-        '--expected-final-sha256', archive['final_sha256'], '--run-id', archive['run']['run_id'],
-        '--db', str(args.db), '--state', str(args.state), '--allow-test-fixture'])
-    code, result = cli.execute(command)
-    assert code == 3 and result['status'] == 'ARCHIVE_IMPORTED_CLOSURE_FAILED'
-    assert result['reason'].startswith('SHORT_HORIZON_CLOSURE_')
-    with cli.service_context(args) as service:
-        assert service.strategy_experiment(archive['run']['run_id']) == archive['run']
-        assert service.store.get_document(bridge.CERTIFICATES, result['bridge']['bridge_id']) == result['bridge']
-        assert service.jobs.list() == []
-
-
-def test_cycle_interrupt_reports_durable_import(tmp_path, monkeypatch):
-    from tests.support.short_horizon_archive_fixture import fixture_archive
-    from stockfish_core.yaogu import short_horizon_daily_closure_v1 as daily
-    archive = fixture_archive(tmp_path / 'TEST_FIXTURE_INTERRUPT')
-    args = arguments(tmp_path, allow_test_fixture=True)
-    (args.state / 'TEST_FIXTURE_ONLY').write_text('TEST_FIXTURE\n')
-    SQLiteStore(args.db)
-    def interrupt(*args, **kwargs):
-        raise KeyboardInterrupt()
-    monkeypatch.setattr(daily.ShortHorizonDailyClosure, 'submit', interrupt)
-    command = cli.parser().parse_args(['r2-daily-cycle', str(archive['job']),
-        '--expected-final-sha256', archive['final_sha256'], '--run-id', archive['run']['run_id'],
-        '--db', str(args.db), '--state', str(args.state), '--allow-test-fixture'])
-    code, result = cli.execute(command)
-    assert code == 130 and result['status'] == 'ARCHIVE_IMPORTED_CLOSURE_INTERRUPTED'
-    with cli.service_context(args) as service:
-        assert service.strategy_experiment(result['bridge']['run_id']) == archive['run']
+    code, repeat = cli.execute(daily_args)
+    assert code == 0 and repeat['job']['job_id'] == job_id
+    assert repeat['ledger'] == ledger

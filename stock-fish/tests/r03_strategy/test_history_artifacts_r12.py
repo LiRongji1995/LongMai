@@ -10,7 +10,7 @@ from stockfish_core.yaogu.history_artifacts import (
     iter_history_securities, history_resolver,
 )
 from stockfish_core.yaogu.strategy_experiments import _prepare_context, _bar
-from tests.r05_product.test_theme_capital_trend_v1 import trend_bundle
+from tests.support.stage_market_fixture import trend_bundle
 
 
 def test_immutable_manifest_reuse_append_basis_source_and_four_clocks(tmp_path):

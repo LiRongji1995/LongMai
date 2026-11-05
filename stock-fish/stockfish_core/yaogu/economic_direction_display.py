@@ -7,6 +7,8 @@ registered original-byte workflow.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint
+
 from datetime import datetime, timezone
 import hashlib
 import json
@@ -187,7 +189,7 @@ def archived_economic_direction_display(attachment_path, *, grouped_parent, as_o
     text = render_economic_direction_explanation(attachment, as_of=as_of)
     # Read the two complete consumed archives again, including file metadata.
     for path, expected in ((attachment_path, attachment_file), (grouped_parent, parent_file)):
-        if _read(path)[1] != expected:
+        if not content_reference_equal(_read(path)[1], expected):
             raise ValueError('ECONOMIC_DISPLAY_ARCHIVE_CHANGED')
     visible = not text.startswith('NOT_YET_VISIBLE')
     result = dict(version=VERSION, status='VISIBLE_ARCHIVED_EXPLANATION' if visible else 'NOT_YET_VISIBLE',

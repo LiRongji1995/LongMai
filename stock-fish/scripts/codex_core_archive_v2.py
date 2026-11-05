@@ -164,8 +164,3 @@ def reuse_archive(*args, **kwargs):
 
 
 archive_status = _api["archive_status"]
-main = verification.bind_functions(legacy, ("main",), dict(PROFILE=PROFILE,
-    register_archive=register_archive, reuse_archive=reuse_archive, archive_status=archive_status))["main"]
-
-if __name__ == "__main__":
-    raise SystemExit(main())

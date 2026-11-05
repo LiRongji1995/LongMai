@@ -21,7 +21,7 @@ FEATURE_VERSION = 'THEME_COVERAGE_PENDING_AND_ACTIVE_DIVERGENCE_DIAGNOSTICS_V2'
 
 def source_identity():
     root = Path(__file__).resolve().parents[2]
-    paths = (Path(__file__), root / 'docs/THEME_OBSERVATION_DIAGNOSTICS_V1.md')
+    paths = (Path(__file__),)
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
               for path in paths}
     return {'implementation_version': VERSION, 'feature_version': FEATURE_VERSION,

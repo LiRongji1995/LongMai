@@ -189,12 +189,17 @@ class ArchiveTests(unittest.TestCase):
         with self.assertRaisesRegex(archive.ArchiveError,'FUTURE_CLOCK'):
             self.register()
 
-    def test_same_bytes_replacement_changes_physical_identity(self):
+    def test_same_bytes_replacement_reuses_but_content_tamper_fails(self):
         first = self.register()
         path = Path(self.items[0]['raw']['path'])
         replacement = path.with_suffix('.replacement')
         replacement.write_bytes(path.read_bytes()); replacement.replace(path)
-        with self.assertRaisesRegex(ValueError,'PHYSICAL_IDENTITY_CHANGED'):
+        reused = self.reuse(first)
+        self.assertTrue(reused['reused'])
+        self.assertEqual(reused['summary'], first['summary'])
+        raw = path.read_bytes()
+        path.write_bytes(b'X' + raw[1:])
+        with self.assertRaisesRegex(ValueError, 'FILE_SHA_OR_IDENTITY_MISMATCH'):
             self.reuse(first)
 
     def test_export_mutation_rejected_without_recompute(self):

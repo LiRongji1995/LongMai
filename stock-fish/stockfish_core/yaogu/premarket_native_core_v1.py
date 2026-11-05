@@ -5,6 +5,8 @@ research records and cannot reconstruct that owner or authorize a theme parent.
 """
 from __future__ import annotations
 
+from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
+
 from copy import deepcopy
 from datetime import date, datetime, timedelta, timezone
 import gzip
@@ -57,7 +59,7 @@ class _LocatorBinding:
             and all(type(value) is int for value in declaration['fp'].values())
             and type(declaration['owned']) is bool
             and all(Path(declaration[key]).is_absolute() for key in ('path','target','archive_root')),
-            'COMPLETE_LOCATOR_PHYSICAL_IDENTITY_REQUIRED')
+            'COMPLETE_LOCATOR_SCHEMA_REQUIRED')
         self.declaration = deepcopy(declaration)
         path = Path(declaration['path'])
         expected = {str(item) for item in (path.parent, path.parent.parent,
@@ -81,12 +83,11 @@ class _LocatorBinding:
         path = Path(value['path'])
         current = path.lstat()
         fp = {key: getattr(current, key, 0) for key in value['fp']}
-        _require(stat.S_ISLNK(current.st_mode) and fp == value['fp']
+        _require(stat.S_ISLNK(current.st_mode)
             and path == Path(value['archive_root'])/'cache/raw'
             and os.readlink(path) == value['target']
             and path.resolve(strict=True) == Path(value['target']), 'LOCATOR_CHANGED')
-        _require(all(self._directory(path) == identity for path, identity in
-            self.directories.items()), 'LOCATOR_DIRECTORY_CHANGED')
+        _require(all(Path(path).is_dir() for path in self.directories), 'LOCATOR_DIRECTORY_CHANGED')
 
 
 class _BudgetRegistry:
@@ -97,7 +98,7 @@ class _BudgetRegistry:
     def read(self, path, sha256=None, limit=None):
         raw, ref = self.budget.read(path, expected=sha256, limit=limit)
         previous = self.references.setdefault(ref['path'], ref)
-        _require(previous == ref, 'ORIGINAL_SOURCE_IDENTITY_CHANGED')
+        _require(content_reference_equal(previous, ref), 'ORIGINAL_SOURCE_CONTENT_CHANGED')
         return raw
 
     def registered(self, declaration, base):
@@ -113,7 +114,7 @@ class _BudgetRegistry:
         # Snapshot first: validation cannot append to the iteration scope.
         for expected in tuple(self.references.values()):
             _, actual = self.budget.read(expected['path'], expected=expected)
-            _require(actual == expected, 'ORIGINAL_SOURCE_IDENTITY_CHANGED')
+            _require(content_reference_equal(actual, expected), 'ORIGINAL_SOURCE_CONTENT_CHANGED')
 
 
 class _BudgetSourceReader(SourceArtifactReader):

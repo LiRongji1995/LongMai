@@ -62,25 +62,14 @@ def test_invalid_or_nonexact_profile_rejected(invalid):
 
 
 def arguments(command, profile=None):
-    # Use actual command contexts. Late cutoff fields are not ordinary daily
-    # cycle inputs; injecting them used to exercise no real parser invocation.
     argv = [command]
     if command in cli.ARCHIVE_COMMANDS:
         argv += ['/TEST_FIXTURE_ONLY/archive', '--expected-final-sha256', '0'*64]
     if command != 'r2-archive-verify':
         argv += ['--db', '/TEST_FIXTURE_ONLY/service.sqlite3', '--state', '/TEST_FIXTURE_ONLY']
-    if command.endswith(('-plan', '-run')) or command == 'r2-daily-cycle':
-        argv += ['--run-id', 'TEST_FIXTURE_RUN']
-        if command != 'r2-daily-cycle':
-            argv += ['--input-id', 'TEST_FIXTURE_INPUT']
-    if command.endswith(('-retry', '-status')):
-        argv += ['TEST_FIXTURE_JOB']
-    if command.endswith(('-plan', '-run', '-retry')) or command == 'r2-daily-cycle':
-        argv += ['--max-runs', '2']
-    if command.endswith(('-plan', '-run')) and command.startswith(('r2-closed-session-', 'r2-late-completed-')):
-        argv += ['--business-session', '2026-10-16', '--knowledge-cutoff', '2026-10-16T15:51:06+00:00']
-    if command.endswith(('-run', '-retry')) or command == 'r2-daily-cycle':
-        argv += ['--wait-seconds', '1200']
+    if command == 'r2-daily-run':
+        argv += ['--run-id', 'TEST_FIXTURE_RUN', '--input-id', 'TEST_FIXTURE_INPUT',
+                 '--max-runs', '2', '--wait-seconds', '1200']
     if profile is not None:
         argv += ['--verification-profile', profile]
     return cli.parser().parse_args(argv)
@@ -108,9 +97,7 @@ def test_archive_verify_passes_explicit_session_only_when_requested(monkeypatch,
 
 
 @pytest.mark.parametrize('profile', [None, PROFILE])
-@pytest.mark.parametrize('command', ['r2-daily-run', 'r2-daily-retry',
-    'r2-closed-session-run', 'r2-closed-session-retry', 'r2-daily-cycle',
-    'r2-late-completed-run', 'r2-late-completed-retry'])
+@pytest.mark.parametrize('command', ['r2-daily-run'])
 def test_closure_profile_and_wait_have_independent_arguments(monkeypatch, profile, command):
     seen = {}
     service = object()
@@ -134,8 +121,6 @@ def test_closure_profile_and_wait_have_independent_arguments(monkeypatch, profil
     monkeypatch.setattr(cli, 'service_context', context)
     monkeypatch.setattr(cli, '_job_wait', wait)
     monkeypatch.setattr(daily, 'ShortHorizonDailyClosure', Closure)
-    monkeypatch.setattr(daily, 'ClosedSessionClosure', Closure)
-    monkeypatch.setattr(daily, 'LateCompletedSessionClosure', Closure)
     monkeypatch.setattr(bridge, 'authenticate_archive', lambda *a, **k: object())
     monkeypatch.setattr(bridge, 'commit_bridge', lambda *a, **k: {'input_id': 'TEST_FIXTURE_INPUT'})
     code, _ = cli.execute(arguments(command, profile))
@@ -174,77 +159,3 @@ def test_cli_rejects_arbitrary_resource_profile():
         cli.parser().parse_args(['r2-archive-verify', '/TEST_FIXTURE_ONLY/archive',
             '--expected-final-sha256', '0'*64, '--verification-profile', 'UNLIMITED'])
     assert exc.value.code == 2
-
-
-@pytest.mark.parametrize('command', ['r2-late-completed-plan', 'r2-late-completed-status'])
-def test_late_read_commands_only_use_readonly_service(monkeypatch, command):
-    seen = {}
-    @contextmanager
-    def context(*args, **kwargs):
-        assert kwargs == {'writable': False}
-        yield object()
-    class Closure:
-        def __init__(self, service, **kwargs):
-            seen['options'] = kwargs
-        def plan_late(self, run_ids, input_id, **kwargs):
-            seen['request'] = dict(run_ids=run_ids, input_id=input_id, **kwargs)
-            return {'status': 'TEST_FIXTURE_PLAN'}
-        def status(self, job_id):
-            assert job_id == 'TEST_FIXTURE_JOB'
-            return {'status': 'TEST_FIXTURE_STATUS'}
-    monkeypatch.setattr(cli, 'service_context', context)
-    monkeypatch.setattr(daily, 'LateCompletedSessionClosure', Closure)
-    code, result = cli.execute(arguments(command, PROFILE if command.endswith('plan') else None))
-    assert code == 0
-    if command.endswith('plan'):
-        assert seen['options'] == {'max_runs': 2, 'verification_profile': PROFILE}
-        assert seen['request'] == dict(run_ids=['TEST_FIXTURE_RUN'], input_id='TEST_FIXTURE_INPUT',
-            business_session=date(2026, 10, 16), evaluated_at='2026-10-16T15:51:06+00:00')
-    else:
-        assert seen['options'] == {'max_runs': 5}
-
-
-@pytest.mark.parametrize('command', ['r2-late-completed-plan', 'r2-late-completed-run'])
-def test_late_cli_requires_explicit_session_and_cutoff(command):
-    common = [command, '--db', '/TEST_FIXTURE_ONLY/db', '--state', '/TEST_FIXTURE_ONLY',
-              '--run-id', 'TEST_FIXTURE', '--input-id', 'TEST_FIXTURE']
-    with pytest.raises(SystemExit):
-        cli.parser().parse_args(common)
-    with pytest.raises(SystemExit):
-        cli.parser().parse_args(common+['--business-session', '2026-10-20'])
-    args = cli.parser().parse_args(common+['--business-session','2026-10-20',
-        '--knowledge-cutoff','2026-10-21T02:00:00+08:00', '--verification-profile',PROFILE])
-    assert args.verification_profile == PROFILE
-    assert str(args.business_session) == '2026-10-20'
-    assert args.knowledge_cutoff == '2026-10-21T02:00:00+08:00'
-
-
-@pytest.mark.parametrize('profile', [None, PROFILE])
-def test_plain_cycle_actual_parser_does_not_supply_late_or_copy_inputs(profile):
-    args = arguments('r2-daily-cycle', profile)
-    assert args.business_session is None and args.knowledge_cutoff is None
-    assert args.source_protocol is None
-    assert args.local_copy_manifest is None and args.local_copy_manifest_sha256 is None
-    assert args.restoration_manifest is None and args.restoration_manifest_sha256 is None
-    assert args.verification_profile == profile and args.wait_seconds == 1200
-    assert args.run_id == ['TEST_FIXTURE_RUN'] and args.max_runs == 2
-
-
-@pytest.mark.parametrize('profile', [None, PROFILE])
-@pytest.mark.parametrize('late_fields', [
-    ['--business-session', '2026-10-16'],
-    ['--knowledge-cutoff', '2026-10-16T15:51:06+00:00'],
-    ['--business-session', '2026-10-16', '--knowledge-cutoff', '2026-10-16T15:51:06+00:00'],
-])
-def test_explicit_cycle_late_inputs_without_copy_protocol_rejected_before_io(monkeypatch, profile, late_fields):
-    argv = ['r2-daily-cycle', '/TEST_FIXTURE_ONLY/archive', '--expected-final-sha256', '0'*64,
-        '--db', '/TEST_FIXTURE_ONLY/service.sqlite3', '--state', '/TEST_FIXTURE_ONLY',
-        '--run-id', 'TEST_FIXTURE_RUN', '--wait-seconds', '1200', *late_fields]
-    if profile is not None:
-        argv += ['--verification-profile', profile]
-    args = cli.parser().parse_args(argv)
-    monkeypatch.setattr(cli, 'service_context', lambda *a, **k: pytest.fail('DB access forbidden'))
-    monkeypatch.setattr(bridge, 'authenticate_archive', lambda *a, **k: pytest.fail('archive access forbidden'))
-    with pytest.raises(ValueError, match='^LOCAL_COPY_CYCLE_PROTOCOL_REQUIRED_FOR_LATE_ARGUMENTS$'):
-        cli.execute(args)
-    assert args.verification_profile == profile and args.wait_seconds == 1200

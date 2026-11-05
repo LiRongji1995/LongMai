@@ -14,7 +14,6 @@ from .visibility import stamp
 
 ROOT = Path(__file__).resolve().parents[2]
 CONFIG_PATH = ROOT / 'config/short_horizon_strength_r1.yaml'
-SPEC_PATH = ROOT / 'docs/SHORT_HORIZON_STRENGTH_R1.md'
 CONFIG = yaml.safe_load(CONFIG_PATH.read_text(encoding='utf-8'))
 SHORT_HORIZON_ID = STRATEGY_ID = CONFIG['strategy_id']
 IMPLEMENTATION_VERSION = CONFIG['implementation_version']
@@ -338,11 +337,11 @@ def _encoded_features(value):
 def short_horizon_source_identity():
     _, se = _shared()
     hashes = dict(se.source_identity()['source_file_hashes'])
-    paths = [Path(__file__), CONFIG_PATH, SPEC_PATH, se.SPEC_PATH, se.COMPLETION_PATH,
+    paths = [Path(__file__), CONFIG_PATH, se.SPEC_PATH, se.COMPLETION_PATH,
              ROOT/'config/theme_capital_trend_v1.yaml', ROOT/'config/stage_aware_momentum_v2.yaml',
-             ROOT/'stockfish_core/storage.py', ROOT/'scripts/codex_research.py']
+             ROOT/'stockfish_core/storage.py', ROOT/'scripts/codex_daily_v2.py']
     paths += [Path(__file__).with_name(name) for name in
-              ('data_pipeline.py', 'derived_feature_store.py', 'candidate_service.py', 'candidate_api.py')]
+              ('data_pipeline.py', 'derived_feature_store.py', 'candidate_service.py')]
     hashes.update({str(path.relative_to(ROOT)).replace('\\','/'):hashlib.sha256(path.read_bytes()).hexdigest()
                    for path in paths})
     policy = {'id':SELECTION_POLICY_ID, 'research_only':True, 'formal_focus':False, 'core_pass':False,
@@ -350,7 +349,7 @@ def short_horizon_source_identity():
               'known_limit_down':'REJECT', 'unknown_limit':'PRESERVE_UNKNOWN'}
     return {'implementation_version':IMPLEMENTATION_VERSION, 'spec_revision':SPEC_REVISION,
             'feature_version':FEATURE_VERSION, 'source_hash':digest(hashes), 'source_file_hashes':hashes,
-            'config_hash':digest(CONFIG), 'spec_hash':hashes[str(SPEC_PATH.relative_to(ROOT))],
+            'config_hash':digest(CONFIG), 'spec_hash':hashes[str(CONFIG_PATH.relative_to(ROOT))],
             'selection_policy_hash':digest(policy)}
 
 

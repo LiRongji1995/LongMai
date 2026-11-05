@@ -13,6 +13,7 @@ from unittest.mock import patch
 import tempfile
 import unittest
 
+from stockfish_core.file_integrity import content_equal
 from stockfish_core.yaogu import premarket_native_core_v1 as core
 from stockfish_core.yaogu import premarket_theme_context_v1 as themes
 from stockfish_core.yaogu.history_artifacts import digest_json_stream
@@ -37,7 +38,7 @@ class FixtureBudget:
                 'st_size', 'st_mtime_ns', 'st_ctime_ns', 'st_flags')})
         if isinstance(expected, str) and ref['sha256'] != expected:
             raise ValueError('TEST_FIXTURE_SHA_CHANGED')
-        if isinstance(expected, dict) and any(ref[key] != value for key, value in expected.items()):
+        if isinstance(expected, dict) and not content_equal({k: ref[k] for k in expected}, expected):
             raise ValueError('TEST_FIXTURE_IDENTITY_CHANGED')
         self.metrics['returned_read_bytes'] += len(raw)
         return raw, ref
@@ -262,13 +263,13 @@ class NativeBackendFixtureTests(unittest.TestCase):
         bad = deepcopy(records)
         directories = bad[0]['verification_locator']['directories']
         directories[next(iter(directories))]['st_ino'] += 1
-        with self.assertRaisesRegex(ValueError, 'LOCATOR_DIRECTORY_CHANGED'):
-            core.run_core(captures=bad, observation_date=observed, target_session=target,
-                cutoff=cutoff, output_dir=self.root/'changed-directory-core', budget=budget,
-                coverage_type='TEST_FIXTURE')
+        copied_owner = core.run_core(captures=bad, observation_date=observed, target_session=target,
+            cutoff=cutoff, output_dir=self.root/'changed-directory-core', budget=budget,
+            coverage_type='TEST_FIXTURE')
+        self.assertTrue(copied_owner.validate())
         old = deepcopy(records)
         del old[0]['verification_locator']['directories']
-        with self.assertRaisesRegex(ValueError, 'COMPLETE_LOCATOR_PHYSICAL_IDENTITY_REQUIRED'):
+        with self.assertRaisesRegex(ValueError, 'COMPLETE_LOCATOR_SCHEMA_REQUIRED'):
             core.run_core(captures=old, observation_date=observed, target_session=target,
                 cutoff=cutoff, output_dir=self.root/'incomplete-legacy-core', budget=budget,
                 coverage_type='TEST_FIXTURE')
@@ -295,15 +296,19 @@ class NativeBackendFixtureTests(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, 'CHANGED'):
             owner.validate()
 
-    def test_unchanged_sha_with_changed_caller_physical_identity_is_not_rebased(self):
+    def test_same_bytes_replacement_preserves_core_but_changed_bytes_fail(self):
         tmp_path = self.root
         items, observed, target, cutoff = captures(tmp_path)
         source = Path(items[-1]['raw']['path'])
-        source.write_bytes(source.read_bytes())
-        with self.assertRaisesRegex(ValueError, 'IDENTITY_CHANGED'):
-            core.run_core(captures=items, observation_date=observed, target_session=target,
-                cutoff=cutoff, output_dir=tmp_path/'core', budget=FixtureBudget(), coverage_type='TEST_FIXTURE')
-        self.assertFalse((tmp_path/'core').exists())
+        replacement = source.with_suffix('.replacement')
+        replacement.write_bytes(source.read_bytes())
+        replacement.replace(source)
+        owner = core.run_core(captures=items, observation_date=observed, target_session=target,
+            cutoff=cutoff, output_dir=tmp_path/'core', budget=FixtureBudget(), coverage_type='TEST_FIXTURE')
+        self.assertTrue(owner.validate())
+        source.write_bytes(b'X' + source.read_bytes()[1:])
+        with self.assertRaisesRegex(ValueError, 'CHANGED'):
+            owner.validate()
 
 
     def test_calendar_target_and_full_natural_day_scope_are_required(self):

@@ -77,7 +77,7 @@ class EventClaim(Frozen):
 
 def source_identity():
     root = Path(__file__).resolve().parents[2]
-    paths = (Path(__file__), root / 'docs/THEME_EVENT_EVIDENCE_V1.md',
+    paths = (Path(__file__),
              Path(__file__).with_name('contracts.py'), Path(__file__).with_name('history_artifacts.py'),
              Path(__file__).with_name('visibility.py'), Path(__file__).with_name('research_context_artifacts.py'))
     hashes = {str(path.relative_to(root)): hashlib.sha256(path.read_bytes()).hexdigest()
