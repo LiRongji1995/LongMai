@@ -29,6 +29,16 @@ def test_unknown_critical_source_selects_all_specialist_groups():
     assert scope.classify(["README.md"])["selected_groups"] == []
 
 
+@pytest.mark.parametrize("path", [".gitattributes", "stock-fish/.gitattributes"])
+def test_checkout_attribute_changes_select_full_frozen_identity_regressions(path):
+    result = scope.classify([path])
+    assert result["components"]["daily"] is True
+    assert set(result["selected_groups"]) == set(scope.GROUPS)
+    assert "tests/unit/test_active_runtime_v1.py" in result["daily_tests"]
+    if path == ".gitattributes":
+        assert all(result["components"].values())
+
+
 def test_source_bootstrap_changes_keep_dependency_and_safety_gates():
     result = scope.classify(["stock-fish/scripts/active_source_bootstrap_v1.py"])
     assert set(result["selected_groups"]) == set(scope.GROUPS)

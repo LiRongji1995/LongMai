@@ -76,6 +76,36 @@ def test_build_preserves_exact_inputs_and_no_unreviewed_module(active):
     assert "Runtime.run_once" in result["hooks"]["scripts/codex_workspace.py"]
 
 
+def test_clean_git_checkout_preserves_all_frozen_preimage_bytes(active, tmp_path):
+    """Exercise Git clean/smudge, not just bytes in an already populated checkout."""
+    repository = tmp_path / "TEST_FIXTURE_git_checkout"
+    repository.mkdir()
+    for relative in (".gitattributes", "stock-fish/.gitattributes"):
+        target = repository / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((build.ROOT.parent / relative).read_bytes())
+    manifest = json.loads(build.BASE_MANIFEST.read_bytes())
+    for item in manifest["files"]:
+        target = repository / "stock-fish" / item["path"]
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes((active["base"] / item["path"]).read_bytes())
+    environment = {key: value for key, value in os.environ.items() if not key.startswith("GIT_")}
+    environment.update(GIT_CONFIG_NOSYSTEM="1", GIT_CONFIG_GLOBAL=os.devnull)
+    def git(*arguments):
+        return subprocess.run(["git", "-c", "core.autocrlf=false", *arguments],
+                              cwd=repository, env=environment, check=True,
+                              capture_output=True, timeout=30)
+    git("init", "--quiet", "--template=")
+    git("add", "--", ".gitattributes", "stock-fish")
+    checkout = tmp_path / "TEST_FIXTURE_fresh_checkout"
+    checkout.mkdir()
+    git("checkout-index", "--all", "--prefix=" + str(checkout) + os.sep)
+    mismatches = [item["path"] for item in manifest["files"]
+                  if hashlib.sha256((checkout / "stock-fish" / item["path"]).read_bytes()).hexdigest()
+                  != item["sha256"]]
+    assert mismatches == [], "Git checkout changed frozen bytes: " + repr(mismatches)
+
+
 def test_original_bypass_entry_points_cannot_write_or_launch_without_capability(active):
     result=child(active,"""
 from scripts import codex_workspace

@@ -84,7 +84,14 @@ def classify(paths, *, root=ROOT):
     for path in paths:
         names = set()
         relative = path.removeprefix("stock-fish/")
-        if path.startswith(".github/"):
+        if path == ".gitattributes":
+            # Repository-wide clean/smudge rules affect every component's bytes.
+            names.update(GROUPS)
+            result["components"] = dict.fromkeys(result["components"], True)
+        elif path == "stock-fish/.gitattributes":
+            names.update(GROUPS)
+            result["components"]["daily"] = True
+        elif path.startswith(".github/"):
             names.update(GROUPS)
         elif path.startswith("stock-fish/"):
             for patterns, targets in RULES:

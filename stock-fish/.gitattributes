@@ -7,3 +7,6 @@ stockfish_core/yaogu/candidate_service.py -text whitespace=blank-at-eol,blank-at
 stockfish_core/yaogu/provider_normalization.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 stockfish_core/yaogu/scheduler.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
 stockfish_core/yaogu/strategy_tracking.py -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
+# ACTIVE_RUNTIME_V1 also binds this original LF blob. Root *.ps1 eol=crlf
+# must not transform the frozen preimage on a fresh checkout.
+premarket.ps1 -text whitespace=blank-at-eol,blank-at-eof,space-before-tab,cr-at-eol
