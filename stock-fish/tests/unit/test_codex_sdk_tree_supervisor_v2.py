@@ -487,19 +487,46 @@ def test_failure_during_child_identity_acquisition_still_reaps_direct_child(case
     assert value["root_reaped"] and value["child_exit_code"] in (-signal.SIGTERM, -signal.SIGKILL)
 
 
-def test_stable_native_identity_ignores_public_wall_adjustment(case, monkeypatch):
+@pytest.mark.parametrize('first_sample_delay', [0., .8], ids=['native', 'delayed-first-sample'])
+def test_stable_native_identity_ignores_public_wall_adjustment(case, monkeypatch, first_sample_delay):
     original = supervisor.psutil.Process.create_time
     reads = []
+    live_identities = []
+    release = case['root'] / 'TEST_FIXTURE_native_identity_observed'
     def shifted(process):
         reads.append(process.pid)
         return original(process) + 3600.
+    def before_sample(state):
+        if state['sample_count'] == 0 and first_sample_delay:
+            supervisor.time.sleep(first_sample_delay)
+    def after_sample(state):
+        if state['root_rss_bytes'] > 0:
+            live_identities.append(supervisor._identity(supervisor.psutil.Process(state['pid'])))
+            if len(live_identities) == 2:
+                release.touch(exist_ok=False)
     monkeypatch.setattr(supervisor.psutil.Process, 'create_time', shifted)
-    value = run(case)
-    assert value['status'] == 'COMPLETE'
+    # Public-clock independence needs real live observations. A fixed .6 s
+    # worker can exit before the first snapshot on a loaded host, which must
+    # correctly fail RSS coverage rather than be mistaken for identity failure.
+    assert case['limits']['max_seconds'] == 10.
+    value = run(case, f'''import time
+from pathlib import Path
+release = Path({str(release)!r})
+deadline = time.monotonic() + {case['limits']['max_seconds']!r}
+while not release.exists():
+    if time.monotonic() >= deadline:
+        raise SystemExit("TEST_FIXTURE_NATIVE_IDENTITY_PROGRESS_DEADLINE")
+    time.sleep(.01)
+''', _test_hooks={'before_sample': before_sample, 'after_sample': after_sample})
+    assert value['status'] == 'COMPLETE', value
     assert value['identity_basis'] == supervisor.IDENTITY_BASIS
     assert value['root_reaped'] and value['cleanup']['root_reap_evidence']['exit_code_proven']
     assert value['cleanup']['root_reap_evidence']['wait_status'] == 0
     assert value['cleanup']['signals'] == []
+    assert len(live_identities) >= 2
+    assert all(identity == value['root_identity'] for identity in live_identities)
+    assert value['observed_peak_root_rss_bytes'] > 0
+    assert value['all_observed_owned_exited'] and value['all_observed_descendants_gone']
     # The supervisor never uses the public wall-adjusted method for ownership.
     assert reads == []
 

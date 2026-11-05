@@ -6,9 +6,11 @@ OS network denial. The supervisor retains native ps with an earliest Python
 network guard; a default provider call is forbidden in the private source tree.
 """
 from pathlib import Path
+import hashlib
 import json
 import os
 import shutil
+import stat
 import subprocess
 import sys
 
@@ -71,6 +73,125 @@ if 'TEST_FIXTURE_UTC_ORIGIN' in _fixture_os.environ:
 '''
 
 
+def _native_failure_evidence(directory):
+    """Count/depth/byte bounded fixture diagnostics, not native gate evidence.
+
+    Do not copy the private tree, DB, environment, capability, provider rows or
+    source files into a CI assertion. Keep precise terminal codes and hashes so
+    an outer DAILY_SHARED_EXECUTION_FAILED does not hide its actual cause.
+    """
+    directory = Path(directory)
+    assert any(part.startswith('TEST_FIXTURE') for part in directory.parts)
+    jobs = directory / 'state' / 'jobs'
+    result = {'scope': 'TEST_FIXTURE_TERMINAL_DIAGNOSTICS_ONLY', 'files': [], 'omitted': []}
+    if not jobs.exists():
+        return result
+    if jobs.is_symlink() or any(parent.is_symlink() for parent in jobs.parents):
+        result['omitted'].append({'path': 'state/jobs', 'reason': 'SYMLINK'})
+        return result
+    names = {'final-control.json', 'worker-completion.json', 'completion.json', 'failure.json', 'metrics.json'}
+    fields = ('schema_version', 'status', 'workflow_status', 'failure_reason', 'monitor_error_type',
+        'terminal_validation_error', 'child_exit_code', 'external_worker_exit_code',
+        'external_worker_reaped', 'root_reaped', 'all_observed_descendants_gone', 'core_verified',
+        'phase', 'elapsed_seconds', 'actual_utc_elapsed_seconds', 'monotonic_elapsed_seconds',
+        'sample_count', 'observed_peak_root_rss_bytes', 'observed_peak_tree_rss_bytes')
+    limits = {'entries': 256, 'directories': 64, 'depth': 6, 'files': 32}
+    counts = {'entries': 0, 'directories': 0, 'files': 0}
+    result['limits'] = limits
+    result['observed'] = counts
+    physical = lambda value: (value.st_dev, value.st_ino, value.st_mode,
+        value.st_size, value.st_mtime_ns, value.st_ctime_ns)
+    def read_terminal(parent_fd, name, relative, before):
+        try:
+            if not stat.S_ISREG(before.st_mode) or before.st_size > 512*1024:
+                result['omitted'].append({'path': relative, 'reason': 'NONREGULAR_OR_SIZE_LIMIT'})
+                return
+            # read() remains bounded even if a file grows after stat(). A
+            # diagnostic read cannot turn a partial terminal into acceptance.
+            descriptor = os.open(name, os.O_RDONLY | os.O_NOFOLLOW | os.O_NONBLOCK, dir_fd=parent_fd)
+            with os.fdopen(descriptor, 'rb') as handle:
+                if physical(os.fstat(handle.fileno())) != physical(before):
+                    result['omitted'].append({'path':relative,'reason':'CHANGED_OR_SIZE_LIMIT'})
+                    return
+                raw = handle.read(512*1024+1)
+            if len(raw) > 512*1024 or physical(os.stat(name, dir_fd=parent_fd, follow_symlinks=False)) != physical(before):
+                result['omitted'].append({'path': relative, 'reason': 'CHANGED_OR_SIZE_LIMIT'})
+                return
+            value = json.loads(raw)
+            if type(value) is not dict:
+                raise ValueError('NON_OBJECT_TERMINAL')
+            selected = {key: value[key] for key in fields if key in value and
+                        type(value[key]) in (str, int, float, bool, type(None))}
+            selected = {key: item[:512] if isinstance(item, str) else item for key, item in selected.items()}
+            if type(value.get('error')) is dict:
+                selected['error'] = {key: value['error'][key][:512] for key in ('type', 'reason')
+                                     if type(value['error'].get(key)) is str}
+            if type(value.get('phases')) is dict:
+                from itertools import islice
+                selected['phases'] = {str(key)[:64]: item[:64]
+                    for key, item in islice(value['phases'].items(), 32) if type(item) is str}
+                if len(value['phases']) > 32:
+                    selected['phases_omitted'] = len(value['phases'])-32
+            if type(value.get('cleanup')) is dict:
+                cleanup = value['cleanup']
+                selected['cleanup'] = {key: len(cleanup[key]) for key in ('errors', 'remaining', 'signals')
+                                       if type(cleanup.get(key)) is list}
+            result['files'].append({'path': relative, 'bytes': len(raw),
+                'sha256': hashlib.sha256(raw).hexdigest(), 'terminal': selected})
+        except Exception as error:
+            result['omitted'].append({'path': relative, 'reason': type(error).__name__})
+    def walk(descriptor, relative, depth):
+        counts['directories'] += 1
+        try:
+            # scandir(fd), no-follow stat and openat avoid traversing directory
+            # symlinks. Never materialize or sort an unbounded directory list.
+            with os.scandir(descriptor) as entries:
+                for entry in entries:
+                    if counts['entries'] >= limits['entries']:
+                        result['omitted'].append({'path':relative, 'reason':'ENTRY_COUNT_LIMIT'})
+                        return
+                    counts['entries'] += 1
+                    child = relative+'/'+entry.name
+                    try:
+                        before = entry.stat(follow_symlinks=False)
+                        if stat.S_ISLNK(before.st_mode):
+                            result['omitted'].append({'path':child, 'reason':'SYMLINK'})
+                        elif stat.S_ISDIR(before.st_mode):
+                            if depth >= limits['depth']:
+                                result['omitted'].append({'path':child, 'reason':'DEPTH_LIMIT'})
+                            elif counts['directories'] >= limits['directories']:
+                                result['omitted'].append({'path':child, 'reason':'DIRECTORY_COUNT_LIMIT'})
+                            else:
+                                nested = os.open(entry.name, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW,
+                                                 dir_fd=descriptor)
+                                try:
+                                    if physical(os.fstat(nested)) != physical(before):
+                                        result['omitted'].append({'path':child, 'reason':'CHANGED_DIRECTORY'})
+                                    else:
+                                        walk(nested, child, depth+1)
+                                finally:
+                                    os.close(nested)
+                        elif entry.name in names:
+                            if counts['files'] >= limits['files']:
+                                result['omitted'].append({'path':relative, 'reason':'FILE_COUNT_LIMIT'})
+                                return
+                            counts['files'] += 1
+                            read_terminal(descriptor, entry.name, child, before)
+                    except Exception as error:
+                        result['omitted'].append({'path':child, 'reason':type(error).__name__})
+                    if counts['entries'] >= limits['entries'] or counts['files'] >= limits['files']:
+                        result['omitted'].append({'path':relative, 'reason':'TRAVERSAL_LIMIT_REMAINDER_UNKNOWN'})
+                        return
+        except Exception as error:
+            result['omitted'].append({'path':relative, 'reason':'ENUMERATION_'+type(error).__name__})
+    descriptor = os.open(jobs, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+    try:
+        walk(descriptor, 'state/jobs', 0)
+    finally:
+        os.close(descriptor)
+    return result
+
+
 def _child(tree, program, name, *, claim=None, timeout=240, os_sandbox=True, fixture_clock=None):
     sandbox=shutil.which('sandbox-exec')
     assert sandbox, 'TEST_FIXTURE_OS_NETWORK_SANDBOX_REQUIRED_NO_DOWNGRADE'
@@ -100,8 +221,122 @@ def _child(tree, program, name, *, claim=None, timeout=240, os_sandbox=True, fix
     # Do not serialize environment capabilities. Exact public argv/program and
     # exit are retained to make test boundaries independently reviewable.
     (tree['root']/(name+'.command.json')).write_text(json.dumps({'argv':command,'exit_code':result.returncode},indent=2))
-    assert result.returncode==0,result.stderr
+    if result.returncode:
+        try:
+            diagnostic = _native_failure_evidence(tree['root'])
+        except Exception as error:
+            diagnostic = {'scope':'TEST_FIXTURE_TERMINAL_DIAGNOSTICS_ONLY',
+                          'diagnostic_error':type(error).__name__}
+        try:
+            (tree['root']/(name+'.native-failure-evidence.json')).write_text(json.dumps(diagnostic,indent=2))
+        except Exception as error:
+            diagnostic['publication_error'] = type(error).__name__
+    else:
+        diagnostic = None
+    # A dict assertion message is abbreviated by pytest's saferepr and can
+    # hide the very native failure code this evidence is meant to preserve.
+    # TimeoutExpired retains subprocess.run's original exception and timeout;
+    # these extra diagnostics apply only to a child that returned nonzero.
+    assert result.returncode==0, json.dumps({'returncode':result.returncode, 'native_terminal_evidence':diagnostic,
+                                          'stderr':result.stderr},ensure_ascii=False)
     return json.loads(result.stdout)
+
+
+def test_native_failure_diagnostics_preserve_codes_without_copying_private_payloads(tmp_path):
+    root = (tmp_path/'TEST_FIXTURE_diagnostics').resolve()
+    job = root/'state/jobs/TEST_FIXTURE_job'; job.mkdir(parents=True)
+    terminal = {'status':'FAILED', 'failure_reason':'TEST_FIXTURE_ROOT_SAMPLE_UNKNOWN',
+        'sample_count':0, 'error':{'type':'ValueError','reason':'TEST_FIXTURE_TERMINAL'},
+        'phases':{'core':'UNKNOWN'}, 'cleanup':{'errors':['TEST_FIXTURE'], 'signals':[], 'remaining':[]},
+        'environment':{'capability':'TEST_FIXTURE_MUST_NOT_EXPORT'},
+        'raw_rows':['TEST_FIXTURE_MUST_NOT_EXPORT']}
+    raw = json.dumps(terminal).encode(); (job/'final-control.json').write_bytes(raw)
+    (job/'completion.json').write_text('{partial')
+    (job/'worker-completion.json').write_bytes(b'x'*(512*1024+1))
+    (job/'metrics.json').write_text('['*100_000+'0'+']'*100_000)
+    private = root/'TEST_FIXTURE_private.json'; private.write_text('TEST_FIXTURE_MUST_NOT_EXPORT')
+    (job/'failure.json').symlink_to(private)
+    (root/'state/jobs/TEST_FIXTURE_alias').symlink_to(job, target_is_directory=True)
+    observed = _native_failure_evidence(root)
+    assert len(observed['files']) == 1
+    row = observed['files'][0]
+    assert row['sha256'] == hashlib.sha256(raw).hexdigest()
+    assert row['terminal']['failure_reason'] == terminal['failure_reason']
+    assert row['terminal']['sample_count'] == 0
+    assert row['terminal']['cleanup'] == {'errors':1,'remaining':0,'signals':0}
+    assert 'TEST_FIXTURE_MUST_NOT_EXPORT' not in json.dumps(observed)
+    assert {item['reason'] for item in observed['omitted']} == {
+        'JSONDecodeError','RecursionError','SYMLINK','NONREGULAR_OR_SIZE_LIMIT'}
+    # Exercise the actual bounded child wrapper's failure branch. These
+    # deliberately synthetic terminal dictionaries supply diagnostics only;
+    # they are never passed to a native verifier or an Authority.
+    with pytest.raises(AssertionError) as captured:
+        _child({'root':root,'source':root},
+               "raise RuntimeError('TEST_FIXTURE_DRIVER_FAILURE')", 'TEST_FIXTURE_failed_child', timeout=10)
+    assert 'TEST_FIXTURE_DRIVER_FAILURE' in str(captured.value)
+    assert 'TEST_FIXTURE_ROOT_SAMPLE_UNKNOWN' in str(captured.value)
+    assert 'TEST_FIXTURE_MUST_NOT_EXPORT' not in str(captured.value)
+    assert json.loads((root/'TEST_FIXTURE_failed_child.native-failure-evidence.json').read_bytes()) == observed
+
+
+@pytest.mark.parametrize('limit', ['entries','directories','depth','files'])
+def test_native_failure_diagnostics_stop_at_explicit_traversal_limits(tmp_path, limit):
+    root = (tmp_path/'TEST_FIXTURE_diagnostic_limits').resolve()
+    jobs = root/'state/jobs'; jobs.mkdir(parents=True)
+    if limit == 'entries':
+        for index in range(300):
+            (jobs/f'TEST_FIXTURE_unselected_{index}').write_text('not a terminal')
+    elif limit == 'directories':
+        for index in range(70):
+            (jobs/f'TEST_FIXTURE_directory_{index}').mkdir()
+    elif limit == 'depth':
+        leaf = jobs.joinpath(*[f'TEST_FIXTURE_depth_{index}' for index in range(8)])
+        leaf.mkdir(parents=True)
+        (leaf/'final-control.json').write_text('{"status":"MUST_NOT_READ"}')
+    else:
+        for index in range(40):
+            leaf = jobs/f'TEST_FIXTURE_job_{index}'; leaf.mkdir()
+            (leaf/'final-control.json').write_text('{"status":"FAILED"}')
+    observed = _native_failure_evidence(root)
+    reasons = {item['reason'] for item in observed['omitted']}
+    expected = {'entries':'TRAVERSAL_LIMIT_REMAINDER_UNKNOWN', 'directories':'DIRECTORY_COUNT_LIMIT',
+                'depth':'DEPTH_LIMIT', 'files':'TRAVERSAL_LIMIT_REMAINDER_UNKNOWN'}
+    assert expected[limit] in reasons
+    assert all(observed['observed'][key] <= observed['limits'][key]
+               for key in ('entries','directories','files'))
+    assert len(observed['files']) <= 32
+    assert 'MUST_NOT_READ' not in json.dumps(observed)
+
+
+@pytest.mark.parametrize('fault', ['collection','enumeration','publication'])
+def test_native_failure_diagnostic_fault_cannot_replace_child_failure(tmp_path, monkeypatch, fault):
+    root = (tmp_path/'TEST_FIXTURE_diagnostic_fault').resolve()
+    (root/'state/jobs').mkdir(parents=True)
+    # Synthetic process result: this verifies failure reporting only. No
+    # fixture terminal is authenticated and no business process is retried.
+    monkeypatch.setattr(subprocess, 'run', lambda *args, **kwargs:
+                        subprocess.CompletedProcess(args[0], 19, '', 'TEST_FIXTURE_ORIGINAL_STDERR'))
+    def broken(*args, **kwargs):
+        raise RecursionError('TEST_FIXTURE_MUST_NOT_EXPORT')
+    if fault == 'collection':
+        monkeypatch.setattr(sys.modules[__name__], '_native_failure_evidence', broken)
+    elif fault == 'enumeration':
+        monkeypatch.setattr(os, 'scandir', broken)
+    else:
+        original = Path.write_text
+        def failed_publication(path, *args, **kwargs):
+            if path.name.endswith('.native-failure-evidence.json'):
+                return broken()
+            return original(path, *args, **kwargs)
+        monkeypatch.setattr(Path, 'write_text', failed_publication)
+    with pytest.raises(AssertionError) as captured:
+        _child({'root':root,'source':root}, 'raise RuntimeError()', 'TEST_FIXTURE_failure', timeout=10)
+    message = str(captured.value)
+    assert '"returncode": 19' in message
+    assert 'TEST_FIXTURE_ORIGINAL_STDERR' in message
+    assert 'RecursionError' in message
+    assert 'TEST_FIXTURE_MUST_NOT_EXPORT' not in message
+    assert 'Traceback' not in message
 
 
 def _prepared(active,tmp_path):

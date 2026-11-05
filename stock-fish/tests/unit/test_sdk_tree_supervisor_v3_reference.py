@@ -138,7 +138,7 @@ class Fixture:
         assert not pending, 'TEST_FIXTURE_WAITABLE_ROOT_LEAK'
         assert not any(exact_live(row) for row in values), 'TEST_FIXTURE_LIVE_PROCESS_LEAK'
 
-    def run(self, mode='block', *, hooks=None, limits=None, control=None):
+    def run(self, mode='block', *, hooks=None, limits=None, control=None, await_ready=True):
         control = control or self.directory/('TEST_FIXTURE_control_'+mode)
         options = dict(tree_rss_bytes=256*MIB, self_rss_bytes=512*MIB,
             max_seconds=3, output_bytes=2*MIB, supervisor_read_bytes=64*MIB,
@@ -149,7 +149,8 @@ class Fixture:
         callback = supplied.pop('after_launch', None)
         def launched(pid):
             self.launch(pid)
-            self.ready(mode)
+            if await_ready:
+                self.ready(mode)
             if callback:
                 callback(pid)
         argv = [sys.executable, '-I', '-B', '-X',
@@ -384,16 +385,29 @@ def test_three_generation_normal_exit_has_no_signals_and_measures_descendants(ow
     reaped(result, owned)
 
 
-def test_tree_rss_breach_escalates_ignoring_processes_without_foreign_signal(owned, foreign):
+@pytest.mark.parametrize('root_ready_delay_seconds', [0., 3.25], ids=['normal', 'delayed-ready'])
+def test_tree_rss_breach_escalates_ignoring_processes_without_foreign_signal(
+        owned, foreign, root_ready_delay_seconds):
+    if root_ready_delay_seconds:
+        raw = owned.program.read_text()
+        marker = '(base/(mode+".ready")).write_text("TEST_FIXTURE_READY")'
+        assert raw.count(marker) == 1
+        owned.program.write_text(raw.replace(marker,
+            f'if mode=="rss_root":time.sleep({root_ready_delay_seconds!r})\n'+marker))
+    # RSS supervision must run while the real process tree is starting. Waiting
+    # for a fixture-wide ready marker in after_launch blocks every live sample
+    # and can turn a real RSS breach into an unrelated fixture assertion.
     result, control = owned.run('rss_root', limits=dict(tree_rss_bytes=112*MIB, max_seconds=5,
-        kill_grace_seconds=2, root_reap_seconds=1))
+        kill_grace_seconds=2, root_reap_seconds=1), await_ready=False)
     failed(result, control)
-    assert 'RSS' in result['failure_reason']
+    assert 'RSS' in result['failure_reason'], result
     assert result['observed_peak_tree_rss_bytes'] > 112*MIB
     sent = {row['signal'] for row in result['cleanup']['signals']}
     assert {signal.SIGTERM, signal.SIGKILL} <= sent
     assert exact_live(foreign), 'TEST_FIXTURE_UNRELATED_PROCESS_WAS_SIGNALED'
     reaped(result, owned)
+    if root_ready_delay_seconds:
+        assert not (owned.directory/'rss_root.ready').exists()
 
 
 @pytest.mark.parametrize('category', ['orphan', 'escaped'])
