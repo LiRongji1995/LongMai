@@ -323,10 +323,15 @@ def _views():
     return codex_result_view_v1
 
 
-def _select_view(runtime, view_id, fixture=False):
+def _select_view(runtime, view_id, fixture=False, *, observation_date=None, target_session=None):
     if view_id is not None:
         return view_id
     rows = _views().list_views(runtime, allow_test_fixture=fixture)["views"]
+    requested = {key: str(value) for key, value in (
+        ("observation_date", observation_date), ("target_session", target_session)) if value is not None}
+    if requested:
+        rows = [row for row in rows if all(row[key] == value for key, value in requested.items())]
+        need(bool(rows), "DAILY_SEALED_RESULT_NOT_FOUND_FOR_REQUESTED_SESSION")
     need(bool(rows), "DAILY_NO_SEALED_RESULT_PUBLISH_ONCE_REQUIRED")
     return max(rows, key=lambda row: (row["observation_date"], row["decision_cutoff"], row["view_id"]))["view_id"]
 
@@ -671,7 +676,9 @@ def execute(runtime, args):
                 need(args.role == "summary", "SAVED_FAILED_JOB_HAS_NO_EXPORT")
             need(verify_content_reference(reference), "SAVED_JOB_FINAL_CHANGED")
         else:
-            viewed = _views().read_view(runtime, _select_view(runtime, args.view_id, fixture), role=args.role,
+            view_id = _select_view(runtime, args.view_id, fixture,
+                observation_date=args.observation_date, target_session=args.target_session)
+            viewed = _views().read_view(runtime, view_id, role=args.role,
                 allow_test_fixture=fixture,
                 observation_date=str(args.observation_date) if args.observation_date else None,
                 target_session=str(args.target_session) if args.target_session else None)
