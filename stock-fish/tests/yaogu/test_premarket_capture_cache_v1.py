@@ -346,7 +346,8 @@ class CaptureCacheTests(unittest.TestCase):
         now=datetime.now(cache_module.SH)+timedelta(minutes=1)
         collection=cache_module.capture_collect(cache,now=now)
         self.assertEqual(len(collection.price_sessions),25)
-        self.assertEqual(len(collection.context_records),134)
+        self.assertEqual(len(collection.context_records),50)
+        self.assertEqual({r.parameters['date'] for r in collection.context_records}, set(collection.price_sessions))
         self.assertTrue(collection.ready_for_core)
         self.assertGreater(collection.target_session,collection.observation_date)
         self.assertEqual(collection.completeness,'PARTIAL')
@@ -370,9 +371,13 @@ class CaptureCacheTests(unittest.TestCase):
         self.assertEqual(endpoints.count('lhb_summary'), 1)
         self.assertLess(endpoints.index('lhb_summary'), endpoints.index('adjustment_factors'))
         run=dict(results={'SHORT_HORIZON_STRENGTH_R2':dict(items=[dict(instrument_id='600001.SH',research_selected=True)],research_selected_ids=['600001.SH'])})
+        calls = len(executor.calls)
         sources=cache_module.capture_theme_sources(cache,core_run=run,collection=collection)
-        self.assertEqual(len(sources.requested_industry_nodes),2)
-        self.assertEqual(len(sources.requested_concept_symbols),1)
+        self.assertEqual(len(executor.calls), calls)
+        self.assertEqual(sources.requested_industry_nodes, ())
+        self.assertEqual(sources.requested_concept_symbols, ())
+        self.assertFalse(sources.parent_acquisition['context_ready'])
+        self.assertTrue(sources.parent_acquisition['missing_source_is_not_empty'])
         core_ids={r.receipt_id for r in collection.core_records}
         self.assertFalse(core_ids & {r['receipt_id'] for r in sources.context_captures})
         self.assertFalse(sources.parent_acquisition['display_amount_filter_applied'])
@@ -474,7 +479,7 @@ class CaptureCacheTests(unittest.TestCase):
 
     def test_full_known_capture_stage_preflight_and_registered_transport_cap(self):
         executor=FixtureExecutor();cache=self.cache(executor,calendar_lookback_days=110)
-        cache.budget.limits['max_requests']=100
+        cache.budget.limits['max_requests']=50
         with self.assertRaisesRegex(ValueError,'COMPLETE_STAGE_REQUEST_BUDGET_REQUIRED'):
             cache_module.capture_collect(cache,now=datetime.now(cache_module.SH)+timedelta(minutes=1))
         self.assertEqual([endpoint for endpoint,_ in executor.calls],['calendar'])
@@ -484,15 +489,20 @@ class CaptureCacheTests(unittest.TestCase):
             cache_module.capture_collect(cache,now=datetime.now(cache_module.SH),config={'offline':True})
         self.assertEqual([endpoint for endpoint,_ in executor.calls],['calendar'])
 
-    def test_unknown_config_and_complete_member_plan_budget_fail_before_members(self):
+    def test_unknown_config_and_optional_members_never_spend_request_budget(self):
         with self.assertRaisesRegex(ValueError,'UNKNOWN_CAPTURE_CONFIGURATION'):
             self.cache(typo_retry=True)
         cache=self.cache();cache.budget.limits['max_requests']=2
         run=dict(results={'SHORT_HORIZON_STRENGTH_R2':dict(items=[dict(instrument_id='600001.SH',research_selected=True)],research_selected_ids=['600001.SH'])})
         collection=cache_module.CaptureCollection('2026-10-15','2026-10-16',(),(),(),(),(),(),(),{},True)
-        with self.assertRaisesRegex(ValueError,'COMPLETE_STAGE_REQUEST_BUDGET_REQUIRED'):
-            cache_module.capture_theme_sources(cache,core_run=run,collection=collection)
-        self.assertFalse(any(endpoint.endswith('members_sina') for endpoint,_ in cache.executor.calls))
+        sources = cache_module.capture_theme_sources(cache,core_run=run,collection=collection)
+        self.assertFalse(sources.parent_acquisition['context_ready'])
+        self.assertEqual(cache.executor.calls, [])
+        specs = [cache_module.RequestSpec('industry_members_sina', {'symbol':'hangye_TEST_FIXTURE_'+str(i)},
+            '2026-10-15', current=True) for i in range(3)]
+        with self.assertRaisesRegex(ValueError, 'COMPLETE_STAGE_REQUEST_BUDGET_REQUIRED'):
+            cache_module._preflight_requests(cache, specs)
+        self.assertEqual(cache.executor.calls, [])
 
 
 if __name__=='__main__':

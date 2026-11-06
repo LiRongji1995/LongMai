@@ -78,6 +78,13 @@ class SourcesTests(Base):
         self.assertEqual(len(value["core_sessions"]), 25)
         self.assertEqual(value["original_capture_count"], 56)
         self.assertEqual(value["missing_request_count"], 0)
+        scope = value["qualification_diagnostics"]["factor_scope"]
+        self.assertEqual(scope["factor_query_codes"], ["sh.600001"])
+        self.assertEqual(scope["skipped_factor_codes"], [])
+        self.assertEqual(scope["normalizer_calls"], 1)
+        self.assertEqual(scope["strategy_execution_calls"], 0)
+        self.assertNotIn("qualification", scope)
+        self.assertEqual(value["qualification_preview"]["normalizer_calls"], 1)
         self.assertEqual(value["theme_context"]["additional_market_sessions_deferred"], self.theme[:-25])
         self.assertEqual(value["theme_context"]["additional_market_requests_not_issued"], 84)
         self.assertFalse(value["full_premarket_ready"])

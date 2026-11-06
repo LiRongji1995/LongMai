@@ -1,9 +1,9 @@
 """Offline, bounded planning of the frozen 25-session native-core sources.
 
-The original collector remains unchanged. This version keeps the 67-session
-calendar requirement but leaves the additional 42 market sessions to an
-independent theme stage. It authenticates original cache entries, never invents
-empty results, downloads, constructs a market input, or executes a strategy.
+The original strategy remains unchanged. The 67-session calendar requirement
+is retained; the additional 42 market sessions are optional cached context.
+Authenticated sources also feed the original qualification rules before factor
+requests. This planner never downloads or executes a strategy selection.
 """
 from __future__ import annotations
 
@@ -306,13 +306,31 @@ def _collect(index, config, identity_policy):
     future = sorted(code for code in raw_union if listing(code) is not None and listing(code) > date.fromisoformat(observed))
     conflicts = sorted(code for code in raw_union & set(roster) if _listing(basic.get(code, {}).get("outDate")) is not None
                        and _listing(basic[code]["outDate"]) <= date.fromisoformat(observed))
-    factor_codes = []
+    factor_codes, factor_scope = [], None
     if latest_master is not None and official_complete:
-        factor_codes = sorted({row["code"] for row in latest_master["rows"]
+        from stockfish_core.yaogu.collection_qualification import factor_query_scope
+        from stockfish_core.yaogu.collection_factor_scope import plan_factor_requests
+        original_factor_codes = sorted({row["code"] for row in latest_master["rows"]
                               if row["code"] in mainboard and ORDINARY.fullmatch(row["code"])})
-        for offset in range(0, len(factor_codes), batch_size):
-            take(RequestSpec("adjustment_factors", dict(codes=factor_codes[offset:offset+batch_size],
-                start_date="1990-01-01", end_date=observed), observed, role="FULL_ANCHORED_FACTOR_WINDOW"))
+        qualification_sources = [value for value in sources.values()
+            if value["endpoint"] not in ("market_daily", "master_all")
+            or value["parameters"].get("date") == observed]
+        factor_scope = factor_query_scope([index.verify(value) for value in qualification_sources],
+            requested_codes=original_factor_codes, observation_date=observed,
+            cutoff=index.instant, sessions=[row["calendar_date"] for row in calendar_result["rows"]
+                if row["is_trading_day"] == "1" and row["calendar_date"] <= observed],
+            coverage_type="TEST_FIXTURE" if index.fixture else "RECONSTRUCTED_HISTORICAL")
+        factor_scope = {key: value for key, value in factor_scope.items()
+                        if key not in ("qualification", "known_excluded_records")}
+        factor_codes = factor_scope["factor_query_codes"]
+        for spec in plan_factor_requests(index.cache, codes=factor_codes, observed=observed,
+                batch_size=batch_size, entries=index.entries):
+            _, _, status = take(spec)
+            if status == "MISSING":
+                blockers = index.cache.factor_overlap_blockers(spec, entries=index.entries)
+                if blockers:
+                    plans[-1].update(status="OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY",
+                                     overlapping_prior_requests=blockers)
     else:
         dependencies.append("CURRENT_MASTER_AND_OFFICIAL_ORIGINALS_REQUIRED_FOR_EXACT_FACTOR_SCOPE")
     qualification_ready = market_complete and official_complete and not (missing or future or conflicts)
@@ -328,7 +346,10 @@ def _collect(index, config, identity_policy):
         qualification_diagnostics=dict(RAW_union_count=len(raw_union), missing_positive_listing_codes=missing,
             future_listing_codes=future, current_roster_positive_outDate_conflicts=conflicts,
             exact_missing_scope=market_complete and official_complete,
-            factor_query_codes=factor_codes, query_scope_not_eligibility=True),
+            factor_query_codes=factor_codes, factor_scope=factor_scope,
+            query_scope_not_eligibility=True),
+        qualification_preview=dict(normalizer_calls=0 if factor_scope is None else factor_scope["normalizer_calls"],
+            strategy_execution_calls=0),
         theme_context=dict(status="UNKNOWN_NOT_EXECUTED", required_sessions=67,
             additional_market_sessions_deferred=theme[:-25], additional_market_requests_not_issued=84,
             membership_and_theme_computation="NOT_EXECUTED", core_scope_shortened=False))

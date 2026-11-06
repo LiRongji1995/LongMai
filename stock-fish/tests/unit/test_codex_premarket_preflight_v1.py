@@ -114,13 +114,17 @@ class PreflightTests(Base):
         self.assertEqual(len(value["theme_sessions"]), 67)
         stages = {row["name"]: row for row in value["stages"]}
         self.assertEqual(len(stages["CURRENT_OFFICIAL"]["requests"]), 3)
-        self.assertEqual(len(stages["THEME_MARKET_ADDITIONAL_42"]["requests"]), 84)
+        optional = stages["THEME_MARKET_ADDITIONAL_42"]
+        self.assertEqual(optional["requests"], [])
+        self.assertEqual(optional["historical_network_requests_avoided"], 84)
+        self.assertFalse(optional["network_collection_allowed"])
+        self.assertEqual(optional["missing_source_result"], "UNKNOWN_NOT_COLLECTED")
         conditional = stages["FULL_ANCHORED_FACTORS"]["conditional_prior_universe_estimate"]
         self.assertEqual(conditional["sdk_reserved"], 4)
         self.assertFalse(conditional["included_in_known_totals"])
         self.assertEqual(value["source_authentication"]["authenticated_original_count"], 1)
         self.assertFalse(value["factor_inventory"]["tail_composition_allowed"])
-        self.assertEqual(value["totals"]["sdk_reserved"], 134*3)
+        self.assertEqual(value["totals"]["sdk_reserved"], 50*3)
         self.assertEqual(value["network_calls"], 0)
         self.assertEqual(value["strategy_calls"], 0)
         self.assertFalse(value["full_premarket_ready"])
@@ -141,6 +145,53 @@ class PreflightTests(Base):
         self.assertIsNone(value["prescreen_plan"]["candidate_ids"])
         self.assertFalse(value["prescreen_plan"]["decisions_computed"])
         self.assertEqual(before, self.refs())
+
+    def test_missing_optional_context_does_not_block_core_or_reserve_collection(self):
+        add = self.add
+        def core_only(endpoint, parameters, day, **options):
+            if endpoint in ("industry_list_sina", "concept_list_sina",
+                            "industry_members_sina", "concept_members_sina"):
+                return None
+            if endpoint in ("market_daily", "master_all") and day not in self.core:
+                return None
+            return add(endpoint, parameters, day, **options)
+        with patch.object(self, "add", side_effect=core_only):
+            self.complete()
+        before, calls = self.refs(), list(self.executor.calls)
+        value = self.plan()
+        self.assertTrue(value["execution_admitted"], value["reasons"])
+        self.assertEqual(value["totals"]["requests"], 0)
+        for stage in value["stages"]:
+            if stage["name"] in ("THEME_MARKET_ADDITIONAL_42", "CURRENT_THEME_DIRECTORIES",
+                                  "WHOLE_CURRENT_THEME_MEMBERS"):
+                self.assertEqual(stage["requests"], [])
+                self.assertEqual(stage["status"], "CACHE_ONLY_AFTER_PRESCREEN")
+                self.assertFalse(stage["required_for_core"])
+                self.assertEqual(stage["missing_source_result"], "UNKNOWN_NOT_COLLECTED")
+        self.assertEqual(value["prescreen_plan"]["optional_context_policy"], "CACHE_ONLY_AFTER_PRESCREEN")
+        self.assertEqual(before, self.refs())
+        self.assertEqual(calls, self.executor.calls)
+
+    def test_optional_unfinished_request_is_retained_without_retry_or_core_block(self):
+        self.complete()
+        spec = native.RequestSpec("industry_members_sina", dict(symbol="hangye_TEST_FIXTURE_MISSING"),
+                                  self.local, role="WHOLE_CURRENT_THEME_MEMBERS", current=True)
+        crashed = FixtureExecutor(crash=True)
+        failed_cache = native.CaptureCache(self.cache.root, FixtureBudget(),
+            config=dict(allow_test_fixture=True), executor=crashed)
+        with self.assertRaisesRegex(RuntimeError, "TEST_FIXTURE_EXECUTOR_DIED"):
+            failed_cache.capture_one(spec)
+        before, calls = self.refs(), list(self.executor.calls)
+        with patch.object(native.CaptureCache, "capture_one", side_effect=AssertionError("NO_WRITE")):
+            value = self.plan()
+        self.assertTrue(value["execution_admitted"], value["reasons"])
+        self.assertFalse(any(row["request_key"] == spec.key for stage in value["stages"]
+                             for row in stage["requests"]))
+        self.assertEqual(before, self.refs())
+        self.assertEqual(value["totals"]["requests"], 0)
+        self.assertEqual(value["network_calls"], 0)
+        self.assertEqual(calls, self.executor.calls)
+        self.assertEqual(len(crashed.calls), 1)
 
     def complete_without_lhb(self):
         add = self.add

@@ -163,6 +163,24 @@ class WorkflowFixtureTests(unittest.TestCase):
         self.assertEqual(result['display']['counts']['direction_unknown'], 2)
         self.assertEqual(result['phase_failures']['theme']['reason'], 'TEST_FIXTURE_NATIVE_THEME_FAILURE')
 
+    def test_missing_optional_context_skips_model_and_retains_core_and_unknown_display(self):
+        adapters, now = self._adapters()
+        def sources(*args, target_ids, core_run, **kwargs):
+            screen = json.loads((self.root/'job/collection-prescreen.json').read_bytes())
+            self.assertEqual(target_ids, screen['admitted_ids'])
+            return ThemeSourceCollection((), (), (), (), dict(context_ready=False,
+                status='CACHE_ONLY_PARTIAL_OR_UNKNOWN', network_collection_allowed=False))
+        adapters['theme_sources'] = sources
+        adapters['theme'] = lambda *a, **k: self.fail('OPTIONAL_CONTEXT_MUST_NOT_RUN_MODEL')
+        result = self._execute(adapters, now)
+        self.assertEqual(result['status'], 'COMPLETED_WITH_UNKNOWNS', result.get('error'))
+        self.assertTrue(result['core_verified'])
+        self.assertEqual(result['phases']['theme'], 'UNKNOWN')
+        self.assertEqual(result['display']['counts']['original_selected'], 2)
+        self.assertEqual(result['display']['counts']['direction_unknown'], 2)
+        self.assertEqual(result['metrics']['calls']['requests'], 0)
+        self.assertTrue(Path(result['core_artifacts']['observation.json']['path']).is_file())
+
     def test_real_news_collector_completes_sampling_without_economic_confirmation(self):
         from stockfish_core.yaogu import premarket_news_v1 as news
         from tests.yaogu.test_premarket_news_v1 import Opener, Response

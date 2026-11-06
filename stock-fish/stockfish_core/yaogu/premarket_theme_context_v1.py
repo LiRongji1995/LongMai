@@ -258,6 +258,13 @@ def attach_theme_context(core_owner, *, context_captures=(), raw_receipt_sources
             document['scope']['modeled_cohort_count'] = len(scoped)
             document['source_context']['counts']['modeled'] = len(scoped)
             save('native-theme-parent.json.gz', parent, compressed=True)
+        if (parent_acquisition is not None
+                and parent_acquisition.get('network_collection_allowed') is False
+                and parent_acquisition.get('status') != 'COMPLETE_CAPTURE_NOT_THEME_READY'):
+            document.setdefault('reason_codes', []).append('OPTIONAL_CONTEXT_CACHE_SCOPE_INCOMPLETE')
+            document['scope']['uncollected_context'] = 'UNKNOWN_NOT_EMPTY'
+            if document['status'] == 'AVAILABLE':
+                document['status'] = 'PARTIAL'
         validator()
         budget.check('theme_complete')
     except Exception as error:

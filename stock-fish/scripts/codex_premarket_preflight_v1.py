@@ -9,7 +9,6 @@ from __future__ import annotations
 from collections import Counter
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-import re
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -145,8 +144,15 @@ def _scope(index, config, writer_limits, raw_entries):
           for ep in ("mainboard_sse", "master_szse", "delisting_sse")])
     stage("CORE_MARKET_25", [RequestSpec(ep, dict(date=day), day, role="FULL_MARKET_CONTEXT")
           for day in price for ep in ("market_daily", "master_all")])
-    stage("THEME_MARKET_ADDITIONAL_42", [RequestSpec(ep, dict(date=day), day, role="FULL_MARKET_CONTEXT")
-          for day in theme[:-25] for ep in ("market_daily", "master_all")], allow_raw=True)
+    def cached_context_stage(name, **fields):
+        value = stage(name, [])
+        value.update(status="CACHE_ONLY_AFTER_PRESCREEN", network_collection_allowed=False,
+            missing_source_result="UNKNOWN_NOT_COLLECTED", required_for_core=False,
+            source_authentication="DEFERRED_UNTIL_ACTUAL_USE", **fields)
+        return value
+
+    cached_context_stage("THEME_MARKET_ADDITIONAL_42", sessions=theme[:-25],
+                         historical_network_requests_avoided=2*len(theme[:-25]))
     lhb_spec = lhb_request_spec(price)
     lhb_stage = stage("PRESCREEN_LHB", [lhb_spec])
     lhb_blockers = index.cache.lhb_overlap_blockers(lhb_spec, entries=index.entries)
@@ -173,8 +179,22 @@ def _scope(index, config, writer_limits, raw_entries):
                 row.update(status="AVAILABLE", authentication="ORIGINAL_SOURCE_AUTHENTICATED")
     factor_specs = [RequestSpec(**row["request_spec"]) for row in core["requests"]
                     if row["request_spec"]["endpoint"] == "adjustment_factors"]
+    factor_scope = (core.get("qualification_diagnostics") or {}).get("factor_scope")
     factors = stage("FULL_ANCHORED_FACTORS", factor_specs,
-                    unknown=() if factor_specs else ("CURRENT_MASTER_AND_OFFICIAL_REQUIRED_FOR_EXACT_SECURITY_SCOPE",))
+                    unknown=() if factor_specs or factor_scope is not None else
+                    ("CURRENT_MASTER_AND_OFFICIAL_REQUIRED_FOR_EXACT_SECURITY_SCOPE",))
+    factors["qualification_scope"] = None if factor_scope is None else dict(
+        status=factor_scope["status"], requested_security_count=len(factor_scope["requested_codes"]),
+        required_security_count=len(factor_scope["factor_query_codes"]),
+        known_excluded_security_count=len(factor_scope["skipped_factor_codes"]),
+        unknown_security_count=len(factor_scope["unknown_ids"]),
+        full_eligible_pool_preserved=True)
+    for row in factors["requests"]:
+        original_row = known.get(row["request_key"])
+        if original_row and original_row["status"] == "OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY":
+            row.update(status=original_row["status"],
+                       overlapping_prior_requests=original_row["overlapping_prior_requests"])
+    factors["cost"] = _cost(factors["requests"], writer_limits["request_http_attempts"])
     basics = [RequestSpec(**row["request_spec"]) for row in core["requests"]
               if row["request_spec"]["endpoint"] in ("stock_basic", "stock_basic_all")]
     stage("QUALIFICATION", basics, unknown=() if core.get("remaining_core_dependencies") == "EVALUATED"
@@ -182,7 +202,7 @@ def _scope(index, config, writer_limits, raw_entries):
     inventory = _factor_inventory(index, observed)
     previous = [row for row in inventory["windows"] if row["start_date"] == "1990-01-01"
                 and row["end_date"] < observed and row["complete_index_security_count"]]
-    if not factor_specs and previous:
+    if not factor_specs and factor_scope is None and previous:
         prior = max(previous, key=lambda row: row["end_date"])
         batch_size = int(config.get("batch_size", 50))
         _need(1 <= batch_size <= 100, "PREFLIGHT_FACTOR_BATCH_SIZE_BOUND")
@@ -193,35 +213,12 @@ def _scope(index, config, writer_limits, raw_entries):
             authentication="INDEX_ONLY_NOT_CURRENT_SECURITY_SCOPE", prior_end_date=prior["end_date"],
             security_count=count, requests=batches, sdk_reserved=count+2*batches,
             included_in_known_totals=False)
-    families = []
-    if config.get("include_industries", True):
-        families.append(("industry_list_sina", "industry_members_sina", r"hangye_[A-Za-z0-9_]+"))
-    if config.get("include_concepts", True):
-        families.append(("concept_list_sina", "concept_members_sina", r"gn_[A-Za-z0-9_]+"))
-    _need(families, "PREFLIGHT_EXPLICIT_THEME_FAMILY_REQUIRED")
-    dirs = stage("CURRENT_THEME_DIRECTORIES", [RequestSpec(ep, {}, local,
-        role="CURRENT_THEME_DIRECTORY", current=True) for ep, _, _ in families])
-    member_specs, member_unknown = [], []
-    for directory, (endpoint, member, pattern) in zip(dirs["requests"], families):
-        if directory["status"] != "CACHED_COMPLETE_UNAUTHENTICATED":
-            member_unknown.append("COMPLETE_"+endpoint.upper()+"_REQUIRED_FOR_MEMBER_SCOPE")
-            continue
-        metadata, decoded, status = index.lookup(RequestSpec(**directory["request_spec"]))
-        if status != "AVAILABLE":
-            member_unknown.append("COMPLETE_"+endpoint.upper()+"_REQUIRED_FOR_MEMBER_SCOPE")
-            continue
-        directory.update(status="AVAILABLE", authentication="ORIGINAL_SOURCE_AUTHENTICATED")
-        nodes = []
-        for row in decoded["rows"]:
-            node = row.get("label") or row.get("板块代码")
-            _need(type(node) is str and re.fullmatch(pattern, node, re.ASCII) and node not in nodes,
-                  "PREFLIGHT_THEME_DIRECTORY_NODE_INVALID_OR_DUPLICATE")
-            nodes.append(node)
-        _need(nodes, "PREFLIGHT_COMPLETE_THEME_DIRECTORY_EMPTY")
-        member_specs.extend(RequestSpec(member, dict(symbol=node), local,
-                            role="WHOLE_CURRENT_THEME_MEMBERS", current=True) for node in nodes)
-    _need(len(member_specs) <= config.get("max_theme_nodes", 2048), "PREFLIGHT_THEME_NODE_BOUND_NO_TRUNCATION")
-    stage("WHOLE_CURRENT_THEME_MEMBERS", member_specs, unknown=member_unknown)
+    # Optional explanations consume authenticated same-day cache entries only,
+    # after the actual prescreen is known. Their missing/failed sources neither
+    # reserve new requests nor become missing prerequisites for the core run.
+    cached_context_stage("CURRENT_THEME_DIRECTORIES")
+    cached_context_stage("WHOLE_CURRENT_THEME_MEMBERS",
+                         target_scope="PRESCREEN_ADMITTED_ORIGINAL_SELECTION")
     # News is optional in the original workflow. Its presence is reported by
     # the caller; there is no attempt to claim its cost from a missing result.
     reasons = []
@@ -359,7 +356,8 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
     with budget.phase("capture"), budget.meter_files():
         cache = CaptureCache(root, budget, config=options, executor=sources._no_network)
         index = sources._Index(cache, now, allow_test_fixture)
-        raw_entries = list(cache._entries(raw_only=True))
+        # Optional historical context is inspected only if it is consumed.
+        raw_entries = []
         result = _scope(index, options, writer, raw_entries)
         reasons = result.pop("reasons")
         calendar = result.pop("calendar")
@@ -463,7 +461,8 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
             source_status=lhb_rows[0]["status"] if lhb_rows else "UNKNOWN_CALENDAR_REQUIRED",
             request_key=lhb_rows[0]["request_key"] if lhb_rows else None,
             scope="SUPPLEMENTAL_DEEP_RESEARCH_ROUTING_ONLY",
-            full_pool_factor_scope_preserved=True, missing_source_is_not_empty=True)
+            full_eligible_pool_factor_scope_preserved=True, missing_source_is_not_empty=True,
+            optional_context_policy="CACHE_ONLY_AFTER_PRESCREEN")
         result.update(schema_version=VERSION, planned_at=now.isoformat(),
             status="ADMITTED_FOR_BOUNDED_EXECUTION" if not reasons else "BLOCKED",
             execution_admitted=not reasons, reasons=sorted(set(reasons)),
@@ -479,9 +478,13 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
                     "total_exact":not unknown and not news_calls and all(row["status"] in ("AVAILABLE", "MISSING") for row in rows.values()),
                     "network_transfer_bytes":None, "elapsed_seconds_estimate":None},
             source_authentication=dict(authenticated_original_count=len(index.checked),
-                unresolved_graph_requests=unresolved, index_count=len(index.entries), raw_index_count=len(raw_entries)),
+                unresolved_graph_requests=unresolved, index_count=len(index.entries),
+                raw_index_count=None, raw_index_inspection="DEFERRED_OPTIONAL_CONTEXT"),
             source_identity_policy=sources.LEGACY_IDENTITY,
             full_premarket_ready=False, source_capability_issued=False, network_calls=0,
-            strategy_calls=0, database_created=False, added_cache_logical_bytes=0,
+            strategy_calls=0,
+            qualification_normalizer_calls=(result.get("source_plan") or {}).get(
+                "qualification_preview", {}).get("normalizer_calls", 0),
+            database_created=False, added_cache_logical_bytes=0,
             metrics=budget.metrics)
         return result

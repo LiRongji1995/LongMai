@@ -201,7 +201,7 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
     """Worker implementation. Adapter injection exists only for isolated tests."""
     from .premarket_capture_cache_v1 import CaptureCache, capture_collect, capture_theme_sources
     from .premarket_native_core_v1 import run_core
-    from .premarket_theme_context_v1 import attach_theme_context
+    from .premarket_theme_context_v1 import attach_theme_context, VERSION as THEME_VERSION
     from .premarket_presentation_v1 import render_premarket
     adapters = adapters or {}
     Cache = adapters.get('cache',CaptureCache)
@@ -275,27 +275,40 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
         except Exception as error:
             phases['news'] = 'FAILED'
             phase_failures['news'] = dict(type=type(error).__name__, reason=str(error)[:2000])
-        # Selection affects only which genuine whole membership nodes to read.
-        # Its full original N is used; the 3E display filter is applied last.
+        # Optional context is cache-only and follows the collection screen.
+        # Whole member nodes and the original selected denominator remain intact.
         try:
             with budget.phase('capture'), budget.meter_files():
                 phases['theme_sources'] = 'RUNNING'
                 sources = theme_sources(cache,core_run=owner.run,collection=collection,
-                    config=config.get('capture',{}))
+                    config=config.get('capture',{}), target_ids=prescreen['admitted_ids'])
                 atomic_json(job/'theme-source-summary.json',sources.to_dict())
                 phases['theme_sources'] = ('COMPLETE' if sources.parent_acquisition.get('status') ==
                     'COMPLETE_CAPTURE_NOT_THEME_READY' else 'PARTIAL')
             with budget.phase('theme'), budget.meter_files():
                 phases['theme'] = 'RUNNING'
-                result = theme_runner(owner,context_captures=sources.context_captures,
-                    raw_receipt_sources=sources.raw_receipt_sources,
-                    context_cutoff=datetime.now(timezone.utc).isoformat(),output_dir=job/'theme',budget=budget,
-                    requested_industry_nodes=sources.requested_industry_nodes,
-                    requested_concept_symbols=sources.requested_concept_symbols,
-                    parent_acquisition=sources.parent_acquisition)
-                theme = result.to_dict()
-                phases['theme'] = 'COMPLETE' if theme['status'] == 'AVAILABLE' else theme['status']
-                result.validate()
+                if sources.parent_acquisition.get('context_ready', True) is False:
+                    theme = dict(schema_version=THEME_VERSION, status='UNKNOWN', diagnostic=None,
+                        run_id=owner.run['run_id'], observation_date=owner.run['observation_date'],
+                        target_session=owner.run['target_session'], source_verified=None,
+                        context_cutoff=None,
+                        scope=dict(kind='INTERSECTION_WITH_FULL_ORIGINAL_SELECTION',
+                            selected_ids=list(owner.run['results'][STRATEGY]['research_selected_ids']),
+                            included_theme_ids=[]),
+                        reason_codes=['OPTIONAL_CONTEXT_NOT_COLLECTED'],
+                        parent_acquisition=sources.parent_acquisition,
+                        stock_selection_changed=False)
+                    phases['theme'] = 'UNKNOWN'
+                else:
+                    result = theme_runner(owner,context_captures=sources.context_captures,
+                        raw_receipt_sources=sources.raw_receipt_sources,
+                        context_cutoff=datetime.now(timezone.utc).isoformat(),output_dir=job/'theme',budget=budget,
+                        requested_industry_nodes=sources.requested_industry_nodes,
+                        requested_concept_symbols=sources.requested_concept_symbols,
+                        parent_acquisition=sources.parent_acquisition)
+                    theme = result.to_dict()
+                    phases['theme'] = 'COMPLETE' if theme['status'] == 'AVAILABLE' else theme['status']
+                    result.validate()
         except BudgetExceeded:
             raise
         except Exception as error:

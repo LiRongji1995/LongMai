@@ -236,7 +236,9 @@ class CaptureCollection:
             ready_for_core=self.ready_for_core, completeness=self.completeness,
             calendar_rows=deepcopy(list(self.calendar_rows)), source_role_summary=self.source_role_summary,
             coverage_type=self.coverage_type,
-            eligibility_inferred=False, source_capabilities_issued=0, normalizer_calls=0, selector_calls=0)
+            eligibility_inferred=False, source_capabilities_issued=0,
+            normalizer_calls=(self.identity_coverage.get('factor_scope') or {}).get('normalizer_calls', 0),
+            selector_calls=0)
 
 
 class CaptureCache:
@@ -254,6 +256,7 @@ class CaptureCache:
         self.budget, self.config, self.executor = budget, _config(config), executor
         self._owner = (os.getpid(), threading.get_ident())
         self._known = {}
+        self._factor_index_memo = {}
         self._attempted_keys = set()
         for name in ('index', 'raw', 'raw-index', 'locators'):
             path = self.root / name
@@ -353,6 +356,35 @@ class CaptureCache:
         else:
             self._save(path, value)
         return CaptureRecord.from_metadata(value) if not raw_only else deepcopy(value)
+
+    def _factor_ledger_entries(self):
+        """Invocation-local index decoding; new entries are always discovered.
+
+        Stat equality only avoids repeated reads of an already SHA-validated
+        object within this cache instance. Changes cause a fresh content read,
+        not a persistent device-identity gate. The ordinary terminal validator
+        still hashes every source/index recorded in ``_known``.
+        """
+        self._check('CAPTURE_FACTOR_LEDGER')
+        paths = sorted((self.root / 'index').glob('*/*.json'))
+        _need(len(paths) <= self.max_entries, 'CACHE_ENTRY_COUNT_BOUND')
+        current = set(paths)
+        _need(set(self._factor_index_memo) <= current, 'CACHE_FACTOR_LEDGER_BOUND_ENTRY_REMOVED')
+        values = []
+        for path in paths:
+            before = _fp(path)
+            saved = self._factor_index_memo.get(path)
+            if saved is None or saved['fp'] != before:
+                raw, reference = self._read(path, limit=2 * 1024**2)
+                value = _json(raw)
+                _need(value['schema_version'] == VERSION and reference['sha256'] == path.stem,
+                      'CACHE_INDEX_CONTENT_ADDRESS_CHANGED')
+                _need(value['request_key'] == path.parent.name, 'CACHE_INDEX_REQUEST_PATH_CHANGED')
+                _need(before == _fp(path), 'CACHE_FACTOR_LEDGER_CHANGED_DURING_READ')
+                saved = dict(fp=before, value=value)
+                self._factor_index_memo[path] = saved
+            values.append(deepcopy(saved['value']))
+        return values
 
     def _validate_locator(self, locator):
         if locator is None:
@@ -605,6 +637,10 @@ class CaptureCache:
                         status='OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY')
         return [blocked[key] for key in sorted(blocked)]
 
+    def factor_overlap_blockers(self, spec, *, entries=None):
+        from .collection_factor_scope import factor_overlap_blockers
+        return factor_overlap_blockers(self, spec, entries=entries)
+
     def capture_one(self, spec):
         with self._writer():
             blockers = self.lhb_overlap_blockers(spec)
@@ -619,6 +655,9 @@ class CaptureCache:
             if cached is not None and (cached.status == 'COMPLETE' or
                     not self.config.get('retry_failed', False) or spec.key in self._attempted_keys):
                 return cached
+            blockers = self.factor_overlap_blockers(spec)
+            _need(not blockers, 'FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
+                  ','.join(row['request_key'] for row in blockers))
             _need(not self.config.get('offline', False), 'OFFLINE_SOURCE_MISSING_OR_FAILED_NO_NETWORK')
             _need(spec.key not in self._attempted_keys, 'ONE_ATTEMPT_PER_REQUEST_PER_INVOCATION')
             self.budget.preclaim_request(spec.endpoint, spec.parameters)
@@ -873,29 +912,22 @@ def capture_collect(cache, *, now, config=None):
     _need(following and len([d for d in sessions if d <= observed]) >= 67, 'CALENDAR_NEXT_OR_LAST67_UNAVAILABLE')
     target = following[0]
     historical = [day for day in sessions if day <= observed]
-    window, price = historical[-67:], historical[-25:]
+    price = historical[-25:]
     core.append(calendar)
     official_specs = [RequestSpec(ep, {}, str(local.date()), role='CURRENT_OFFICIAL', current=True)
                       for ep in ('mainboard_sse', 'master_szse', 'delisting_sse')]
     market_specs = [RequestSpec(endpoint, {'date':str(day)}, str(day), role='FULL_MARKET_CONTEXT')
-                   for day in window for endpoint in ('market_daily','master_all')]
-    # A RAW-only source is sufficient only outside the core's last25; it must
-    # not reserve a download or be promoted to a nonexistent result wrapper.
-    planned_market = [spec for spec in market_specs if date.fromisoformat(spec.business_session) in price
-                      or _lookup_for_policy(cache, spec) is not None
-                      or cache.context_recipe(spec.endpoint, spec.business_session) is None]
-    _preflight_requests(cache, official_specs + planned_market)
+                   for day in price for endpoint in ('market_daily','master_all')]
+    # Only the original core's 25-session market window is a network dependency.
+    # The additional 42 sessions are optional report context, read from existing
+    # originals only after the collection screen has produced its targets.
+    _preflight_requests(cache, official_specs + market_specs)
     official = [take(spec) for spec in official_specs]
     core.extend(official)
     raw_union, current_master = set(), None
-    for day in window:
+    for day in price:
         for endpoint in ('market_daily', 'master_all'):
             spec = RequestSpec(endpoint, {'date':str(day)}, str(day), role='FULL_MARKET_CONTEXT')
-            cached = _lookup_for_policy(cache, spec)
-            recipe = cache.context_recipe(endpoint, day) if cached is None and day not in price else None
-            if recipe is not None:
-                recipes.append(recipe)
-                continue
             record = take(spec)
             context.append(record)
             if day in price:
@@ -955,8 +987,7 @@ def capture_collect(cache, *, now, config=None):
     future = sorted(code for code in raw_union if listing(code) is not None and listing(code) > observed)
     outdate_conflict = sorted(code for code in raw_union & set(roster) if
         _listing(basic.get(code, {}).get('outDate')) is not None and _listing(basic[code]['outDate']) <= observed)
-    # Supplemental routing evidence must not change the frozen core source
-    # graph, the full factor query scope, or whole-market theme context.
+    # Supplemental LHB evidence never enters the core's price source graph.
     prescreen_specs = [lhb_request_spec(tuple(map(str, price)))]
     _preflight_requests(cache, prescreen_specs)
     prescreen = [take(spec) for spec in prescreen_specs]
@@ -964,9 +995,17 @@ def capture_collect(cache, *, now, config=None):
     if current_master is not None:
         result = cache.verify(current_master)
         factor_codes = sorted({r['code'] for r in result['rows'] if r['code'] in mainboard and ORDINARY.fullmatch(r['code'])})
-    factor_specs = [RequestSpec('adjustment_factors', dict(codes=factor_codes[offset:offset+batch_size],
-        start_date='1990-01-01', end_date=str(observed)), str(observed), role='FULL_ANCHORED_FACTOR_WINDOW')
-        for offset in range(0,len(factor_codes),batch_size)]
+    from .collection_qualification import factor_query_scope
+    from .collection_factor_scope import plan_factor_requests
+    qualification_records = {r.receipt_id:r for r in core if r.endpoint not in ('market_daily', 'master_all')
+                             or r.parameters['date'] == str(observed)}
+    factor_scope = factor_query_scope(
+        [cache.verify(record) for record in qualification_records.values()],
+        requested_codes=factor_codes, observation_date=str(observed),
+        cutoff=datetime.now(timezone.utc), sessions=tuple(map(str, historical)),
+        coverage_type='TEST_FIXTURE' if cache.config.get('allow_test_fixture') else 'RECONSTRUCTED_HISTORICAL')
+    factor_codes = factor_scope['factor_query_codes']
+    factor_specs = plan_factor_requests(cache, codes=factor_codes, observed=str(observed), batch_size=batch_size)
     _preflight_requests(cache, factor_specs)
     core.extend(take(spec) for spec in factor_specs)
     # Membership in this request scope is not strategy eligibility. PARTIAL
@@ -979,7 +1018,8 @@ def capture_collect(cache, *, now, config=None):
         tuple(unique.values()), tuple(context), tuple(recipes), tuple(failures), tuple(plans),
         dict(RAW_union_count=len(raw_union), missing_positive_listing_codes=missing,
              future_listing_codes=future, current_roster_positive_outDate_conflicts=outdate_conflict,
-             factor_query_codes=factor_codes, query_scope_not_eligibility=True,
+             factor_query_codes=factor_codes, factor_scope=factor_scope, query_scope_not_eligibility=True,
+             core_market_sessions=len(price), optional_market_sessions_not_requested=42,
              prior_basic_reference_clocks_preserved=True, current_snapshot_session=str(local.date())), ready,
         tuple(deepcopy(result_row) for result_row in cache.verify(calendar)['rows']),
         prescreen_records=tuple(prescreen))
@@ -1021,6 +1061,9 @@ def _preflight_requests(cache, specs):
               ','.join(row['request_key'] for row in blockers))
         current = _lookup_for_policy(cache, spec)
         if current is None or current.status != 'COMPLETE' and cache.config.get('retry_failed', False):
+            blockers = cache.factor_overlap_blockers(spec) if spec.endpoint == 'adjustment_factors' else []
+            _need(not blockers, 'FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
+                  ','.join(row['request_key'] for row in blockers))
             missing.append(spec)
     if not missing:
         return
@@ -1039,23 +1082,28 @@ def _preflight_requests(cache, specs):
             _need(calls.get(prior, 0)+extra <= limits[maximum], 'COMPLETE_STAGE_REQUEST_BUDGET_REQUIRED:' + maximum)
 
 
-def capture_theme_sources(cache, *, core_run, collection, config=None):
-    """Fetch whole source-defined nodes; literal intersections are only metadata.
+def capture_theme_sources(cache, *, core_run, collection, config=None, target_ids=None):
+    """Read optional current-cohort context from existing originals only.
 
-    Industry and concept directories use the same full directory/member plan.
-    Either family can be explicitly disabled. The genuine IndustrySina reader in
-    phase 2, never this JSON summary, decides source completeness/authority.
+    A screen chooses which existing whole nodes are worth modeling. It never
+    changes a node's members or the native reader's original selected cohort.
+    Missing/partial context remains UNKNOWN, with no request or fallback.
     """
     policy = _collection_policy(cache, config)
     arm = core_run['results']['SHORT_HORIZON_STRENGTH_R2']
     selected = [r['instrument_id'] for r in arm['items'] if r['research_selected']]
     _need(selected == arm['research_selected_ids'] and len(selected) == len(set(selected)), 'WHOLE_ORIGINAL_SELECTION_REQUIRED')
-    if not selected:
+    targets = selected if target_ids is None else list(target_ids)
+    _need(len(targets) == len(set(targets)) and all(isinstance(iid, str) for iid in targets)
+          and set(targets) <= set(arm.get('eligible_pool_ids', selected)), 'PRESCREEN_THEME_TARGET_SCOPE_INVALID')
+    selected_targets = set(selected) & set(targets)
+    if not selected_targets:
         return ThemeSourceCollection((), (), (), (), dict(schema_version='PREMARKET_THEME_ACQUISITION_FACTS_V1',
-            status='NO_SELECTION_MEMBERS_NOT_REQUESTED', original_selected_count=0,
+            status='NO_PRESCREEN_TARGET_CONTEXT_NOT_REQUESTED', original_selected_count=len(selected),
             all_requested_industry_nodes=[], all_requested_concept_symbols=[], records=[],
             requested_members=0, native_confirmation='UNKNOWN_NOT_COMPUTED',
-            scope='EMPTY_ORIGINAL_SELECTION_NOT_NO_MARKET_MAINLINE', display_amount_filter_applied=False))
+            scope='NO_ADMITTED_ORIGINAL_SELECTION_NOT_NO_MARKET_MAINLINE', display_amount_filter_applied=False,
+            context_ready=False, network_collection_allowed=False, missing_source_is_not_empty=True))
     snapshot = datetime.now(SH).date().isoformat()
     families = []
     if policy.get('include_industries', True):
@@ -1064,15 +1112,32 @@ def capture_theme_sources(cache, *, core_run, collection, config=None):
         families.append(('concept_list_sina','concept_members_sina','concept',r'gn_[A-Za-z0-9_]+'))
     _need(families, 'EXPLICIT_THEME_SOURCE_FAMILY_REQUIRED')
     requests, directories, facts = [], [], []
+    instant = datetime.now(timezone.utc)
+    def cached(spec, record=None):
+        record = record if record is not None else cache.lookup(spec)
+        if record is None:
+            facts.append(dict(endpoint=spec.endpoint, parameters=spec.parameters,
+                              status='UNKNOWN_NOT_COLLECTED'))
+            return None
+        metadata = cache.metadata(record)
+        _need(max(_stamp(metadata[key]) for key in ('first_seen_at', 'ingested_at', 'completed_at')) <= instant,
+              'OPTIONAL_CONTEXT_NOT_VISIBLE_AT_CUTOFF')
+        if record.status != 'COMPLETE' or not metadata['pagination_complete']:
+            facts.append(dict(endpoint=spec.endpoint, parameters=spec.parameters,
+                              status=record.status, actual_capture=metadata,
+                              reason='INCOMPLETE_ORIGINAL_NOT_RETRIED'))
+            return None
+        return record
     nodes = dict(industry=[], concept=[])
     core_ids = {r.receipt_id for r in collection.core_records}
-    captures = {r.receipt_id:cache.metadata(r) for r in collection.context_records if r.receipt_id not in core_ids}
+    captures = {}
     recipes = []
-    for source in collection.raw_context_sources:
-        recipes.append({k:deepcopy(source[k]) for k in ('raw','receipt','typed_receipt')})
     for directory_ep, member_ep, family, pattern in families:
         spec = RequestSpec(directory_ep, {}, snapshot, role='CURRENT_THEME_DIRECTORY', current=True)
-        directory = cache.capture_one(spec); directories.append(directory)
+        directory = cached(spec)
+        if directory is None:
+            continue
+        directories.append(directory)
         captures[directory.receipt_id] = cache.metadata(directory)
         result = cache.verify(directory)
         if result['status'] != 'COMPLETE' or not result['pagination_complete']:
@@ -1088,11 +1153,11 @@ def capture_theme_sources(cache, *, core_run, collection, config=None):
         _need(entries, 'COMPLETE_THEME_DIRECTORY_EMPTY_NOT_KNOWN_EMPTY_ECONOMY')
     maximum = policy.get('max_theme_nodes', 2048)
     _need(type(maximum) is int and 0 < maximum <= 8192 and len(requests) <= maximum, 'DECLARED_THEME_NODE_COUNT_BOUND_NO_TRUNCATION')
-    _preflight_requests(cache, requests)
     potential = dict(industry=[], concept=[])
     for spec in requests:
-        record = cache.capture_one(spec)
-        captures[record.receipt_id] = cache.metadata(record)
+        record = cached(spec)
+        if record is None:
+            continue
         result = cache.verify(record)
         literal_ids = []
         for row in result['rows']:
@@ -1100,27 +1165,60 @@ def capture_theme_sources(cache, *, core_run, collection, config=None):
             if isinstance(symbol, str) and re.fullmatch(r'(?:sh|sz|bj)[0-9]{6}', symbol, re.ASCII) and symbol[2:] == code:
                 literal_ids.append(code+'.'+symbol[:2].upper())
         intersection = [iid for iid in selected if iid in set(literal_ids)]
+        admitted_intersection = selected_targets & set(literal_ids)
         family = 'industry' if spec.endpoint == 'industry_members_sina' else 'concept'
-        if intersection and result['status'] in ('COMPLETE', 'PARTIAL'):
+        if admitted_intersection:
             potential[family].append(spec.parameters['symbol'])
+            captures[record.receipt_id] = cache.metadata(record)
         facts.append(dict(endpoint=spec.endpoint,parameters=spec.parameters,status=result['status'],
             pagination_complete=result['pagination_complete'],rows=len(result['rows']),
             actual_capture=cache.metadata(record), literal_intersection_with_full_original_selected=intersection,
-            potential_reader_request=bool(intersection) and result['status'] in ('COMPLETE','PARTIAL'),
+            potential_reader_request=bool(admitted_intersection),
             omitted_from_potential_scope_reason=None if intersection else
                 'NO_LITERAL_INTERSECTION_OBSERVED' if result['status']=='COMPLETE' and result['pagination_complete']
                 else 'INCOMPLETE_SOURCE_CANNOT_PROVE_ABSENCE_OF_MEMBERSHIP',
             literal_intersection_is_not_authenticated_membership=True))
+    # The old 42 sessions are read only for a cached node with an admitted
+    # member. These originals remain complete market-wide observations.
+    history_complete = True
+    if any(potential.values()):
+        for day in collection.sessions[-67:-25]:
+            for endpoint in ('market_daily', 'master_all'):
+                spec = RequestSpec(endpoint, {'date': day}, day, role='FULL_MARKET_CONTEXT')
+                record = cache.lookup(spec)
+                if record is not None:
+                    record = cached(spec, record)
+                    if record is None:
+                        history_complete = False
+                    elif record.receipt_id not in core_ids:
+                        captures[record.receipt_id] = cache.metadata(record)
+                else:
+                    recipe = cache.context_recipe(endpoint, day)
+                    if recipe is None:
+                        history_complete = False
+                        facts.append(dict(endpoint=endpoint, parameters=spec.parameters,
+                                          status='UNKNOWN_NOT_COLLECTED'))
+                    else:
+                        parent = recipe['typed_receipt']
+                        _need(max(_stamp(parent[key]) for key in ('source_published_at', 'first_seen_at', 'ingested_at')) <= instant,
+                              'OPTIONAL_CONTEXT_NOT_VISIBLE_AT_CUTOFF')
+                        if parent['status'] != 'COMPLETE' or not parent['pagination_complete']:
+                            history_complete = False
+                        recipes.append({k:deepcopy(recipe[k]) for k in ('raw','receipt','typed_receipt')})
     cache.terminal()
     statuses = [r['status'] for r in facts]
     return ThemeSourceCollection(tuple(captures.values()), tuple(recipes), tuple(potential['industry']),
         tuple(potential['concept']), dict(schema_version='PREMARKET_THEME_ACQUISITION_FACTS_V1',
-            status='COMPLETE_CAPTURE_NOT_THEME_READY' if statuses and all(s == 'COMPLETE' for s in statuses) else 'PARTIAL_OR_FAILED_RETAINED',
+            status='COMPLETE_CAPTURE_NOT_THEME_READY' if statuses and all(s == 'COMPLETE' for s in statuses)
+                and selected_targets == set(selected) and history_complete else 'CACHE_ONLY_PARTIAL_OR_UNKNOWN',
             records=facts, directory_captures=[cache.metadata(r) for r in directories],
-            requested_members=len(requests), original_selected_count=len(selected),
+            requested_members=sum(len(v) for v in potential.values()), original_selected_count=len(selected),
+            network_collection_allowed=False, missing_source_is_not_empty=True,
+            context_ready=bool(any(potential.values()) and history_complete and len(collection.sessions) >= 67),
+            context_history_complete=history_complete, admitted_selected_count=len(selected_targets),
             all_requested_industry_nodes=nodes['industry'], all_requested_concept_symbols=nodes['concept'],
             potential_industry_nodes=potential['industry'], potential_concept_symbols=potential['concept'],
             excluded_from_potential_scope_count=len(requests)-sum(len(v) for v in potential.values()),
             potential_scope_is_not_ready_or_source_authority=True,
-            scope='ALL_DECLARED_SOURCE_NODES_THEN_GENUINE_READER_INTERSECTION_WITH_FULL_ORIGINAL_SELECTION',
+            scope='CACHED_WHOLE_NODES_AFTER_PRESCREEN_WITH_FULL_ORIGINAL_SELECTION_DENOMINATOR',
             display_amount_filter_applied=False, native_authority='NOT_ISSUED_BY_CAPTURE_CACHE'))
