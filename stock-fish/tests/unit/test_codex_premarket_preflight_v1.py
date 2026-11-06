@@ -9,6 +9,7 @@ from tests.yaogu.test_premarket_capture_cache_v1 import FixtureBudget, FixtureEx
 from scripts import codex_premarket_preflight_v1 as preflight
 from scripts import codex_core_sources as sources
 from stockfish_core.yaogu import premarket_capture_cache_v1 as native
+from stockfish_core.yaogu import premarket_runtime_v1 as runtime_support
 from stockfish_core.yaogu.premarket_runtime_v1 import BudgetExceeded
 
 
@@ -324,6 +325,92 @@ class PreflightTests(Base):
         self.assertEqual(value["read_only_diagnostic_limits"]["cache_bytes"], 1024**3)
         self.assertEqual(value["original_writer_limits"]["cache_bytes"], 1024**3)
         self.assertFalse(value["diagnostic_limits_authorize_writer"])
+
+    def test_readonly_authentication_does_not_run_periodic_writer_tree_scans(self):
+        self.complete()
+        before = self.refs()
+        with patch.object(runtime_support, "directory_bytes",
+                side_effect=AssertionError("TEST_FIXTURE_NO_PERIODIC_WRITER_SCAN")):
+            value = self.plan()
+        self.assertTrue(value["execution_admitted"], value["reasons"])
+        self.assertEqual(value["cache_inventory"], value["cache_inventory_at_entry"])
+        self.assertEqual(value["diagnostic_cache_observation"],
+                         "ENTRY_AND_TERMINAL_FULL_INVENTORY_READONLY")
+        self.assertEqual(before, self.refs())
+
+    def test_terminal_cache_growth_over_writer_limit_blocks_collection(self):
+        self.online_collection()
+        _, initial = sources._existing_cache(self.cache.root)
+        config = json.loads(Path(self.runtime.profile["config"]).read_bytes())
+        config["limits"]["cache_bytes"] = initial["logical_bytes"] + 1
+        self.config(limits=config["limits"])
+        actual = native.CaptureCache.terminal
+        def concurrent_growth(cache):
+            result = actual(cache)
+            (cache.root / "TEST_FIXTURE_concurrent_growth").write_bytes(b"X" * 4096)
+            return result
+        before_calls = len(self.executor.calls)
+        with patch.object(native.CaptureCache, "terminal", concurrent_growth):
+            value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("ORIGINAL_WRITER_CACHE_LIMIT_EXCEEDED", value["collection_reasons"])
+        self.assertGreater(value["cache_inventory"]["logical_bytes"],
+                           value["original_writer_limits"]["cache_bytes"])
+        self.assertEqual(value["cache_inventory_at_entry"]["logical_bytes"], initial["logical_bytes"])
+        self.assertEqual(value["network_calls"], 0)
+        self.assertEqual(len(self.executor.calls), before_calls)
+
+    def test_terminal_cache_growth_over_diagnostic_limit_raises_before_admission(self):
+        _, initial = sources._existing_cache(self.cache.root)
+        self.config(limits=dict(cache_bytes=initial["logical_bytes"] + 512))
+        actual = native.CaptureCache.terminal
+        def concurrent_growth(cache):
+            result = actual(cache)
+            (cache.root / "TEST_FIXTURE_concurrent_growth").write_bytes(b"X" * 4096)
+            return result
+        limits = dict(sources.LIMITS, cache_bytes=initial["logical_bytes"] + 1024)
+        with patch.object(sources, "LIMITS", limits), \
+                patch.object(native.CaptureCache, "terminal", concurrent_growth):
+            with self.assertRaisesRegex(ValueError, "PREFLIGHT_READONLY_CACHE_LIMIT_EXCEEDED"):
+                self.plan()
+
+    def test_terminal_capacity_change_blocks_collection(self):
+        self.online_collection()
+        with patch.object(self.runtime, "preflight", side_effect=[
+                dict(allowed=True, reason_codes=[]),
+                dict(allowed=False, reason_codes=["TEST_FIXTURE_CONCURRENT_CAPACITY_CHANGE"])]) as capacity:
+            value = self.plan(collect_missing=True)
+        self.assertFalse(value["collection_admitted"])
+        self.assertIn("REGISTERED_STORAGE_CAPACITY_BLOCKED", value["collection_reasons"])
+        self.assertFalse(value["capacity"]["allowed"])
+        self.assertEqual(capacity.call_args_list[0], capacity.call_args_list[1])
+        self.assertEqual(value["network_calls"], 0)
+
+    def test_terminal_inventory_failure_cannot_return_admission(self):
+        self.online_collection()
+        actual = sources._existing_cache(self.cache.root)
+        with patch.object(sources, "_existing_cache", side_effect=[actual,
+                ValueError("CORE_SOURCE_CACHE_INVENTORY_INCOMPLETE")]):
+            with self.assertRaisesRegex(ValueError, "CORE_SOURCE_CACHE_INVENTORY_INCOMPLETE"):
+                self.plan(collect_missing=True)
+
+    def test_readonly_source_byte_and_time_budgets_remain_enforced(self):
+        for field, limit, reason in (("capture_read_bytes", 1, "READ_LIMIT_EXCEEDED:capture"),
+                                     ("max_seconds", 1e-9, "TOTAL_TIME_LIMIT_EXCEEDED")):
+            with self.subTest(field=field), patch.object(sources, "LIMITS", dict(sources.LIMITS, **{field: limit})):
+                with self.assertRaisesRegex(BudgetExceeded, reason):
+                    self.plan()
+
+    def test_terminal_source_content_check_is_preserved(self):
+        actual = native.CaptureCache.terminal
+        path = Path(self.calendar.metadata["raw"]["path"])
+        def tampered_source(cache):
+            raw = path.read_bytes()
+            path.write_bytes(b"X" + raw[1:])
+            return actual(cache)
+        with patch.object(native.CaptureCache, "terminal", tampered_source):
+            with self.assertRaisesRegex(BudgetExceeded, "FILE_SHA256_CHANGED"):
+                self.plan()
 
     def test_explicit_collection_cannot_bypass_capacity_or_known_budget(self):
         self.online_collection()

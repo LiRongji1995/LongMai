@@ -335,7 +335,11 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
     diagnostic = dict(sources.LIMITS)
     diagnostic["cache_bytes"] = max(diagnostic["cache_bytes"], writer["cache_bytes"])
     _need(inventory["logical_bytes"] <= diagnostic["cache_bytes"], "PREFLIGHT_READONLY_CACHE_LIMIT_EXCEEDED")
-    budget = Budget(diagnostic, cache_dir=root)
+    # This planner has no writer or network executor. Scan the complete cache
+    # at entry and again before returning admission, instead of recursively
+    # scanning it during each interval of source reads. Per-read content,
+    # time, RSS and byte limits remain active; writer Budgets are unchanged.
+    budget = Budget(diagnostic)
     now = _now or datetime.now(timezone.utc)
     _need(now.tzinfo is not None and now.utcoffset() is not None, "PREFLIGHT_AWARE_CLOCK_REQUIRED")
     options = dict(configuration.get("capture", {}), offline=True, retry_failed=False,
@@ -419,14 +423,23 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
         unresolved = sum(row["status"] != "AVAILABLE" for row in rows.values())
         if unresolved:
             reasons.append("WHOLE_SOURCE_GRAPH_NOT_AUTHENTICATED")
-        if collect_missing:
-            collection_reasons = _collection_reasons(result, configuration, reasons,
-                calendar_available=calendar is not None, authenticated=True)
         cache.terminal()
         _need(before == original._snapshot(runtime.profile)
               and implementations == [original._reference(Path(row["path"])) for row in implementations],
               "PREFLIGHT_CONTROL_OR_IMPLEMENTATION_CHANGED")
         runtime.check_binding()
+        _, terminal_inventory = sources._existing_cache(root)
+        _need(terminal_inventory["logical_bytes"] <= diagnostic["cache_bytes"],
+              "PREFLIGHT_READONLY_CACHE_LIMIT_EXCEEDED")
+        if terminal_inventory["logical_bytes"] > writer["cache_bytes"]:
+            reasons.append("ORIGINAL_WRITER_CACHE_LIMIT_EXCEEDED")
+        capacity = runtime.preflight(expected_growth_bytes=growth)
+        if not capacity["allowed"]:
+            reasons.append("REGISTERED_STORAGE_CAPACITY_BLOCKED")
+        runtime.check_binding()
+        if collect_missing:
+            collection_reasons = _collection_reasons(result, configuration, reasons,
+                calendar_available=calendar is not None, authenticated=True)
         terminal_now = _now or datetime.now(timezone.utc)
         _need(terminal_now.astimezone(sources.SH).date() == now.astimezone(sources.SH).date(),
               "PREFLIGHT_CURRENT_SNAPSHOT_DAY_CHANGED")
@@ -440,7 +453,9 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
             collection_admitted=collect_missing and not collection_reasons,
             collection_reasons=collection_reasons, explicit_missing_collection_plan=collect_missing,
             collection_policy="ORIGINAL_COLLECTOR_PER_STAGE_ADMISSION_NO_RETRY",
-            original_writer_limits=writer, cache_inventory=inventory, capacity=capacity,
+            original_writer_limits=writer, cache_inventory=terminal_inventory,
+            cache_inventory_at_entry=inventory, capacity=capacity,
+            diagnostic_cache_observation="ENTRY_AND_TERMINAL_FULL_INVENTORY_READONLY",
             diagnostic_cache_ceiling_source="MAX_FIXED_DIAGNOSTIC_AND_REGISTERED_WRITER_LIMIT",
             read_only_diagnostic_limits=diagnostic, diagnostic_limits_authorize_writer=False,
             totals={**totals, "scope":"KNOWN_MISSING_PLUS_BOUNDED_OPTIONAL_NEWS", "unknown_components":unknown,
