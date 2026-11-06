@@ -291,7 +291,8 @@ def render_premarket(core_run: dict, theme_context: dict | None, output_dir,
     retained = {key:deepcopy(provenance.get(key)) for key in
                 ('canonical_run_ref', 'original_exports', 'core_final_ref',
                  'source_role_summary', 'calendar_currentness',
-                 'news_metadata_ref', 'news_summary', 'theme_metadata_ref')}
+                 'news_metadata_ref', 'news_summary', 'theme_metadata_ref',
+                 'collection_prescreen_ref', 'collection_prescreen_counts')}
     exports = retained['original_exports']
     linked_exports = isinstance(exports, dict) and OFFICIAL_EXPORTS <= set(exports)
     counts = dict(original_selected=len(selected), displayed=len(displayed),
@@ -348,6 +349,12 @@ def render_premarket(core_run: dict, theme_context: dict | None, output_dir,
         news = retained['news_summary']
         lines.append('独立报道材料：' + str(news.get('status')) + '；解析' +
                      str(news.get('parsed_articles')) + '篇。报道材料不认证经济归因或EVENT，不用于同篇共现分组。')
+    if retained['collection_prescreen_counts'] is not None:
+        prescreen_counts = retained['collection_prescreen_counts']
+        lines.append('详细资料采集初筛：入围' + str(prescreen_counts['admitted_ids']) +
+                     '，暂不深采' + str(prescreen_counts['not_prioritized_ids']) +
+                     '，证据未知' + str(prescreen_counts['unknown_ids']) +
+                     '。只控制个股资讯采集，不改变原策略名单、排序及全池市场基准。')
     for group in groups:
         basis = '当前行业代理' if group['basis_kind'] == 'CURRENT_VERIFIED_INDUSTRY_PROXY' else '当前概念篮子' if group['theme_id'] else '未知'
         lines.extend(['', group['name'] + '｜' + basis + '（' + str(len(group['items'])) + '）'])

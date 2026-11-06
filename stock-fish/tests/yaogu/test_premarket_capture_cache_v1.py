@@ -52,11 +52,12 @@ class FixtureBudget:
 
 
 class FixtureExecutor:
-    def __init__(self, *, basic_failure=False, factor_partial=False, crash=False):
+    def __init__(self, *, basic_failure=False, factor_partial=False, crash=False, lhb_status='COMPLETE'):
         self.calls = []
         self.basic_failure = basic_failure
         self.factor_partial = factor_partial
         self.crash = crash
+        self.lhb_status = lhb_status
 
     def __call__(self, endpoint, params, output, **kwargs):
         self.calls.append((endpoint, params))
@@ -102,6 +103,9 @@ class FixtureExecutor:
             coverage = dict(requested_codes=params['codes'],security_statuses=statuses)
             if self.factor_partial:
                 status, complete = 'PARTIAL', False
+        elif endpoint == 'lhb_summary':
+            rows, status = [], self.lhb_status
+            complete = status == 'COMPLETE'
         elif endpoint == 'industry_list_sina':
             rows = [dict(label='hangye_TEST_FIXTURE_A',板块='TEST_FIXTURE行业',公司家数=1),
                     dict(label='hangye_TEST_FIXTURE_B',板块='TEST_FIXTURE其他',公司家数=1)]
@@ -152,6 +156,113 @@ class CaptureCacheTests(unittest.TestCase):
         self.assertEqual(spec.parameters['codes'],['sh.600001'])
         with self.assertRaisesRegex(ValueError,'ASCII_REQUEST'):
             cache_module.RequestSpec('stock_basic',{'codes':['sh.６００００１']})
+
+    def test_lhb_request_uses_five_calendar_sessions_and_role_does_not_change_key(self):
+        sessions = ['2026-01-05', '2026-01-06', '2026-01-07', '2026-01-08',
+                    '2026-01-09', '2026-01-12', '2026-01-13']
+        spec = cache_module.lhb_request_spec(sessions)
+        self.assertEqual(spec.endpoint, 'lhb_summary')
+        self.assertEqual(spec.parameters, dict(start_date='2026-01-07', end_date='2026-01-13'))
+        self.assertEqual(spec.business_session, '2026-01-13')
+        self.assertFalse(spec.current)
+        same = cache_module.RequestSpec('lhb_summary', spec.parameters, spec.business_session,
+                                        role='TEST_FIXTURE_OTHER_DESCRIPTION')
+        self.assertEqual(spec.key, same.key)
+        for invalid in (sessions[:4], list(reversed(sessions)), sessions + [sessions[-1]]):
+            with self.subTest(sessions=invalid):
+                with self.assertRaisesRegex(ValueError, 'LHB_FIVE_ORDERED'):
+                    cache_module.lhb_request_spec(invalid)
+
+    def test_changed_lhb_window_cannot_retry_prior_three_session_failure(self):
+        executor = FixtureExecutor(lhb_status='FETCH_FAILED')
+        cache = self.cache(executor)
+        old = cache_module.RequestSpec('lhb_summary', dict(start_date='2026-01-08', end_date='2026-01-12'),
+                                      '2026-01-12', role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        failed = cache.capture_one(old)
+        current = cache_module.lhb_request_spec(['2026-01-07', '2026-01-08', '2026-01-09',
+                                                 '2026-01-12', '2026-01-13'])
+        self.assertNotEqual(old.key, current.key)
+        calls = list(executor.calls)
+        with self.assertRaisesRegex(ValueError, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+            cache.capture_one(current)
+        self.assertEqual(executor.calls, calls)
+        self.assertEqual(cache.lookup(old).receipt_id, failed.receipt_id)
+
+    def test_changed_lhb_window_cannot_retry_prior_unfinished_claim(self):
+        executor = FixtureExecutor(crash=True)
+        cache = self.cache(executor)
+        old = cache_module.RequestSpec('lhb_summary', dict(start_date='2026-01-08', end_date='2026-01-12'),
+                                      '2026-01-12', role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        with self.assertRaisesRegex(RuntimeError, 'TEST_FIXTURE_EXECUTOR_DIED'):
+            cache.capture_one(old)
+        current = cache_module.lhb_request_spec(['2026-01-07', '2026-01-08', '2026-01-09',
+                                                 '2026-01-12', '2026-01-13'])
+        calls = list(executor.calls)
+        with self.assertRaisesRegex(ValueError, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+            cache.capture_one(current)
+        self.assertEqual(executor.calls, calls)
+        self.assertEqual(cache.lhb_overlap_blockers(current)[0]['request_key'], old.key)
+
+    def test_lhb_nonoverlapping_source_window_is_not_an_overlapping_retry(self):
+        executor = FixtureExecutor(lhb_status='FETCH_FAILED')
+        cache = self.cache(executor)
+        old = cache_module.RequestSpec('lhb_summary', dict(start_date='2026-01-08', end_date='2026-01-12'),
+                                      '2026-01-12', role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        cache.capture_one(old)
+        executor.lhb_status = 'COMPLETE'
+        current = cache_module.lhb_request_spec(['2026-01-19', '2026-01-20', '2026-01-21',
+                                                 '2026-01-22', '2026-01-23'])
+        self.assertEqual(cache.lhb_overlap_blockers(current), [])
+        self.assertEqual(cache.capture_one(current).status, 'COMPLETE')
+        self.assertEqual(len(executor.calls), 2)
+
+    def test_lhb_successful_old_cache_without_claim_is_not_reclassified_as_unknown(self):
+        executor = FixtureExecutor()
+        cache = self.cache(executor)
+        old = cache_module.RequestSpec('lhb_summary', dict(start_date='2026-01-08', end_date='2026-01-12'),
+                                      '2026-01-12', role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        record = cache.capture_one(old)
+        claim = Path(record.metadata['capture_attempt_dir']) / 'request-claim.json'
+        claim.unlink()  # TEST_FIXTURE emulates a committed older cache format.
+        reopened = self.cache(executor)
+        current = cache_module.lhb_request_spec(['2026-01-07', '2026-01-08', '2026-01-09',
+                                                 '2026-01-12', '2026-01-13'])
+        self.assertEqual(reopened.lhb_overlap_blockers(current), [])
+        self.assertEqual(reopened.capture_one(current).status, 'COMPLETE')
+        self.assertEqual(reopened.lookup(old).receipt_id, record.receipt_id)
+        self.assertEqual(len(executor.calls), 2)
+
+    def test_lhb_known_nonoverlapping_old_cache_needs_no_claim_or_attempt_mapping(self):
+        executor = FixtureExecutor()
+        cache = self.cache(executor)
+        old = cache_module.RequestSpec('lhb_summary', dict(start_date='2026-01-08', end_date='2026-01-12'),
+                                      '2026-01-12', role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        record = cache.capture_one(old)
+        (Path(record.metadata['capture_attempt_dir']) / 'request-claim.json').unlink()
+        # A prior known disjoint window cannot be a retry of the new window,
+        # even if an older attempt has no newly introduced claim structure.
+        orphan = cache.root / 'raw' / old.key / 'raw' / 'TEST_FIXTURE-old-attempt'
+        orphan.mkdir()
+        reopened = self.cache(executor)
+        current = cache_module.lhb_request_spec(['2026-01-19', '2026-01-20', '2026-01-21',
+                                                 '2026-01-22', '2026-01-23'])
+        self.assertEqual(reopened.lhb_overlap_blockers(current), [])
+        self.assertEqual(reopened.capture_one(current).status, 'COMPLETE')
+        self.assertEqual(len(executor.calls), 2)
+
+    def test_lhb_does_not_guess_unidentified_prior_attempt_is_unrelated(self):
+        executor = FixtureExecutor()
+        cache = self.cache(executor)
+        prior = cache.root / 'raw' / ('0' * 64)
+        prior.mkdir()
+        (prior / 'TEST_FIXTURE-unidentified-attempt').write_bytes(b'UNKNOWN retained request')
+        current = cache_module.lhb_request_spec(['2026-01-07', '2026-01-08', '2026-01-09',
+                                                 '2026-01-12', '2026-01-13'])
+        with self.assertRaisesRegex(ValueError, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+            cache.capture_one(current)
+        self.assertEqual(executor.calls, [])
+        self.assertEqual(cache.lhb_overlap_blockers(current)[0]['status'],
+                         'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
 
     def test_single_capture_hit_and_full_mature_verification(self):
         executor = FixtureExecutor(); cache = self.cache(executor)
@@ -243,6 +354,21 @@ class CaptureCacheTests(unittest.TestCase):
         fallback=[params['codes'] for endpoint,params in executor.calls if endpoint=='stock_basic']
         self.assertEqual(fallback,[['sh.688001']])
         self.assertFalse(any(r.endpoint=='stock_basic_all' and r.status=='FETCH_FAILED' for r in collection.core_records))
+        self.assertEqual(len(collection.prescreen_records), 1)
+        self.assertEqual(collection.prescreen_records[0].endpoint, 'lhb_summary')
+        self.assertEqual(collection.prescreen_records[0].parameters,
+                         cache_module.lhb_request_spec(collection.price_sessions).parameters)
+        self.assertEqual(collection.to_dict()['prescreen_records'],
+                         [collection.prescreen_records[0].to_dict()])
+        self.assertFalse(any(r.endpoint == 'lhb_summary'
+                             for r in collection.core_records + collection.context_records))
+        self.assertEqual(collection.identity_coverage['factor_query_codes'], ['sh.600001'])
+        factor_calls = [params for endpoint, params in executor.calls if endpoint == 'adjustment_factors']
+        self.assertEqual(factor_calls, [dict(codes=['sh.600001'], start_date='1990-01-01',
+                                           end_date=collection.observation_date)])
+        endpoints = [endpoint for endpoint, _ in executor.calls]
+        self.assertEqual(endpoints.count('lhb_summary'), 1)
+        self.assertLess(endpoints.index('lhb_summary'), endpoints.index('adjustment_factors'))
         run=dict(results={'SHORT_HORIZON_STRENGTH_R2':dict(items=[dict(instrument_id='600001.SH',research_selected=True)],research_selected_ids=['600001.SH'])})
         sources=cache_module.capture_theme_sources(cache,core_run=run,collection=collection)
         self.assertEqual(len(sources.requested_industry_nodes),2)
@@ -250,6 +376,46 @@ class CaptureCacheTests(unittest.TestCase):
         core_ids={r.receipt_id for r in collection.core_records}
         self.assertFalse(core_ids & {r['receipt_id'] for r in sources.context_captures})
         self.assertFalse(sources.parent_acquisition['display_amount_filter_applied'])
+
+    def test_lhb_incomplete_capture_is_retained_without_changing_core_scope_or_retry(self):
+        for status in ('PARTIAL', 'FETCH_FAILED'):
+            with self.subTest(status=status):
+                executor = FixtureExecutor(lhb_status=status)
+                cache = cache_module.CaptureCache(self.root / status, FixtureBudget(),
+                    config=dict(allow_test_fixture=True, calendar_lookback_days=110,
+                                calendar_lookahead_days=7), executor=executor)
+                collection = cache_module.capture_collect(cache,
+                    now=datetime.now(cache_module.SH) + timedelta(minutes=1))
+                self.assertTrue(collection.ready_for_core)
+                self.assertEqual(collection.completeness, 'PARTIAL')
+                self.assertEqual(collection.prescreen_records[0].status, status)
+                self.assertEqual([row['request_spec']['endpoint'] for row in collection.failures],
+                                 ['lhb_summary'])
+                self.assertEqual(collection.identity_coverage['factor_query_codes'], ['sh.600001'])
+                self.assertFalse(any(row.endpoint == 'lhb_summary' for row in collection.core_records))
+                prior_calls = list(executor.calls)
+                retained = cache.capture_one(cache_module.lhb_request_spec(collection.price_sessions))
+                self.assertEqual(retained.receipt_id, collection.prescreen_records[0].receipt_id)
+                self.assertEqual(executor.calls, prior_calls)
+
+    def test_lhb_stage_respects_remaining_http_budget_before_any_lhb_request(self):
+        class ReservingBudget(FixtureBudget):
+            def preclaim_request(self, endpoint, params):
+                super().preclaim_request(endpoint, params)
+                if provider_requests.ENDPOINTS[endpoint]['provider'] != 'baostock':
+                    self.calls['http_reserved'] += self.limits['request_http_attempts']
+        budget = ReservingBudget()
+        budget.limits['max_http_attempts'] = 3 * budget.limits['request_http_attempts']
+        executor = FixtureExecutor()
+        cache = cache_module.CaptureCache(self.root / 'bounded', budget,
+            config=dict(allow_test_fixture=True, calendar_lookback_days=110,
+                        calendar_lookahead_days=7), executor=executor)
+        with self.assertRaisesRegex(ValueError, 'COMPLETE_STAGE_REQUEST_BUDGET_REQUIRED:max_http_attempts'):
+            cache_module.capture_collect(cache, now=datetime.now(cache_module.SH) + timedelta(minutes=1))
+        endpoints = [endpoint for endpoint, _ in executor.calls]
+        self.assertIn('stock_basic_all', endpoints)
+        self.assertNotIn('lhb_summary', endpoints)
+        self.assertNotIn('adjustment_factors', endpoints)
 
     def test_raw_only_seed_keeps_original_typed_clock_and_has_no_result(self):
         from stockfish_core.yaogu.contracts import SourceReceipt

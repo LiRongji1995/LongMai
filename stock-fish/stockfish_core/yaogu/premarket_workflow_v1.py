@@ -7,10 +7,11 @@ from __future__ import annotations
 
 from stockfish_core.file_integrity import content_equal, content_reference_equal, content_fingerprint, verify_content_reference
 
-from datetime import datetime, timezone, time as wall_time
+from datetime import date, datetime, timezone, time as wall_time
 import hashlib
 import json
 import os
+import re
 from pathlib import Path
 import subprocess
 import sys
@@ -148,6 +149,54 @@ def _completion(job, *, status, phases, budget, **fields):
     return value
 
 
+def _collection_prescreen(cache, collection, core_run, job, budget):
+    """Project authenticated summary facts; never join future-return columns."""
+    from .collection_prescreen import build_collection_prescreen
+    from .premarket_capture_cache_v1 import lhb_request_spec, _stamp
+    sessions = list(collection.price_sessions[-5:])
+    expected = lhb_request_spec(collection.price_sessions)
+    summary = dict(status='UNKNOWN', pagination_complete=False,
+                   window_sessions=sessions, source_refs=[], records=[])
+    references, original_sources = [], []
+    records = collection.prescreen_records
+    if len(records) > 1:
+        raise ValueError('PRESCREEN_SINGLE_WINDOW_SOURCE_REQUIRED')
+    for record in records:
+        result = cache.verify(record)
+        metadata = cache.metadata(record)
+        if result['endpoint'] != expected.endpoint or result['parameters'] != expected.parameters:
+            raise ValueError('PRESCREEN_SOURCE_WINDOW_MISMATCH')
+        refs = [metadata['receipt_id']]
+        visible = max(_stamp(metadata[key]) for key in ('first_seen_at', 'ingested_at', 'completed_at'))
+        summary.update(status=result['status'], pagination_complete=result['pagination_complete'],
+                       source_refs=refs, visible_at=visible.isoformat())
+        originals = {key: metadata[key] for key in ('result', 'raw', 'receipt')}
+        original_sources.append(dict(receipt_id=metadata['receipt_id'], **originals))
+        references.extend(originals.values())
+        code_ids = {iid.split('.')[0]: iid for iid in core_run['results'][STRATEGY]['eligible_pool_ids']}
+        if result['status'] == 'COMPLETE' and result['pagination_complete']:
+            for row in result['rows']:
+                code = row.get('代码') if isinstance(row, dict) else None
+                session = str(row.get('上榜日', '')) if isinstance(row, dict) else ''
+                try:
+                    day = date.fromisoformat(session).isoformat() if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', session) else None
+                except ValueError:
+                    day = None
+                if type(code) is not str or not re.fullmatch(r'[0-9]{6}', code) or day not in sessions:
+                    # A malformed row also invalidates negative membership proofs.
+                    summary['status'] = 'UNKNOWN'
+                    summary['reason'] = 'MALFORMED_OR_OUT_OF_WINDOW_DISCLOSURE'
+                    summary['records'] = []
+                    break
+                if code in code_ids:
+                    summary['records'].append(dict(instrument_id=code_ids[code], session=day,
+                        evidence_status='VALID', source_refs=refs, visible_at=visible.isoformat()))
+    screen = build_collection_prescreen(core_run, calendar_sessions=collection.sessions, lhb_summary=summary)
+    screen['original_lhb_sources'] = original_sources
+    reference = budget.write_json(job/'collection-prescreen.json', screen)
+    return screen, reference, [*references, reference]
+
+
 def execute_workflow(config, job_dir, *, now=None, adapters=None):
     """Worker implementation. Adapter injection exists only for isolated tests."""
     from .premarket_capture_cache_v1 import CaptureCache, capture_collect, capture_theme_sources
@@ -167,6 +216,7 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
     budget = Budget(config['limits'], job_dir=job, cache_dir=state/'cache')
     phases = {name:'NOT_RUN' for name in ('capture','core','news','theme_sources','theme','presentation')}
     collection, owner, theme, display, result, news = None, None, None, None, None, None
+    prescreen, prescreen_ref, prescreen_refs = None, None, []
     phase_failures = {}
     core_verified = False
     calendar_rows = []
@@ -195,6 +245,9 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
             owner.validate()
             core_verified = True
             phases['core'] = 'COMPLETE'
+        with budget.phase('capture'), budget.meter_files():
+            prescreen, prescreen_ref, prescreen_refs = _collection_prescreen(
+                cache, collection, owner.run, job, budget)
         # Independent news capture never upgrades an article mention into a
         # direction or EVENT capability. Offline is inherited, not overridden.
         try:
@@ -207,7 +260,7 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
                 news_config = dict(config.get('news', {}))
                 news_config['offline'] = config.get('capture', {}).get('offline', False)
                 news = news_collector(core_run=owner.run, output_dir=job/'news',
-                    budget=budget, config=news_config)
+                    budget=budget, config=news_config, target_ids=prescreen['admitted_ids'])
                 summary = news['summary']
                 if 'acquisition_complete' in summary:
                     acquired = summary['acquisition_complete']
@@ -261,7 +314,10 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
                 source_role_summary=collection.source_role_summary,
                 calendar_currentness=gate,DAILY_V1='UNKNOWN_NOT_EXECUTED',
                 news_metadata_ref=None if news is None else news['metadata'],
-                news_summary=None if news is None else news['summary'])
+                news_summary=None if news is None else news['summary'],
+                collection_prescreen_ref=prescreen_ref,
+                collection_prescreen_counts={key:len(prescreen[key]) for key in
+                    ('admitted_ids', 'not_prioritized_ids', 'unknown_ids')})
             display = renderer(owner.run,theme,job/'display',
                 minimum_amount_cny=config['minimum_amount_cny'],provenance=provenance)
             phases['presentation'] = 'COMPLETE'
@@ -278,7 +334,8 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
         validation_refs = {}
         for reference in [*owner.validation_references,
                 *(result.validation_references if result is not None else []),
-                *(news.get('validation_references', []) if news is not None else [])]:
+                *(news.get('validation_references', []) if news is not None else []),
+                *prescreen_refs]:
             prior = validation_refs.setdefault(reference['path'], reference)
             if prior != reference:
                 raise ValueError('TERMINAL_SOURCE_REFERENCE_CONFLICT')
@@ -288,6 +345,9 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
             observation_date=str(collection.observation_date),target_session=str(collection.target_session),
             calendar_rows=calendar_rows,calendar_currentness=gate,display=display,
             theme_artifacts={} if result is None else result.artifacts, news=news,
+            collection_prescreen_ref=prescreen_ref,
+            collection_prescreen_counts={key:len(prescreen[key]) for key in
+                ('admitted_ids', 'not_prioritized_ids', 'unknown_ids')},
             phase_failures=phase_failures, validation_references=list(validation_refs.values()),
             core_artifacts=owner.artifacts,theme_status='UNKNOWN' if theme is None else theme['status'])
     except Exception as error:

@@ -2,6 +2,8 @@
 
 本轮仅精简工程实现，不调整策略公式、权重、阈值或资格规则，不覆盖既有 run。以下参数均尚未验证，`MARKET_EDGE=NOT_ESTABLISHED`。
 
+2026-11-06新增 `COLLECTION_PRESCREEN_V1`，仅控制可选个股资讯采集：完整可见的近5交易会话龙虎榜线索，或原R2动态成交参考达标且近期参与度PASS，任一路成立即入围。两路都明确不满足才暂不优先，否则UNKNOWN。它不产生新的策略入选结论；原PV/V2/DAILY/R2、低成交额延续及回撤等原策略结果仍保留，全池市场与题材基准不变。无榜不否决成交额通道，净卖出榜不伪装成利好，参数仍未经投资验证。
+
 | 保留能力 | 用途与边界 | 权威定义 |
 |---|---|---|
 | PV_OBSERVATION_V1 | 已确认的日常量价研究；实验结论与冻结主策略分开 | [实验配置](stock-fish/config/r05_strategy_experiments.yaml)及 `strategy_experiments.py` |

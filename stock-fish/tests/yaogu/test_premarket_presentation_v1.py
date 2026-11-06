@@ -88,6 +88,25 @@ class PremarketPresentationFixture(unittest.TestCase):
         self.assertIsNone(report['theme_context']['source_verified'])
         self.assertIn('原生主线确认未知', text)
 
+    def test_prescreen_provenance_keeps_original_counts_and_hidden_lhb_candidate_private(self):
+        from stockfish_core.yaogu import premarket_news_v1 as news
+        from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+        original = core([item(1, 200000000), item(2, 400000000)])
+        reported = news.collect_reported_news(core_run=original, output_dir=self.root/'news',
+            budget=Budget(), config={'offline': True}, target_ids=['000001.SZ'])
+        provenance = self.originals()
+        provenance.update(news_summary=reported['summary'], news_metadata_ref=reported['metadata'],
+            collection_prescreen_counts={'admitted_ids':1,'not_prioritized_ids':1,'unknown_ids':0})
+        result = presentation.render_premarket(original, None, self.root/'prescreen', provenance=provenance)
+        text, report, csv_text = self.read(result)
+        self.assertEqual(result['counts'], report['counts'])
+        self.assertEqual(result['counts']['original_selected'], 2)
+        self.assertEqual(result['counts']['displayed'], 1)
+        self.assertIn('详细资料采集初筛：入围1', text)
+        for payload in (text, json.dumps(report), csv_text):
+            self.assertNotIn('000001.SZ', payload)
+        self.assertEqual(json.loads(Path(reported['metadata']['path']).read_bytes())['target_ids'], ['000001.SZ'])
+
     def test_inclusive_raw_money_unknown_and_full_original_retention(self):
         rows = [item(1, 299999999), item(2, 300000000), item(3, 300000001), item(4, None)]
         original = core(rows)

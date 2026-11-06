@@ -80,7 +80,7 @@ class _Anchors(HTMLParser):
             self.current = None
 
 
-def _discover(raw, home, names):
+def _discover(raw, home, names, *, candidates_only=False):
     parsed = _Anchors()
     parsed.feed(raw.decode('utf-8', errors='strict'))
     parsed.close()
@@ -90,6 +90,8 @@ def _discover(raw, home, names):
         if not _allowed(url, article=True) or HOSTS[urlsplit(url).hostname] != HOSTS[urlsplit(home).hostname]:
             continue
         title = anchor['title']
+        if candidates_only and not any(name in title for name in names):
+            continue
         score = sum(word in title for word in KEYWORDS) * 2 + sum(name in title for name in names)
         if score:
             rows.append(dict(url=url, discovered_title=title, discovery_home=home,
@@ -219,7 +221,7 @@ def _parse_material(raw, url, observed, coverage):
         publication_is_not_business_date_proof=True)
 
 
-def collect_reported_news(*, core_run, output_dir, budget, config=None):
+def collect_reported_news(*, core_run, output_dir, budget, config=None, target_ids=None):
     """Archive bounded reported material, returning ``{summary, metadata: ref4}``.
 
     The summary contains no stock names or article text and is safe to link in
@@ -242,19 +244,29 @@ def collect_reported_news(*, core_run, output_dir, budget, config=None):
     observed = date.fromisoformat(core_run['observation_date'])
     strategy = core_run.get('strategy_id') or 'SHORT_HORIZON_STRENGTH_R2'
     selected = [row for row in core_run['results'][strategy]['items'] if row.get('research_selected') is True]
+    if target_ids is not None:
+        pool = core_run['results'][strategy]['items']
+        ids = {row['instrument_id'] for row in pool}
+        if (not isinstance(target_ids, (list, tuple)) or
+                any(type(iid) is not str for iid in target_ids) or
+                len(target_ids) != len(set(target_ids)) or not set(target_ids) <= ids):
+            raise ValueError('NEWS_TARGET_IDS_MUST_BE_UNIQUE_CORE_POOL_SUBSET')
+        selected = [row for row in pool if row['instrument_id'] in set(target_ids)]
     names = [row['name'] for row in selected if isinstance(row.get('name'), str) and row['name']]
     output = Path(output_dir).expanduser().absolute()
     output.mkdir(parents=True, exist_ok=False)
     state = dict(gets=0, captures=[])
     discovered, articles, home_errors = [], [], []
     completed_homes, planned_articles = 0, None
-    if not config['offline']:
+    no_targets = target_ids is not None and not names
+    if not config['offline'] and not no_targets:
         opener = _make_opener()
         for home in HOMES:
             fetched = _fetch(home, output, budget, config, state, opener)
             if fetched is not None:
                 try:
-                    discovered.extend(_discover(fetched['body'], home, names))
+                    discovered.extend(_discover(fetched['body'], home, names,
+                                                candidates_only=target_ids is not None))
                     completed_homes += 1
                 except (ValueError, UnicodeError) as error:
                     home_errors.append(dict(home=home, error_type=type(error).__name__))
@@ -291,13 +303,14 @@ def collect_reported_news(*, core_run, output_dir, budget, config=None):
          row.get('redirect_status') == 'FOLLOWED_WITH_SEPARATE_GET_ADMISSION')
         for row in state['captures'])
     acquisition_complete = None
-    if not config['offline']:
+    if not config['offline'] and not no_targets:
         if (completed_homes != len(HOMES) or home_errors or not bodies_complete or
                 len(articles) != planned_articles or parsed_count != len(articles)):
             acquisition_complete = False
         elif parsed_count > 0 and date_counts == {'AVAILABLE': parsed_count}:
             acquisition_complete = True
     summary = dict(status='OFFLINE_NOT_COLLECTED_UNKNOWN' if config['offline'] else
+                   'NOT_REQUESTED_NO_PRESCREEN_TARGET_NAMES' if no_targets else
                    'REPORTED_MATERIALS_ONLY' if parsed_count else 'UNKNOWN_NO_PARSED_REPORTED_MATERIAL',
         HTTP_GET_attempts=state['gets'], articles_saved=sum('capture' in row for row in articles),
         article_records=len(articles), parsed_articles=parsed_count,
@@ -309,10 +322,16 @@ def collect_reported_news(*, core_run, output_dir, budget, config=None):
         economic_attribution='UNKNOWN', EVENT_confirmation='UNKNOWN_NOT_ISSUED',
         network_metric_scope='ACTUAL_URLLIB_GET_INVOCATIONS_NOT_CONFIRMED_WIRE_OR_SERVER_ARRIVALS',
         automatic_retries=0)
+    summary.update(target_scope='PRESCREEN_ADMITTED_ONLY' if target_ids is not None else 'ORIGINAL_SELECTED_AND_MARKET_NEWS',
+                   target_count=None if target_ids is None else len(target_ids),
+                   candidate_name_count=len(names),
+                   skipped_by_prescreen=no_targets,
+                   general_market_keyword_articles_included=target_ids is None)
     for capture in state['captures']:
         for role in ('raw', 'receipt'):
             budget.read(capture[role]['path'], expected=capture[role])
     metadata = dict(schema_version=VERSION, run_id=core_run['run_id'],
+        target_ids=None if target_ids is None else list(target_ids),
         observation_date=core_run['observation_date'], target_session=core_run['target_session'],
         actual_generated_at=utc_now(), summary=summary, config=config,
         original_HTTP_captures=state['captures'], discovered_candidates=discovered,

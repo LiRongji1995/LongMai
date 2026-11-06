@@ -73,6 +73,37 @@ class NewsFixture(unittest.TestCase):
         document = json.loads(Path(result['metadata']['path']).read_bytes())
         return result, document, opener, budget
 
+    def test_prescreen_empty_targets_issue_no_requests_and_are_not_empty_news(self):
+        with patch.object(news, '_make_opener', side_effect=AssertionError('NO_NETWORK_FOR_EMPTY_SCOPE')):
+            result = news.collect_reported_news(core_run=self.core, output_dir=self.root/'empty',
+                budget=Budget(), target_ids=[])
+        self.assertEqual(result['summary']['HTTP_GET_attempts'], 0)
+        self.assertEqual(result['summary']['status'], 'NOT_REQUESTED_NO_PRESCREEN_TARGET_NAMES')
+        self.assertIsNone(result['summary']['acquisition_complete'])
+        self.assertEqual(result['summary']['source_coverage'], 'UNKNOWN')
+
+    def test_prescreen_only_fetches_matching_candidate_articles_without_mutating_core(self):
+        before = json.dumps(self.core, sort_keys=True)
+        opener = Opener({
+            news.HOMES[0]: Response(('<a href="/detail/101">TEST_FIXTURE_STOCK_1</a>'
+                '<a href="/detail/102">焦点复盘 其他个股</a>').encode()),
+            news.HOMES[1]: Response(b'NO LINKS TEST_FIXTURE'),
+            'https://www.cls.cn/detail/101': Response(cls_article(101))})
+        with patch.object(news, '_make_opener', return_value=opener):
+            result = news.collect_reported_news(core_run=self.core, output_dir=self.root/'targeted',
+                budget=Budget(), target_ids=['000001.SZ'])
+        self.assertEqual(len(opener.calls), 3)
+        self.assertEqual(result['summary']['article_requests_planned'], 1)
+        self.assertFalse(result['summary']['general_market_keyword_articles_included'])
+        self.assertEqual(json.dumps(self.core, sort_keys=True), before)
+
+    def test_prescreen_target_scope_rejects_duplicates_and_foreign_ids_before_io(self):
+        for ids in (['000001.SZ', '000001.SZ'], ['600001.SH'], '000001.SZ', [None]):
+            with self.subTest(ids=ids), self.assertRaisesRegex(ValueError, 'NEWS_TARGET_IDS'):
+                news.collect_reported_news(core_run=self.core, output_dir=self.root/'invalid',
+                    budget=Budget(), target_ids=ids)
+        self.assertFalse((self.root/'invalid').exists())
+
     def test_real_anchor_discovery_existing_parsers_and_unknown_date(self):
         result, document, opener, budget = self.run_news({
             news.HOMES[0]: Response(('<a href="/detail/101"><span>TEST_FIXTURE 焦点复盘</span></a>'

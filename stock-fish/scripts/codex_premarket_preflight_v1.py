@@ -111,7 +111,7 @@ def _factor_inventory(index, observed):
 
 
 def _scope(index, config, writer_limits, raw_entries):
-    from stockfish_core.yaogu.premarket_capture_cache_v1 import RequestSpec
+    from stockfish_core.yaogu.premarket_capture_cache_v1 import RequestSpec, lhb_request_spec
     calendar, result = index.calendar()
     if calendar is None:
         local = index.instant.astimezone(sources.SH).date()
@@ -147,6 +147,13 @@ def _scope(index, config, writer_limits, raw_entries):
           for day in price for ep in ("market_daily", "master_all")])
     stage("THEME_MARKET_ADDITIONAL_42", [RequestSpec(ep, dict(date=day), day, role="FULL_MARKET_CONTEXT")
           for day in theme[:-25] for ep in ("market_daily", "master_all")], allow_raw=True)
+    lhb_spec = lhb_request_spec(price)
+    lhb_stage = stage("PRESCREEN_LHB", [lhb_spec])
+    lhb_blockers = index.cache.lhb_overlap_blockers(lhb_spec, entries=index.entries)
+    if lhb_blockers:
+        lhb_stage['requests'][0].update(status='OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY',
+                                       overlapping_prior_requests=lhb_blockers)
+        lhb_stage['cost'] = _cost(lhb_stage['requests'], writer_limits['request_http_attempts'])
     # The original planner authenticates only what it actually reaches. Its
     # early return is retained, but does not hide the index gaps above/below.
     core = sources._collect(index, config, sources.LEGACY_IDENTITY)
@@ -244,7 +251,7 @@ def _collection_reasons(result, configuration, reasons, *, calendar_available, a
     stages = {stage["name"]: stage for stage in result["stages"]}
     permitted_stages = {"CURRENT_OFFICIAL", "CORE_MARKET_25", "THEME_MARKET_ADDITIONAL_42",
         "FULL_ANCHORED_FACTORS", "QUALIFICATION", "CURRENT_THEME_DIRECTORIES",
-        "WHOLE_CURRENT_THEME_MEMBERS"}
+        "WHOLE_CURRENT_THEME_MEMBERS", "PRESCREEN_LHB"}
     permitted_reasons = {"ORIGINAL_CORE_SOURCES_NOT_READY", "WHOLE_SOURCE_GRAPH_NOT_AUTHENTICATED"}
     permitted_reasons.update(prefix+stage for prefix in ("SOURCE_GAPS:", "UNKNOWN_SCOPE:")
                              for stage in permitted_stages)
@@ -284,7 +291,8 @@ def _collection_reasons(result, configuration, reasons, *, calendar_available, a
         for row in stage["requests"]:
             if row["status"] not in allowed_statuses:
                 reason = ("COLLECTION_SOURCE_NOT_RETRYABLE:" if row["status"] in {
-                    "INCOMPLETE_NO_IMPLICIT_RETRY", "UNFINISHED_NO_IMPLICIT_RETRY", "NOT_VISIBLE_AT_CUTOFF"}
+                    "INCOMPLETE_NO_IMPLICIT_RETRY", "UNFINISHED_NO_IMPLICIT_RETRY", "NOT_VISIBLE_AT_CUTOFF",
+                    "OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY"}
                     else "COLLECTION_EXISTING_SOURCE_NOT_AUTHENTICATED:")
                 blocked.append(reason+row["request_key"])
         for dependency in stage["unknown_dependencies"]:
@@ -447,6 +455,15 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
             _latest_gate(index.verify(calendar)["rows"], result["observation_date"], result["target_session"],
                          terminal_now)
         budget.check("whole_preflight_return", force=True)
+        lhb_rows = [row for stage in result["stages"] if stage["name"] == "PRESCREEN_LHB"
+                    for row in stage["requests"]]
+        result["prescreen_plan"] = dict(status="NOT_EVALUATED_READONLY_SOURCE_PLAN",
+            candidate_count=None, candidate_ids=None, decisions_computed=False,
+            window_sessions=result["core_sessions"][-5:] if calendar is not None else None,
+            source_status=lhb_rows[0]["status"] if lhb_rows else "UNKNOWN_CALENDAR_REQUIRED",
+            request_key=lhb_rows[0]["request_key"] if lhb_rows else None,
+            scope="SUPPLEMENTAL_DEEP_RESEARCH_ROUTING_ONLY",
+            full_pool_factor_scope_preserved=True, missing_source_is_not_empty=True)
         result.update(schema_version=VERSION, planned_at=now.isoformat(),
             status="ADMITTED_FOR_BOUNDED_EXECUTION" if not reasons else "BLOCKED",
             execution_admitted=not reasons, reasons=sorted(set(reasons)),

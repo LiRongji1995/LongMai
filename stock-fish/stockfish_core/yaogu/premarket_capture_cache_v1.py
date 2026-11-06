@@ -138,6 +138,22 @@ class RequestSpec:
                     business_session=self.business_session, role=self.role, current=self.current)
 
 
+def lhb_request_spec(price_sessions):
+    """One bounded request covering the last five authenticated trade sessions.
+
+    The caller supplies the actual calendar selection. This function does not
+    infer trading sessions from weekdays or certify source completeness.
+    """
+    _need(isinstance(price_sessions, (list, tuple)) and len(price_sessions) >= 5,
+          'LHB_FIVE_ORDERED_TRADE_SESSIONS_REQUIRED')
+    sessions = tuple(str(day) for day in price_sessions)
+    _need(all(date.fromisoformat(day).isoformat() == day for day in sessions)
+          and all(left < right for left, right in zip(sessions, sessions[1:])),
+          'LHB_FIVE_ORDERED_TRADE_SESSIONS_REQUIRED')
+    return RequestSpec('lhb_summary', dict(start_date=sessions[-5], end_date=sessions[-1]),
+                       sessions[-1], role='PRESCREEN_LHB_5_SESSIONS')
+
+
 @dataclass(frozen=True)
 class CaptureRecord:
     """Immutable JSON metadata, not a reader or a restored native capability."""
@@ -190,6 +206,7 @@ class CaptureCollection:
     ready_for_core: bool
     calendar_rows: tuple[dict, ...] = ()
     coverage_type: str = 'RECONSTRUCTED_HISTORICAL'
+    prescreen_records: tuple[CaptureRecord, ...] = ()
 
     @property
     def completeness(self):
@@ -213,6 +230,7 @@ class CaptureCollection:
             target_session=self.target_session, sessions=list(self.sessions),
             price_sessions=list(self.price_sessions), core_records=[r.to_dict() for r in self.core_records],
             context_records=[r.to_dict() for r in self.context_records],
+            prescreen_records=[r.to_dict() for r in self.prescreen_records],
             raw_context_sources=deepcopy(list(self.raw_context_sources)), failures=deepcopy(list(self.failures)),
             request_plan=deepcopy(list(self.request_plan)), identity_coverage=deepcopy(self.identity_coverage),
             ready_for_core=self.ready_for_core, completeness=self.completeness,
@@ -516,8 +534,82 @@ class CaptureCache:
         _need(len({v['receipt_id'] for v in tied}) == 1, 'SAME_CLOCK_CAPTURE_CONFLICT')
         return CaptureRecord.from_metadata(tied[0])
 
+    def lhb_overlap_blockers(self, spec, *, entries=None):
+        """Retain overlapping LHB failures even when a new range changes key.
+
+        This is an invocation-local inspection of the existing cache and
+        claims, not a new retry ledger. Exact-key handling remains unchanged.
+        """
+        if spec.endpoint != 'lhb_summary':
+            return []
+        values = list(self._entries()) if entries is None else entries
+        by_key, blocked = {}, {}
+        start, end = spec.parameters['start_date'], spec.parameters['end_date']
+
+        def overlaps(prior):
+            return (prior.endpoint == 'lhb_summary' and prior.key != spec.key
+                    and prior.parameters['start_date'] <= end
+                    and start <= prior.parameters['end_date'])
+
+        for value in values:
+            prior = RequestSpec(**value['request_spec'])
+            _need(prior.key == value['request_key'], 'CACHE_LHB_PRIOR_REQUEST_IDENTITY_CHANGED')
+            by_key.setdefault(prior.key, []).append(value)
+            if overlaps(prior) and (value['status'] != 'COMPLETE' or not value['pagination_complete']):
+                blocked[prior.key] = dict(request_key=prior.key, request_spec=prior.to_dict(),
+                                         status='OVERLAPPING_INCOMPLETE_NO_IMPLICIT_RETRY')
+        folders = sorted((self.root / 'raw').iterdir())
+        _need(len(folders) <= self.max_entries, 'CACHE_LHB_ATTEMPT_COUNT_BOUND')
+        claim_count = 0
+        for folder in folders:
+            _need(folder.is_dir() and not folder.is_symlink(), 'CACHE_LHB_ATTEMPT_DIRECTORY_REQUIRED')
+            if folder.name == spec.key or folder.name in blocked:
+                continue
+            indexed = by_key.get(folder.name, ())
+            if indexed and not any(overlaps(RequestSpec(**value['request_spec'])) for value in indexed):
+                continue
+            attempts_root = folder / 'raw'
+            _need(not attempts_root.is_symlink(), 'CACHE_LHB_ATTEMPT_DIRECTORY_REQUIRED')
+            attempts = sorted(attempts_root.iterdir()) if attempts_root.is_dir() else []
+            claim_count += len(attempts)
+            _need(claim_count <= self.max_entries, 'CACHE_LHB_ATTEMPT_COUNT_BOUND')
+            if not attempts and not indexed and any(folder.iterdir()):
+                blocked[folder.name] = dict(request_key=folder.name, request_spec=None,
+                    status='UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
+            for attempt in attempts:
+                _need(attempt.is_dir() and not attempt.is_symlink(), 'CACHE_LHB_ATTEMPT_DIRECTORY_REQUIRED')
+                committed = any(value.get('capture_attempt_dir') == str(attempt)
+                                and value['status'] == 'COMPLETE' and value['pagination_complete']
+                                for value in indexed)
+                failed = attempt / 'attempt-failed.json'
+                if committed and not failed.exists():
+                    # Older successful originals need no newly introduced
+                    # claim artifact to retain their existing authority.
+                    continue
+                if failed.exists():
+                    self._read(failed, limit=2 * 1024**2)
+                claim = attempt / 'request-claim.json'
+                if not claim.exists():
+                    prior_spec = indexed[0]['request_spec'] if indexed else None
+                    blocked[folder.name] = dict(request_key=folder.name, request_spec=prior_spec,
+                        status='OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY' if prior_spec else
+                               'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
+                    continue
+                raw, _ = self._read(claim, limit=2 * 1024**2)
+                declared = _json(raw)
+                prior = RequestSpec(**declared['request_spec'])
+                _need(declared['schema_version'] == VERSION and prior.key == folder.name,
+                      'CACHE_LHB_PRIOR_CLAIM_IDENTITY_CHANGED')
+                if overlaps(prior) and (not committed or failed.exists()):
+                    blocked[prior.key] = dict(request_key=prior.key, request_spec=prior.to_dict(),
+                        status='OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY')
+        return [blocked[key] for key in sorted(blocked)]
+
     def capture_one(self, spec):
         with self._writer():
+            blockers = self.lhb_overlap_blockers(spec)
+            _need(not blockers, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
+                  ','.join(row['request_key'] for row in blockers))
             try:
                 cached = self.lookup(spec)
             except ValueError as error:
@@ -863,6 +955,11 @@ def capture_collect(cache, *, now, config=None):
     future = sorted(code for code in raw_union if listing(code) is not None and listing(code) > observed)
     outdate_conflict = sorted(code for code in raw_union & set(roster) if
         _listing(basic.get(code, {}).get('outDate')) is not None and _listing(basic[code]['outDate']) <= observed)
+    # Supplemental routing evidence must not change the frozen core source
+    # graph, the full factor query scope, or whole-market theme context.
+    prescreen_specs = [lhb_request_spec(tuple(map(str, price)))]
+    _preflight_requests(cache, prescreen_specs)
+    prescreen = [take(spec) for spec in prescreen_specs]
     factor_codes = []
     if current_master is not None:
         result = cache.verify(current_master)
@@ -884,7 +981,8 @@ def capture_collect(cache, *, now, config=None):
              future_listing_codes=future, current_roster_positive_outDate_conflicts=outdate_conflict,
              factor_query_codes=factor_codes, query_scope_not_eligibility=True,
              prior_basic_reference_clocks_preserved=True, current_snapshot_session=str(local.date())), ready,
-        tuple(deepcopy(result_row) for result_row in cache.verify(calendar)['rows']))
+        tuple(deepcopy(result_row) for result_row in cache.verify(calendar)['rows']),
+        prescreen_records=tuple(prescreen))
 
 
 @dataclass(frozen=True)
@@ -918,6 +1016,9 @@ def _preflight_requests(cache, specs):
     """Refuse a known whole stage before issuing its first missing request."""
     missing = []
     for spec in specs:
+        blockers = cache.lhb_overlap_blockers(spec) if spec.endpoint == 'lhb_summary' else []
+        _need(not blockers, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
+              ','.join(row['request_key'] for row in blockers))
         current = _lookup_for_policy(cache, spec)
         if current is None or current.status != 'COMPLETE' and cache.config.get('retry_failed', False):
             missing.append(spec)

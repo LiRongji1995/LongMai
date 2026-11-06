@@ -49,6 +49,8 @@ class PreflightTests(Base):
         self.add("stock_basic_all", {}, self.local, role="CURRENT_BASIC_ATTEMPT", current=True)
         self.add("adjustment_factors", dict(codes=["sh.600001"], start_date="1990-01-01",
             end_date=self.observed), self.observed, role="FULL_ANCHORED_FACTOR_WINDOW")
+        lhb = native.lhb_request_spec(self.core)
+        self.add(lhb.endpoint, lhb.parameters, lhb.business_session, role=lhb.role)
         for endpoint, member, nodes in (
             ("industry_list_sina", "industry_members_sina", ["hangye_TEST_FIXTURE_A", "hangye_TEST_FIXTURE_B"]),
             ("concept_list_sina", "concept_members_sina", ["gn_TEST_FIXTURE"])):
@@ -133,7 +135,110 @@ class PreflightTests(Base):
         self.assertTrue(value["totals"]["total_exact"])
         self.assertFalse(value["full_premarket_ready"])
         self.assertEqual(value["source_authentication"]["unresolved_graph_requests"], 0)
+        self.assertEqual(value["prescreen_plan"]["source_status"], "AVAILABLE")
+        self.assertEqual(value["prescreen_plan"]["window_sessions"], self.core[-5:])
+        self.assertIsNone(value["prescreen_plan"]["candidate_count"])
+        self.assertIsNone(value["prescreen_plan"]["candidate_ids"])
+        self.assertFalse(value["prescreen_plan"]["decisions_computed"])
         self.assertEqual(before, self.refs())
+
+    def complete_without_lhb(self):
+        add = self.add
+        def other_sources(endpoint, parameters, day, **options):
+            if endpoint == 'lhb_summary':
+                return None
+            return add(endpoint, parameters, day, **options)
+        with patch.object(self, 'add', side_effect=other_sources):
+            self.complete()
+        self.online_collection()
+        return native.lhb_request_spec(self.core)
+
+    def test_missing_lhb_has_one_bounded_stage_without_core_or_prescreen_execution(self):
+        spec = self.complete_without_lhb()
+        before, calls = self.refs(), list(self.executor.calls)
+        with patch.object(native.CaptureCache, 'capture_one', side_effect=AssertionError('NO_WRITE')):
+            value = self.plan(collect_missing=True)
+        self.assertTrue(value['collection_admitted'], value['collection_reasons'])
+        self.assertFalse(value['execution_admitted'])
+        stage = next(stage for stage in value['stages'] if stage['name'] == 'PRESCREEN_LHB')
+        self.assertEqual(len(stage['requests']), 1)
+        self.assertEqual(stage['requests'][0]['request_key'], spec.key)
+        self.assertEqual(stage['cost'], preflight.request_cost(spec.to_dict(),
+            value['original_writer_limits']['request_http_attempts']))
+        self.assertEqual(value['prescreen_plan']['source_status'], 'MISSING')
+        self.assertIsNone(value['prescreen_plan']['candidate_count'])
+        self.assertEqual(value['strategy_calls'], 0)
+        self.assertEqual(value['network_calls'], 0)
+        factors = next(stage for stage in value['stages'] if stage['name'] == 'FULL_ANCHORED_FACTORS')
+        self.assertEqual(factors['requests'][0]['request_spec']['parameters']['codes'], ['sh.600001'])
+        self.assertEqual(before, self.refs())
+        self.assertEqual(calls, self.executor.calls)
+
+    def test_lhb_existing_partial_original_is_not_admitted_for_retry(self):
+        self.executor.lhb_status = 'PARTIAL'
+        spec = native.lhb_request_spec(self.core)
+        self.complete()
+        self.online_collection()
+        before, calls = self.refs(), list(self.executor.calls)
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value['collection_admitted'])
+        self.assertIn('COLLECTION_SOURCE_NOT_RETRYABLE:' + spec.key, value['collection_reasons'])
+        self.assertEqual(value['prescreen_plan']['source_status'], 'INCOMPLETE_NO_IMPLICIT_RETRY')
+        self.assertEqual(before, self.refs())
+        self.assertEqual(calls, self.executor.calls)
+
+    def test_lhb_existing_failed_original_is_retained(self):
+        self.executor.lhb_status = 'FETCH_FAILED'
+        self.complete()
+        self.online_collection()
+        calls = list(self.executor.calls)
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value['collection_admitted'])
+        self.assertIn('COLLECTION_SOURCE_NOT_RETRYABLE:' + native.lhb_request_spec(self.core).key,
+                      value['collection_reasons'])
+        self.assertEqual(calls, self.executor.calls)
+
+    def test_lhb_missing_request_cannot_borrow_optional_news_http_reservation(self):
+        self.complete_without_lhb()
+        self.config(capture=dict(offline=False), news=dict(max_gets=4),
+                    limits=dict(max_http_attempts=4))
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value['collection_admitted'])
+        self.assertIn('KNOWN_REQUEST_COST_EXCEEDS_ORIGINAL_LIMIT:max_http_attempts',
+                      value['collection_reasons'])
+
+    def test_changed_lhb_range_preserves_prior_three_session_failure(self):
+        current = self.complete_without_lhb()
+        self.executor.lhb_status = 'FETCH_FAILED'
+        old = native.RequestSpec('lhb_summary', dict(start_date=self.core[-3], end_date=self.core[-1]),
+                                 self.observed, role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        self.cache.capture_one(old)
+        before, calls = self.refs(), list(self.executor.calls)
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value['collection_admitted'])
+        self.assertIn('COLLECTION_SOURCE_NOT_RETRYABLE:' + current.key, value['collection_reasons'])
+        row = next(stage for stage in value['stages'] if stage['name'] == 'PRESCREEN_LHB')['requests'][0]
+        self.assertEqual(row['status'], 'OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY')
+        self.assertEqual(row['overlapping_prior_requests'][0]['request_key'], old.key)
+        self.assertEqual(before, self.refs())
+        self.assertEqual(calls, self.executor.calls)
+
+    def test_changed_lhb_range_preserves_prior_unfinished_claim(self):
+        current = self.complete_without_lhb()
+        self.executor.crash = True
+        old = native.RequestSpec('lhb_summary', dict(start_date=self.core[-3], end_date=self.core[-1]),
+                                 self.observed, role='TEST_FIXTURE_OLD_THREE_SESSIONS')
+        with self.assertRaisesRegex(RuntimeError, 'TEST_FIXTURE_EXECUTOR_DIED'):
+            self.cache.capture_one(old)
+        before, calls = self.refs(), list(self.executor.calls)
+        value = self.plan(collect_missing=True)
+        self.assertFalse(value['collection_admitted'])
+        self.assertIn('COLLECTION_SOURCE_NOT_RETRYABLE:' + current.key, value['collection_reasons'])
+        row = next(stage for stage in value['stages'] if stage['name'] == 'PRESCREEN_LHB')['requests'][0]
+        self.assertEqual(row['overlapping_prior_requests'][0]['status'],
+                         'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY')
+        self.assertEqual(before, self.refs())
+        self.assertEqual(calls, self.executor.calls)
 
     def test_original_writer_cache_limit_blocks_even_diagnostic_can_read(self):
         self.config(capture=dict(offline=True), limits=dict(cache_bytes=1, output_bytes=1024))

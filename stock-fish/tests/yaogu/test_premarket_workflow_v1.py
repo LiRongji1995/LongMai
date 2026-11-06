@@ -19,6 +19,54 @@ from tests.yaogu.test_premarket_native_core_v1 import captures, FixtureBudget
 from tests.support.saved_r2_v3_fixture import physical_source
 
 
+class PrescreenProjectionFixture(unittest.TestCase):
+    def project(self, *, rows, status='COMPLETE', completed=None):
+        from types import SimpleNamespace
+        from tests.yaogu.test_collection_prescreen import core, SESSIONS, VISIBLE
+        from stockfish_core.yaogu.premarket_capture_cache_v1 import lhb_request_spec
+        from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+        tmp = tempfile.TemporaryDirectory(prefix='TEST_FIXTURE_prescreen_projection_')
+        self.addCleanup(tmp.cleanup)
+        job, budget = Path(tmp.name), Budget()
+        spec = lhb_request_spec(SESSIONS)
+        result = dict(endpoint=spec.endpoint, parameters=spec.parameters, rows=rows,
+                      status=status, pagination_complete=status == 'COMPLETE')
+        originals = {role: budget.write_json(job/(role+'.json'), {'TEST_FIXTURE': role})
+                     for role in ('result', 'raw', 'receipt')}
+        metadata = dict(receipt_id='TEST_FIXTURE_LHB', first_seen_at=VISIBLE,
+                        ingested_at=VISIBLE, completed_at=completed or VISIBLE, **originals)
+        cache = SimpleNamespace(verify=lambda _:result, metadata=lambda _:metadata)
+        collection = SimpleNamespace(sessions=SESSIONS, price_sessions=SESSIONS,
+                                     prescreen_records=(object(),))
+        run = core(amount='1', selected=True)
+        before = json.dumps(run, sort_keys=True)
+        screen, ref, refs = workflow._collection_prescreen(cache, collection, run, job, budget)
+        self.assertEqual(json.dumps(run, sort_keys=True), before)
+        self.assertEqual(len(refs), 4)
+        self.assertEqual(json.loads(Path(ref['path']).read_bytes()), screen)
+        return screen
+
+    def test_low_amount_lhb_candidate_survives_without_future_labels(self):
+        screen = self.project(rows=[{'代码':'600001', '上榜日':'2026-10-09',
+            '龙虎榜净买额':-100000, '上榜后1日':9999}])
+        self.assertEqual(screen['admitted_ids'], ['600001.SH'])
+        self.assertNotIn('上榜后1日', json.dumps(screen))
+        self.assertEqual(screen['original_r2_selected_ids'], ['600001.SH'])
+
+    def test_malformed_record_invalidates_absence_and_partial_cannot_admit(self):
+        for rows, status in (([{'代码':'bad', '上榜日':'2026-10-09'}], 'COMPLETE'),
+                             ([None], 'COMPLETE'),
+                             ([{'代码':'600001', '上榜日':'2026-10-09INVALID'}], 'COMPLETE'),
+                             ([{'代码':'600001', '上榜日':'2026-10-09T23:59:00+08:00'}], 'COMPLETE'),
+                             ([{'代码':'600001', '上榜日':'2026-10-09'}], 'PARTIAL')):
+            with self.subTest(status=status):
+                self.assertEqual(self.project(rows=rows, status=status)['unknown_ids'], ['600001.SH'])
+
+    def test_complete_empty_is_not_prioritized_and_future_parent_is_unknown(self):
+        self.assertEqual(self.project(rows=[])['not_prioritized_ids'], ['600001.SH'])
+        self.assertEqual(self.project(rows=[], completed='2026-10-10T12:00:00+08:00')['unknown_ids'], ['600001.SH'])
+
+
 class WorkflowFixtureTests(unittest.TestCase):
     def setUp(self):
         directory = tempfile.TemporaryDirectory(prefix='stockfish-workflow-TEST_FIXTURE-')
@@ -64,8 +112,9 @@ class WorkflowFixtureTests(unittest.TestCase):
             def terminal(self):
                 return True
 
-        def news(*, core_run, output_dir, budget, config):
+        def news(*, core_run, output_dir, budget, config, target_ids):
             self.assertTrue(config['offline'])
+            self.assertTrue(set(target_ids) <= set(core_run['results']['SHORT_HORIZON_STRENGTH_R2']['eligible_pool_ids']))
             Path(output_dir).mkdir()
             ref = budget.write_json(Path(output_dir)/'metadata.json',
                 {'schema_version': 'TEST_FIXTURE_NEWS_NOT_COLLECTED', 'status': 'UNKNOWN'})
@@ -88,6 +137,10 @@ class WorkflowFixtureTests(unittest.TestCase):
         self.assertTrue(result['core_verified'])
         self.assertEqual(result['phases']['core'], 'COMPLETE')
         self.assertEqual(result['phases']['theme'], 'COMPLETE', result.get('phase_failures'))
+        screen = json.loads(Path(result['collection_prescreen_ref']['path']).read_bytes())
+        self.assertTrue(screen['strategy_selection_unchanged'])
+        self.assertFalse(screen['lhb_window_complete'])
+        self.assertEqual(sum(result['collection_prescreen_counts'].values()), len(screen['eligible_pool_ids']))
         self.assertEqual(result['phases']['presentation'], 'COMPLETE')
         self.assertEqual(result['phases']['news'], 'UNKNOWN')
         self.assertEqual(result['display']['counts']['displayed'], 2)
@@ -121,7 +174,7 @@ class WorkflowFixtureTests(unittest.TestCase):
         raw = ('<script id="__NEXT_DATA__" type="application/json">' +
             json.dumps({'props': {'pageProps': {'articleDetail': article}}}, ensure_ascii=False) +
             '</script>').encode()
-        opener = Opener({news.HOMES[0]: Response('<a href="/detail/101">焦点复盘 TEST_FIXTURE</a>'.encode()),
+        opener = Opener({news.HOMES[0]: Response('<a href="/detail/101">焦点复盘 TEST_FIXTURE_SH</a>'.encode()),
             news.HOMES[1]: Response(b'NO MATCHING ANCHORS TEST_FIXTURE'),
             'https://www.cls.cn/detail/101': Response(raw)})
         adapters['news'] = news.collect_reported_news

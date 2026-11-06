@@ -1,5 +1,15 @@
 # 当前状态
 
+## 2026-11-06 龙虎榜与成交额采集初筛
+
+原盘前入口已接入近5交易会话龙虎榜汇总、三值OR初筛及候选个股资讯采集。初筛独立保存，不加入原核心输入，不改变原策略名单、排序或全池行情/复权/题材基准；完整候选代码只写私有任务产物，展示摘要仅给数量。规则、金额边界及未验证参数见 USER_GUIDE 和 CURRENT_STRATEGY。
+
+使用原Python 3.12隔离测试运行器和独立TEST_FIXTURE，禁止真实采集。首轮工程测试发现展示返回计数被新字段覆盖，已修复并补返回值与保存JSON一致的反例；交叉审发现低额龙虎榜候选代码可能泄入展示摘要、龙虎榜日期截断可接受畸形尾缀，也已修复并补反例。初始运行期间源码继续变动触发原快照拒绝，失败日志原样保留；最终以冻结源码后的组合回归为准。
+
+最终冻结源码后的10文件组合：**201 passed、27 subtests passed，退出0，454.30秒，无skip**。实际通过`/usr/bin/sandbox-exec -p '(version 1)(allow default)(deny network*)'`运行已登记Python的`-I -B stock-fish/scripts/run_isolated_tests.py -q`，范围为`test_collection_prescreen`、`test_premarket_capture_cache_v1`、`test_codex_premarket_preflight_v1`、`test_premarket_workflow_v1`、`test_premarket_shared_workflow_v1`、`test_premarket_news_v1`、`test_premarket_presentation_v1`、`test_actual_premarket_plan_cli`、`test_codex_daily_entry_v2`、`test_personal_cli_workflow`，使用独立`--basetemp`及`--junitxml`。验证包括三值OR、低额龙虎榜入围、原结果不变、完整阴性/缺页/未来数据区别、零候选零新闻请求、跨窗口旧失败及未完成请求不重试、旧成功缓存兼容、真实内部流程与CLI接线。4个策略数值模块和8份YAML配置与本轮发布基线逐字相同。未执行整仓全部测试或远端CI；原始日志、XML和源码清单私有保留。
+
+本次没有真实新行情或龙虎榜采集、旧失败重试、预算调整或真实登记切换。未实测真实请求节省、日常交付及投资效果；不宣称减少全池复权成本。`MARKET_EDGE=NOT_ESTABLISHED`。
+
 2026-11-05，本次个人自用最小化重构保留本机数据、PV/主动V2/冻结DAILY、原R2盘前、结果读取导出、后验和备份。主要入口为 `stock-fish/scripts/codex_daily_v2.py`，无 Web/API、模型平台、Go/Live、容器或第二运行树。
 
 ## 已完成核验
