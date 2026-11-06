@@ -6,7 +6,8 @@ old snapshot with a tail or replaces the provider's immutable left anchor.
 """
 from __future__ import annotations
 
-from datetime import date
+from datetime import date, datetime, timezone
+from pathlib import Path
 
 
 def plan_factor_requests(cache, *, codes, observed, batch_size, entries=None):
@@ -29,7 +30,8 @@ def plan_factor_requests(cache, *, codes, observed, batch_size, entries=None):
         return []
     required = set(required)
     originals, covered = {}, set()
-    for value in cache._factor_ledger_entries() if entries is None else entries:
+    values = cache._factor_ledger_entries() if entries is None else entries
+    for value in values:
         if value['endpoint'] != 'adjustment_factors':
             continue
         spec = RequestSpec(**value['request_spec'])
@@ -54,11 +56,11 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
     failure or uncommitted attempt. Exact keys remain governed by lookup.
     Completed seed/cache originals need no newly introduced claim file.
     """
-    from .premarket_capture_cache_v1 import RequestSpec, VERSION, _json, _need
+    from .premarket_capture_cache_v1 import RequestSpec, VERSION, _json, _need, _stamp
 
     if spec.endpoint != 'adjustment_factors':
         return []
-    params, blocked, by_key = spec.parameters, {}, {}
+    params, blocked, by_key, recovered = spec.parameters, {}, {}, set()
     codes = set(params['codes'])
 
     def overlaps(prior):
@@ -72,12 +74,34 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
         blocked[key] = dict(request_key=key,
             request_spec=prior.to_dict() if prior is not None else None, status=status)
 
-    for value in cache._factor_ledger_entries() if entries is None else entries:
+    values = cache._factor_ledger_entries() if entries is None else entries
+    for value in values:
         prior = RequestSpec(**value['request_spec'])
         _need(prior.key == value['request_key'], 'CACHE_FACTOR_PRIOR_REQUEST_IDENTITY_CHANGED')
         by_key.setdefault(prior.key, []).append(value)
-        if overlaps(prior) and (value['status'] != 'COMPLETE' or not value['pagination_complete']):
-            block(prior.key, prior, 'OVERLAPPING_INCOMPLETE_NO_IMPLICIT_RETRY')
+    for key, indexed in by_key.items():
+        prior = RequestSpec(**indexed[0]['request_spec'])
+        if not overlaps(prior) or all(value['status'] == 'COMPLETE'
+                                     and value['pagination_complete'] for value in indexed):
+            continue
+        # An explicitly completed recovery may already exist at the exact old
+        # key. Use lookup's authentication of every version and latest-clock
+        # rule, never a later success for a different grouping or date range.
+        latest = cache.lookup(prior)
+        if latest is not None and latest.status == 'COMPLETE' and latest.metadata['pagination_complete']:
+            _need(all(_stamp(value['completed_at']) <= datetime.now(timezone.utc)
+                      for value in indexed), 'CACHE_FACTOR_RECOVERY_FUTURE_ORIGINAL')
+            _need(any(value['receipt_id'] == latest.receipt_id for value in indexed),
+                  'CACHE_FACTOR_RECOVERY_LEDGER_CHANGED_DURING_READ')
+            root = cache.root / 'raw' / key / 'raw'
+            # Recovery recognition is deliberately limited to retained actual
+            # attempts. An index-only COMPLETE declaration cannot clear one.
+            if all(value.get('capture_attempt_dir')
+                   and Path(value['capture_attempt_dir']).parent == root
+                   and Path(value['capture_attempt_dir']).is_dir() for value in indexed):
+                recovered.add(key)
+                continue
+        block(key, prior, 'OVERLAPPING_INCOMPLETE_NO_IMPLICIT_RETRY')
     folders = sorted((cache.root / 'raw').iterdir())
     _need(len(folders) <= cache.max_entries, 'CACHE_FACTOR_ATTEMPT_COUNT_BOUND')
     count = 0
@@ -94,11 +118,24 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
         count += len(attempts)
         _need(count <= cache.max_entries, 'CACHE_FACTOR_ATTEMPT_COUNT_BOUND')
         if not attempts and not indexed and any(folder.iterdir()):
+            inherited = cache.inherited_attempt_scope(folder, entries=values)
+            if inherited and inherited['status'] == 'VERIFIED_COMPLETE_ORIGINAL':
+                continue
             block(folder.name, None, 'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
+            blocked[folder.name]['inherited_scope'] = inherited
         for attempt in attempts:
             _need(attempt.is_dir() and not attempt.is_symlink(), 'CACHE_FACTOR_ATTEMPT_DIRECTORY_REQUIRED')
             committed = any(value.get('capture_attempt_dir') == str(attempt)
                 and value['status'] == 'COMPLETE' and value['pagination_complete'] for value in indexed)
+            if folder.name in recovered:
+                bindings = [value for value in indexed if value.get('capture_attempt_dir') == str(attempt)]
+                commit = attempt / 'committed.json'
+                committed = False
+                if len(bindings) == 1 and commit.exists():
+                    raw, _ = cache._read(commit, limit=2 * 1024**2)
+                    declared = _json(raw)
+                    committed = (declared.get('request_key') == folder.name
+                                 and declared.get('receipt_id') == bindings[0]['receipt_id'])
             failed = attempt / 'attempt-failed.json'
             if committed and not failed.exists():
                 continue

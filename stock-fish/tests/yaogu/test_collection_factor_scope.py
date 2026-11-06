@@ -1,5 +1,7 @@
 """TEST_FIXTURE request reduction and durable failure preservation, offline."""
 from copy import deepcopy
+from datetime import datetime, timedelta, timezone
+import json
 import os
 from pathlib import Path
 
@@ -227,3 +229,142 @@ def test_factor_memo_does_not_replace_original_source_terminal_hash(tmp_path):
     assert cache.factor_overlap_blockers(spec([A, B])) == []
     with pytest.raises(ValueError, match='ORIGINAL|SHA_CHANGED|FILE_BOUND'):
         cache.terminal()
+
+
+def completed_recovery(tmp_path, *, completion_executor=None):
+    """An already completed explicit retry, confined to TEST_FIXTURE state."""
+    prior = spec([A, B])
+    failed = cache_at(tmp_path, FixtureExecutor(factor_partial=True)).capture_one(prior)
+    writer = CaptureCache(tmp_path / 'TEST_FIXTURE_cache', FixtureBudget(),
+        config=dict(allow_test_fixture=True, retry_failed=True),
+        executor=completion_executor or FixtureExecutor())
+    complete = writer.capture_one(prior)
+    assert failed.status == 'PARTIAL' and complete.status == 'COMPLETE'
+    return cache_at(tmp_path), prior, failed, complete
+
+
+def import_fixture_original(cache, record, seed_path):
+    value = record.metadata
+    seed_path.write_text(json.dumps(dict(trios=[dict(
+        {role: value[role] for role in ('raw', 'receipt', 'result')},
+        archive_root=value['archive_root'], producer_files=value['producer_files'])])))
+    cache.import_seed(seed_path)
+
+
+class FixedCompletionExecutor(FixtureExecutor):
+    def __init__(self, completed_at, **kwargs):
+        super().__init__(**kwargs)
+        self.completed_at = completed_at
+
+    def __call__(self, endpoint, params, output, **kwargs):
+        result = super().__call__(endpoint, params, output, **kwargs)
+        result['completed_at'] = self.completed_at
+        Path(output, 'request-TEST_FIXTURE.json').write_text(json.dumps(result))
+        return result
+
+
+@pytest.mark.parametrize('new', [spec([B]), spec([A, B], end='2026-10-12')])
+def test_authenticated_completed_recovery_clears_overlap_without_rewriting_failure(tmp_path, new):
+    cache, prior, failed, complete = completed_recovery(tmp_path)
+    retained = {path: path.read_bytes() for path in cache.root.rglob('*') if path.is_file()}
+    assert cache.factor_overlap_blockers(new) == []
+    assert cache.lookup(prior).receipt_id == complete.receipt_id
+    assert cache.lookup(prior).status == 'COMPLETE'
+    assert {value['receipt_id'] for value in cache._entries(prior.key)} == {
+        failed.receipt_id, complete.receipt_id}
+    assert {path: path.read_bytes() for path in cache.root.rglob('*') if path.is_file()} == retained
+    assert cache.budget.calls['requests'] == 0 and cache.executor.calls == []
+    assert cache.config.get('retry_failed', False) is False
+    cache.terminal()
+
+
+@pytest.mark.parametrize('which', ['partial', 'complete'])
+def test_recovery_authenticates_both_old_and_new_originals(tmp_path, which):
+    cache, _, failed, complete = completed_recovery(tmp_path)
+    record = failed if which == 'partial' else complete
+    raw = Path(record.metadata['raw']['path'])
+    raw.write_bytes(raw.read_bytes() + b' ')
+    with pytest.raises(ValueError, match='SHA_CHANGED|ORIGINAL'):
+        cache.factor_overlap_blockers(spec([B]))
+    assert cache.budget.calls['requests'] == 0
+
+
+@pytest.mark.parametrize('which', ['partial', 'complete'])
+@pytest.mark.parametrize('damage', ['missing', 'wrong_receipt', 'failed_marker'])
+def test_recovery_requires_every_terminal_attempt_binding(tmp_path, which, damage):
+    cache, prior, failed, complete = completed_recovery(tmp_path)
+    attempt = Path((failed if which == 'partial' else complete).metadata['capture_attempt_dir'])
+    commit = attempt / 'committed.json'
+    if damage == 'missing':
+        commit.unlink()
+    elif damage == 'wrong_receipt':
+        commit.write_text(json.dumps(dict(request_key=prior.key, receipt_id='0' * 64)))
+    else:
+        (attempt / 'attempt-failed.json').write_text(json.dumps(dict(status='TEST_FIXTURE_FAILURE')))
+    blockers = cache.factor_overlap_blockers(spec([B]))
+    assert blockers[0]['request_key'] == prior.key
+    assert blockers[0]['status'] == 'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY'
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_new_unknown_attempt_after_completed_recovery_is_still_blocked(tmp_path):
+    cache, prior, _, _ = completed_recovery(tmp_path)
+    assert cache.factor_overlap_blockers(spec([B])) == []
+    extra = cache.root / 'raw' / prior.key / 'raw' / 'TEST_FIXTURE_uncommitted_after_recovery'
+    extra.mkdir()
+    (extra / 'unknown.bin').write_bytes(b'TEST_FIXTURE')
+    assert cache.factor_overlap_blockers(spec([B]))[0]['request_key'] == prior.key
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_complete_index_without_attempt_binding_cannot_resolve_partial(tmp_path):
+    cache, prior, _, complete = completed_recovery(tmp_path)
+    declaration = complete.metadata
+    declaration.pop('capture_attempt_dir')
+    cache._commit(declaration)
+    assert cache.factor_overlap_blockers(spec([B]))[0]['request_key'] == prior.key
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_a_later_partial_after_complete_remains_blocked(tmp_path):
+    cache, prior, _, complete = completed_recovery(tmp_path)
+    later = cache_at(tmp_path / 'TEST_FIXTURE_later', FixtureExecutor(factor_partial=True)).capture_one(prior)
+    import_fixture_original(cache, later, tmp_path / 'TEST_FIXTURE_later_seed.json')
+    assert cache.lookup(prior).status == 'PARTIAL'
+    assert cache.lookup(prior).receipt_id != complete.receipt_id
+    assert cache.factor_overlap_blockers(spec([B]))[0]['request_key'] == prior.key
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_future_complete_does_not_resolve_prior_partial(tmp_path):
+    future = (datetime.now(timezone.utc) + timedelta(days=1)).isoformat()
+    cache, _, _, _ = completed_recovery(tmp_path,
+        completion_executor=FixedCompletionExecutor(future))
+    with pytest.raises(ValueError, match='CACHE_FACTOR_RECOVERY_FUTURE_ORIGINAL'):
+        cache.factor_overlap_blockers(spec([B]))
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_same_clock_conflict_does_not_resolve_prior_partial(tmp_path):
+    clock = (datetime.now(timezone.utc) + timedelta(minutes=1)).isoformat()
+    prior = spec([A, B])
+    cache_at(tmp_path, FixedCompletionExecutor(clock, factor_partial=True)).capture_one(prior)
+    writer = CaptureCache(tmp_path / 'TEST_FIXTURE_cache', FixtureBudget(),
+        config=dict(allow_test_fixture=True, retry_failed=True), executor=FixedCompletionExecutor(clock))
+    writer.capture_one(prior)
+    cache = cache_at(tmp_path)
+    with pytest.raises(ValueError, match='SAME_CLOCK_CAPTURE_CONFLICT'):
+        cache.factor_overlap_blockers(spec([B]))
+    assert cache.budget.calls['requests'] == 0
+
+
+@pytest.mark.parametrize('other', [spec([B]), spec([A, B], end='2026-10-12')])
+def test_complete_with_different_batch_or_date_cannot_resolve_old_failure(tmp_path, other):
+    cache = cache_at(tmp_path, FixtureExecutor(factor_partial=True))
+    prior = spec([A, B])
+    cache.capture_one(prior)
+    later = cache_at(tmp_path / 'TEST_FIXTURE_other').capture_one(other)
+    import_fixture_original(cache, later, tmp_path / 'TEST_FIXTURE_other_seed.json')
+    assert cache.factor_overlap_blockers(spec([B], end='2026-10-13'))[0]['request_key'] == prior.key
+    assert cache.lookup(prior).status == 'PARTIAL'
+    assert cache.budget.calls['requests'] == 1

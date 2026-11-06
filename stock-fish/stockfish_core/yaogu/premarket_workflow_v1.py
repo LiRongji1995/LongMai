@@ -44,7 +44,16 @@ def _ref(path, read_meter=None):
 
 def _verify(reference, read_meter=None):
     if set(reference) != {'path','sha256','bytes','fp'} or not content_reference_equal(_ref(reference['path'],read_meter), reference):
-        raise ValueError('ARCHIVED_REFERENCE_CHANGED')
+        error = ValueError('ARCHIVED_REFERENCE_CHANGED')
+        error.reference_path = reference.get('path')
+        raise error
+
+
+def _failure_detail(error, limit=2000):
+    detail = dict(type=type(error).__name__, reason=str(error)[:limit])
+    if isinstance(getattr(error, 'reference_path', None), str):
+        detail['reference_path'] = error.reference_path
+    return detail
 
 
 def _read_control(path, read_meter=None):
@@ -370,7 +379,7 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
         # issuer. Previously sealed core files remain available for inspection.
         return _completion(job,status='BUDGET_EXCEEDED' if isinstance(error,BudgetExceeded) else 'FAILED',
             phases=phases,budget=budget,core_verified=core_verified,
-            error=dict(type=type(error).__name__,reason=str(error)[:2000]),
+            error=_failure_detail(error),
             calendar_rows=calendar_rows,display=display,
             core_artifacts=owner.artifacts if owner is not None and core_verified else None,
             theme_confirmation='UNKNOWN' if phases['theme'] != 'COMPLETE' else 'SEE_ORIGINAL_CONTEXT')
@@ -441,6 +450,35 @@ def supervise(config, *, sample_tree, remaining_owned, stop_owned, progress=True
             if actual_exit != expected_exit: raise RuntimeError('WORKER_STATUS_EXIT_MISMATCH')
             if completion.get('schema_version') != VERSION:
                 raise RuntimeError('WORKER_COMPLETION_SCHEMA_MISMATCH')
+            if actual_exit in (3,4):
+                # A terminal worker failure can retain previously rendered
+                # derivatives without having reached its final source bind.
+                # Preserve that failure, not a secondary success-contract
+                # error. Only control bytes are sealed here; no source/code
+                # authority or successful display is claimed for this path.
+                _verify(configuration_ref,charge)
+                _verify(code_registry_ref,charge)
+                completion_ref = _ref(job/'worker-completion.json',charge)
+                _verify(completion_ref,charge)
+                result = dict(schema_version=VERSION,status=completion['status'],
+                    error=completion.get('error'),
+                    external_worker_exit_code=actual_exit,external_worker_reaped=True,
+                    peak_tree_rss_bytes=peak,elapsed_seconds=round(time.monotonic()-started,3),
+                    supervisor_returned_read_bytes=supervisor_read,
+                    implementation_epoch_verified=False,
+                    source_reference_count=0,source_terminal_binding_verified=False,
+                    supervisor_accounting_scope='FAILED_WORKER_CONTROL_BYTES_ONLY; SOURCES_NOT_TERMINALLY_REAUTHENTICATED',
+                    configuration=configuration_ref,code_registry=code_registry_ref,
+                    completion=completion_ref,display=None,core_verified=False,
+                    worker_core_verified=completion.get('core_verified',False),
+                    partial_artifacts_retained=bool(completion.get('display') or completion.get('core_artifacts')),
+                    final_sealed_at=utc_now(),job=str(job),source_capability_restored=False)
+                _seal(job/'final-control.json',result)
+                _verify(completion_ref,charge)
+                result['supervisor_returned_read_bytes'] = supervisor_read
+                _seal(job/'final-control.json',result)
+                atomic_json(state/'latest-job.json',dict(job=str(job),final=_ref(job/'final-control.json')))
+                return actual_exit,result
             if actual_exit in (0,2) and (completion.get('core_verified') is not True or not completion.get('display')):
                 raise RuntimeError('SUCCESS_REQUIRES_VERIFIED_CORE_AND_DISPLAY')
             if completion.get('display'):
@@ -507,8 +545,8 @@ def supervise(config, *, sample_tree, remaining_owned, stop_owned, progress=True
                 try: stop_owned(process)
                 except Exception as cleanup:
                     cleanup_error = dict(type=type(cleanup).__name__,reason=str(cleanup)[:1000])
-            result = dict(schema_version=VERSION,status='BUDGET_EXCEEDED' if isinstance(error,BudgetExceeded) else 'FAILED',error=dict(type=type(error).__name__,
-                reason=str(error)[:1500]),job=str(job),external_worker_exit_code=process.returncode if process else None,
+            result = dict(schema_version=VERSION,status='BUDGET_EXCEEDED' if isinstance(error,BudgetExceeded) else 'FAILED',error=_failure_detail(error,1500),
+                job=str(job),external_worker_exit_code=process.returncode if process else None,
                 external_worker_reaped=process is None or process.poll() is not None,
                 peak_tree_rss_bytes=peak,final_sealed_at=utc_now(),display=None,cleanup_error=cleanup_error,
                 supervisor_returned_read_bytes=supervisor_read)

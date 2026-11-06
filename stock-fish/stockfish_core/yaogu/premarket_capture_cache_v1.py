@@ -606,8 +606,12 @@ class CaptureCache:
             claim_count += len(attempts)
             _need(claim_count <= self.max_entries, 'CACHE_LHB_ATTEMPT_COUNT_BOUND')
             if not attempts and not indexed and any(folder.iterdir()):
+                inherited = self.inherited_attempt_scope(folder, entries=values)
+                if inherited and inherited['status'] == 'VERIFIED_COMPLETE_ORIGINAL':
+                    continue
                 blocked[folder.name] = dict(request_key=folder.name, request_spec=None,
-                    status='UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
+                    status='UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY',
+                    inherited_scope=inherited)
             for attempt in attempts:
                 _need(attempt.is_dir() and not attempt.is_symlink(), 'CACHE_LHB_ATTEMPT_DIRECTORY_REQUIRED')
                 committed = any(value.get('capture_attempt_dir') == str(attempt)
@@ -636,6 +640,10 @@ class CaptureCache:
                     blocked[prior.key] = dict(request_key=prior.key, request_spec=prior.to_dict(),
                         status='OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY')
         return [blocked[key] for key in sorted(blocked)]
+
+    def inherited_attempt_scope(self, folder, *, entries=None):
+        from .collection_inherited_scope import inherited_attempt_scope
+        return inherited_attempt_scope(self, folder, entries=entries)
 
     def factor_overlap_blockers(self, spec, *, entries=None):
         from .collection_factor_scope import factor_overlap_blockers

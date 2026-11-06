@@ -133,8 +133,13 @@ class SourcesTests(Base):
 
     def test_current_day_official_missing_does_not_relabel_old_source(self):
         with patch.object(sources, "_collect", wraps=sources._collect):
-            tomorrow = datetime.now(timezone.utc)+timedelta(days=1)
-            value = self.execute_sources(_now=tomorrow)
+            # A natural-day increment can stay in the same completed session
+            # over a weekend. Exercise the intended missing-market gate after
+            # the fixture calendar's next trading session has actually closed.
+            next_close = datetime.combine(datetime.fromisoformat(self.target).date(),
+                wall_time(18, 1), sources.SH)
+            value = self.execute_sources(_now=next_close)
+        self.assertEqual(value["observation_date"], self.target)
         self.assertFalse(value["core_ready_to_run"])
         official = [row for row in value["requests"] if row["request_spec"]["current"]]
         self.assertEqual(official, [])
