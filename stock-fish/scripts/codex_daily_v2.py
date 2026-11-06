@@ -101,7 +101,7 @@ def _prior_request(runtime, identity):
                 raise original.PremarketError("DAILY_SHARED_EXISTING_REQUEST_RECONCILE_NO_RETRY")
 
 
-def _validate(prepared, snapshot, receipt, observation, target, expected_engine):
+def _validate(prepared, snapshot, receipt, observation, target, expected_engine, *, recovery_context=None):
     workflow = _workflow()
     _same(prepared, snapshot)
     need(receipt.get("schema_version") == VERSION, "DAILY_SHARED_RECEIPT_VERSION")
@@ -165,7 +165,10 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine)
         original._inside_job(reference, job)
     from stockfish_core.yaogu import premarket_workflow_v1 as frozen
     actual_config = frozen._read_control(final["configuration"]["path"])
-    need(actual_config == frozen.load_config(str(prepared["config"])), "DAILY_SHARED_EXECUTED_CONFIG_CHANGED")
+    expected_config = frozen.load_config(str(prepared["config"]))
+    if recovery_context is not None:
+        expected_config["recovery_context"] = recovery_context
+    need(actual_config == expected_config, "DAILY_SHARED_EXECUTED_CONFIG_CHANGED")
     need(content_equal(frozen._read_control(final["code_registry"]["path"]), workflow.code_refs()),
          "DAILY_SHARED_EXECUTED_SOURCE_CHANGED")
     verified = workflow.verify_job(job)
@@ -194,6 +197,7 @@ def _premarket(runtime, args):
     need(prepared["source"] == ROOT and workspace.interpreter_path(sys.executable) == prepared["python"],
          "DAILY_SHARED_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
     snapshot = _snapshot(prepared)
+    recovery_context = runtime.capture_recovery_context()
     identity = dict(schema_version=VERSION, backend="premarket", state_root=str(prepared["state"]),
         source_root=str(prepared["source"]), python_path=str(prepared["python"]),
         configuration=snapshot["configuration"], python=snapshot["python"],
@@ -266,8 +270,10 @@ def _premarket(runtime, args):
             _same(prepared, snapshot)
             config = frozen.load_config(str(prepared["config"]))
         started = execution_budget.started
+        recovery_options = {} if recovery_context is None else dict(recovery_context=recovery_context)
         code, final = _workflow().supervise(config, progress=False, started_at=execution_budget.started,
-                                           expected_sessions=(observation, target, local_date), engine=args.engine)
+                                           expected_sessions=(observation, target, local_date), engine=args.engine,
+                                           **recovery_options)
         execution_budget.charge_read(final.get("supervisor_returned_read_bytes", 0))
         execution_budget.check("supervisor_return", force=True)
         with execution_budget.phase("capture"), execution_budget.meter_files():
@@ -295,7 +301,11 @@ def _premarket(runtime, args):
         if execution_budget is None:
             execution_budget = new_wrapper_budget()
         with execution_budget.phase("capture"), execution_budget.meter_files():
-            checked = _validate(prepared, snapshot, receipt, observation, target, args.engine)
+            need(content_equal(runtime.capture_recovery_context(), recovery_context),
+                 "DAILY_SHARED_RECOVERY_CONTEXT_CHANGED")
+            validation_options = {} if recovery_context is None else dict(recovery_context=recovery_context)
+            checked = _validate(prepared, snapshot, receipt, observation, target, args.engine,
+                                **validation_options)
         checked["parent_verification_metrics"] = execution_budget.metrics
         checked["parent_budget_scope"] = ("FRESH_ACTION_SUPERVISION_AND_RECEIPT_VALIDATION" if fresh
                                           else "CURRENT_READONLY_REUSE_VALIDATION")

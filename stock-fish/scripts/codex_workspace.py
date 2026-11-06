@@ -516,6 +516,47 @@ class Runtime:
             _need(all(verify_content_reference(ref) for ref in self.control_references),
                   "RECOVERY_LEDGER_OR_CONFIGURATION_CONTENT_CHANGED")
 
+    def capture_recovery_context(self):
+        """Locate existing completed recoveries in this exact durable scope.
+
+        References are read-only control locators, not retry authorization.
+        The capture reader independently authenticates each referenced recovery
+        and its old/new originals before it may recognize an existing result.
+        No registry/profile configuration, source or operation is written.
+        """
+        from stockfish_core.file_integrity import content_fingerprint, verify_content_reference
+        self.check_binding()
+        directory = Path(self.directory)
+        _need(directory.is_absolute() and directory.name == _digest(self.scope),
+              "CAPTURE_RECOVERY_SCOPE_DIRECTORY_BINDING")
+        root = directory / "explicit-failure-recoveries"
+        if not root.exists() and not root.is_symlink():
+            return None
+        _need(directory.resolve(strict=True) == directory and root.resolve(strict=True) == root,
+              "CAPTURE_RECOVERY_SCOPE_ALIAS_FORBIDDEN")
+        with _directory_fd(root):
+            operations = sorted(root.iterdir())
+        _need(len(operations) <= 10000, "CAPTURE_RECOVERY_OPERATION_COUNT_BOUND")
+        references = []
+        for operation in operations:
+            _need(re.fullmatch(r"[0-9a-f]{64}", operation.name) is not None,
+                  "CAPTURE_RECOVERY_OPERATION_ID_REQUIRED")
+            with _directory_fd(operation):
+                path = operation / "completion.json"
+                if not path.exists() and not path.is_symlink():
+                    continue
+                _need(len(references) < 64, "CAPTURE_RECOVERY_COMPLETION_COUNT_BOUND")
+                # Read through the original bounded no-follow control reader,
+                # then bind the precise bytes passed to the capture helper.
+                _read(path, limit=2 * MAX_CONTROL)
+                reference = dict(path=str(path), **content_fingerprint(path))
+                _read(path, limit=2 * MAX_CONTROL)
+                verify_content_reference(reference)
+                references.append(reference)
+        self.check_binding()
+        return dict(scope=deepcopy(self.scope), scope_directory=str(directory),
+                    completions=references)
+
     def guard_ancestor_request(self, identity):
         for directory, scope in getattr(self, "ancestor_ledgers", ()) :
             _need(not directory.is_symlink(), "RECOVERY_ANCESTOR_LEDGER_ALIAS")

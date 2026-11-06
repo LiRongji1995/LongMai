@@ -153,5 +153,10 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
             _need(declared['schema_version'] == VERSION and prior.key == folder.name,
                   'CACHE_FACTOR_PRIOR_CLAIM_IDENTITY_CHANGED')
             if overlaps(prior) and (not committed or failed.exists()):
+                recovery = cache.explicit_recovered_attempt(attempt, prior, entries=indexed)
+                if recovery and recovery['status'] == 'VERIFIED_EXPLICITLY_RECOVERED_ATTEMPT':
+                    continue
                 block(prior.key, prior, 'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY')
+                if recovery is not None:
+                    blocked[prior.key]['explicit_recovery'] = recovery
     return [blocked[key] for key in sorted(blocked)]

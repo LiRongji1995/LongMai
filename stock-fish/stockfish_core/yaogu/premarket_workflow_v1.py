@@ -232,7 +232,8 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
     try:
         with budget.phase('capture'), budget.meter_files():
             phases['capture'] = 'RUNNING'
-            cache = Cache(state/'cache',budget,config=config.get('capture',{}))
+            cache = Cache(state/'cache',budget,config=config.get('capture',{}),
+                          recovery_context=config.get('recovery_context'))
             for seed in config['seed_sources']:
                 cache.import_seed(seed)
             collection = collect(cache,now=now or datetime.now(timezone.utc), config=config.get('capture',{}))

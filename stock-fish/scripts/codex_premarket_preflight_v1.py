@@ -354,7 +354,8 @@ def plan(runtime, *, allow_test_fixture=False, _now=None, collect_missing=False)
     # All directories were required to exist above, so the original constructor
     # cannot create any cache directory. No writer or runtime journal is opened.
     with budget.phase("capture"), budget.meter_files():
-        cache = CaptureCache(root, budget, config=options, executor=sources._no_network)
+        cache = CaptureCache(root, budget, config=options, executor=sources._no_network,
+                             recovery_context=runtime.capture_recovery_context())
         index = sources._Index(cache, now, allow_test_fixture)
         # Optional historical context is inspected only if it is consumed.
         raw_entries = []

@@ -31,6 +31,9 @@ class FixtureRuntime:
     def check_binding(self):
         pass
 
+    def capture_recovery_context(self):
+        return getattr(self, "recovery_context", None)
+
     def preflight(self, **kwargs):
         return dict(allowed=True, reason_codes=[], expected_growth_bytes=1024,
                     min_free_bytes=1, max_managed_bytes=1024**3,
@@ -70,9 +73,12 @@ class GatewayTests(unittest.TestCase):
             context.start()
             self.addCleanup(context.stop)
 
-    def supervise(self, config, *, progress, started_at=None, expected_sessions=None, engine="original"):
+    def supervise(self, config, *, progress, started_at=None, expected_sessions=None, engine="original",
+                  recovery_context=None):
         self.calls += 1
         assert not progress and config["capture"]["allow_test_fixture"] is True
+        if recovery_context is not None:
+            config = {**config, "recovery_context": recovery_context}
         job = self.state / "jobs" / f"TEST_FIXTURE_{self.calls}"
         job.mkdir(parents=True)
         def write(name, data):
@@ -112,6 +118,45 @@ class GatewayTests(unittest.TestCase):
             code, second = daily.execute(self.runtime, self.args)
         self.assertEqual(code, 2)
         self.assertEqual(second["status"], "REUSED")
+        self.assertEqual(self.calls, 1)
+
+    def test_recovery_context_is_bound_to_job_without_changing_registered_config(self):
+        original = self.config.read_bytes()
+        self.runtime.recovery_context = dict(scope="f"*64,
+            scope_directory=str(self.runtime.directory), completions=[])
+        _, result = daily.execute(self.runtime, self.args)
+        actual = json.loads((Path(result["receipt"]["job"])/"configuration.json").read_text())
+        self.assertEqual(actual["recovery_context"], self.runtime.recovery_context)
+        self.assertEqual(self.config.read_bytes(), original)
+        self.assertEqual(actual["limits"], frozen.load_config(str(self.config))["limits"])
+        self.assertFalse(actual["capture"].get("retry_failed", False))
+        _, reused = daily.execute(self.runtime, self.args)
+        self.assertTrue(reused["reused"])
+        self.assertEqual(self.calls, 1)
+
+    def test_worker_cannot_drop_recovery_context_from_sealed_job_config(self):
+        self.runtime.recovery_context = dict(scope="f"*64,
+            scope_directory=str(self.runtime.directory), completions=[])
+        actual = self.supervise
+        def dropped(config, **kwargs):
+            kwargs.pop("recovery_context")
+            return actual(config, **kwargs)
+        with patch.object(self.worker, "supervise", side_effect=dropped):
+            with self.assertRaisesRegex(ValueError, "EXECUTED_CONFIG_CHANGED"):
+                daily.execute(self.runtime, self.args)
+        self.assertEqual(self.calls, 1)
+
+    def test_recovery_context_change_during_worker_is_not_silently_accepted(self):
+        self.runtime.recovery_context = dict(scope="f"*64,
+            scope_directory=str(self.runtime.directory), completions=[])
+        actual = self.supervise
+        def changed(config, **kwargs):
+            result = actual(config, **kwargs)
+            self.runtime.recovery_context = None
+            return result
+        with patch.object(self.worker, "supervise", side_effect=changed):
+            with self.assertRaisesRegex(ValueError, "RECOVERY_CONTEXT_CHANGED"):
+                daily.execute(self.runtime, self.args)
         self.assertEqual(self.calls, 1)
 
     def test_admission_race_is_rechecked_inside_coordinator_before_worker(self):

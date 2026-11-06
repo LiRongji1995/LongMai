@@ -335,11 +335,14 @@ class _WorkerSubprocess:
         return subprocess.Popen(command, **kwargs)
 
 
-def supervise(config, *, progress=True, started_at=None, expected_sessions=None, engine="original", _fixture_worker_command=None):
+def supervise(config, *, progress=True, started_at=None, expected_sessions=None, engine="original",
+              recovery_context=None, _fixture_worker_command=None):
     """Return ``(exit_code, final)``; caller coordinates its stable request key.
 
-    Configuration is the unchanged original schema and retains every original
-    limit. The parent additionally enforces wall/output during terminal hashing.
+    Registered configuration retains its original schema and every limit.
+    Optional existing recovery locators are copied into this job's control
+    configuration only; the capture reader must authenticate their full chain.
+    The parent additionally enforces wall/output during terminal hashing.
     ``_fixture_worker_command`` is restricted to explicit isolated fixture state.
     """
     if not isinstance(config, dict) or set(config) - {
@@ -347,6 +350,11 @@ def supervise(config, *, progress=True, started_at=None, expected_sessions=None,
             "capture", "news", "seed_sources"} or config.get("schema_version", legacy.VERSION) != legacy.VERSION:
         raise ValueError("UNSUPPORTED_PREMARKET_CONFIG")
     config = legacy.load_config(overrides=deepcopy(config))
+    if recovery_context is not None:
+        if (not isinstance(recovery_context, dict) or set(recovery_context) !=
+                {"scope", "scope_directory", "completions"}):
+            raise ValueError("SHARED_PREMARKET_RECOVERY_CONTEXT_FORMAT")
+        config["recovery_context"] = deepcopy(recovery_context)
     if _fixture_worker_command is not None and config.get("capture", {}).get("allow_test_fixture") is not True:
         raise ValueError("ADAPTERS_REQUIRE_EXPLICIT_TEST_FIXTURE")
     class Guard(_SupervisorGuard):

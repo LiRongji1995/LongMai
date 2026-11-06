@@ -248,12 +248,13 @@ class CaptureCache:
     budget.preclaim_request(endpoint, params), budget.record_request(result) are
     supplied by the orchestrator. Native verify_capture reads are metered too.
     """
-    def __init__(self, root, budget, config=None, executor=execute_request):
+    def __init__(self, root, budget, config=None, executor=execute_request, *, recovery_context=None):
         self.root = Path(root).absolute()
         _need(not self.root.is_symlink(), 'CACHE_ROOT_SYMLINK_FORBIDDEN')
         self.root.mkdir(parents=True, exist_ok=True)
         self.root = self.root.resolve(strict=True)
         self.budget, self.config, self.executor = budget, _config(config), executor
+        self.recovery_context = deepcopy(recovery_context)
         self._owner = (os.getpid(), threading.get_ident())
         self._known = {}
         self._factor_index_memo = {}
@@ -648,6 +649,10 @@ class CaptureCache:
     def factor_overlap_blockers(self, spec, *, entries=None):
         from .collection_factor_scope import factor_overlap_blockers
         return factor_overlap_blockers(self, spec, entries=entries)
+
+    def explicit_recovered_attempt(self, attempt, prior, *, entries=None):
+        from .collection_explicit_recovery import explicit_recovered_attempt
+        return explicit_recovered_attempt(self, attempt, prior, entries=entries)
 
     def capture_one(self, spec):
         with self._writer():
