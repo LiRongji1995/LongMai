@@ -3,6 +3,9 @@
 The public daily entry supplies authorization. This module never calls a
 provider, changes an old record, chooses another request key, or retries a
 claim. Its small journal lives under the original operation in the same scope.
+After sealed success, a separate explicit metadata append can carry the exact
+reviewed factor intersection into later legal sessions, without new retry or
+collection budget authority.
 """
 from __future__ import annotations
 
@@ -52,6 +55,10 @@ WRAPPER_PREPARE_READ_BYTES = 64 * MIB
 WRAPPER_PREPARE_SECONDS = 60
 JOURNAL_OUTPUT_BYTES = MIB
 OLD_OUTER_RESERVE_SECONDS = 60
+FUTURE_PROPOSAL_VERSION = "FUTURE_FACTOR_AUTHORIZATION_PROPOSAL_V1"
+FUTURE_READ_BYTES = 128 * MIB
+FUTURE_SECONDS = 120
+FUTURE_RECORD_BYTES = 64 * 1024
 
 
 def _need(condition, reason):
@@ -906,3 +913,127 @@ def execute(runtime, proposal, *, action, validate, authorize_existing_factor_re
                     # An audit-write problem must not replace the primary error.
                     pass
             raise
+
+
+def _future_proposal_id(proposal):
+    return workspace._digest(_content({key: value for key, value in proposal.items()
+        if key not in ("proposal_id", "read_only_metrics")}))
+
+
+def _future_readonly_cache(root, budget, allow_test_fixture):
+    from scripts.codex_prescreen_view import _ReadOnlyCaptureCache
+    cache = _ReadOnlyCaptureCache(root, budget, allow_test_fixture=allow_test_fixture)
+    # The inherited inventory reader additionally decodes bounded saved index
+    # entries. No constructor, writer, import or provider method is enabled.
+    cache.max_entries = 8192
+    cache.recovery_context = cache.continuation_context = None
+    return cache
+
+
+def prepare_future_factor_authorization(runtime, *, operation_path, expected_terminal_sha256,
+                                        allow_test_fixture=False):
+    """Prepare one exact future-date policy from an immutable successful slot."""
+    from stockfish_core.yaogu.collection_factor_reconciliation import (
+        CONTINUATION_FILES, FUTURE_FILE, future_factor_authorization_basis, verify_future_factor_authorization)
+    _need(type(allow_test_fixture) is bool and isinstance(expected_terminal_sha256, str)
+          and re.fullmatch("[0-9a-f]{64}", expected_terminal_sha256), "FUTURE_EXACT_TERMINAL_SHA_REQUIRED")
+    _need(not allow_test_fixture or "TEST_FIXTURE" in str(runtime.directory), "EXPLICIT_ISOLATED_TEST_FIXTURE_REQUIRED")
+    budget = Budget(_reader_limits(seconds=FUTURE_SECONDS, byte_limit=FUTURE_READ_BYTES))
+    with budget.meter_files():
+        runtime.check_binding()
+        reader = _Reader(budget)
+        path = _path(operation_path)
+        operation, operation_ref = reader.read(path)
+        _need(runtime.profile.get("backend") == "premarket" and path.parent == Path(runtime.directory) / "operations"
+              and operation.get("scope") == runtime.scope and operation.get("phase") == "FAILED_OR_UNKNOWN"
+              and operation.get("operation_id") == path.stem
+              and path.stem == workspace._digest(dict(scope=runtime.scope, identity=operation["identity"]))
+              and operation["identity"].get("state_root") == runtime.profile["state_root"],
+              "FUTURE_ORIGINAL_OPERATION_SCOPE_REQUIRED")
+        slot = _slot(runtime, path.stem)
+        _, terminal_ref = reader.read(slot / "terminal.json")
+        _need(terminal_ref["sha256"] == expected_terminal_sha256, "FUTURE_EXPECTED_TERMINAL_CHANGED")
+        cache_root = _path(Path(runtime.profile["state_root"]) / "cache", directory=True)
+        for name in ("index", "raw", "raw-index", "locators"):
+            _path(cache_root / name, directory=True)
+        cache = _future_readonly_cache(cache_root, budget, allow_test_fixture)
+        basis = future_factor_authorization_basis(cache, scope=runtime.scope,
+            scope_directory=str(runtime.directory), operation_id=path.stem, terminal_reference=terminal_ref)
+        existing = None
+        if (slot / FUTURE_FILE).exists() or (slot / FUTURE_FILE).is_symlink():
+            _, existing = reader.read(slot / FUTURE_FILE)
+            verify_future_factor_authorization(cache, existing, context=dict(scope=runtime.scope,
+                scope_directory=str(runtime.directory)))
+        for reference in cache.terminal():
+            previous = reader.refs.setdefault(reference["path"], reference)
+            _need(content_reference_equal(previous, reference), "FUTURE_REFERENCE_CHANGED_DURING_PREPARATION")
+        _need(len(workspace._canonical({**basis, "registered_at": datetime.now(timezone.utc).isoformat()}))
+              <= FUTURE_RECORD_BYTES, "FUTURE_METADATA_BOUND")
+        old_refs = [reader.refs[str(slot / name)] for name in sorted(CONTINUATION_FILES)]
+        result = dict(schema_version=FUTURE_PROPOSAL_VERSION, status="PREPARED_EXACT_FUTURE_FACTOR_AUTHORIZATION",
+            scope=deepcopy(runtime.scope), scope_directory=str(runtime.directory), operation_id=path.stem,
+            original_operation_ref=operation_ref, original_slot_references=old_refs,
+            authorization=basis, existing_authorization_ref=existing,
+            validation_references=[reader.refs[key] for key in sorted(reader.refs)],
+            preparation_arguments=dict(operation_path=str(path), expected_terminal_sha256=expected_terminal_sha256,
+                allow_test_fixture=allow_test_fixture), provider_requests=0, strategy_executions=0,
+            original_records_rewritten=False, collection_budget_changed=False, budget_credit=0,
+            accounting_scope="METADATA_AUTHORIZATION_ONLY_NOT_COLLECTION_ALLOCATION")
+        reader.verify_all()
+        runtime.check_binding()
+        result["proposal_id"] = _future_proposal_id(result)
+    result["read_only_metrics"] = budget.metrics
+    return result
+
+
+def register_future_factor_authorization(runtime, proposal, *, authorize_future_observations=False):
+    """Append only the approved policy; no provider or old continuation executes."""
+    from stockfish_core.yaogu.collection_factor_reconciliation import (
+        CONTINUATION_FILES, FUTURE_FILE, verify_future_factor_authorization)
+    _need(authorize_future_observations is True, "FUTURE_EXPLICIT_AUTHORIZATION_REQUIRED")
+    _need(proposal.get("schema_version") == FUTURE_PROPOSAL_VERSION
+          and proposal.get("proposal_id") == _future_proposal_id(proposal)
+          and proposal.get("scope") == runtime.scope and proposal.get("scope_directory") == str(runtime.directory),
+          "FUTURE_PREPARED_AUTHORIZATION_CHANGED")
+    with runtime.exclusive():
+        fresh = prepare_future_factor_authorization(runtime, **proposal["preparation_arguments"])
+        _need(fresh["operation_id"] == proposal["operation_id"]
+              and content_reference_equal(fresh["original_operation_ref"], proposal["original_operation_ref"])
+              and content_equal(fresh["authorization"], proposal["authorization"])
+              and content_equal(fresh["original_slot_references"], proposal["original_slot_references"]),
+              "FUTURE_ADMISSION_CHANGED_BEFORE_REGISTRATION")
+        budget = Budget(_reader_limits(seconds=FUTURE_SECONDS, byte_limit=FUTURE_READ_BYTES))
+        with budget.meter_files():
+            reader = _Reader(budget)
+            slot = _slot(runtime, proposal["operation_id"])
+            expected_names = set(CONTINUATION_FILES)
+            before = set(p.name for p in slot.iterdir())
+            _need(before in (expected_names, expected_names | {FUTURE_FILE}), "FUTURE_SLOT_INVENTORY_CHANGED")
+            for reference in fresh["validation_references"]:
+                _, actual = budget.read(reference["path"], expected=reference, limit=max(reference["bytes"], 1))
+                reader.refs[reference["path"]] = actual
+            path = slot / FUTURE_FILE
+            reused = path.exists()
+            if not reused:
+                record = {**proposal["authorization"], "registered_at": datetime.now(timezone.utc).isoformat()}
+                _need(len(workspace._canonical(record)) <= FUTURE_RECORD_BYTES, "FUTURE_METADATA_BOUND")
+                workspace._write(path, record)
+            _, reference = reader.read(path)
+            cache = _future_readonly_cache(Path(runtime.profile["state_root"]) / "cache", budget,
+                proposal["preparation_arguments"]["allow_test_fixture"])
+            verified = verify_future_factor_authorization(cache, reference,
+                context=dict(scope=runtime.scope, scope_directory=str(runtime.directory)))
+            _need(content_equal(verified, proposal["authorization"]), "FUTURE_REGISTERED_AUTHORIZATION_CHANGED")
+            for item in cache.terminal():
+                previous = reader.refs.setdefault(item["path"], item)
+                _need(content_reference_equal(previous, item), "FUTURE_TERMINAL_REFERENCE_CHANGED")
+            _need(set(p.name for p in slot.iterdir()) == expected_names | {FUTURE_FILE},
+                  "FUTURE_SLOT_APPEND_NOT_EXACT")
+            reader.verify_all()
+            runtime.check_binding()
+            budget.check("future_factor_registration", force=True)
+        return dict(status="REUSED" if reused else "RECORDED", operation_id=proposal["operation_id"],
+            authorization_id=verified["authorization_id"], authorization_ref=reference,
+            original_records_rewritten=False, provider_requests=0, strategy_executions=0,
+            collection_budget_changed=False, budget_credit=0,
+            locked_preparation_metrics=fresh["read_only_metrics"], registration_metrics=budget.metrics)

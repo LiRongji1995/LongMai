@@ -1,21 +1,27 @@
 """Present-day reconciliation of one reviewed ancestor UNKNOWN, never a retry.
 
 The existing complete original is reauthenticated. The uncommitted attempt
-stays UNKNOWN. Only a claimed continuation may allow its original observation
-day's new full-anchor requests to overlap the exact reviewed code set.
+stays UNKNOWN. A claimed continuation may allow its original observation
+day's new full-anchor requests to overlap the exact reviewed code set. After
+sealed success, an explicit append-only policy may allow the same intersection
+on strictly later, currently completed exchange sessions. Neither grants retry.
 """
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import date, datetime, timedelta, timezone
 import hashlib
 from pathlib import Path
 
-from stockfish_core.file_integrity import content_equal, content_reference_equal
+from stockfish_core.file_integrity import content_equal, content_reference_equal, _content
 
 
 VERSION = 'PREMARKET_FACTOR_RECONCILIATION_CANDIDATE_V1'
 RECORD = 'PREMARKET_FACTOR_RECONCILIATION_RECORD_V1'
 INVENTORY = 'INVENTORY_RECONCILED_UNKNOWN_RETAINED'
+FUTURE = 'FUTURE_FACTOR_RECONCILIATION_AUTHORIZATION_V1'
+FUTURE_FILE = 'future-factor-authorization.json'
+CONTINUATION_FILES = frozenset(('proposal.json', 'claim.json', 'reconciliation.json',
+                               'parent-snapshot-proof.json', 'terminal.json'))
 
 
 def _portable(reference):
@@ -155,10 +161,10 @@ def reconciled_inherited_scope(cache, folder, evidence):
     return value['inventory']
 
 
-def verify_claimed_factor_reconciliation(cache):
+def verify_claimed_factor_reconciliation(cache, *, context=None):
     """Authenticate the sealed relationship before any authorized source call."""
     from .premarket_capture_cache_v1 import SH, _json, _need, _stamp
-    context = cache.continuation_context
+    context = cache.continuation_context if context is None else context
     _need(isinstance(context, dict) and context.get('schema_version') == 'PREMARKET_CONTINUATION_AUTHORIZATION_V1',
           'RECONCILIATION_CONTINUATION_CONTEXT_REQUIRED')
     directory = Path(context['scope_directory'])
@@ -202,13 +208,176 @@ def verify_claimed_factor_reconciliation(cache):
     return verify_factor_reconciliation(cache, evidence)
 
 
-def factor_reconciliation_allows(cache, folder, spec):
-    """Grant only this retained old blocker's original observation-day overlap."""
+def future_factor_authorization_basis(cache, *, scope, scope_directory, operation_id, terminal_reference=None):
+    """Authenticate an already successful continuation; never run it again."""
+    from .premarket_capture_cache_v1 import _canonical, _json, _need, _stamp
+    directory = Path(scope_directory)
+    _need(directory.is_absolute() and directory.resolve(strict=True) == directory
+          and directory.name == hashlib.sha256(_canonical(scope)).hexdigest()
+          and len(operation_id) == 64 and all(c in '0123456789abcdef' for c in operation_id),
+          'FUTURE_FACTOR_ORIGINAL_SCOPE_REQUIRED')
+    slot = directory / 'operations' / operation_id / 'continuation'
+    _need(slot.is_dir() and slot.resolve(strict=True) == slot
+          and set(p.name for p in slot.iterdir()) in
+              (set(CONTINUATION_FILES), set(CONTINUATION_FILES) | {FUTURE_FILE})
+          and all(p.is_file() and not p.is_symlink() for p in slot.iterdir()),
+          'FUTURE_FACTOR_EXACT_CONTINUATION_SLOT_REQUIRED')
+    references = {}
+
+    def read(reference, path):
+        _need(not isinstance(reference, dict) or reference['path'] == str(path),
+              'FUTURE_FACTOR_FIXED_REFERENCE_PATH_REQUIRED')
+        raw, ref = cache._read(reference if reference is not None else path, limit=16 * 1024**2)
+        references[str(path)] = _portable(ref)
+        return _json(raw), ref
+
+    terminal, terminal_ref = read(terminal_reference, slot / 'terminal.json')
+    _need(terminal.get('schema_version') == 'PREMARKET_CONTINUATION_TERMINAL_V1'
+          and terminal.get('operation_id') == operation_id and terminal.get('status') == 'SUCCEEDED'
+          and terminal.get('original_failure_rewritten') is False
+          and (terminal.get('validation') or {}).get('verified') is True,
+          'FUTURE_FACTOR_SUCCESSFUL_CONTINUATION_REQUIRED')
+    claim, claim_ref = read(terminal['claim_ref'], slot / 'claim.json')
+    proposal, proposal_ref = read(claim['proposal_ref'], slot / 'proposal.json')
+    read(claim['factor_reconciliation_ref'], slot / 'reconciliation.json')
+    read(claim['snapshot_proof_ref'], slot / 'parent-snapshot-proof.json')
+    _need(claim.get('operation_id') == proposal.get('operation_id') == operation_id
+          and claim.get('scope') == proposal.get('scope') == scope
+          and terminal.get('proposal_id') == claim.get('proposal_id') == proposal.get('proposal_id')
+          and proposal.get('proposal_id') == hashlib.sha256(_canonical(_content({key: value
+              for key, value in proposal.items() if key not in ('proposal_id', 'preparation_metrics')}))).hexdigest()
+          and claim.get('remaining_limits') == proposal.get('remaining_limits')
+          and _stamp(claim['claimed_at']) <= _stamp(terminal['completed_at']) <= datetime.now(timezone.utc),
+          'FUTURE_FACTOR_COMPLETED_CONTROL_BINDING_CHANGED')
+    context = dict(schema_version='PREMARKET_CONTINUATION_AUTHORIZATION_V1', scope=scope,
+        scope_directory=str(directory), operation_id=operation_id, claim=claim_ref, proposal=proposal_ref)
+    evidence = verify_claimed_factor_reconciliation(cache, context=context)
+    receipt, accounting = terminal['receipt'], terminal['new_accounting']
+    job = Path(receipt['job'])
+    _need(job.parent == cache.root.parent / 'jobs' and job.resolve(strict=True) == job
+          and str(job) != evidence['source_job'], 'FUTURE_FACTOR_COMPLETED_JOB_BINDING')
+    final, final_ref = read(receipt['final'], job / 'final-control.json')
+    completion, completion_ref = read(receipt['completion'], job / 'worker-completion.json')
+    configuration, _ = read(final['configuration'], job / 'configuration.json')
+    # The old closure is an immutable saved document. Its historical hashes
+    # must not be compared to today's revised application source files.
+    code, _ = read(final['code_registry'], job / 'code-registry.json')
+    _need(isinstance(code, list) and bool(code), 'FUTURE_FACTOR_ORIGINAL_CODE_REGISTRY_REQUIRED')
+    _need(final.get('schema_version') == completion.get('schema_version') == 'CODEX_PREMARKET_SHARED_WORKFLOW_V1'
+          and final.get('status') == completion.get('status') in ('COMPLETE', 'COMPLETED_WITH_UNKNOWNS')
+          and final.get('job') == str(job) and final.get('external_worker_reaped') is True
+          and final.get('core_verified') is True and completion.get('core_verified') is True
+          and final.get('source_terminal_binding_verified') is True
+          and content_reference_equal(final['completion'], completion_ref)
+          and content_reference_equal(accounting['worker_final_ref'], final_ref)
+          and content_reference_equal(accounting['worker_completion_ref'], completion_ref)
+          and content_equal(accounting['worker_metrics'], completion['metrics'])
+          and configuration.get('state_root') == str(cache.root.parent)
+          and content_equal(configuration.get('continuation_context'), context)
+          and configuration.get('limits') == completion['metrics'].get('limits') == proposal['remaining_limits']
+          and configuration.get('capture', {}).get('retry_failed', False) is False
+          and completion.get('expected_sessions') == proposal.get('expected_sessions')
+          and completion.get('observation_date') == evidence['observation_date']
+          and completion.get('target_session') == evidence['target_session']
+          and completion['metrics'].get('pending_request_results') == 0
+          and completion['metrics'].get('failures') == []
+          and completion['metrics'].get('calls', {}).get('actual_unknown') == 0
+          and _stamp(completion['completed_at']) <= _stamp(final['final_sealed_at'])
+              <= _stamp(terminal['completed_at']), 'FUTURE_FACTOR_SUCCESSFUL_JOB_OR_BUDGET_BINDING_CHANGED')
+    result = dict(schema_version=FUTURE, scope=scope, scope_directory=str(directory),
+        operation_id=operation_id, cache_root=str(cache.root), completed_job=str(job),
+        original_operation_ref=evidence['original_operation_ref'],
+        terminal_ref=_portable(terminal_ref), claim_ref=_portable(claim_ref), proposal_ref=_portable(proposal_ref),
+        reconciliation_ref=_portable(claim['factor_reconciliation_ref']),
+        parent_snapshot_ref=_portable(claim['snapshot_proof_ref']),
+        completed_at=terminal['completed_at'], original_observation_date=evidence['observation_date'],
+        old_request_key=evidence['old_request_key'], authorized_codes=evidence['authorized_codes'],
+        allowed_endpoint='adjustment_factors', allowed_start_date='1990-01-01',
+        observation_policy='STRICTLY_LATER_AND_LATEST_COMPLETED_EXCHANGE_SESSION',
+        old_request_retry_authorized=False, old_window_rebatch_authorized=False,
+        master_retry_authorized=False, other_failures_authorized=False,
+        unknown_source_completion='UNKNOWN', historical_authorization_proven=False,
+        source_capability_issued=False, budget_credit=0, budget_limits_changed=False,
+        test_fixture=cache.config.get('allow_test_fixture', False),
+        references=[references[key] for key in sorted(references)])
+    result['authorization_id'] = hashlib.sha256(_canonical(result)).hexdigest()
+    return result
+
+
+def verify_future_factor_authorization(cache, reference, *, context):
+    from .premarket_capture_cache_v1 import _json, _need, _stamp
+    raw, ref = cache._read(reference, limit=2 * 1024**2)
+    record = _json(raw)
+    _need(record.get('schema_version') == FUTURE and record.get('scope') == context['scope']
+          and record.get('scope_directory') == context['scope_directory'],
+          'FUTURE_FACTOR_REGISTERED_SCOPE_CHANGED')
+    path = Path(context['scope_directory']) / 'operations' / record['operation_id'] / 'continuation' / FUTURE_FILE
+    _need(ref['path'] == str(path), 'FUTURE_FACTOR_FIXED_AUTHORIZATION_PATH_REQUIRED')
+    basis = future_factor_authorization_basis(cache, scope=context['scope'],
+        scope_directory=context['scope_directory'], operation_id=record['operation_id'],
+        terminal_reference=record['terminal_ref'])
+    _need(content_equal({k: v for k, v in record.items() if k != 'registered_at'}, basis)
+          and _stamp(basis['completed_at']) <= _stamp(record['registered_at']) <= datetime.now(timezone.utc),
+          'FUTURE_FACTOR_AUTHORIZATION_BINDING_CHANGED')
+    return basis
+
+
+def _future_reconciliation_allows(cache, folder, spec):
     from .premarket_capture_cache_v1 import _need
-    if cache.continuation_context is None or not cache._continuation_ready:
+    context = cache.recovery_context
+    if context is None:
         return None
+    _need(isinstance(context, dict), 'FUTURE_FACTOR_CONTEXT_SCHEMA')
+    if not context.get('factor_reconciliations'):
+        return None
+    _need(cache.config.get('retry_failed', False) is False, 'FUTURE_FACTOR_NO_GENERAL_RETRY_POLICY')
+    _need(set(context) == {'scope', 'scope_directory', 'completions', 'factor_reconciliations'},
+          'FUTURE_FACTOR_CONTEXT_SCHEMA')
+    references = context['factor_reconciliations']
+    _need(isinstance(references, list) and 0 < len(references) <= 64
+          and len({r['path'] for r in references}) == len(references), 'FUTURE_FACTOR_REFERENCE_BOUND')
+    matched = []
+    for reference in references:
+        value = verify_future_factor_authorization(cache, reference, context=context)
+        if Path(folder) == cache.root / 'raw' / value['old_request_key']:
+            matched.append(value)
+    _need(len(matched) == 1, 'FUTURE_FACTOR_EXACT_ONE_ANCESTOR_AUTHORIZATION_REQUIRED')
+    value, params = matched[0], spec.parameters
+    _need(spec.endpoint == 'adjustment_factors' and spec.key != value['old_request_key']
+          and spec.current is False and spec.business_session == params['end_date']
+          and params['start_date'] == '1990-01-01'
+          and params['end_date'] > value['original_observation_date']
+          and bool(set(params['codes']) & set(value['authorized_codes'])),
+          'FUTURE_FACTOR_ONLY_LATER_FULL_ANCHOR_INTERSECTION')
+    instant = datetime.now(timezone.utc)
+    calendar = cache.calendar_reference(instant)
+    _need(calendar is not None, 'FUTURE_FACTOR_AUTHENTICATED_CURRENT_CALENDAR_REQUIRED')
+    result = cache.verify(calendar)
+    _need(result['status'] == 'COMPLETE' and result['pagination_complete'] is True,
+          'FUTURE_FACTOR_COMPLETE_CALENDAR_REQUIRED')
+    start, end = (date.fromisoformat(result['parameters'][key]) for key in ('start_date', 'end_date'))
+    _need({row['calendar_date'] for row in result['rows']} ==
+          {str(start + timedelta(days=n)) for n in range((end-start).days + 1)},
+          'FUTURE_FACTOR_CALENDAR_PARAMETER_COVERAGE')
+    following = sorted(row['calendar_date'] for row in result['rows']
+                       if row['is_trading_day'] == '1' and row['calendar_date'] > params['end_date'])
+    _need(following, 'FUTURE_FACTOR_NEXT_SESSION_REQUIRED')
+    from .premarket_workflow_v1 import _latest_gate
+    _latest_gate(result['rows'], params['end_date'], following[0], now=instant)
+    return dict(status='AUTHORIZED_NEW_OBSERVATION_OVERLAP_ONLY', request_key=value['old_request_key'],
+        authorization_id=value['authorization_id'], authorization_origin='REGISTERED_FUTURE_OBSERVATIONS',
+        unknown_source_completion='UNKNOWN', old_request_retry_authorized=False, budget_credit=0)
+
+
+def factor_reconciliation_allows(cache, folder, spec):
+    """Grant only the exact old blocker's explicitly registered date policy."""
+    from .premarket_capture_cache_v1 import _need
     denied = dict(status='RECONCILIATION_NOT_AUTHORIZED_UNKNOWN_RETAINED', retry_authorized=False)
     try:
+        if cache.continuation_context is None:
+            return _future_reconciliation_allows(cache, folder, spec)
+        if not cache._continuation_ready:
+            return None
         value = verify_claimed_factor_reconciliation(cache)
         params = spec.parameters
         _need(Path(folder) == cache.root / 'raw' / value['old_request_key']

@@ -51,8 +51,18 @@ def explicit_recovered_attempt(cache, attempt, prior, *, entries=None):
         return path
 
     try:
-        _need(isinstance(context, dict) and set(context) == {'scope', 'scope_directory', 'completions'},
+        _need(isinstance(context, dict) and set(context) in
+              ({'scope', 'scope_directory', 'completions'},
+               {'scope', 'scope_directory', 'completions', 'factor_reconciliations'}),
               'EXPLICIT_RECOVERY_RUNTIME_CONTEXT_REQUIRED')
+        if 'factor_reconciliations' in context:
+            refs = context['factor_reconciliations']
+            _need(isinstance(refs, list) and len(refs) <= 64
+                  and all(isinstance(ref, dict) and isinstance(ref.get('path'), str)
+                          and SHA.fullmatch(ref.get('sha256', ''))
+                          and type(ref.get('bytes')) is int and ref['bytes'] >= 0 for ref in refs)
+                  and len({ref['path'] for ref in refs}) == len(refs),
+                  'EXPLICIT_RECOVERY_FUTURE_LOCATOR_SCHEMA')
         scope, references = context['scope'], context['completions']
         directory = canonical_directory(context['scope_directory'])
         _need(isinstance(scope, dict) and scope.get('backend') == 'premarket'

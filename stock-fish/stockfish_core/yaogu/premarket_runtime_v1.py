@@ -133,19 +133,42 @@ def _windows_control_mutex(name):
             raise primary
 
 
+def _directory_identity(value):
+    return value.st_dev, value.st_ino, value.st_mode
+
+
+def _scan_directory_stat(directory, parent_fd, name):
+    return (os.stat(name, dir_fd=parent_fd, follow_symlinks=False) if parent_fd is not None
+            else os.stat(directory, follow_symlinks=False))
+
+
 @contextmanager
-def _control_directory_lock(directory, *, exclusive):
+def _control_directory_lock(directory, *, exclusive, _scan_binding=None):
     """Coordinate only control publication and one directory's metadata scan.
 
     Computing, source reads, recursive traversal and whole jobs are not locked.
     POSIX locks the directory inode itself. Windows uses a named mutex and
     retains its existing file-fsync + replace durability level.
     """
-    directory = Path(directory).resolve(strict=True)
-    before = directory.stat()
+    borrowed = _scan_binding is not None
+    if borrowed:
+        # Only directory_bytes supplies this invocation-owned descriptor. Its
+        # parent descriptor anchors the name, so no ancestor path is resolved
+        # again and no child symlink can redirect the scan.
+        directory = Path(directory)
+        if os.name != 'posix' or not directory.is_absolute() or '..' in directory.parts:
+            raise RuntimeError('ATOMIC_CONTROL_INVALID_SCAN_BINDING')
+        descriptor, expected_identity, parent_fd, name = _scan_binding
+        before = os.fstat(descriptor)
+        current = _scan_directory_stat(directory, parent_fd, name)
+        if any(_directory_identity(value) != expected_identity for value in (before, current)):
+            raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
+    else:
+        directory = Path(directory).resolve(strict=True)
+        before = directory.stat()
     if not stat.S_ISDIR(before.st_mode):
         raise NotADirectoryError(str(directory))
-    identity = (before.st_dev, before.st_ino, before.st_mode)
+    identity = _directory_identity(before)
     key = (os.path.normcase(str(directory)), *identity)
     owner_pid = os.getpid()
     active_key = (owner_pid, *key)
@@ -158,11 +181,13 @@ def _control_directory_lock(directory, *, exclusive):
             raise RuntimeError('ATOMIC_CONTROL_LOCK_UPGRADE_FORBIDDEN')
         yield prior['descriptor']
         return
-    descriptor, primary, acquired = None, None, False
+    descriptor = descriptor if borrowed else None
+    primary, acquired = None, False
     if os.name == 'posix':
         import fcntl
         flags = os.O_RDONLY | getattr(os, 'O_DIRECTORY', 0) | getattr(os, 'O_NOFOLLOW', 0)
-        descriptor = os.open(directory, flags)
+        if not borrowed:
+            descriptor = os.open(directory, flags)
         try:
             deadline = time.monotonic() + CONTROL_LOCK_WAIT_SECONDS
             operation = (fcntl.LOCK_EX if exclusive else fcntl.LOCK_SH) | fcntl.LOCK_NB
@@ -177,8 +202,8 @@ def _control_directory_lock(directory, *, exclusive):
                 except BlockingIOError:
                     time.sleep(min(CONTROL_LOCK_POLL_SECONDS, remaining))
             opened = os.fstat(descriptor)
-            current = directory.stat()
-            if any((v.st_dev, v.st_ino, v.st_mode) != identity for v in (opened, current)):
+            current = (_scan_directory_stat(directory, parent_fd, name) if borrowed else directory.stat())
+            if any(_directory_identity(v) != identity for v in (opened, current)):
                 raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
             active[active_key] = dict(descriptor=descriptor, exclusive=exclusive)
             yield descriptor
@@ -187,7 +212,7 @@ def _control_directory_lock(directory, *, exclusive):
             raise
         finally:
             active.pop(active_key, None)
-            operations = [('DIRECTORY_CLOSE', lambda: os.close(descriptor))]
+            operations = [] if borrowed else [('DIRECTORY_CLOSE', lambda: os.close(descriptor))]
             if acquired and os.getpid() == owner_pid:
                 operations.insert(0, ('DIRECTORY_UNLOCK', lambda: fcntl.flock(descriptor, fcntl.LOCK_UN)))
             for phase, operation in operations:
@@ -273,6 +298,8 @@ def directory_bytes(root):
         return 0
     if not stat.S_ISDIR(mode):
         return 0
+    if os.name == 'posix':
+        return _directory_bytes_anchored(Path(root).resolve(strict=True))
     pending = [os.fspath(root)]
     while pending:
         directory = Path(pending.pop()).resolve(strict=True)
@@ -286,6 +313,71 @@ def directory_bytes(root):
                         pending.append(entry.path)
                     else:
                         total += info.st_size
+    return total
+
+
+def _directory_bytes_anchored(root):
+    """Scan fresh sizes through directory FDs, retaining only the DFS ancestry.
+
+    Each directory holds the original shared publication lock only while its
+    immediate entries are inspected. Parent FDs stay open without their locks
+    while descendants are visited; identities are rechecked on return. No size
+    or directory-mtime cache survives even one call.
+    """
+    flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+    root_identity = _directory_identity(os.stat(root, follow_symlinks=False))
+    descriptor = os.open(root, flags)
+    stack = [dict(path=root, descriptor=descriptor, identity=root_identity,
+                  parent_fd=None, name=None, children=None)]
+    total = 0
+
+    def verify(frame):
+        current = _scan_directory_stat(frame['path'], frame['parent_fd'], frame['name'])
+        if any(_directory_identity(value) != frame['identity'] for value in
+               (os.fstat(frame['descriptor']), current)):
+            raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
+
+    try:
+        while stack:
+            frame = stack[-1]
+            if frame['children'] is None:
+                children = []
+                binding = (frame['descriptor'], frame['identity'], frame['parent_fd'], frame['name'])
+                with _control_directory_lock(frame['path'], exclusive=False, _scan_binding=binding):
+                    with os.scandir(frame['descriptor']) as entries:
+                        for entry in entries:
+                            info = entry.stat(follow_symlinks=False)
+                            if stat.S_ISLNK(info.st_mode):
+                                continue
+                            if stat.S_ISDIR(info.st_mode):
+                                children.append((entry.name, _directory_identity(info)))
+                            else:
+                                total += info.st_size
+                frame['children'] = iter(children)
+            verify(frame)
+            try:
+                name, identity = next(frame['children'])
+            except StopIteration:
+                stack.pop()
+                os.close(frame['descriptor'])
+                continue
+            child_fd = os.open(name, flags, dir_fd=frame['descriptor'])
+            stack.append(dict(path=frame['path'] / name, descriptor=child_fd, identity=identity,
+                              parent_fd=frame['descriptor'], name=name, children=None))
+    finally:
+        primary, closing_error = sys.exc_info()[1], None
+        for frame in reversed(stack):
+            try:
+                os.close(frame['descriptor'])
+            except BaseException as error:
+                if primary is not None:
+                    _control_cleanup_error(primary, 'SCAN_DIRECTORY_CLOSE', error)
+                elif closing_error is None:
+                    closing_error = error
+                else:
+                    _control_cleanup_error(closing_error, 'SCAN_DIRECTORY_CLOSE', error)
+        if primary is None and closing_error is not None:
+            raise closing_error
     return total
 
 

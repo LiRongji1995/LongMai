@@ -72,6 +72,95 @@ class RuntimeFixture(unittest.TestCase):
             self.assertEqual(len(scans), 4)
             self.assertEqual(self.total(budget), 50)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_scan_resolves_only_root_and_rechecks_growth_without_parent_mtime_change(self):
+        tree = self.root/'tree'
+        (tree/'a'/'b').mkdir(parents=True)
+        target = tree/'a'/'b'/'payload'
+        target.write_bytes(b'old')
+        original, resolved = Path.resolve, []
+        def resolve(path, *args, **kwargs):
+            resolved.append(path)
+            return original(path, *args, **kwargs)
+        with patch.object(Path, 'resolve', resolve):
+            self.assertEqual(runtime.directory_bytes(tree), 3)
+        self.assertEqual(resolved, [tree])
+        parent_clock = target.parent.stat().st_mtime_ns
+        with target.open('ab') as handle:
+            handle.write(b'x'*5000)
+        self.assertEqual(target.parent.stat().st_mtime_ns, parent_clock)
+        self.assertEqual(runtime.directory_bytes(tree), 5003)
+        with self.assertRaisesRegex(runtime.BudgetExceeded, 'CACHE_SIZE_LIMIT_EXCEEDED'):
+            runtime.Budget({'cache_bytes': 4096}, cache_dir=tree).check('grown', force=True)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_child_replaced_after_enumeration_never_redirects_or_undercounts(self):
+        for replacement in ('directory', 'symlink'):
+            with self.subTest(replacement=replacement):
+                tree = self.root/replacement
+                child, outside = tree/'child', self.root/(replacement+'-outside')
+                child.mkdir(parents=True); outside.mkdir()
+                (child/'payload').write_bytes(b'x'*5000)
+                (outside/'foreign').write_bytes(b'foreign'*1000)
+                original, changed = os.open, []
+                def open_directory(path, flags, *args, **kwargs):
+                    if path == 'child' and kwargs.get('dir_fd') is not None and not changed:
+                        child.rename(tree/'retained-child'); changed.append(True)
+                        if replacement == 'symlink': child.symlink_to(outside, target_is_directory=True)
+                        else: child.mkdir()
+                    return original(path, flags, *args, **kwargs)
+                with patch.object(runtime.os, 'open', side_effect=open_directory):
+                    with self.assertRaises((OSError, RuntimeError)):
+                        runtime.directory_bytes(tree)
+                self.assertEqual(changed, [True])
+                self.assertEqual((tree/'retained-child'/'payload').stat().st_size, 5000)
+                self.assertEqual((outside/'foreign').read_bytes(), b'foreign'*1000)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_ancestor_replaced_during_descendant_scan_is_rejected_without_following_link(self):
+        tree, outside = self.root/'tree', self.root/'outside'
+        child = tree/'a'/'b'
+        child.mkdir(parents=True); (outside/'b').mkdir(parents=True)
+        (child/'own').write_bytes(b'own')
+        (outside/'b'/'foreign').write_bytes(b'foreign'*1000)
+        own_inode, foreign_inode = child.stat().st_ino, (outside/'b').stat().st_ino
+        original, visited, changed = os.scandir, [], []
+        def scandir(descriptor):
+            inode = os.fstat(descriptor).st_ino
+            visited.append(inode)
+            if inode == own_inode and not changed:
+                (tree/'a').rename(tree/'retained-a')
+                (tree/'a').symlink_to(outside, target_is_directory=True)
+                changed.append(True)
+            return original(descriptor)
+        with patch.object(runtime.os, 'scandir', side_effect=scandir):
+            with self.assertRaisesRegex(RuntimeError, 'DIRECTORY_IDENTITY_CHANGED'):
+                runtime.directory_bytes(tree)
+        self.assertEqual(changed, [True])
+        self.assertNotIn(foreign_inode, visited)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_scan_error_closes_held_ancestor_descriptors(self):
+        tree = self.root/'tree'; (tree/'child').mkdir(parents=True)
+        original_open, original_scandir = os.open, os.scandir
+        descriptors, child_inode = [], (tree/'child').stat().st_ino
+        def opened(*args, **kwargs):
+            descriptor = original_open(*args, **kwargs)
+            descriptors.append(descriptor)
+            return descriptor
+        def scandir(descriptor):
+            if os.fstat(descriptor).st_ino == child_inode:
+                raise OSError('TEST_FIXTURE interrupted child scan')
+            return original_scandir(descriptor)
+        with patch.object(runtime.os, 'open', side_effect=opened), \
+                patch.object(runtime.os, 'scandir', side_effect=scandir):
+            with self.assertRaisesRegex(OSError, 'interrupted child scan'):
+                runtime.directory_bytes(tree)
+        self.assertEqual(len(descriptors), 2)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError): os.fstat(descriptor)
+        self.assertEqual(runtime.directory_bytes(tree), 0)
+
     def test_phase_entry_and_exit_force_complete_growth_checks(self):
         for scope in ('job', 'cache'):
             for boundary in ('entry', 'exit'):
@@ -468,6 +557,31 @@ class AtomicControlFixture(unittest.TestCase):
             self.joined(thread)
         self.assertEqual(errors, [])
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_descendant_scan_retains_parent_descriptor_without_parent_publication_lock(self):
+        child = self.root/'child'; child.mkdir()
+        payload = child/'payload'; payload.write_bytes(b'child')
+        ready, allow = self.threading.Event(), self.threading.Event()
+        original, child_inode = os.scandir, child.stat().st_ino
+        def scandir(descriptor):
+            if os.fstat(descriptor).st_ino == child_inode:
+                ready.set(); self.wait(allow)
+            return original(descriptor)
+        with patch.object(runtime.os, 'scandir', side_effect=scandir):
+            scanner, se, result = self.start(lambda: runtime.directory_bytes(self.root), name='descendant-scanner')
+            try:
+                self.wait(ready)
+                publisher, pe, _ = self.start(lambda: runtime.atomic_json(self.target,
+                    {'TEST_FIXTURE': 'parent can publish during descendant scan'}), name='parent-publisher')
+                self.joined(publisher)
+                self.assertEqual(pe, [])
+                self.assertTrue(scanner.is_alive())
+            finally:
+                allow.set(); self.joined(scanner)
+        self.assertEqual(se, [])
+        self.assertEqual(result, [len(self.old) + 5])
+        self.assertEqual(runtime.directory_bytes(self.root), self.target.stat().st_size + 5)
+
     def test_same_thread_nested_publish_scan_does_not_self_lock(self):
         def nested():
             with runtime._control_directory_lock(self.root, exclusive=True):
@@ -512,7 +626,8 @@ class AtomicControlFixture(unittest.TestCase):
         class Entry:
             def __init__(self, entry): self.entry, self.path = entry, entry.path
             def stat(inner, **kwargs):
-                if inner.path == str(victim): victim.unlink()
+                # scandir(fd) returns a name relative to its held directory.
+                if Path(inner.path).name == victim.name: victim.unlink()
                 return inner.entry.stat(**kwargs)
         class Entries:
             def __init__(self, path): self.source = original(path)

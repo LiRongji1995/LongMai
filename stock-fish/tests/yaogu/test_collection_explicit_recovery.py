@@ -217,3 +217,19 @@ def test_terminal_rehash_catches_change_after_recovery_was_recognized(tmp_path):
     original.write_bytes(changed)
     with pytest.raises(ValueError, match='SHA_CHANGED|ORIGINAL|FILE_CONTENT'):
         f['cache'].terminal()
+
+
+def test_optional_factor_context_does_not_change_existing_explicit_source_authority(tmp_path):
+    f = make_recovery(tmp_path)
+    context = dict(f['context'], factor_reconciliations=[dict(path=str(tmp_path / 'TEST_FIXTURE_unrelated_policy.json'),
+        sha256='a' * 64, bytes=1)])
+    cache = CaptureCache(f['cache'].root, FixtureBudget(), config=dict(allow_test_fixture=True),
+                         recovery_context=context, executor=FixtureExecutor())
+    assert cache.explicit_recovered_attempt(f['attempt'], f['prior'])['status'] == 'VERIFIED_EXPLICITLY_RECOVERED_ATTEMPT'
+    assert cache.factor_overlap_blockers(f['new']) == []
+    context['completions'] = []
+    cache = CaptureCache(cache.root, FixtureBudget(), config=dict(allow_test_fixture=True),
+                         recovery_context=context, executor=FixtureExecutor())
+    assert cache.explicit_recovered_attempt(f['attempt'], f['prior'])['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    assert cache.factor_overlap_blockers(f['new'])
+    assert cache.executor.calls == []

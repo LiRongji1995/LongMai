@@ -530,12 +530,13 @@ class Runtime:
         _need(directory.is_absolute() and directory.name == _digest(self.scope),
               "CAPTURE_RECOVERY_SCOPE_DIRECTORY_BINDING")
         root = directory / "explicit-failure-recoveries"
-        if not root.exists() and not root.is_symlink():
-            return None
-        _need(directory.resolve(strict=True) == directory and root.resolve(strict=True) == root,
-              "CAPTURE_RECOVERY_SCOPE_ALIAS_FORBIDDEN")
-        with _directory_fd(root):
-            operations = sorted(root.iterdir())
+        has_recoveries = root.exists() or root.is_symlink()
+        operations = []
+        if has_recoveries:
+            _need(directory.resolve(strict=True) == directory and root.resolve(strict=True) == root,
+                  "CAPTURE_RECOVERY_SCOPE_ALIAS_FORBIDDEN")
+            with _directory_fd(root):
+                operations = sorted(root.iterdir())
         _need(len(operations) <= 10000, "CAPTURE_RECOVERY_OPERATION_COUNT_BOUND")
         references = []
         for operation in operations:
@@ -553,9 +554,40 @@ class Runtime:
                 _read(path, limit=2 * MAX_CONTROL)
                 verify_content_reference(reference)
                 references.append(reference)
+        # Only the fixed append-only authorization under an existing operation
+        # is discoverable. It conveys no source retry or new budget. Consumers
+        # independently authenticate the successful continuation and old case.
+        factors = []
+        operation_root = directory / "operations"
+        if operation_root.exists() or operation_root.is_symlink():
+            with _directory_fd(operation_root):
+                children = sorted(operation_root.iterdir())
+            _need(len(children) <= 20000, "CAPTURE_RECOVERY_OPERATION_COUNT_BOUND")
+            for operation in children:
+                if re.fullmatch(r"[0-9a-f]{64}", operation.name) is None:
+                    continue  # Existing operation journal files are not slots.
+                with _directory_fd(operation):
+                    slot = operation / "continuation"
+                    if not slot.exists() and not slot.is_symlink():
+                        continue
+                    with _directory_fd(slot):
+                        path = slot / "future-factor-authorization.json"
+                        if not path.exists() and not path.is_symlink():
+                            continue
+                        _need(len(factors) < 64, "CAPTURE_FACTOR_AUTHORIZATION_COUNT_BOUND")
+                        _read(path, limit=2 * MAX_CONTROL)
+                        reference = dict(path=str(path), **content_fingerprint(path))
+                        _read(path, limit=2 * MAX_CONTROL)
+                        verify_content_reference(reference)
+                        factors.append(reference)
         self.check_binding()
-        return dict(scope=deepcopy(self.scope), scope_directory=str(directory),
-                    completions=references)
+        if not has_recoveries and not factors:
+            return None
+        context = dict(scope=deepcopy(self.scope), scope_directory=str(directory),
+                       completions=references)
+        if factors:
+            context["factor_reconciliations"] = factors
+        return context
 
     def guard_ancestor_request(self, identity):
         for directory, scope in getattr(self, "ancestor_ledgers", ()) :

@@ -1,8 +1,10 @@
 """TEST_FIXTURE exact present-day reconciliation, with no real provider access."""
 from copy import deepcopy
 from datetime import datetime, timedelta, timezone
+from contextlib import contextmanager
 import json
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -10,6 +12,8 @@ from stockfish_core.yaogu import premarket_capture_cache_v1 as native
 from stockfish_core.yaogu.collection_factor_reconciliation import (
     case_from_review, prepare_factor_reconciliation, verify_factor_reconciliation,
     verify_claimed_factor_reconciliation, reconciled_inherited_scope)
+from stockfish_core.yaogu import collection_factor_reconciliation as reconciliation
+from scripts import codex_premarket_continuation as coordinator
 from stockfish_core.yaogu.collection_inherited_scope import EPOCH_SCHEMA, inherited_attempt_scope
 from tests.yaogu.test_premarket_capture_cache_v1 import FixtureBudget, FixtureExecutor
 from tests.yaogu.test_collection_source_continuation import (
@@ -238,3 +242,234 @@ def test_after_authorized_source_new_ancestor_attempt_still_blocks_and_terminal_
     with pytest.raises(ValueError):
         cache.terminal()
     assert f['executor'].calls == [('master_szse', {})]
+
+
+def completed_fixture(tmp_path):
+    """A sealed TEST_FIXTURE success around genuine captured originals."""
+    f = fixture(tmp_path)
+    f['proposal']['expected_sessions'] = [OBSERVED, TARGET, f['spec'].business_session]
+    f['proposal']['proposal_id'] = coordinator._proposal_digest(f['proposal'])
+    f['claim']['proposal_id'] = f['proposal']['proposal_id']
+    snapshot = json.loads(Path(f['claim']['snapshot_proof_ref']['path']).read_bytes())
+    f['claim']['snapshot_proof_ref'] = save(f['slot'] / 'parent-snapshot-proof.json', snapshot)
+    seal(f)
+    cache = ready(f)
+    job = cache.root.parent / 'jobs/TEST_FIXTURE_completed_job'
+    job.mkdir()
+    config = dict(state_root=str(cache.root.parent), capture=dict(retry_failed=False),
+        limits=f['proposal']['remaining_limits'], continuation_context=f['context'])
+    config_ref = save(job / 'configuration.json', config)
+    code_ref = save(job / 'code-registry.json', [dict(path='/TEST_FIXTURE_HISTORICAL_SOURCE.py',
+        sha256='a' * 64, bytes=1)])
+    metrics = dict(cache.budget.metrics, limits=config['limits'], failures=[], pending_request_results=0)
+    completion = dict(schema_version='CODEX_PREMARKET_SHARED_WORKFLOW_V1', status='COMPLETED_WITH_UNKNOWNS',
+        core_verified=True, observation_date=OBSERVED, target_session=TARGET, completed_at=now(),
+        expected_sessions=f['proposal']['expected_sessions'], metrics=metrics)
+    completion_ref = save(job / 'worker-completion.json', completion)
+    final = dict(schema_version=completion['schema_version'], status=completion['status'], job=str(job),
+        external_worker_reaped=True, core_verified=True, source_terminal_binding_verified=True,
+        configuration=config_ref, code_registry=code_ref, completion=completion_ref, final_sealed_at=now())
+    final_ref = save(job / 'final-control.json', final)
+    receipt = dict(job=str(job), final=final_ref, completion=completion_ref)
+    terminal = dict(schema_version='PREMARKET_CONTINUATION_TERMINAL_V1', status='SUCCEEDED',
+        operation_id=f['operation']['operation_id'], proposal_id=f['proposal']['proposal_id'],
+        claim_ref=f['context']['claim'], original_failure_rewritten=False, validation=dict(verified=True),
+        receipt=receipt, new_accounting=dict(worker_final_ref=final_ref, worker_completion_ref=completion_ref,
+            worker_metrics=metrics), completed_at=now())
+    f['terminal_ref'] = save(f['slot'] / 'terminal.json', terminal)
+    f['terminal'], f['job'] = terminal, job
+    @contextmanager
+    def exclusive():
+        yield
+    f['runtime'] = SimpleNamespace(directory=Path(f['context']['scope_directory']), scope=f['context']['scope'],
+        profile=dict(backend='premarket', state_root=str(cache.root.parent)),
+        check_binding=lambda: None, exclusive=exclusive)
+    return f
+
+
+def register_future(f):
+    proposal = coordinator.prepare_future_factor_authorization(f['runtime'],
+        operation_path=f['operation_ref']['path'], expected_terminal_sha256=f['terminal_ref']['sha256'],
+        allow_test_fixture=True)
+    registered = coordinator.register_future_factor_authorization(f['runtime'], proposal,
+        authorize_future_observations=True)
+    context = dict(scope=f['context']['scope'], scope_directory=f['context']['scope_directory'],
+                   completions=[], factor_reconciliations=[registered['authorization_ref']])
+    return proposal, registered, context
+
+
+def future_cache(f, context):
+    executor = FixtureExecutor()
+    cache = native.CaptureCache(f['cache'].root, AccountingBudget(), config=dict(allow_test_fixture=True),
+                               recovery_context=context, executor=executor)
+    cache.capture_one(native.RequestSpec('calendar', dict(start_date='2026-01-01', end_date='2026-12-01'),
+                                         datetime.now(native.SH).date().isoformat()))
+    executor.calls.clear()
+    return cache
+
+
+class FutureClock(datetime):
+    @classmethod
+    def now(cls, tz=None):
+        return cls(2026, 11, 9, 12, tzinfo=timezone.utc).astimezone(tz or timezone.utc)
+
+
+def test_future_registration_appends_once_preserves_all_old_bytes_and_mints_no_budget(tmp_path):
+    f = completed_fixture(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    proposal, registered, context = register_future(f)
+    assert registered['status'] == 'RECORDED' and registered['provider_requests'] == 0
+    assert registered['collection_budget_changed'] is False and registered['budget_credit'] == 0
+    assert all(p.read_bytes() == raw for p, raw in before.items())
+    assert {p for p in tmp_path.rglob('*') if p.is_file()} - set(before) == {
+        f['slot'] / reconciliation.FUTURE_FILE}
+    raw = (f['slot'] / reconciliation.FUTURE_FILE).read_bytes()
+    reused = coordinator.register_future_factor_authorization(f['runtime'], proposal,
+        authorize_future_observations=True)
+    assert reused['status'] == 'REUSED' and (f['slot'] / reconciliation.FUTURE_FILE).read_bytes() == raw
+    proof = reconciliation.verify_future_factor_authorization(f['cache'], registered['authorization_ref'], context=context)
+    assert proof['authorized_codes'] == CODES and proof['unknown_source_completion'] == 'UNKNOWN'
+    assert proof['master_retry_authorized'] is False
+    # Appending the policy must not invalidate the old six-field authorization.
+    assert verify_claimed_factor_reconciliation(f['cache']) == f['candidate']
+
+
+def test_new_latest_session_allows_only_exact_old_set_intersection_and_no_master_retry(tmp_path, monkeypatch):
+    f = completed_fixture(tmp_path)
+    _, _, context = register_future(f)
+    cache = future_cache(f, context)
+    monkeypatch.setattr(reconciliation, 'datetime', FutureClock)
+    new = factor(end='2026-11-09')
+    assert cache.factor_overlap_blockers(new) == []
+    assert cache.capture_one(new).status == 'COMPLETE'
+    assert cache.executor.calls == [('adjustment_factors', new.parameters)]
+    with pytest.raises(ValueError, match='CONTINUATION_EXPLICIT_AUTHORIZATION_REQUIRED'):
+        cache.capture_authorized_once()
+    assert cache.executor.calls == [('adjustment_factors', new.parameters)]
+
+
+@pytest.mark.parametrize('spec', [factor(end=OLD_END), factor(end=OBSERVED),
+    factor(end='2026-11-08'), factor(end='2026-11-10'), factor(end='2026-11-09', start='2000-01-01'),
+    factor(end='2026-11-09', business_session='2026-11-10'), factor(end='2026-11-09', current=True)])
+def test_future_authorization_does_not_allow_old_window_rebatch_or_nonlatest_dates(tmp_path, monkeypatch, spec):
+    f = completed_fixture(tmp_path)
+    _, _, context = register_future(f)
+    cache = future_cache(f, context)
+    monkeypatch.setattr(reconciliation, 'datetime', FutureClock)
+    assert cache.factor_overlap_blockers(spec)
+    assert cache.executor.calls == []
+
+
+@pytest.mark.parametrize('fault', ['extra_attempt', 'six_bytes', 'terminal', 'configuration', 'unrelated_unknown'])
+def test_future_permission_keeps_all_other_failures_and_changed_proof_blocked(tmp_path, monkeypatch, fault):
+    f = completed_fixture(tmp_path)
+    _, _, context = register_future(f)
+    cache = future_cache(f, context)
+    if fault == 'extra_attempt':
+        save(f['unknown'].parent / 'TEST_FIXTURE_extra' / 'request-claim.json', {})
+    elif fault == 'six_bytes':
+        path = f['unknown'] / 'result.json'
+        path.write_bytes(path.read_bytes() + b' ')
+    elif fault == 'terminal':
+        path = f['slot'] / 'terminal.json'
+        path.write_bytes(path.read_bytes() + b' ')
+    elif fault == 'configuration':
+        path = f['job'] / 'configuration.json'
+        path.write_bytes(path.read_bytes() + b' ')
+    else:
+        save(cache.root / 'raw' / ('e' * 64) / 'raw/TEST_FIXTURE_unknown/request-claim.json', {})
+    monkeypatch.setattr(reconciliation, 'datetime', FutureClock)
+    with pytest.raises((ValueError, KeyError), match='FACTOR|request_spec'):
+        cache.capture_one(factor(end='2026-11-09'))
+    assert cache.executor.calls == []
+
+
+@pytest.mark.parametrize('fault', ['not_authorized', 'wrong_terminal_sha', 'failed_terminal',
+    'changed_old_file', 'extra_slot_file'])
+def test_future_registration_rejects_unapproved_or_changed_evidence_without_writes(tmp_path, fault):
+    f = completed_fixture(tmp_path)
+    if fault == 'failed_terminal':
+        f['terminal']['status'] = 'FAILED_OR_UNKNOWN'
+        f['terminal_ref'] = save(f['slot'] / 'terminal.json', f['terminal'])
+    before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    kwargs = dict(operation_path=f['operation_ref']['path'],
+        expected_terminal_sha256='0' * 64 if fault == 'wrong_terminal_sha' else f['terminal_ref']['sha256'],
+        allow_test_fixture=True)
+    if fault in ('failed_terminal', 'wrong_terminal_sha'):
+        with pytest.raises(ValueError, match='FUTURE_'):
+            coordinator.prepare_future_factor_authorization(f['runtime'], **kwargs)
+    else:
+        proposal = coordinator.prepare_future_factor_authorization(f['runtime'], **kwargs)
+        if fault == 'changed_old_file':
+            path = f['slot'] / 'claim.json'
+            path.write_bytes(path.read_bytes() + b' ')
+        elif fault == 'extra_slot_file':
+            save(f['slot'] / 'TEST_FIXTURE_extra.json', {})
+        before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+        with pytest.raises((ValueError, RuntimeError), match='FUTURE_|REFERENCE|SHA'):
+            coordinator.register_future_factor_authorization(f['runtime'], proposal,
+                authorize_future_observations=fault != 'not_authorized')
+    assert {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+    assert not (f['slot'] / reconciliation.FUTURE_FILE).exists()
+
+
+def test_future_preparation_has_no_directory_creation_or_provider_path(tmp_path, monkeypatch):
+    f = completed_fixture(tmp_path)
+    before = {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()}
+    def denied(*args, **kwargs):
+        raise AssertionError('TEST_FIXTURE_READ_ONLY_PATH_ATTEMPTED_WRITE')
+    monkeypatch.setattr(Path, 'mkdir', denied)
+    monkeypatch.setattr(native.CaptureCache, '_capture_new', denied)
+    coordinator.prepare_future_factor_authorization(f['runtime'], operation_path=f['operation_ref']['path'],
+        expected_terminal_sha256=f['terminal_ref']['sha256'], allow_test_fixture=True)
+    assert {p: p.read_bytes() for p in tmp_path.rglob('*') if p.is_file()} == before
+
+
+def test_future_new_source_failure_stays_blocked_after_batch_or_date_change(tmp_path, monkeypatch):
+    f = completed_fixture(tmp_path)
+    _, _, context = register_future(f)
+    cache = future_cache(f, context)
+    monkeypatch.setattr(reconciliation, 'datetime', FutureClock)
+    cache.executor.factor_partial = True
+    failed_spec = factor(CODES[:2], end='2026-11-09')
+    failed = cache.capture_one(failed_spec)
+    assert failed.status == 'PARTIAL'
+    original = {p: p.read_bytes() for p in Path(failed.metadata['capture_attempt_dir']).rglob('*') if p.is_file()}
+    class LaterClock(FutureClock):
+        @classmethod
+        def now(cls, tz=None):
+            return cls(2026, 11, 10, 12, tzinfo=timezone.utc).astimezone(tz or timezone.utc)
+    for clock, spec in ((FutureClock, factor(end='2026-11-09')),
+                        (LaterClock, factor(end='2026-11-10'))):
+        monkeypatch.setattr(reconciliation, 'datetime', clock)
+        blockers = cache.factor_overlap_blockers(spec)
+        assert any(item['request_key'] == failed_spec.key for item in blockers)
+        with pytest.raises(ValueError, match='FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+            cache.capture_one(spec)
+    assert len(cache.executor.calls) == 1
+    assert all(path.read_bytes() == raw for path, raw in original.items())
+
+
+@pytest.mark.parametrize('fault', ['missing_calendar', 'future_visible_calendar', 'not_covering_today'])
+def test_future_calendar_must_be_visible_complete_and_cover_current_day(tmp_path, monkeypatch, fault):
+    f = completed_fixture(tmp_path)
+    _, _, context = register_future(f)
+    executor = FixtureExecutor()
+    cache = native.CaptureCache(f['cache'].root, AccountingBudget(), config=dict(allow_test_fixture=True),
+        recovery_context=context, executor=executor)
+    if fault != 'missing_calendar':
+        # Both calendars are genuinely captured TEST_FIXTURE originals. The
+        # former is not visible to the pre-capture cutoff, the latter expires.
+        before_capture = datetime.now(timezone.utc) - timedelta(seconds=1)
+        cache.capture_one(native.RequestSpec('calendar', dict(start_date='2026-01-01',
+            end_date='2026-11-08' if fault == 'not_covering_today' else '2026-12-01'),
+            datetime.now(native.SH).date().isoformat()))
+        if fault == 'future_visible_calendar':
+            assert cache.calendar_reference(before_capture) is None
+            original = cache.calendar_reference
+            monkeypatch.setattr(cache, 'calendar_reference', lambda cutoff: original(before_capture))
+    executor.calls.clear()
+    monkeypatch.setattr(reconciliation, 'datetime', FutureClock)
+    with pytest.raises(ValueError, match='FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+        cache.capture_one(factor(end='2026-11-09'))
+    assert executor.calls == []

@@ -246,7 +246,8 @@ class CaptureCache:
 
     budget.check(stage), budget.read(path, expected=None, limit=None)->(bytes,ref4),
     budget.preclaim_request(endpoint, params), budget.record_request(result) are
-    supplied by the orchestrator. Native verify_capture reads are metered too.
+    supplied by the orchestrator. Native verify_capture receives the same
+    metered original bytes within each authentication transaction.
     """
     def __init__(self, root, budget, config=None, executor=execute_request, *, recovery_context=None,
                  continuation_context=None):
@@ -417,31 +418,46 @@ class CaptureCache:
             directories={str(item):self._directory_identity(item) for item in
                 (link.parent, link.parent.parent, root, Path(target))})
 
-    def _native_verify(self, archive_root, result, refs):
-        # The mature function uses Path.read_text/read_bytes. Route those exact
-        # original paths through the caller's reader; restore even on failure.
+    def _authentication_objects(self, refs):
+        """Bind this transaction to the physical objects just SHA-authenticated.
+
+        These fingerprints are never persisted as admission rules. Every new
+        authentication first reads and hashes all originals again.
+        """
+        self._check('CAPTURE_AUTHENTICATION_OBJECTS')
+        for ref in refs:
+            path = Path(ref['path'])
+            _need(str(path.resolve(strict=True)) == ref['path'] and _fp(path) == ref['fp'],
+                  'ORIGINAL_CHANGED_DURING_AUTHENTICATION')
+
+    def _native_verify(self, archive_root, result, refs, snapshots):
+        # Keep the mature verifier's scope/receipt/row checks unchanged. Its
+        # repeated reads receive only immutable bytes from this authentication,
+        # after the caller's metered SHA+length reads. Nothing survives the call.
         allowed = {str(Path(ref['path']).resolve(strict=True)): ref for ref in refs}
+        _need(set(snapshots) == set(allowed) and len(allowed) == len(refs),
+              'EXACT_MATURE_CAPTURE_SNAPSHOTS_REQUIRED')
+        for path, raw in snapshots.items():
+            ref = allowed[path]
+            _need(type(raw) is bytes and len(raw) == ref['bytes']
+                  and hashlib.sha256(raw).hexdigest() == ref['sha256'],
+                  'MATURE_CAPTURE_SNAPSHOT_CONTENT_CHANGED')
+        self._authentication_objects(refs)
         original_bytes, original_text = Path.read_bytes, Path.read_text
-        reading = False
         def get(path):
-            nonlocal reading
             resolved = str(Path(path).resolve(strict=True))
             _need(resolved in allowed, 'UNREGISTERED_MATURE_CAPTURE_READ')
-            reading = True
-            try:
-                return self._read(allowed[resolved])[0]
-            finally:
-                reading = False
+            self._authentication_objects((allowed[resolved],))
+            return snapshots[resolved]
         def read_bytes(path):
-            return original_bytes(path) if reading else get(path)
+            return get(path)
         def read_text(path, encoding=None, errors=None):
-            if reading:
-                return original_text(path, encoding=encoding, errors=errors)
             return io.TextIOWrapper(io.BytesIO(get(path)), encoding=encoding, errors=errors).read()
         with _VERIFY_LOCK:
             Path.read_bytes, Path.read_text = read_bytes, read_text
             try:
                 authenticated = historical_replay.verify_capture(archive_root, result)
+                self._authentication_objects(refs)
             finally:
                 Path.read_bytes, Path.read_text = original_bytes, original_text
         return authenticated
@@ -490,10 +506,12 @@ class CaptureCache:
         return records
 
     def _authenticate(self, trio, archive_root=None, producer_files=(), source=None):
-        docs, refs = {}, {}
+        docs, refs, snapshots = {}, {}, {}
         for role in ('result', 'raw', 'receipt'):
             raw, refs[role] = self._read(trio[role])
             docs[role] = _json(raw)
+            if role in ('raw', 'receipt'):
+                snapshots[refs[role]['path']] = raw
         result, payload, receipt = (docs[k] for k in ('result', 'raw', 'receipt'))
         _need(result['provider'] == provider_requests.ENDPOINTS[result['endpoint']]['provider'] or
               self.config.get('allow_test_fixture', False) and result['provider'] == 'TEST_FIXTURE',
@@ -522,10 +540,12 @@ class CaptureCache:
         factor = factor_contract(result) if result['endpoint'] == 'adjustment_factors' else None
         producer = self._producer_files(result, producer_files)
         root, locator = self._archive_root(archive_root, result, refs['raw'], refs['receipt'])
-        auth = self._native_verify(root, result, (refs['raw'], refs['receipt']))
+        auth = self._native_verify(root, result, (refs['raw'], refs['receipt']), snapshots)
         _need(auth['raw_path'] == refs['raw']['path'] and auth['receipt_path'] == refs['receipt']['path']
               and auth['raw_file_sha256'] == refs['raw']['sha256']
               and auth['receipt_file_sha256'] == refs['receipt']['sha256'], 'NATIVE_VERIFIER_MUST_RETURN_ORIGINAL_FILES')
+        self._authentication_objects((*refs.values(), *producer))
+        self._validate_locator(locator)
         return result, dict(archive_root=root, **refs, producer_files=producer, verification_locator=locator,
             receipt_id=rid, endpoint=result['endpoint'], parameters=deepcopy(result['parameters']), status=result['status'],
             pagination_complete=result['pagination_complete'], rows=len(result['rows']),

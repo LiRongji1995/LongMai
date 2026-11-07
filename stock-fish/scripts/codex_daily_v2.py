@@ -748,6 +748,13 @@ def parser():
                              help="明确授权所列原来源最多追加一次；失败或不明后不再尝试")
             sub.add_argument("--authorize-existing-factor-reconciliation", action="store_true",
                              help="明确登记已有完整结果与唯一旧UNKNOWN关系，允许原余额内本观察日新复权覆盖其范围")
+    for name in ("premarket-factor-plan", "premarket-factor-authorize"):
+        sub = commands.add_parser(name, allow_abbrev=False,
+            help="将已成功续跑的精确复权核对关联到未来合法观察日；不重采旧请求、不增加预算")
+        sub.add_argument("--operation", type=Path, required=True)
+        sub.add_argument("--expected-terminal-sha256", required=True)
+        if name == "premarket-factor-authorize":
+            sub.add_argument("--authorize-future-observations", action="store_true")
     sub = commands.add_parser("outcomes", help="已有R2归档的显式后验", allow_abbrev=False)
     sub.add_argument("--request-key", help="写操作必须提供稳定请求标识")
     sub.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -822,6 +829,17 @@ def execute(runtime, args):
         return _premarket(runtime, args)
     if args.command in {"premarket-continue-plan", "premarket-continue"}:
         return _continue_premarket(runtime, args)
+    if args.command in {"premarket-factor-plan", "premarket-factor-authorize"}:
+        from scripts import codex_premarket_continuation as continuation
+        if args.command == "premarket-factor-authorize":
+            need(args.authorize_future_observations, "EXPLICIT_FUTURE_FACTOR_AUTHORIZATION_REQUIRED")
+        proposal = continuation.prepare_future_factor_authorization(runtime,
+            operation_path=args.operation, expected_terminal_sha256=args.expected_terminal_sha256,
+            allow_test_fixture=fixture)
+        if args.command == "premarket-factor-plan":
+            return 0, proposal
+        return 0, continuation.register_future_factor_authorization(runtime, proposal,
+            authorize_future_observations=args.authorize_future_observations)
     if args.command == "operations":
         return 0, _operations(runtime)
     if args.command == "status":

@@ -2,6 +2,7 @@
 from datetime import datetime, timedelta, timezone
 import hashlib
 import json
+import os
 from pathlib import Path
 import tempfile
 import unittest
@@ -276,6 +277,161 @@ class CaptureCacheTests(unittest.TestCase):
         self.assertEqual(record.archive_root,str(cache.root/'raw'/spec.key))
         cache.terminal()
         self.assertFalse(list(self.root.rglob('*.sqlite*')))
+
+    def test_native_repeated_reads_use_one_authenticated_transaction_snapshot(self):
+        cache = self.cache(FixtureExecutor())
+        spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+        record = cache.capture_one(spec)
+        value = record.metadata
+        required = [value[role] for role in ('raw', 'receipt', 'result')] + value['producer_files']
+        expected_bytes = sum(ref['bytes'] for ref in required)
+        mature = cache_module.historical_replay.verify_capture
+        with patch.object(cache_module.historical_replay, 'verify_capture', wraps=mature) as verify:
+            before = cache.budget.read_bytes
+            first = cache.verify(record)
+            self.assertEqual(cache.budget.read_bytes - before, expected_bytes)
+            first['rows'][0]['code'] = 'TEST_FIXTURE_CALLER_MUTATION'
+            before = cache.budget.read_bytes
+            second = cache.verify(record)
+            self.assertEqual(cache.budget.read_bytes - before, expected_bytes)
+            self.assertEqual(second['rows'][0]['code'], 'sh.600001')
+            self.assertEqual(verify.call_count, 2)  # Mature semantics still execute every time.
+        before = cache.budget.read_bytes
+        terminal_bytes = sum(ref['bytes'] for ref in cache._known.values())
+        cache.terminal()
+        self.assertEqual(cache.budget.read_bytes - before, terminal_bytes)
+        reopened = self.cache(FixtureExecutor())
+        reopened.verify(record)
+        self.assertEqual(reopened.budget.read_bytes, expected_bytes)
+
+    def test_native_memory_snapshot_preserves_actual_runtime_file_read_meter(self):
+        from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+        seeded = self.cache(FixtureExecutor())
+        spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+        record = seeded.capture_one(spec)
+        value = record.metadata
+        expected = sum(value[role]['bytes'] for role in ('raw', 'receipt', 'result'))
+        expected += sum(ref['bytes'] for ref in value['producer_files'])
+        budget = Budget()
+        cache = cache_module.CaptureCache(seeded.root, budget, config=dict(allow_test_fixture=True))
+        with budget.phase('capture'), budget.meter_files():
+            cache.verify(record)
+            self.assertEqual(budget.metrics['returned_read_bytes']['capture'], expected)
+            cache.verify(record)
+            self.assertEqual(budget.metrics['returned_read_bytes']['capture'], 2 * expected)
+            cache.terminal()
+            self.assertEqual(budget.metrics['returned_read_bytes']['capture'], 3 * expected)
+        self.assertEqual(budget.metrics['calls']['requests'], 0)
+
+    def test_new_transaction_hashes_bytes_even_when_mtime_and_length_are_restored(self):
+        cache = self.cache(FixtureExecutor())
+        spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+        record = cache.capture_one(spec)
+        cache.verify(record)
+        path = Path(record.metadata['raw']['path'])
+        before = path.stat()
+        raw = path.read_bytes()
+        changed = raw.replace(b'500000000', b'400000000')
+        self.assertEqual(len(changed), len(raw))
+        self.assertNotEqual(changed, raw)
+        path.write_bytes(changed)
+        os.utime(path, ns=(before.st_atime_ns, before.st_mtime_ns))
+        with self.assertRaisesRegex(ValueError, 'SHA_CHANGED|SHA256_CHANGED'):
+            cache.verify(record)
+        self.assertEqual(len(cache.executor.calls), 1)
+
+    def test_native_snapshot_rejects_changes_before_or_after_mature_read(self):
+        for role, when in (('raw', 'before'), ('raw', 'after'), ('receipt', 'after'),
+                           ('result', 'after'), ('producer', 'after')):
+            with self.subTest(role=role, when=when):
+                root = self.root / ('TEST_FIXTURE_' + role + '_' + when)
+                cache = cache_module.CaptureCache(root, FixtureBudget(),
+                    config=dict(allow_test_fixture=True), executor=FixtureExecutor())
+                spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+                record = cache.capture_one(spec)
+                value = record.metadata
+                if role == 'producer':
+                    references = []
+                    for ref in value['producer_files']:
+                        copy = root / 'TEST_FIXTURE_producers' / Path(ref['path']).name
+                        copy.parent.mkdir(exist_ok=True)
+                        copy.write_bytes(Path(ref['path']).read_bytes())
+                        references.append(cache.budget.read(copy)[1])
+                    value['producer_files'] = references
+                    path = Path(references[0]['path'])
+                else:
+                    path = Path(value[role]['path'])
+                original = path.read_bytes()
+                mature = cache_module.historical_replay.verify_capture
+                def mutate(*args):
+                    if when == 'before':
+                        path.write_bytes(original + b' ')
+                    result = mature(*args)
+                    if when == 'after':
+                        path.write_bytes(original + b' ')
+                    return result
+                methods = Path.read_bytes, Path.read_text
+                with patch.object(cache_module.historical_replay, 'verify_capture', side_effect=mutate):
+                    with self.assertRaisesRegex(ValueError, 'CHANGED_DURING_AUTHENTICATION'):
+                        cache.verify(value)
+                self.assertEqual((Path.read_bytes, Path.read_text), methods)
+                self.assertEqual(len(cache.executor.calls), 1)
+
+    def test_transaction_rejects_replacement_but_new_read_accepts_same_original_bytes(self):
+        cache = self.cache(FixtureExecutor())
+        spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+        record = cache.capture_one(spec)
+        path = Path(record.metadata['raw']['path'])
+        original = path.read_bytes()
+        mature = cache_module.historical_replay.verify_capture
+        def replace_after(*args):
+            result = mature(*args)
+            replacement = self.root / 'TEST_FIXTURE_same_bytes.raw'
+            replacement.write_bytes(original)
+            os.replace(replacement, path)
+            return result
+        with patch.object(cache_module.historical_replay, 'verify_capture', side_effect=replace_after):
+            with self.assertRaisesRegex(ValueError, 'CHANGED_DURING_AUTHENTICATION'):
+                cache.verify(record)
+        self.assertEqual(cache.verify(record)['rows'][0]['code'], 'sh.600001')
+        self.assertEqual(self.cache(FixtureExecutor()).verify(record)['rows'][0]['code'], 'sh.600001')
+        self.assertEqual(len(cache.executor.calls), 1)
+
+    def test_snapshot_never_allows_unregistered_reads_and_restores_path_methods(self):
+        cache = self.cache(FixtureExecutor())
+        spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+        record = cache.capture_one(spec)
+        unrelated = self.root / 'TEST_FIXTURE_unregistered.json'
+        unrelated.write_text('{}')
+        methods = Path.read_bytes, Path.read_text
+        with patch.object(cache_module.historical_replay, 'verify_capture',
+                          side_effect=lambda *_: unrelated.read_bytes()):
+            with self.assertRaisesRegex(ValueError, 'UNREGISTERED_MATURE_CAPTURE_READ'):
+                cache.verify(record)
+        self.assertEqual((Path.read_bytes, Path.read_text), methods)
+
+    def test_native_snapshot_rejects_deleted_or_symlinked_original(self):
+        for replacement in ('delete', 'symlink'):
+            with self.subTest(replacement=replacement):
+                cache = cache_module.CaptureCache(self.root / ('TEST_FIXTURE_' + replacement), FixtureBudget(),
+                    config=dict(allow_test_fixture=True), executor=FixtureExecutor())
+                spec = cache_module.RequestSpec('market_daily', {'date': '2026-10-15'}, '2026-10-15')
+                record = cache.capture_one(spec)
+                path = Path(record.metadata['raw']['path'])
+                copy = self.root / ('TEST_FIXTURE_copy_' + replacement)
+                copy.write_bytes(path.read_bytes())
+                mature = cache_module.historical_replay.verify_capture
+                def change_after(*args):
+                    result = mature(*args)
+                    path.unlink()
+                    if replacement == 'symlink':
+                        path.symlink_to(copy)
+                    return result
+                methods = Path.read_bytes, Path.read_text
+                with patch.object(cache_module.historical_replay, 'verify_capture', side_effect=change_after):
+                    with self.assertRaises((ValueError, OSError)):
+                        cache.verify(record)
+                self.assertEqual((Path.read_bytes, Path.read_text), methods)
 
     def test_corrupt_cached_original_does_not_become_a_miss_or_redownload(self):
         executor = FixtureExecutor(); cache = self.cache(executor)

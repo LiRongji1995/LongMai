@@ -42,6 +42,8 @@ python stock-fish/scripts/codex_daily_v2.py premarket \
 
 若用户已明确授权核对某一祖先复权UNKNOWN与已有同请求完整结果的关系，可在这两条续跑命令上附 `--factor-reconciliation REVIEW.json --expected-reconciliation-sha256 SHA256`；真正执行还须加 `--authorize-existing-factor-reconciliation`。清单必须绑定唯一旧attempt的完整文件集合、精确证券集合及已存在的完整原件，按当前核验时间记录在原operation的continuation目录。旧UNKNOWN、未知调用次数与原件不改写，不返还预算，不重新采集旧请求；只允许原观察日所需的新复权请求在原完整锚点下覆盖明确授权的旧范围。其他失败、新增不明attempt、其他日期或证据变更继续阻断，库存清单本身不授予恢复权限。
 
+若已完成上述续跑，并另获明确授权将该核对用于未来观察日，可先执行 `premarket-factor-plan --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 SHA256`；确认原成功terminal及精确核对关系后，用 `premarket-factor-authorize` 的相同参数加 `--authorize-future-observations` 追加一次授权。入口不接受新key、日期、预算或重试来源，只在原continuation内新增固定授权文件。以后普通预检和采集自动读取该引用；旧UNKNOWN及原六文件、已有完整结果、旧操作和成功续跑链每次重新认证。仅原精确证券范围与合法新观察日的完整1990锚定复权请求可通过该旧范围阻断；旧请求、原窗口重分批、其他失败、新增UNKNOWN或证据变化仍阻断，深交所名册不会因此再试一次。
+
 ## 采集范围与初筛
 
 已封存任务可用 `show --job JOB --role prescreen` 只读复核初筛；可同时指定原 `--observation-date` 和 `--target-session`。入口验证原核心、日历和同份龙虎榜原件，保留原决策截止时间，输出原封存计数与当前兼容投影的复算计数。它不重新运行策略、不补采、不覆写原任务或预算；原摘要仍由 `show --job JOB --role summary` 读取。复算入围数量不代表新增候选的详细资讯已经采集。

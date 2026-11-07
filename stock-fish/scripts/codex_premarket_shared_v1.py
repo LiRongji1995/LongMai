@@ -351,8 +351,9 @@ def supervise(config, *, progress=True, started_at=None, expected_sessions=None,
         raise ValueError("UNSUPPORTED_PREMARKET_CONFIG")
     config = legacy.load_config(overrides=deepcopy(config))
     if recovery_context is not None:
-        if (not isinstance(recovery_context, dict) or set(recovery_context) !=
-                {"scope", "scope_directory", "completions"}):
+        if (not isinstance(recovery_context, dict) or set(recovery_context) not in (
+                {"scope", "scope_directory", "completions"},
+                {"scope", "scope_directory", "completions", "factor_reconciliations"})):
             raise ValueError("SHARED_PREMARKET_RECOVERY_CONTEXT_FORMAT")
         config["recovery_context"] = deepcopy(recovery_context)
     if continuation_context is not None:

@@ -88,8 +88,53 @@ class RecoveryContextTests(Base):
         with self.assertRaisesRegex(workspace.WorkspaceError, "CAPTURE_RECOVERY_COMPLETION_COUNT_BOUND"):
             self.runtime.capture_recovery_context()
 
+    def factor_authorization(self, operation="a" * 64):
+        path = self.runtime.directory / "operations" / operation / "continuation" / "future-factor-authorization.json"
+        path.parent.mkdir(parents=True)
+        path.write_text('{"TEST_FIXTURE":"authorization locator only"}')
+        return path
 
-def test_preflight_passes_exact_read_only_scope_context_to_source_cache():
+    def test_future_factor_locator_without_source_recoveries_is_readonly_and_content_bound(self):
+        path = self.factor_authorization()
+        before = self.originals()
+        context = self.runtime.capture_recovery_context()
+        self.assertEqual(context["completions"], [])
+        self.assertEqual(context["scope"], self.runtime.scope)
+        self.assertEqual(len(context["factor_reconciliations"]), 1)
+        reference = context["factor_reconciliations"][0]
+        self.assertEqual(reference["path"], str(path))
+        self.assertTrue(verify_content_reference(reference))
+        self.assertEqual(before, self.originals())
+        path.write_text('{"TEST_FIXTURE":"changed"}')
+        with self.assertRaises(ValueError):
+            verify_content_reference(reference)
+
+    def test_future_factor_locator_alias_and_extra_authorizations_are_refused(self):
+        path = self.factor_authorization()
+        outside = self.root / "TEST_FIXTURE-authorization.json"
+        outside.write_bytes(path.read_bytes())
+        path.unlink()
+        path.symlink_to(outside)
+        with self.assertRaisesRegex(workspace.WorkspaceError, "CONTROL_FILE_TYPE_OR_LINKS"):
+            self.runtime.capture_recovery_context()
+        path.unlink()
+        path.write_bytes(outside.read_bytes())
+        for number in range(64):
+            self.factor_authorization(format(number, "064x"))
+        with self.assertRaisesRegex(workspace.WorkspaceError, "CAPTURE_FACTOR_AUTHORIZATION_COUNT_BOUND"):
+            self.runtime.capture_recovery_context()
+
+    def test_incomplete_continuation_does_not_create_factor_authorization(self):
+        slot = self.runtime.directory / "operations" / ("a" * 64) / "continuation"
+        slot.mkdir(parents=True)
+        (slot / "claim.json").write_text('{"TEST_FIXTURE":"unfinished"}')
+        before = self.originals()
+        self.assertIsNone(self.runtime.capture_recovery_context())
+        self.assertEqual(before, self.originals())
+
+
+@pytest.mark.parametrize("include_factors", [False, True])
+def test_preflight_passes_exact_read_only_scope_context_to_source_cache(include_factors):
     # Reuse source fixtures without inheriting and rerunning their complete suite.
     from tests.unit.test_codex_premarket_preflight_v1 import PreflightTests
     from stockfish_core.yaogu import premarket_capture_cache_v1 as capture
@@ -97,6 +142,10 @@ def test_preflight_passes_exact_read_only_scope_context_to_source_cache():
     fixture.setUp()
     try:
         (fixture.runtime.directory / "explicit-failure-recoveries").mkdir(parents=True)
+        if include_factors:
+            path = fixture.runtime.directory / "operations" / ("a" * 64) / "continuation" / "future-factor-authorization.json"
+            path.parent.mkdir(parents=True)
+            path.write_text('{"TEST_FIXTURE":"scope locator; no blocker is exempted"}')
         expected = fixture.runtime.capture_recovery_context()
         before = fixture.refs()
         seen = []
@@ -116,7 +165,8 @@ def test_preflight_passes_exact_read_only_scope_context_to_source_cache():
         fixture.doCleanups()
 
 
-def test_worker_passes_context_without_changing_capture_policy(tmp_path, monkeypatch):
+@pytest.mark.parametrize("include_factors", [False, True])
+def test_worker_passes_context_without_changing_capture_policy(tmp_path, monkeypatch, include_factors):
     def forbidden(*args, **kwargs):
         raise AssertionError("TEST_FIXTURE_NETWORK_OR_DATABASE_FORBIDDEN")
     monkeypatch.setattr(socket.socket, "connect", forbidden)
@@ -124,6 +174,8 @@ def test_worker_passes_context_without_changing_capture_policy(tmp_path, monkeyp
     config = workflow.load_config(overrides={"state_root": str(tmp_path / "TEST_FIXTURE-state"),
         "capture": {"offline": True, "allow_test_fixture": True}})
     context = {"scope": {"TEST_FIXTURE": True}, "scope_directory": str(tmp_path), "completions": []}
+    if include_factors:
+        context["factor_reconciliations"] = []
     config["recovery_context"] = context
     before = deepcopy(config)
     seen = []
@@ -145,7 +197,8 @@ def test_worker_passes_context_without_changing_capture_policy(tmp_path, monkeyp
     assert result["phases"]["core"] == "NOT_RUN"
 
 
-def test_supervisor_context_is_per_job_and_registered_configuration_stays_strict(tmp_path, monkeypatch):
+@pytest.mark.parametrize("include_factors", [False, True])
+def test_supervisor_context_is_per_job_and_registered_configuration_stays_strict(tmp_path, monkeypatch, include_factors):
     def forbidden(*args, **kwargs):
         raise AssertionError("TEST_FIXTURE_NETWORK_OR_DATABASE_FORBIDDEN")
     monkeypatch.setattr(socket.socket, "connect", forbidden)
@@ -155,6 +208,8 @@ def test_supervisor_context_is_per_job_and_registered_configuration_stays_strict
         "capture": {"offline": True, "allow_test_fixture": True}, "limits": {"max_seconds": 30}})
     before = deepcopy(config)
     context = {"scope": {"TEST_FIXTURE": True}, "scope_directory": str(tmp_path), "completions": []}
+    if include_factors:
+        context["factor_reconciliations"] = []
     script = "\n".join([
         "import json,pathlib",
         "job=next(pathlib.Path(" + repr(str(state / "jobs")) + ").iterdir())",
