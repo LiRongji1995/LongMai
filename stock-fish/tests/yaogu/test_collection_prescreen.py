@@ -6,7 +6,8 @@ import pytest
 
 from stockfish_core.yaogu import short_horizon_participation as r2
 from stockfish_core.yaogu import strategy_experiments as se
-from stockfish_core.yaogu.collection_prescreen import build_collection_prescreen
+from stockfish_core.yaogu.collection_prescreen import (
+    build_collection_prescreen, project_lhb_summary, _lhb_disclosure_session)
 from tests.yaogu.test_short_horizon_strength_r2 import fixture_bundle, market_sources, START
 
 
@@ -216,3 +217,80 @@ def test_real_native_r2_shape_and_source_refs_without_changing_strategy_output()
     assert result['items'][0]['strong_amount']['source_refs']
     assert result['decision_cutoff'] == cutoff.isoformat()
     assert run == before
+
+
+def source_projection(rows, *, status='COMPLETE', pagination=True, visible=VISIBLE):
+    result = dict(endpoint='lhb_summary', parameters=dict(start_date=SESSIONS[0], end_date=DAY),
+                  rows=rows, status=status, pagination_complete=pagination)
+    metadata = dict(receipt_id='TEST_FIXTURE_LHB', first_seen_at=VISIBLE,
+                    ingested_at=VISIBLE, completed_at=visible)
+    return project_lhb_summary(eligible_pool_ids=[IID], window_sessions=SESSIONS,
+                              authenticated_sources=[(result, metadata)])
+
+
+@pytest.mark.parametrize('value,expected', [('2026-11-06', '2026-11-06'),
+    ('2026-11-06T00:00:00.000', '2026-11-06'), ('2024-02-29', '2024-02-29'),
+    ('2024-02-29T00:00:00.000', '2024-02-29')])
+def test_exact_date_and_provider_midnight_encodings(value, expected):
+    assert _lhb_disclosure_session(value) == expected
+
+
+@pytest.mark.parametrize('value', ['2026-02-29', '2026-02-29T00:00:00.000',
+    '2026-13-01', '2026-11-31T00:00:00.000', '2026-1-01', '２０２６-11-06',
+    '', None, 20261106, '2026-11-06 ', ' 2026-11-06', '2026-11-06\n',
+    '2026-11-06T00:00:00', '2026-11-06T00:00:00.000000', '2026-11-06 00:00:00.000',
+    '2026-11-06T00:00:00.001', '2026-11-06T00:00:01.000', '2026-11-06T01:00:00.000',
+    '2026-11-06T00:00:00.000Z', '2026-11-06T00:00:00.000+08:00',
+    '2026-11-06T00:00:00.000-08:00', '2026-11-06T00:00:00.000INVALID'])
+def test_other_encodings_are_not_truncated_or_interpreted(value):
+    assert _lhb_disclosure_session(value) is None
+
+
+def test_provider_midnight_projects_same_route_without_touching_core_or_future_labels():
+    run = core(amount='1', selected=True)
+    before = deepcopy(run)
+    dated = [{'代码': '600001', '上榜日': day} for day in (SESSIONS[0], DAY)]
+    provider = [{**row, '上榜日': row['上榜日'] + 'T00:00:00.000',
+                 '上榜后1日': 999999, '上榜后10日': -999999, '龙虎榜净买额': -1000} for row in dated]
+    ordinary, midnight = source_projection(dated), source_projection(provider)
+    assert ordinary == midnight
+    result = route(run, midnight)
+    assert result == route(run, ordinary) and result['admitted_ids'] == [IID]
+    assert result['items'][0]['admitted_by'] == ['LHB_CLUE']
+    assert result['lhb_window_complete'] is True
+    assert run == before and result['original_r2_selected_ids'] == [IID]
+    assert all(set(row) == {'instrument_id', 'session', 'evidence_status', 'source_refs', 'visible_at'}
+               for row in midnight['records'])
+
+
+@pytest.mark.parametrize('row', [{'代码': '600001', '上榜日': '2026-09-24T00:00:00.000'},
+    {'代码': '600001', '上榜日': '2026-10-12T00:00:00.000'},
+    {'代码': '600001', '上榜日': '2026-10-09T00:00:00.000+08:00'},
+    {'代码': 600001, '上榜日': DAY + 'T00:00:00.000'},
+    {'代码': '60001', '上榜日': DAY + 'T00:00:00.000'}, None])
+def test_one_malformed_or_outside_row_invalidates_entire_complete_projection(row):
+    projected = source_projection([{'代码': '600001', '上榜日': DAY + 'T00:00:00.000'}, row])
+    assert projected['status'] == 'UNKNOWN' and projected['records'] == []
+    assert projected['reason'] == 'MALFORMED_OR_OUT_OF_WINDOW_DISCLOSURE'
+    assert route(core(amount='1'), projected)['unknown_ids'] == [IID]
+
+
+@pytest.mark.parametrize('change', [dict(status='PARTIAL'), dict(status='FETCH_FAILED'),
+    dict(pagination=False), dict(visible=DAY + 'T20:30:01+08:00')])
+def test_midnight_compatibility_never_overrides_parent_completeness_or_visibility(change):
+    projected = source_projection([{'代码': '600001', '上榜日': DAY + 'T00:00:00.000'}], **change)
+    result = route(core(amount='1'), projected)
+    assert result['unknown_ids'] == [IID] and result['lhb_window_complete'] is False
+
+
+def test_eligible_identity_and_single_source_window_are_preserved():
+    projected = source_projection([{'代码': '000001', '上榜日': DAY + 'T00:00:00.000'}])
+    assert projected['records'] == [] and route(core(amount='1'), projected)['not_prioritized_ids'] == [IID]
+    assert project_lhb_summary(eligible_pool_ids=[IID], window_sessions=SESSIONS,
+                              authenticated_sources=[])['status'] == 'UNKNOWN'
+    with pytest.raises(ValueError, match='SINGLE_WINDOW_SOURCE_REQUIRED'):
+        project_lhb_summary(eligible_pool_ids=[IID], window_sessions=SESSIONS,
+                            authenticated_sources=[({}, {}), ({}, {})])
+    with pytest.raises(ValueError, match='SOURCE_WINDOW_MISMATCH'):
+        project_lhb_summary(eligible_pool_ids=[IID], window_sessions=SESSIONS,
+            authenticated_sources=[(dict(endpoint='lhb_summary', parameters=dict(start_date=DAY, end_date=DAY)), {})])

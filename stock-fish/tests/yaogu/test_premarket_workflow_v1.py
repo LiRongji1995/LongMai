@@ -66,6 +66,54 @@ class PrescreenProjectionFixture(unittest.TestCase):
         self.assertEqual(self.project(rows=[])['not_prioritized_ids'], ['600001.SH'])
         self.assertEqual(self.project(rows=[], completed='2026-10-10T12:00:00+08:00')['unknown_ids'], ['600001.SH'])
 
+    def test_original_provider_midnight_encoding_matches_date_only(self):
+        rows = [{'代码': '600001', '上榜日': '2026-10-09'}]
+        expected = self.project(rows=rows)
+        actual = self.project(rows=[{**rows[0], '上榜日': '2026-10-09T00:00:00.000'}])
+        for key in ('admitted_ids', 'not_prioritized_ids', 'unknown_ids', 'items',
+                    'counts', 'original_r2_selected_ids', 'lhb_window_complete'):
+            self.assertEqual(actual[key], expected[key])
+
+    def test_midnight_compatibility_after_native_original_authentication(self):
+        import hashlib
+        from types import SimpleNamespace
+        from stockfish_core.yaogu import provider_requests
+        from stockfish_core.yaogu.premarket_capture_cache_v1 import CaptureCache, PRODUCERS, lhb_request_spec
+        from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+        from tests.yaogu.test_premarket_capture_cache_v1 import FixtureBudget as CacheBudget
+        from tests.yaogu.test_collection_prescreen import core, SESSIONS, VISIBLE
+        from tests.support.saved_r2_v3_fixture import write
+        tmp = tempfile.TemporaryDirectory(prefix='TEST_FIXTURE_midnight_original_')
+        self.addCleanup(tmp.cleanup)
+        root = Path(tmp.name).resolve()
+        spec = lhb_request_spec(SESSIONS)
+        original = physical_source(root/'original', spec.endpoint,
+            [{'代码': '600001', '上榜日': SESSIONS[-1] + 'T00:00:00.000', '上榜后1日': 9999}],
+            datetime.fromisoformat(VISIBLE), parameters=spec.parameters, provider='akshare',
+            version='TEST_FIXTURE_LHB_V1', include_result=True)
+        result = json.loads(Path(original['result']['path']).read_bytes())
+        result['implementation_source_hashes'] = {name: hashlib.sha256(
+            Path(provider_requests.__file__).with_name(name).read_bytes()).hexdigest() for name in PRODUCERS}
+        original['result'] = write(Path(original['result']['path']), result)
+        seed = root/'TEST_FIXTURE_seed.json'
+        write(seed, dict(sources=[original]))
+        cache = CaptureCache(root/'TEST_FIXTURE_cache', CacheBudget(), config=dict(allow_test_fixture=True, offline=True))
+        cache.import_seed(seed)
+        record = cache.lookup(spec)
+        original_bytes = {Path(original[role]['path']): Path(original[role]['path']).read_bytes()
+                          for role in ('raw', 'receipt', 'result')}
+        collection = SimpleNamespace(sessions=SESSIONS, price_sessions=SESSIONS, prescreen_records=(record,))
+        run = core(amount='1', selected=True)
+        before = json.dumps(run, sort_keys=True)
+        (root/'view').mkdir()
+        screen, _, _ = workflow._collection_prescreen(cache, collection, run, root/'view', Budget())
+        self.assertEqual(screen['admitted_ids'], ['600001.SH'])
+        self.assertTrue(screen['lhb_window_complete'])
+        self.assertEqual(json.dumps(run, sort_keys=True), before)
+        self.assertEqual({path: path.read_bytes() for path in original_bytes}, original_bytes)
+        self.assertEqual(cache.budget.calls['requests'], 0)
+        cache.terminal()
+
 
 class WorkflowFixtureTests(unittest.TestCase):
     def setUp(self):

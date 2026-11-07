@@ -11,7 +11,6 @@ from datetime import date, datetime, timezone, time as wall_time
 import hashlib
 import json
 import os
-import re
 from pathlib import Path
 import subprocess
 import sys
@@ -160,46 +159,23 @@ def _completion(job, *, status, phases, budget, **fields):
 
 def _collection_prescreen(cache, collection, core_run, job, budget):
     """Project authenticated summary facts; never join future-return columns."""
-    from .collection_prescreen import build_collection_prescreen
-    from .premarket_capture_cache_v1 import lhb_request_spec, _stamp
+    from .collection_prescreen import build_collection_prescreen, project_lhb_summary
+    from .premarket_capture_cache_v1 import lhb_request_spec
+    lhb_request_spec(collection.price_sessions)  # Retain the complete original ordered-session check.
     sessions = list(collection.price_sessions[-5:])
-    expected = lhb_request_spec(collection.price_sessions)
-    summary = dict(status='UNKNOWN', pagination_complete=False,
-                   window_sessions=sessions, source_refs=[], records=[])
-    references, original_sources = [], []
+    references, original_sources, authenticated_sources = [], [], []
     records = collection.prescreen_records
     if len(records) > 1:
         raise ValueError('PRESCREEN_SINGLE_WINDOW_SOURCE_REQUIRED')
     for record in records:
         result = cache.verify(record)
         metadata = cache.metadata(record)
-        if result['endpoint'] != expected.endpoint or result['parameters'] != expected.parameters:
-            raise ValueError('PRESCREEN_SOURCE_WINDOW_MISMATCH')
-        refs = [metadata['receipt_id']]
-        visible = max(_stamp(metadata[key]) for key in ('first_seen_at', 'ingested_at', 'completed_at'))
-        summary.update(status=result['status'], pagination_complete=result['pagination_complete'],
-                       source_refs=refs, visible_at=visible.isoformat())
+        authenticated_sources.append((result, metadata))
         originals = {key: metadata[key] for key in ('result', 'raw', 'receipt')}
         original_sources.append(dict(receipt_id=metadata['receipt_id'], **originals))
         references.extend(originals.values())
-        code_ids = {iid.split('.')[0]: iid for iid in core_run['results'][STRATEGY]['eligible_pool_ids']}
-        if result['status'] == 'COMPLETE' and result['pagination_complete']:
-            for row in result['rows']:
-                code = row.get('代码') if isinstance(row, dict) else None
-                session = str(row.get('上榜日', '')) if isinstance(row, dict) else ''
-                try:
-                    day = date.fromisoformat(session).isoformat() if re.fullmatch(r'[0-9]{4}-[0-9]{2}-[0-9]{2}', session) else None
-                except ValueError:
-                    day = None
-                if type(code) is not str or not re.fullmatch(r'[0-9]{6}', code) or day not in sessions:
-                    # A malformed row also invalidates negative membership proofs.
-                    summary['status'] = 'UNKNOWN'
-                    summary['reason'] = 'MALFORMED_OR_OUT_OF_WINDOW_DISCLOSURE'
-                    summary['records'] = []
-                    break
-                if code in code_ids:
-                    summary['records'].append(dict(instrument_id=code_ids[code], session=day,
-                        evidence_status='VALID', source_refs=refs, visible_at=visible.isoformat()))
+    summary = project_lhb_summary(eligible_pool_ids=core_run['results'][STRATEGY]['eligible_pool_ids'],
+        window_sessions=sessions, authenticated_sources=authenticated_sources)
     screen = build_collection_prescreen(core_run, calendar_sessions=collection.sessions, lhb_summary=summary)
     screen['original_lhb_sources'] = original_sources
     reference = budget.write_json(job/'collection-prescreen.json', screen)

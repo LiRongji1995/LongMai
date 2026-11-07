@@ -9,6 +9,7 @@ from __future__ import annotations
 
 from collections import Counter
 from datetime import date, datetime
+import re
 
 from . import short_horizon_strength as r1
 
@@ -16,6 +17,59 @@ from . import short_horizon_strength as r1
 VERSION = 'COLLECTION_PRESCREEN_V1'
 STRATEGY = 'SHORT_HORIZON_STRENGTH_R2'
 WINDOW = 5
+
+
+def _lhb_disclosure_session(value):
+    """Accept only the original date or provider's explicit midnight encoding."""
+    if type(value) is not str:
+        return None
+    match = re.fullmatch(r'([0-9]{4}-[0-9]{2}-[0-9]{2})(?:T00:00:00\.000)?', value, flags=re.ASCII)
+    if match is None:
+        return None
+    try:
+        return date.fromisoformat(match.group(1)).isoformat()
+    except ValueError:
+        return None
+
+
+def project_lhb_summary(*, eligible_pool_ids, window_sessions, authenticated_sources):
+    """Project caller-authenticated originals without issuing source authority.
+
+    ``authenticated_sources`` contains at most one ``(result, metadata)`` pair
+    authenticated by the original cache reader. This pure function does not
+    authenticate caller JSON. Disclosure dates never replace visibility clocks.
+    """
+    sessions = list(window_sessions)
+    if (len(sessions) != WINDOW or sessions != sorted(set(sessions))
+            or any(_lhb_disclosure_session(day) != day for day in sessions)):
+        raise ValueError('PRESCREEN_FIVE_ORDERED_WINDOW_SESSIONS_REQUIRED')
+    sources = list(authenticated_sources)
+    if len(sources) > 1:
+        raise ValueError('PRESCREEN_SINGLE_WINDOW_SOURCE_REQUIRED')
+    summary = dict(status='UNKNOWN', pagination_complete=False,
+                   window_sessions=sessions, source_refs=[], records=[])
+    code_ids = {iid.split('.')[0]: iid for iid in eligible_pool_ids}
+    for result, metadata in sources:
+        if (result['endpoint'] != 'lhb_summary' or result['parameters'] !=
+                dict(start_date=sessions[0], end_date=sessions[-1])):
+            raise ValueError('PRESCREEN_SOURCE_WINDOW_MISMATCH')
+        clocks = [_clock(metadata[key]) for key in ('first_seen_at', 'ingested_at', 'completed_at')]
+        if any(clock is None for clock in clocks):
+            raise ValueError('PRESCREEN_AWARE_PARENT_CLOCK_REQUIRED')
+        visible, refs = max(clocks), [metadata['receipt_id']]
+        summary.update(status=result['status'], pagination_complete=result['pagination_complete'],
+                       source_refs=refs, visible_at=visible.isoformat())
+        if result['status'] == 'COMPLETE' and result['pagination_complete']:
+            for row in result['rows']:
+                code = row.get('代码') if isinstance(row, dict) else None
+                day = _lhb_disclosure_session(row.get('上榜日')) if isinstance(row, dict) else None
+                if type(code) is not str or not re.fullmatch(r'[0-9]{6}', code) or day not in sessions:
+                    summary.update(status='UNKNOWN', reason='MALFORMED_OR_OUT_OF_WINDOW_DISCLOSURE', records=[])
+                    break
+                if code in code_ids:
+                    summary['records'].append(dict(instrument_id=code_ids[code], session=day,
+                        evidence_status='VALID', source_refs=refs, visible_at=visible.isoformat()))
+    return summary
 
 
 def _clock(value):

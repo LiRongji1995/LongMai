@@ -483,6 +483,11 @@ def _views():
     return codex_result_view_v1
 
 
+def _prescreen_view():
+    from scripts import codex_prescreen_view
+    return codex_prescreen_view
+
+
 def _select_view(runtime, view_id, fixture=False, *, observation_date=None, target_session=None):
     if view_id is not None:
         return view_id
@@ -712,7 +717,8 @@ def parser():
         sub = commands.add_parser(name, allow_abbrev=False)
         sub.add_argument("--view-id")
         sub.add_argument("--job", type=Path, help="已保存完整盘前任务目录")
-        sub.add_argument("--role", choices=("summary", "observation.json", "observation.csv", "all.csv", "focus.csv", "unselected.csv"), default="summary" if name == "show" else "all.csv")
+        roles = ("summary", "observation.json", "observation.csv", "all.csv", "focus.csv", "unselected.csv")
+        sub.add_argument("--role", choices=roles + (("prescreen",) if name == "show" else ()), default="summary" if name == "show" else "all.csv")
         sub.add_argument("--observation-date", type=date.fromisoformat)
         sub.add_argument("--target-session", type=date.fromisoformat)
         if name == "export":
@@ -827,6 +833,13 @@ def execute(runtime, args):
     if args.command == "publish":
         return 0, _views().publish_view(runtime, args.archive_id, profile=args.profile, allow_test_fixture=fixture)
     if args.command in {"show", "export"}:
+        if args.role == "prescreen":
+            need(args.command == "show" and args.job is not None and args.view_id is None,
+                 "PRESCREEN_RECHECK_REQUIRES_SAVED_JOB")
+            return 0, _prescreen_view().read_prescreen(runtime, args.job,
+                allow_test_fixture=fixture,
+                observation_date=str(args.observation_date) if args.observation_date else None,
+                target_session=str(args.target_session) if args.target_session else None)
         if args.job is not None:
             need(args.view_id is None, "CHOOSE_SAVED_JOB_OR_VIEW")
             job = original._job_path(original._prepared(runtime.profile), str(args.job.absolute()))

@@ -277,6 +277,32 @@ class GatewayTests(unittest.TestCase):
         self.assertIs(result, self.admission)
         self.assertEqual(self.calls, 0)
 
+    def test_prescreen_view_uses_readonly_reader_and_forwards_exact_sessions(self):
+        job = self.state / "jobs" / "TEST_FIXTURE_archived"
+        args = daily.parser().parse_args(["show", "--job", str(job), "--role", "prescreen",
+            "--observation-date", "2026-11-06", "--target-session", "2026-11-09"])
+        reader = Mock(return_value={"status": "VERIFIED_ARCHIVED_PRESCREEN_RECHECK"})
+        with patch.object(daily, "_prescreen_view", return_value=SimpleNamespace(read_prescreen=reader)):
+            code, result = daily.execute(self.runtime, args)
+        self.assertEqual(code, 0)
+        self.assertEqual(result["status"], "VERIFIED_ARCHIVED_PRESCREEN_RECHECK")
+        reader.assert_called_once_with(self.runtime, job, allow_test_fixture=False,
+            observation_date="2026-11-06", target_session="2026-11-09")
+        self.assertEqual(self.calls, 0)
+        self.assertFalse(self.runtime.directory.exists())
+
+    def test_prescreen_view_requires_explicit_job_and_rejects_view_selection(self):
+        for options in ([], ["--view-id", "TEST_FIXTURE_view"],
+                        ["--job", str(self.state / "TEST_FIXTURE_job"), "--view-id", "TEST_FIXTURE_view"]):
+            with self.subTest(options=options):
+                args = daily.parser().parse_args(["show", "--role", "prescreen", *options])
+                with patch.object(daily, "_prescreen_view") as reader:
+                    with self.assertRaisesRegex(ValueError, "PRESCREEN_RECHECK_REQUIRES_SAVED_JOB"):
+                        daily.execute(self.runtime, args)
+                reader.assert_not_called()
+        self.assertEqual(self.calls, 0)
+        self.assertFalse(self.runtime.directory.exists())
+
     def test_main_preserves_blocked_exit_and_complete_json(self):
         self.admission["execution_admitted"] = False
         output = io.StringIO()
