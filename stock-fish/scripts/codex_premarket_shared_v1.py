@@ -336,7 +336,7 @@ class _WorkerSubprocess:
 
 
 def supervise(config, *, progress=True, started_at=None, expected_sessions=None, engine="original",
-              recovery_context=None, _fixture_worker_command=None):
+              recovery_context=None, continuation_context=None, _fixture_worker_command=None):
     """Return ``(exit_code, final)``; caller coordinates its stable request key.
 
     Registered configuration retains its original schema and every limit.
@@ -355,6 +355,12 @@ def supervise(config, *, progress=True, started_at=None, expected_sessions=None,
                 {"scope", "scope_directory", "completions"}):
             raise ValueError("SHARED_PREMARKET_RECOVERY_CONTEXT_FORMAT")
         config["recovery_context"] = deepcopy(recovery_context)
+    if continuation_context is not None:
+        if (not isinstance(continuation_context, dict) or set(continuation_context) !=
+                {"schema_version", "scope", "scope_directory", "operation_id", "claim", "proposal"}
+                or continuation_context.get("schema_version") != "PREMARKET_CONTINUATION_AUTHORIZATION_V1"):
+            raise ValueError("SHARED_PREMARKET_CONTINUATION_CONTEXT_FORMAT")
+        config["continuation_context"] = deepcopy(continuation_context)
     if _fixture_worker_command is not None and config.get("capture", {}).get("allow_test_fixture") is not True:
         raise ValueError("ADAPTERS_REQUIRE_EXPLICIT_TEST_FIXTURE")
     class Guard(_SupervisorGuard):

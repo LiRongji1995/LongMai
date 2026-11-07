@@ -74,11 +74,13 @@ class GatewayTests(unittest.TestCase):
             self.addCleanup(context.stop)
 
     def supervise(self, config, *, progress, started_at=None, expected_sessions=None, engine="original",
-                  recovery_context=None):
+                  recovery_context=None, continuation_context=None):
         self.calls += 1
         assert not progress and config["capture"]["allow_test_fixture"] is True
         if recovery_context is not None:
             config = {**config, "recovery_context": recovery_context}
+        if continuation_context is not None:
+            config = {**config, "continuation_context": continuation_context}
         job = self.state / "jobs" / f"TEST_FIXTURE_{self.calls}"
         job.mkdir(parents=True)
         def write(name, data):
@@ -97,6 +99,9 @@ class GatewayTests(unittest.TestCase):
             theme_artifacts={}, display=display, news=None,
             calendar_rows=[dict(calendar_date=str(self.observation+timedelta(days=i)), is_trading_day="1")
                            for i in range(-3, 5)])
+        if continuation_context is not None:
+            from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+            completion["metrics"] = Budget(config["limits"]).metrics
         completion_ref = write("worker-completion.json", completion)
         final = dict(schema_version=self.version, status=completion["status"], core_verified=True,
             execution_engine=engine, expected_sessions=list(expected_sessions),

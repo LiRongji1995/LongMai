@@ -248,13 +248,18 @@ class CaptureCache:
     budget.preclaim_request(endpoint, params), budget.record_request(result) are
     supplied by the orchestrator. Native verify_capture reads are metered too.
     """
-    def __init__(self, root, budget, config=None, executor=execute_request, *, recovery_context=None):
+    def __init__(self, root, budget, config=None, executor=execute_request, *, recovery_context=None,
+                 continuation_context=None):
         self.root = Path(root).absolute()
         _need(not self.root.is_symlink(), 'CACHE_ROOT_SYMLINK_FORBIDDEN')
         self.root.mkdir(parents=True, exist_ok=True)
         self.root = self.root.resolve(strict=True)
         self.budget, self.config, self.executor = budget, _config(config), executor
         self.recovery_context = deepcopy(recovery_context)
+        self.continuation_context = deepcopy(continuation_context)
+        self._continuation_ready = False
+        self._continuation_failed = False
+        self._continuation_session = None
         self._owner = (os.getpid(), threading.get_ident())
         self._known = {}
         self._factor_index_memo = {}
@@ -656,6 +661,8 @@ class CaptureCache:
 
     def capture_one(self, spec):
         with self._writer():
+            _need(self.continuation_context is None or self._continuation_ready,
+                  'CONTINUATION_AUTHORIZED_SOURCE_MUST_COMPLETE_FIRST')
             blockers = self.lhb_overlap_blockers(spec)
             _need(not blockers, 'LHB_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
                   ','.join(row['request_key'] for row in blockers))
@@ -667,49 +674,105 @@ class CaptureCache:
                 cached = None
             if cached is not None and (cached.status == 'COMPLETE' or
                     not self.config.get('retry_failed', False) or spec.key in self._attempted_keys):
+                if self.continuation_context is not None and (
+                        cached.status != 'COMPLETE' or not cached.metadata['pagination_complete']):
+                    self._continuation_ready = False
+                    self._continuation_failed = True
+                    raise ValueError('CONTINUATION_EXISTING_FAILED_SOURCE_NOT_AUTHORIZED_FOR_RETRY')
                 return cached
             blockers = self.factor_overlap_blockers(spec)
             _need(not blockers, 'FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY:' +
                   ','.join(row['request_key'] for row in blockers))
-            _need(not self.config.get('offline', False), 'OFFLINE_SOURCE_MISSING_OR_FAILED_NO_NETWORK')
-            _need(spec.key not in self._attempted_keys, 'ONE_ATTEMPT_PER_REQUEST_PER_INVOCATION')
-            self.budget.preclaim_request(spec.endpoint, spec.parameters)
-            self._attempted_keys.add(spec.key)
-            # A request-local native archive avoids globbing the whole cache on
-            # each mature verification: BASE/raw/<attempt>/raw is native grammar.
-            request_archive = self.root / 'raw' / spec.key
-            output = request_archive / 'raw' / uuid.uuid4().hex
-            self._mkdir_owned(output)
-            self._mkdir_owned(self.root / 'index' / spec.key)
-            self._save(output / 'request-claim.json', dict(schema_version=VERSION,
-                request_spec=spec.to_dict(), actual_started_at=datetime.now(timezone.utc).isoformat(), retries=0))
+            return self._capture_new(spec)
+
+    def capture_authorized_once(self):
+        """Consume the exact retained single-source authorization, never a retry policy."""
+        from .collection_source_continuation import authorized_source_attempt, require_known_accounting
+        with self._writer():
+            _need(not self._continuation_failed, 'CONTINUATION_FAILED_NO_MORE_REQUESTS')
+            spec, authorization, existing = authorized_source_attempt(self)
+            self._continuation_session = spec.business_session
+            if existing is not None:
+                self._continuation_ready = True
+                return existing
+            require_known_accounting(self)
+            record = self._capture_new(spec, authorization=authorization)
+            # Re-read the committed consumption through the same exact proof
+            # used on reuse. This authenticates claim <= request <= result
+            # clocks before a fresh successful result can unlock collection.
             try:
-                kwargs = dict(timeout=self.timeout, max_http_requests=self.max_http)
-                for key in ('budget_path', 'budget_id'):
-                    if key in self.config:
-                        kwargs[key] = self.config[key]
-                result = self.executor(spec.endpoint, spec.parameters, output, **kwargs)
-                self.budget.record_request(result)
-                rid = result['request_receipt_id']
-                receipt = output / 'raw' / (rid + '.receipt.json')
-                physical, _ = self._read(receipt)
-                raw = output / 'raw' / (_json(physical)['content_hash'] + '.raw.json')
-                candidates = list(output.glob('request-*.json'))
-                candidates = [p for p in candidates if p.name != 'request-claim.json']
-                _need(len(candidates) == 1, 'EXACTLY_ONE_REAL_RESULT_WRAPPER_REQUIRED')
-                loaded, _ = self._read(candidates[0])
-                _need(_json(loaded) == result and result['endpoint'] == spec.endpoint and result['parameters'] == spec.parameters,
-                      'ACTUAL_EXECUTOR_RESULT_SCOPE_CHANGED')
-                _, value = self._authenticate(dict(raw=str(raw), receipt=str(receipt), result=str(candidates[0])), str(request_archive))
-                value.update(schema_version=VERSION, request_key=spec.key, request_spec=spec.to_dict(),
-                             origin='ACTUAL_PROVIDER_CAPTURE', capture_attempt_dir=str(output))
-                record = self._commit(value)
-                self._save(output / 'committed.json', dict(request_key=spec.key, receipt_id=record.receipt_id))
-                return record
-            except BaseException as exc:
-                self._save(output / 'attempt-failed.json', dict(schema_version=VERSION, status='FAILED_RETAINED_NO_RETRY',
-                    error_type=type(exc).__name__[:128], reason=str(exc)[:2048], source_completion='UNKNOWN'))
+                _, _, verified = authorized_source_attempt(self)
+                _need(verified is not None and verified.receipt_id == record.receipt_id,
+                      'CONTINUATION_FRESH_CONSUMPTION_BINDING_CHANGED')
+            except BaseException:
+                self._continuation_ready = False
+                self._continuation_failed = True
                 raise
+            self._continuation_ready = True
+            return record
+
+    def _capture_new(self, spec, *, authorization=None):
+        """Original request/receipt transaction; callers must hold the writer lock."""
+        _need(not self.config.get('offline', False), 'OFFLINE_SOURCE_MISSING_OR_FAILED_NO_NETWORK')
+        _need(spec.key not in self._attempted_keys, 'ONE_ATTEMPT_PER_REQUEST_PER_INVOCATION')
+        if self.continuation_context is not None:
+            from .collection_source_continuation import require_active_session, require_known_accounting
+            try:
+                require_active_session(self)
+                require_known_accounting(self)
+            except BaseException:
+                self._continuation_ready = False
+                self._continuation_failed = True
+                raise
+        self.budget.preclaim_request(spec.endpoint, spec.parameters)
+        self._attempted_keys.add(spec.key)
+        # A request-local native archive avoids globbing the whole cache on
+        # each mature verification: BASE/raw/<attempt>/raw is native grammar.
+        request_archive = self.root / 'raw' / spec.key
+        output = request_archive / 'raw' / uuid.uuid4().hex
+        self._mkdir_owned(output)
+        self._mkdir_owned(self.root / 'index' / spec.key)
+        claim = dict(schema_version=VERSION, request_spec=spec.to_dict(),
+                     actual_started_at=datetime.now(timezone.utc).isoformat(), retries=0)
+        if authorization is not None:
+            claim['continuation_authorization'] = deepcopy(authorization)
+        self._save(output / 'request-claim.json', claim)
+        committed = None
+        try:
+            kwargs = dict(timeout=self.timeout, max_http_requests=self.max_http)
+            for key in ('budget_path', 'budget_id'):
+                if key in self.config:
+                    kwargs[key] = self.config[key]
+            result = self.executor(spec.endpoint, spec.parameters, output, **kwargs)
+            self.budget.record_request(result)
+            rid = result['request_receipt_id']
+            receipt = output / 'raw' / (rid + '.receipt.json')
+            physical, _ = self._read(receipt)
+            raw = output / 'raw' / (_json(physical)['content_hash'] + '.raw.json')
+            candidates = list(output.glob('request-*.json'))
+            candidates = [p for p in candidates if p.name != 'request-claim.json']
+            _need(len(candidates) == 1, 'EXACTLY_ONE_REAL_RESULT_WRAPPER_REQUIRED')
+            loaded, _ = self._read(candidates[0])
+            _need(_json(loaded) == result and result['endpoint'] == spec.endpoint and result['parameters'] == spec.parameters,
+                  'ACTUAL_EXECUTOR_RESULT_SCOPE_CHANGED')
+            _, value = self._authenticate(dict(raw=str(raw), receipt=str(receipt), result=str(candidates[0])), str(request_archive))
+            value.update(schema_version=VERSION, request_key=spec.key, request_spec=spec.to_dict(),
+                         origin='ACTUAL_PROVIDER_CAPTURE', capture_attempt_dir=str(output))
+            record = self._commit(value)
+            self._save(output / 'committed.json', dict(request_key=spec.key, receipt_id=record.receipt_id))
+            committed = record
+            if self.continuation_context is not None:
+                from .collection_source_continuation import require_complete_source
+                require_complete_source(self, record, result)
+            return record
+        except BaseException as exc:
+            if self.continuation_context is not None:
+                self._continuation_ready = False
+                self._continuation_failed = True
+            self._save(output / 'attempt-failed.json', dict(schema_version=VERSION, status='FAILED_RETAINED_NO_RETRY',
+                error_type=type(exc).__name__[:128], reason=str(exc)[:2048],
+                source_completion=committed.status if committed is not None else 'UNKNOWN'))
+            raise
 
     def import_seed(self, path, expected_sha256=None):
         """Authenticate real trios / RAW recipes. Never manufacture a result."""

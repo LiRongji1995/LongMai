@@ -18,12 +18,14 @@ EPOCH_SCHEMA = 'CODEX_CAPTURE_CURRENT_RECERTIFICATION_EPOCH_V1'
 _SHA = re.compile(r'[0-9a-f]{64}', re.ASCII)
 
 
-def inherited_attempt_scope(cache, folder, *, entries=None):
+def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_terminal_failures=False):
     """Return a verified complete old scope, or an explicit retained unknown.
 
     Only the exact existing inherited-marker layout is supported. Unknown
-    layouts, missing links, partial parents and uncommitted attempts remain
-    blockers. Every read is metered and included in the cache's terminal SHA
+    layouts, missing links and uncommitted attempts remain blockers. The
+    explicit inventory-only mode may retain authenticated committed failures;
+    it never declares them complete or authorizes another provider attempt.
+    Every read is metered and included in the cache's terminal SHA
     verification. No supplier or bookkeeping mutation is performed.
     """
     from .premarket_capture_cache_v1 import RequestSpec, VERSION, SH, _canonical, _json, _need, _stamp
@@ -39,7 +41,13 @@ def inherited_attempt_scope(cache, folder, *, entries=None):
         raw, reference = cache._read(expected if expected is not None else path, limit=2 * 1024**2)
         return _json(raw), reference
 
+    def terminal(value):
+        return (value.get('status') == 'COMPLETE' and value.get('pagination_complete') is True
+                or retain_known_terminal_failures and value.get('status') in ('FETCH_FAILED', 'PARTIAL')
+                and value.get('pagination_complete') is False)
+
     try:
+        _need(type(retain_known_terminal_failures) is bool, 'INHERITED_EXPLICIT_INVENTORY_POLICY_REQUIRED')
         _need(folder.parent == cache.root / 'raw' and _SHA.fullmatch(folder.name)
               and not folder.is_symlink() and not inherited.is_symlink()
               and set(path.name for path in folder.iterdir()) == {'inherited-original-attempt'}
@@ -91,13 +99,13 @@ def inherited_attempt_scope(cache, folder, *, entries=None):
                   and old.get('request_key') == prior.key == folder.name
                   and old.get('endpoint') == prior.endpoint and old.get('parameters') == prior.parameters,
                   'INHERITED_OLD_REQUEST_IDENTITY_CHANGED')
-            _need(old.get('status') == 'COMPLETE' and old.get('pagination_complete') is True,
+            _need(terminal(old),
                   'INHERITED_INCOMPLETE_ORIGINAL_RETAINED')
             originals.append((old, prior))
         _need(set(by_receipt) == {old['receipt_id'] for old, _ in originals},
               'INHERITED_MAPPING_DOES_NOT_COVER_ALL_ORIGINALS')
         values = cache._factor_ledger_entries() if entries is None else entries
-        receipt_ids, attempts = set(), set()
+        receipt_ids, attempts, accounting = set(), set(), {}
         now = datetime.now(timezone.utc)
         for old, prior in originals:
             mapping = by_receipt[old['receipt_id']]
@@ -117,7 +125,8 @@ def inherited_attempt_scope(cache, folder, *, entries=None):
                 _need(spec.key == key and spec.endpoint == prior.endpoint
                       and spec.parameters == prior.parameters,
                       'INHERITED_CURRENT_REQUEST_IDENTITY_CHANGED')
-                _need(current.get('status') == 'COMPLETE' and current.get('pagination_complete') is True,
+                _need(terminal(current) and current.get('status') == old.get('status')
+                      and current.get('pagination_complete') == old.get('pagination_complete'),
                       'INHERITED_INCOMPLETE_ORIGINAL_RETAINED')
                 _need(max(_stamp(current[field]) for field in
                       ('first_seen_at', 'ingested_at', 'completed_at')) <= now,
@@ -138,8 +147,19 @@ def inherited_attempt_scope(cache, folder, *, entries=None):
                 # result/receipt/RAW and their producer, identity and time facts.
                 result = cache.verify(current)
                 _need(result['endpoint'] == prior.endpoint and result['parameters'] == prior.parameters
+                      and result['status'] == old['status']
+                      and result['pagination_complete'] == old['pagination_complete']
                       and result['request_receipt_id'] == old['receipt_id'],
                       'INHERITED_AUTHENTICATED_RESULT_SCOPE_CHANGED')
+                if retain_known_terminal_failures:
+                    coverage = result.get('coverage') or {}
+                    actual = {field: coverage.get(field) for field in ('sdk_operations', 'http_attempts')}
+                    known = all(type(value) is int and value >= 0 for value in actual.values())
+                    # This is older inventory, not a request made by the parent
+                    # operation. Preserve unknown counts verbatim (missing is
+                    # None); do not manufacture zero or refund any budget.
+                    accounting[old['receipt_id']] = dict(actual_counts=actual,
+                        actual_counts_status='KNOWN' if known else 'UNKNOWN_RETAINED')
                 imported_day = (prior.parameters.get('date') or prior.parameters.get('end_date')
                     or _stamp(current['first_seen_at']).astimezone(SH).date().isoformat())
                 _need(spec.business_session == imported_day and spec.current ==
@@ -166,8 +186,21 @@ def inherited_attempt_scope(cache, folder, *, entries=None):
               and set((source_attempt / 'raw').iterdir()) == attempts
               and set(path.name for path in source_attempt.iterdir()) == {'raw'},
               'INHERITED_UNMAPPED_OR_UNFINISHED_ATTEMPT_RETAINED')
-        return dict(status='VERIFIED_COMPLETE_ORIGINAL', request_spec=originals[0][1].to_dict(),
+        all_complete = all(old['status'] == 'COMPLETE' and old['pagination_complete'] is True
+                           for old, _ in originals)
+        counts_known = all(value['actual_counts_status'] == 'KNOWN' for value in accounting.values())
+        result = dict(status='VERIFIED_COMPLETE_ORIGINAL' if all_complete and counts_known else 'VERIFIED_RETAINED_ORIGINAL',
+                    request_spec=originals[0][1].to_dict(),
                     receipt_ids=sorted(receipt_ids), source_capability_issued=False,
+                    statuses=[dict(receipt_id=old['receipt_id'], status=old['status'],
+                                   pagination_complete=old['pagination_complete'],
+                                   **accounting.get(old['receipt_id'], {})) for old, _ in originals],
+                    retry_authorized=False,
                     purpose='PRIOR_REQUEST_SCOPE_ONLY_NOT_SOURCE_OR_RETRY_AUTHORITY')
+        if retain_known_terminal_failures:
+            result.update(inventory_only=True,
+                actual_counts_status='KNOWN' if counts_known else 'UNKNOWN_RETAINED',
+                actual_counts_affect_parent_budget=False)
+        return result
     except (ValueError, TypeError, KeyError, OSError) as error:
         return dict(unknown, reason=str(error)[:512])

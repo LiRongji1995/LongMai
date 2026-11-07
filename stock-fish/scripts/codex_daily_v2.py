@@ -101,7 +101,8 @@ def _prior_request(runtime, identity):
                 raise original.PremarketError("DAILY_SHARED_EXISTING_REQUEST_RECONCILE_NO_RETRY")
 
 
-def _validate(prepared, snapshot, receipt, observation, target, expected_engine, *, recovery_context=None):
+def _validate(prepared, snapshot, receipt, observation, target, expected_engine, *, recovery_context=None,
+              effective_limits=None, continuation_context=None):
     workflow = _workflow()
     _same(prepared, snapshot)
     need(receipt.get("schema_version") == VERSION, "DAILY_SHARED_RECEIPT_VERSION")
@@ -166,8 +167,13 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine,
     from stockfish_core.yaogu import premarket_workflow_v1 as frozen
     actual_config = frozen._read_control(final["configuration"]["path"])
     expected_config = frozen.load_config(str(prepared["config"]))
+    if effective_limits is not None:
+        _bounded_continuation_limits(expected_config["limits"], effective_limits)
+        expected_config["limits"] = effective_limits
     if recovery_context is not None:
         expected_config["recovery_context"] = recovery_context
+    if continuation_context is not None:
+        expected_config["continuation_context"] = continuation_context
     need(actual_config == expected_config, "DAILY_SHARED_EXECUTED_CONFIG_CHANGED")
     need(content_equal(frozen._read_control(final["code_registry"]["path"]), workflow.code_refs()),
          "DAILY_SHARED_EXECUTED_SOURCE_CHANGED")
@@ -320,6 +326,135 @@ def _premarket(runtime, args):
     result["execution_version"] = VERSION
     result["daily_v1_readiness"] = "UNKNOWN_NOT_EXECUTED"
     result["market_edge"] = "NOT_ESTABLISHED"
+    return result["receipt"]["execution_exit_code"], result
+
+
+def _bounded_continuation_limits(original_limits, remaining_limits):
+    """A continuation consumes an existing finite envelope, never a new one."""
+    need(isinstance(remaining_limits, dict) and set(remaining_limits) == set(original_limits),
+         "CONTINUATION_LIMIT_KEYS_CHANGED")
+    for name, maximum in original_limits.items():
+        value = remaining_limits[name]
+        need(type(maximum) in (int, float) and type(value) in (int, float)
+             and 0 < value <= maximum, "CONTINUATION_LIMIT_NOT_WITHIN_ORIGINAL:" + name)
+
+
+def _continue_premarket(runtime, args):
+    """One explicitly authorized continuation attached to the original failure."""
+    from scripts import codex_premarket_continuation as continuation
+    from stockfish_core.yaogu import premarket_workflow_v1 as frozen
+    from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+
+    planning = args.command == "premarket-continue-plan"
+    need(planning or args.authorize_one_source_retry, "CONTINUATION_EXPLICIT_ONE_SOURCE_AUTHORIZATION_REQUIRED")
+    prepared = original._prepared(runtime.profile)
+    need(prepared["source"] == ROOT and workspace.interpreter_path(sys.executable) == prepared["python"],
+         "DAILY_SHARED_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
+    proposal = continuation.prepare(runtime, operation_path=args.operation, source_job=args.source_job,
+        snapshot_proof_path=args.snapshot_proof, expected_snapshot_proof_sha256=args.expected_proof_sha256,
+        allowed_source_key=args.source_key, allowed_receipt_id=args.source_receipt,
+        allow_test_fixture=getattr(args, "allow_test_fixture", False))
+    if planning:
+        return 0, proposal
+    identity = proposal["identity"]
+    observation, target = identity["observation_date"], identity["target_session"]
+    local_day = proposal["source_retry"]["request_spec"]["business_session"]
+    expected_sessions = (observation, target, local_day)
+    wrapper_budget = Budget({**proposal["remaining_limits"],
+        "max_seconds": continuation.WRAPPER_PREPARE_SECONDS,
+        "capture_read_bytes": continuation.WRAPPER_PREPARE_READ_BYTES})
+    with wrapper_budget.phase("capture"), wrapper_budget.meter_files():
+        _workflow()._expected_gate(expected_sessions)
+        snapshot = _snapshot(prepared)
+        recovery_context = runtime.capture_recovery_context()
+        original_config = frozen.load_config(str(prepared["config"]))
+        need(not original_config["capture"].get("retry_failed", False)
+             and not original_config["capture"].get("offline", False)
+             and not original_config["seed_sources"], "CONTINUATION_ORIGINAL_CAPTURE_POLICY_REQUIRED")
+    wrapper_preparation_metrics = wrapper_budget.metrics
+    execution_budget = None
+    effective_limits, execution_authorization = None, None
+
+    def action(remaining_limits, authorization):
+        nonlocal execution_budget, effective_limits, execution_authorization
+        _bounded_continuation_limits(original_config["limits"], remaining_limits)
+        effective_limits, execution_authorization = dict(remaining_limits), authorization
+        execution_budget = Budget({**effective_limits,
+            "capture_read_bytes": min(effective_limits["capture_read_bytes"], effective_limits["supervisor_read_bytes"])})
+        final = None
+        try:
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _same(prepared, snapshot)
+                need(content_equal(runtime.capture_recovery_context(), recovery_context),
+                     "DAILY_SHARED_RECOVERY_CONTEXT_CHANGED")
+                _workflow()._expected_gate(expected_sessions)
+                config = frozen.load_config(str(prepared["config"]))
+                config["limits"] = effective_limits
+            options = {} if recovery_context is None else dict(recovery_context=recovery_context)
+            code, final = _workflow().supervise(config, progress=False, started_at=execution_budget.started,
+                expected_sessions=expected_sessions, engine="original", continuation_context=authorization, **options)
+            execution_budget.charge_read(final.get("supervisor_returned_read_bytes", 0))
+            execution_budget.check("continuation_supervisor_return", force=True)
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _same(prepared, snapshot)
+                need(code in (0, 2) and final.get("status") in original.SUCCESS
+                     and code == original.SUCCESS[final["status"]],
+                     "CONTINUATION_EXECUTION_FAILED_NO_FURTHER_ATTEMPT")
+                job = original._job_path(prepared, final["job"])
+                saved, final_ref = original._control(job / "final-control.json")
+                need(saved == final, "DAILY_SHARED_RETURNED_FINAL_CHANGED")
+                completion, completion_ref = original._control(Path(final["completion"]["path"]))
+                return dict(schema_version=VERSION, status=final["status"], job=str(job),
+                    execution_engine="original", expected_sessions=list(expected_sessions),
+                    observation_date=observation, target_session=target, run_id=completion["run_id"],
+                    strategy_id=completion.get("strategy_id"), theme_status=completion.get("theme_status"),
+                    final=final_ref, completion=completion_ref, execution_exit_code=code,
+                    execution_seconds=time.monotonic()-execution_budget.started,
+                    display_artifacts={key: ref["path"] for key, ref in (final.get("display") or {}).get("artifacts", {}).items()},
+                    source_authority_restored=False, result_role="ARCHIVED_REUSE_NOT_NEW_CAPTURE")
+        except BaseException as error:
+            information = dict(parent_verification_metrics=execution_budget.metrics,
+                               worker_final=None, job=None)
+            if final is not None and final.get("job"):
+                try:
+                    job = original._job_path(prepared, final["job"])
+                    information.update(worker_final=original._reference(job / "final-control.json"), job=str(job))
+                except Exception:
+                    # A broken failure artifact must not replace the original error.
+                    pass
+            error.continuation_failure = information
+            raise
+
+    def validate(receipt, checked_proposal):
+        nonlocal execution_budget, effective_limits, execution_authorization
+        fresh = execution_budget is not None
+        if not fresh:
+            # Reading a successful continuation must not create another worker.
+            effective_limits = checked_proposal["remaining_limits"]
+            execution_authorization = continuation.authorization(runtime, checked_proposal)
+            _bounded_continuation_limits(original_config["limits"], effective_limits)
+            execution_budget = Budget({**effective_limits,
+                "capture_read_bytes": min(effective_limits["capture_read_bytes"], effective_limits["supervisor_read_bytes"])})
+        try:
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _workflow()._expected_gate(expected_sessions)
+                need(content_equal(runtime.capture_recovery_context(), recovery_context),
+                     "DAILY_SHARED_RECOVERY_CONTEXT_CHANGED")
+                checked = _validate(prepared, snapshot, receipt, observation, target, "original",
+                    recovery_context=recovery_context, effective_limits=effective_limits,
+                    continuation_context=execution_authorization)
+        except BaseException as error:
+            error.continuation_failure = dict(parent_verification_metrics=execution_budget.metrics,
+                worker_final=receipt.get("final"), job=receipt.get("job"))
+            raise
+        checked["parent_verification_metrics"] = execution_budget.metrics
+        checked["wrapper_preparation_metrics"] = wrapper_preparation_metrics
+        checked["parent_budget_scope"] = "CONTINUATION_ACTION_AND_VALIDATION" if fresh else "READONLY_CONTINUATION_REUSE"
+        return checked
+
+    result = continuation.execute(runtime, proposal, action=action, validate=validate)
+    result.update(complete_daily_delivery=True, execution_version=VERSION,
+        daily_v1_readiness="UNKNOWN_NOT_EXECUTED", market_edge="NOT_ESTABLISHED")
     return result["receipt"]["execution_exit_code"], result
 
 
@@ -574,6 +709,18 @@ def parser():
     sub.add_argument("--engine", choices=("original",), default="original")
     sub.add_argument("--collect-missing", action="store_true",
                      help="显式允许原采集器在登记预算内补齐缺失来源；不重试旧失败")
+    for name in ("premarket-continue-plan", "premarket-continue"):
+        sub = commands.add_parser(name, allow_abbrev=False,
+            help="原失败记录下的一次限定恢复；保留原key、旧失败和累计预算")
+        sub.add_argument("--operation", type=Path, required=True)
+        sub.add_argument("--source-job", type=Path, required=True)
+        sub.add_argument("--snapshot-proof", type=Path, required=True)
+        sub.add_argument("--expected-proof-sha256", required=True)
+        sub.add_argument("--source-key", required=True)
+        sub.add_argument("--source-receipt", required=True)
+        if name == "premarket-continue":
+            sub.add_argument("--authorize-one-source-retry", action="store_true",
+                             help="明确授权所列原来源最多追加一次；失败或不明后不再尝试")
     sub = commands.add_parser("outcomes", help="已有R2归档的显式后验", allow_abbrev=False)
     sub.add_argument("--request-key", help="写操作必须提供稳定请求标识")
     sub.add_argument("arguments", nargs=argparse.REMAINDER)
@@ -646,6 +793,8 @@ def execute(runtime, args):
         return 0, _plan(runtime, **options)
     if args.command == "premarket":
         return _premarket(runtime, args)
+    if args.command in {"premarket-continue-plan", "premarket-continue"}:
+        return _continue_premarket(runtime, args)
     if args.command == "operations":
         return 0, _operations(runtime)
     if args.command == "status":

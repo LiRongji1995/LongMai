@@ -368,3 +368,111 @@ def test_complete_with_different_batch_or_date_cannot_resolve_old_failure(tmp_pa
     assert cache.factor_overlap_blockers(spec([B], end='2026-10-13'))[0]['request_key'] == prior.key
     assert cache.lookup(prior).status == 'PARTIAL'
     assert cache.budget.calls['requests'] == 1
+
+
+def inherited_same_key(tmp_path, *, endpoint='adjustment_factors', unknown=True):
+    """TEST_FIXTURE complete import with a retained ancestor attempt inventory."""
+    from stockfish_core.yaogu.collection_inherited_scope import EPOCH_SCHEMA
+    from tests.yaogu.test_collection_inherited_scope import write
+
+    if endpoint == 'adjustment_factors':
+        old = spec([A, B])
+    elif endpoint == 'calendar':
+        old = RequestSpec(endpoint, dict(start_date='2026-10-01', end_date=DAY), DAY)
+    else:
+        old = RequestSpec(endpoint, {}, datetime.now(timezone(timedelta(hours=8))).date().isoformat(), current=True)
+    source_root = tmp_path / 'TEST_FIXTURE_ancestor_cache'
+    source = CaptureCache(source_root, FixtureBudget(), config=dict(allow_test_fixture=True),
+                          executor=FixtureExecutor(crash=True))
+    if unknown:
+        with pytest.raises(RuntimeError, match='TEST_FIXTURE_EXECUTOR_DIED'):
+            source.capture_one(old)
+    source = CaptureCache(source_root, FixtureBudget(),
+        config=dict(allow_test_fixture=True, retry_failed=True), executor=FixtureExecutor())
+    original = source.capture_one(old)
+    target = CaptureCache(tmp_path / 'TEST_FIXTURE_imported_cache', FixtureBudget(),
+        config=dict(allow_test_fixture=True), executor=FixtureExecutor())
+    value = original.metadata
+    write(target.root / 'epoch-seed.json', dict(schema_version=EPOCH_SCHEMA, sources=[dict(
+        {role: value[role] for role in ('raw', 'receipt', 'result')}, archive_root=value['archive_root'])]))
+    target.import_seed(target.root / 'epoch-seed.json')
+    imported = next(target._entries())
+    assert imported['request_key'] == old.key and imported['request_spec']['role'] == 'IMPORTED_ORIGINAL'
+    clock, plan = datetime.now(timezone.utc).isoformat(), 'f' * 64
+    write(target.root / 'epoch-claim.json', dict(schema_version=EPOCH_SCHEMA, source_cache=str(source.root),
+        plan_sha256=plan, status='STARTED_NO_IMPLICIT_RETRY', actual_started_at=clock))
+    write(target.root / 'epoch-complete.json', dict(schema_version=EPOCH_SCHEMA, source_cache=str(source.root),
+        cache_root=str(target.root), plan_sha256=plan, actual_completed_at=clock,
+        status='CURRENT_ORIGINALS_RECERTIFIED_NEW_METADATA_EPOCH', network_calls=0, new_market_data=False,
+        old_records_rewritten=False, source_clocks_rewritten=False, request_key_mappings=[dict(
+            old_request_key=old.key, current_request_keys=[old.key], receipt_id=original.receipt_id)]))
+    folder = target.root / 'raw' / old.key
+    write(folder / 'inherited-original-attempt/request-claim.json', dict(schema_version=EPOCH_SCHEMA,
+        request_key=old.key, indexed=True, source_attempt_directory=str(source.root / 'raw' / old.key),
+        source_plan_sha256=plan, status='INHERITED_ORIGINAL_ATTEMPT_NO_IMPLICIT_RETRY'))
+    target = CaptureCache(target.root, FixtureBudget(), config=dict(allow_test_fixture=True),
+                          executor=FixtureExecutor())
+    return target, source, old, original, folder
+
+
+@pytest.mark.parametrize('new', [spec([B]), spec([A, B], end='2026-10-12'),
+                               spec([B], start='2026-10-01', end='2026-10-12')])
+def test_imported_complete_same_key_cannot_hide_ancestor_unknown_for_new_overlap(tmp_path, new):
+    cache, source, old, original, folder = inherited_same_key(tmp_path)
+    before = {path: path.read_bytes() for root in (cache.root, source.root)
+              for path in root.rglob('*') if path.is_file()}
+    # Reusing this exact authenticated complete capture makes no request.
+    assert cache.capture_one(old).receipt_id == original.receipt_id
+    blockers = cache.factor_overlap_blockers(new)
+    assert len(blockers) == 1 and blockers[0]['request_key'] == old.key
+    assert blockers[0]['status'] == 'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY'
+    assert RequestSpec(**blockers[0]['request_spec']).key == old.key
+    assert blockers[0]['inherited_scope']['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    with pytest.raises(ValueError, match='FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+        _preflight_requests(cache, [new])
+    with pytest.raises(ValueError, match='FACTOR_OVERLAPPING_FAILURE_NO_IMPLICIT_RETRY'):
+        cache.capture_one(new)
+    assert cache.budget.calls['requests'] == 0 and cache.executor.calls == []
+    assert {path: path.read_bytes() for path in before} == before
+    cache.terminal()
+
+
+@pytest.mark.parametrize('new', [spec([C], end='2026-10-12'),
+    spec([A], start='2026-10-10', end='2026-10-12')])
+def test_known_ancestor_scope_does_not_block_disjoint_codes_or_dates(tmp_path, new):
+    cache, _, _, _, _ = inherited_same_key(tmp_path)
+    assert cache.factor_overlap_blockers(new) == []
+    assert cache.budget.calls['requests'] == 0
+
+
+@pytest.mark.parametrize('endpoint', ['calendar', 'mainboard_sse'])
+def test_known_nonfactor_ancestor_unknown_is_not_a_global_factor_blocker(tmp_path, endpoint):
+    cache, _, _, _, _ = inherited_same_key(tmp_path, endpoint=endpoint)
+    assert cache.factor_overlap_blockers(spec([A], end='2026-10-12')) == []
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_inventory_only_nonfactor_scope_does_not_clear_unknown_guard(tmp_path):
+    from stockfish_core.yaogu.collection_inherited_scope import inherited_attempt_scope
+    from tests.yaogu.test_collection_inherited_scope import make_epoch
+    cache, _, old, _, _, folder = make_epoch(tmp_path, endpoint='lhb_summary', failed=True)
+    inventory = inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)
+    assert inventory['status'] == 'VERIFIED_RETAINED_ORIGINAL'
+    assert inventory['inventory_only'] is True and inventory['retry_authorized'] is False
+    blockers = cache.factor_overlap_blockers(spec([A], end='2026-10-12'))
+    assert blockers[0]['request_key'] == old.key
+    assert blockers[0]['status'] == 'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY'
+    assert blockers[0]['request_spec'] is None
+    assert cache.budget.calls['requests'] == 0
+
+
+def test_complete_inherited_inventory_is_allowed_but_new_ancestor_attempt_is_seen(tmp_path):
+    from tests.yaogu.test_collection_inherited_scope import write
+    cache, source, old, _, _ = inherited_same_key(tmp_path, unknown=False)
+    new = spec([A], end='2026-10-12')
+    assert cache.factor_overlap_blockers(new) == []
+    extra = source.root / 'raw' / old.key / 'raw' / 'TEST_FIXTURE_later_unknown'
+    write(extra / 'request-claim.json', dict(schema_version='PREMARKET_CAPTURE_CACHE_V1',
+        request_spec=old.to_dict(), actual_started_at=datetime.now(timezone.utc).isoformat(), retries=0))
+    assert cache.factor_overlap_blockers(new)[0]['request_key'] == old.key
+    assert cache.budget.calls['requests'] == 0

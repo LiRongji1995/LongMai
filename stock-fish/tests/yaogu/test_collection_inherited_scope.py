@@ -5,9 +5,12 @@ import json
 from pathlib import Path
 
 import pytest
+from unittest.mock import patch
 
-from stockfish_core.yaogu.collection_inherited_scope import EPOCH_SCHEMA
+from stockfish_core.yaogu.collection_inherited_scope import EPOCH_SCHEMA, inherited_attempt_scope
 from stockfish_core.yaogu.premarket_capture_cache_v1 import CaptureCache, RequestSpec
+from stockfish_core.yaogu import provider_requests
+from tests.yaogu import test_premarket_capture_cache_v1 as fixtures
 from tests.yaogu.test_premarket_capture_cache_v1 import FixtureBudget, FixtureExecutor
 
 
@@ -16,13 +19,20 @@ def write(path, value):
     path.write_text(json.dumps(value, sort_keys=True), encoding='utf-8')
 
 
-def make_epoch(tmp_path, *, endpoint='calendar', failed=False):
+def make_epoch(tmp_path, *, endpoint='calendar', failed=False, known_counts=False):
     source = CaptureCache(tmp_path / 'TEST_FIXTURE_source', FixtureBudget(),
         config=dict(allow_test_fixture=True),
         executor=FixtureExecutor(lhb_status='FETCH_FAILED' if failed else 'COMPLETE'))
     parameters = dict(start_date='2026-10-01', end_date='2026-10-09')
     old = RequestSpec(endpoint, parameters, role='TEST_FIXTURE_OLD_UNDATED_BUSINESS_SESSION')
-    record = source.capture_one(old)
+    archive = fixtures.archive_receipt
+    def counted(*args, **kwargs):
+        if known_counts:
+            sdk = provider_requests.ENDPOINTS[args[2]]['provider'] == 'baostock'
+            args[4]['coverage'].update(sdk_operations=3 if sdk else 0, http_attempts=0 if sdk else 1)
+        return archive(*args, **kwargs)
+    with patch.object(fixtures, 'archive_receipt', counted):
+        record = source.capture_one(old)
     target = CaptureCache(tmp_path / 'TEST_FIXTURE_epoch', FixtureBudget(),
         config=dict(allow_test_fixture=True), executor=FixtureExecutor())
     original = record.to_dict()
@@ -172,3 +182,64 @@ def test_changed_original_after_valid_scope_is_detected_by_terminal(tmp_path):
     p = Path(record.metadata['raw']['path']); p.write_bytes(p.read_bytes() + b' ')
     with pytest.raises(ValueError):
         cache.terminal()
+
+
+def test_inventory_retains_authenticated_committed_failure_without_clearing_guards(tmp_path):
+    cache, source, old, record, current, folder = make_epoch(
+        tmp_path, endpoint='lhb_summary', failed=True, known_counts=True)
+    before = {str(p): p.read_bytes() for root in (cache.root, source.root)
+              for p in root.rglob('*') if p.is_file()}
+    assert cache.inherited_attempt_scope(folder)['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    proof = inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)
+    assert proof['status'] == 'VERIFIED_RETAINED_ORIGINAL'
+    assert proof['statuses'] == [dict(receipt_id=record.receipt_id,
+        status='FETCH_FAILED', pagination_complete=False, actual_counts_status='KNOWN',
+        actual_counts=dict(sdk_operations=0, http_attempts=1))]
+    assert proof['source_capability_issued'] is False and proof['retry_authorized'] is False
+    assert cache.lhb_overlap_blockers(lhb_spec())
+    assert cache.factor_overlap_blockers(factor_spec())
+    assert cache.executor.calls == []
+    cache.terminal()
+    assert {str(p): p.read_bytes() for root in (cache.root, source.root)
+            for p in root.rglob('*') if p.is_file()} == before
+
+
+def test_old_inventory_preserves_unknown_counts_without_clearing_failure_or_refunding_parent(tmp_path):
+    cache, source, old, record, current, folder = make_epoch(tmp_path, endpoint='lhb_summary', failed=True)
+    before = {str(p): p.read_bytes() for root in (cache.root, source.root)
+              for p in root.rglob('*') if p.is_file()}
+    proof = inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)
+    assert proof['status'] == 'VERIFIED_RETAINED_ORIGINAL'
+    assert proof['inventory_only'] is True
+    assert proof['actual_counts_status'] == 'UNKNOWN_RETAINED'
+    assert proof['actual_counts_affect_parent_budget'] is False
+    assert proof['statuses'] == [dict(receipt_id=record.receipt_id,
+        status='FETCH_FAILED', pagination_complete=False, actual_counts_status='UNKNOWN_RETAINED',
+        actual_counts=dict(sdk_operations=None, http_attempts=None))]
+    assert proof['source_capability_issued'] is False and proof['retry_authorized'] is False
+    assert cache.inherited_attempt_scope(folder)['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    assert cache.lhb_overlap_blockers(lhb_spec())
+    assert cache.executor.calls == []
+    assert {str(p): p.read_bytes() for root in (cache.root, source.root)
+            for p in root.rglob('*') if p.is_file()} == before
+
+
+def test_inventory_does_not_accept_unknown_status_or_uncommitted_attempt(tmp_path):
+    cache, source, old, record, current, folder = make_epoch(
+        tmp_path, endpoint='lhb_summary', failed=True, known_counts=True)
+    assert inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)['status'] == 'VERIFIED_RETAINED_ORIGINAL'
+    attempt = Path(record.metadata['capture_attempt_dir'])
+    commit = attempt / 'committed.json'
+    saved = commit.read_bytes()
+    commit.unlink()
+    assert inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    commit.write_bytes(saved)
+    old_path = next((source.root / 'index' / old.key).glob('*.json'))
+    value = json.loads(old_path.read_bytes())
+    value['status'] = 'UNKNOWN'
+    raw = json.dumps(value, ensure_ascii=False, sort_keys=True, separators=(',', ':')).encode()
+    replacement = old_path.parent / (hashlib.sha256(raw).hexdigest() + '.json')
+    replacement.write_bytes(raw)
+    old_path.unlink()
+    assert inherited_attempt_scope(cache, folder, retain_known_terminal_failures=True)['status'] == 'UNKNOWN_RETAINED_NO_IMPLICIT_RETRY'
+    assert cache.executor.calls == []

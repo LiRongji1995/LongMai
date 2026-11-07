@@ -117,12 +117,22 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
         attempts = sorted(root.iterdir()) if root.is_dir() else []
         count += len(attempts)
         _need(count <= cache.max_entries, 'CACHE_FACTOR_ATTEMPT_COUNT_BOUND')
-        if not attempts and not indexed and any(folder.iterdir()):
+        marker = folder / 'inherited-original-attempt'
+        if (marker.exists() or marker.is_symlink()
+                or not attempts and not indexed and any(folder.iterdir())):
+            # An imported COMPLETE index authenticates one original, not the
+            # ancestor request's entire attempt inventory. In particular it
+            # cannot hide an extra unfinished attempt at the same old key.
             inherited = cache.inherited_attempt_scope(folder, entries=values)
             if inherited and inherited['status'] == 'VERIFIED_COMPLETE_ORIGINAL':
                 continue
-            block(folder.name, None, 'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
+            prior = RequestSpec(**indexed[0]['request_spec']) if indexed else None
+            if prior is not None:
+                cache.lookup(prior)  # Authenticate originals; completeness is not a retry exemption.
+            block(folder.name, prior, 'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY' if prior else
+                  'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
             blocked[folder.name]['inherited_scope'] = inherited
+            continue
         for attempt in attempts:
             _need(attempt.is_dir() and not attempt.is_symlink(), 'CACHE_FACTOR_ATTEMPT_DIRECTORY_REQUIRED')
             committed = any(value.get('capture_attempt_dir') == str(attempt)

@@ -232,8 +232,12 @@ def execute_workflow(config, job_dir, *, now=None, adapters=None):
     try:
         with budget.phase('capture'), budget.meter_files():
             phases['capture'] = 'RUNNING'
+            continuation_options = ({'continuation_context': config['continuation_context']}
+                                    if config.get('continuation_context') is not None else {})
             cache = Cache(state/'cache',budget,config=config.get('capture',{}),
-                          recovery_context=config.get('recovery_context'))
+                          recovery_context=config.get('recovery_context'), **continuation_options)
+            if config.get('continuation_context') is not None:
+                cache.capture_authorized_once()
             for seed in config['seed_sources']:
                 cache.import_seed(seed)
             collection = collect(cache,now=now or datetime.now(timezone.utc), config=config.get('capture',{}))
