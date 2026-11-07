@@ -126,12 +126,17 @@ def factor_overlap_blockers(cache, spec, *, entries=None):
             inherited = cache.inherited_attempt_scope(folder, entries=values)
             if inherited and inherited['status'] == 'VERIFIED_COMPLETE_ORIGINAL':
                 continue
+            reconciliation = cache.factor_reconciliation_allows(folder, spec)
+            if reconciliation and reconciliation['status'] == 'AUTHORIZED_NEW_OBSERVATION_OVERLAP_ONLY':
+                continue
             prior = RequestSpec(**indexed[0]['request_spec']) if indexed else None
             if prior is not None:
                 cache.lookup(prior)  # Authenticate originals; completeness is not a retry exemption.
             block(folder.name, prior, 'OVERLAPPING_UNFINISHED_NO_IMPLICIT_RETRY' if prior else
                   'UNKNOWN_PRIOR_REQUEST_SCOPE_NO_IMPLICIT_RETRY')
             blocked[folder.name]['inherited_scope'] = inherited
+            if reconciliation is not None:
+                blocked[folder.name]['reconciliation'] = reconciliation
             continue
         for attempt in attempts:
             _need(attempt.is_dir() and not attempt.is_symlink(), 'CACHE_FACTOR_ATTEMPT_DIRECTORY_REQUIRED')

@@ -18,7 +18,8 @@ EPOCH_SCHEMA = 'CODEX_CAPTURE_CURRENT_RECERTIFICATION_EPOCH_V1'
 _SHA = re.compile(r'[0-9a-f]{64}', re.ASCII)
 
 
-def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_terminal_failures=False):
+def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_terminal_failures=False,
+                            retained_unknown_attempts=()):
     """Return a verified complete old scope, or an explicit retained unknown.
 
     Only the exact existing inherited-marker layout is supported. Unknown
@@ -48,6 +49,9 @@ def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_termina
 
     try:
         _need(type(retain_known_terminal_failures) is bool, 'INHERITED_EXPLICIT_INVENTORY_POLICY_REQUIRED')
+        _need(isinstance(retained_unknown_attempts, (list, tuple)) and len(retained_unknown_attempts) <= 1
+              and (not retained_unknown_attempts or retain_known_terminal_failures),
+              'INHERITED_UNKNOWN_RETENTION_IS_INVENTORY_ONLY')
         _need(folder.parent == cache.root / 'raw' and _SHA.fullmatch(folder.name)
               and not folder.is_symlink() and not inherited.is_symlink()
               and set(path.name for path in folder.iterdir()) == {'inherited-original-attempt'}
@@ -182,6 +186,40 @@ def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_termina
                   'INHERITED_ORIGINAL_COMMIT_BINDING_INVALID')
             attempts.add(attempt)
             receipt_ids.add(old['receipt_id'])
+        retained = []
+        for item in retained_unknown_attempts:
+            extra = Path(item['attempt_dir'])
+            references = item['references']
+            _need(extra.parent == source_attempt / 'raw' and extra.is_dir()
+                  and not extra.is_symlink() and extra.resolve(strict=True) == extra and extra not in attempts
+                  and isinstance(references, list) and len(references) == 6
+                  and len({ref['path'] for ref in references}) == 6,
+                  'INHERITED_EXACT_REVIEWED_UNKNOWN_ATTEMPT_REQUIRED')
+            documents, expected = {}, set()
+            for reference in references:
+                path = Path(reference['path'])
+                _need(path.is_relative_to(extra), 'INHERITED_UNKNOWN_REFERENCE_OUTSIDE_ATTEMPT')
+                document, _ = read(path, reference)
+                documents[path] = document
+                expected.add(path)
+                expected.update(parent for parent in path.parents if parent != extra and parent.is_relative_to(extra))
+            paths = list(extra.rglob('*'))
+            _need(len(paths) <= cache.max_entries and set(paths) == expected
+                  and not any(path.is_symlink() for path in paths)
+                  and not (extra / 'committed.json').exists() and not (extra / 'committed.json').is_symlink(),
+                  'INHERITED_REVIEWED_UNKNOWN_INVENTORY_CHANGED')
+            declaration, failure = documents[extra / 'request-claim.json'], documents[extra / 'attempt-failed.json']
+            prior = RequestSpec(**declaration['request_spec'])
+            _need(declaration.get('schema_version') == VERSION and declaration.get('retries') == 0
+                  and prior.key == folder.name and failure.get('schema_version') == VERSION
+                  and failure.get('status') == 'FAILED_RETAINED_NO_RETRY'
+                  and failure.get('source_completion') == 'UNKNOWN',
+                  'INHERITED_REVIEWED_FAILURE_MUST_REMAIN_UNKNOWN')
+            attempts.add(extra)
+            retained.append(dict(request_key=folder.name, attempt_dir=str(extra),
+                status='UNKNOWN_RETAINED', source_completion='UNKNOWN', pagination_complete=False,
+                actual_counts_status='UNKNOWN_RETAINED', actual_counts=dict(sdk_operations=None, http_attempts=None),
+                historical_preservation_proven=False, retry_authorized=False))
         _need(not (source_attempt / 'raw').is_symlink()
               and set((source_attempt / 'raw').iterdir()) == attempts
               and set(path.name for path in source_attempt.iterdir()) == {'raw'},
@@ -201,6 +239,11 @@ def inherited_attempt_scope(cache, folder, *, entries=None, retain_known_termina
             result.update(inventory_only=True,
                 actual_counts_status='KNOWN' if counts_known else 'UNKNOWN_RETAINED',
                 actual_counts_affect_parent_budget=False)
+        if retained:
+            result.update(status='INVENTORY_RECONCILED_UNKNOWN_RETAINED',
+                actual_counts_status='UNKNOWN_RETAINED', retained_unknown_attempts=retained,
+                historical_preservation_proven=False, retry_authorized=False)
+            result['statuses'].extend(retained)
         return result
     except (ValueError, TypeError, KeyError, OSError) as error:
         return dict(unknown, reason=str(error)[:512])

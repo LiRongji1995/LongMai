@@ -659,6 +659,10 @@ class CaptureCache:
         from .collection_explicit_recovery import explicit_recovered_attempt
         return explicit_recovered_attempt(self, attempt, prior, entries=entries)
 
+    def factor_reconciliation_allows(self, folder, spec):
+        from .collection_factor_reconciliation import factor_reconciliation_allows
+        return factor_reconciliation_allows(self, folder, spec)
+
     def capture_one(self, spec):
         with self._writer():
             _need(self.continuation_context is None or self._continuation_ready,

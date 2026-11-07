@@ -347,13 +347,27 @@ def _continue_premarket(runtime, args):
 
     planning = args.command == "premarket-continue-plan"
     need(planning or args.authorize_one_source_retry, "CONTINUATION_EXPLICIT_ONE_SOURCE_AUTHORIZATION_REQUIRED")
+    reconciliation_path = getattr(args, "factor_reconciliation", None)
+    reconciliation_sha = getattr(args, "expected_reconciliation_sha256", None)
+    reconcile_authorized = getattr(args, "authorize_existing_factor_reconciliation", False)
+    need((reconciliation_path is None) == (reconciliation_sha is None),
+         "CONTINUATION_RECONCILIATION_PATH_AND_SHA_REQUIRED")
+    need(not reconcile_authorized or reconciliation_path is not None,
+         "CONTINUATION_RECONCILIATION_EVIDENCE_REQUIRED")
+    need(planning or reconciliation_path is None or reconcile_authorized,
+         "CONTINUATION_EXPLICIT_FACTOR_RECONCILIATION_AUTHORIZATION_REQUIRED")
+    reconciliation_options = {}
+    if reconciliation_path is not None:
+        need(re.fullmatch(r"[0-9a-f]{64}", reconciliation_sha) is not None,
+             "CONTINUATION_RECONCILIATION_SHA256_REQUIRED")
+        reconciliation_options["factor_reconciliation"] = dict(path=str(reconciliation_path), sha256=reconciliation_sha)
     prepared = original._prepared(runtime.profile)
     need(prepared["source"] == ROOT and workspace.interpreter_path(sys.executable) == prepared["python"],
          "DAILY_SHARED_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
     proposal = continuation.prepare(runtime, operation_path=args.operation, source_job=args.source_job,
         snapshot_proof_path=args.snapshot_proof, expected_snapshot_proof_sha256=args.expected_proof_sha256,
         allowed_source_key=args.source_key, allowed_receipt_id=args.source_receipt,
-        allow_test_fixture=getattr(args, "allow_test_fixture", False))
+        allow_test_fixture=getattr(args, "allow_test_fixture", False), **reconciliation_options)
     if planning:
         return 0, proposal
     identity = proposal["identity"]
@@ -452,7 +466,8 @@ def _continue_premarket(runtime, args):
         checked["parent_budget_scope"] = "CONTINUATION_ACTION_AND_VALIDATION" if fresh else "READONLY_CONTINUATION_REUSE"
         return checked
 
-    result = continuation.execute(runtime, proposal, action=action, validate=validate)
+    execute_options = ({"authorize_existing_factor_reconciliation": True} if reconcile_authorized else {})
+    result = continuation.execute(runtime, proposal, action=action, validate=validate, **execute_options)
     result.update(complete_daily_delivery=True, execution_version=VERSION,
         daily_v1_readiness="UNKNOWN_NOT_EXECUTED", market_edge="NOT_ESTABLISHED")
     return result["receipt"]["execution_exit_code"], result
@@ -718,9 +733,15 @@ def parser():
         sub.add_argument("--expected-proof-sha256", required=True)
         sub.add_argument("--source-key", required=True)
         sub.add_argument("--source-receipt", required=True)
+        sub.add_argument("--factor-reconciliation", type=Path,
+                         help="已审阅的唯一祖先复权UNKNOWN与现有完整结果清单；不重采旧请求")
+        sub.add_argument("--expected-reconciliation-sha256",
+                         help="上述清单的精确SHA-256；只读计划也须绑定")
         if name == "premarket-continue":
             sub.add_argument("--authorize-one-source-retry", action="store_true",
                              help="明确授权所列原来源最多追加一次；失败或不明后不再尝试")
+            sub.add_argument("--authorize-existing-factor-reconciliation", action="store_true",
+                             help="明确登记已有完整结果与唯一旧UNKNOWN关系，允许原余额内本观察日新复权覆盖其范围")
     sub = commands.add_parser("outcomes", help="已有R2归档的显式后验", allow_abbrev=False)
     sub.add_argument("--request-key", help="写操作必须提供稳定请求标识")
     sub.add_argument("arguments", nargs=argparse.REMAINDER)

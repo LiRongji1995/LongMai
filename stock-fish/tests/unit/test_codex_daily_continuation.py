@@ -116,6 +116,46 @@ class DailyContinuationTests(unittest.TestCase):
         self.assertFalse(slot.exists())
         self.assertEqual(self.calls, 0)
 
+    def test_reconciliation_requires_bound_evidence_and_separate_execution_authorization(self):
+        slot = self.prepare_continuation()
+        self.args.factor_reconciliation = self.root / "TEST_FIXTURE_review.json"
+        with self.assertRaisesRegex(ValueError, "RECONCILIATION_PATH_AND_SHA_REQUIRED"):
+            daily.execute(self.runtime, self.args)
+        self.args.expected_reconciliation_sha256 = "e"*64
+        with self.assertRaisesRegex(ValueError, "EXPLICIT_FACTOR_RECONCILIATION_AUTHORIZATION_REQUIRED"):
+            daily.execute(self.runtime, self.args)
+        self.args.factor_reconciliation = None
+        self.args.expected_reconciliation_sha256 = None
+        self.args.authorize_existing_factor_reconciliation = True
+        with self.assertRaisesRegex(ValueError, "RECONCILIATION_EVIDENCE_REQUIRED"):
+            daily.execute(self.runtime, self.args)
+        self.assertFalse(slot.exists())
+        self.assertEqual(self.calls, 0)
+
+    def test_reconciliation_plan_binds_exact_manifest_without_claim(self):
+        slot = self.prepare_continuation("premarket-continue-plan")
+        path = self.root / "TEST_FIXTURE_review.json"
+        self.args.factor_reconciliation = path
+        self.args.expected_reconciliation_sha256 = "e"*64
+        with patch.object(continuation, "prepare", return_value=deepcopy(self.proposal)) as prepare:
+            code, result = daily.execute(self.runtime, self.args)
+        self.assertEqual(code, 0)
+        self.assertEqual(prepare.call_args.kwargs["factor_reconciliation"], dict(path=str(path),sha256="e"*64))
+        self.assertFalse(slot.exists())
+        self.assertEqual(self.calls, 0)
+
+    def test_reconciliation_execution_forwards_explicit_authorization_only(self):
+        slot = self.prepare_continuation()
+        self.args.factor_reconciliation = self.root / "TEST_FIXTURE_review.json"
+        self.args.expected_reconciliation_sha256 = "e"*64
+        self.args.authorize_existing_factor_reconciliation = True
+        with patch.object(continuation, "execute", side_effect=ValueError("TEST_FIXTURE_STOP_BEFORE_CLAIM")) as execute:
+            with self.assertRaisesRegex(ValueError, "TEST_FIXTURE_STOP_BEFORE_CLAIM"):
+                daily.execute(self.runtime, self.args)
+        self.assertIs(execute.call_args.kwargs["authorize_existing_factor_reconciliation"], True)
+        self.assertFalse(slot.exists())
+        self.assertEqual(self.calls, 0)
+
 
 if __name__ == "__main__":
     unittest.main()

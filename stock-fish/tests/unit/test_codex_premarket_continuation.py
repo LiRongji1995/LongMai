@@ -5,6 +5,7 @@ from datetime import datetime, timedelta, timezone, time as wall_time
 import hashlib
 import json
 from pathlib import Path
+import sys
 import tempfile
 from types import SimpleNamespace
 import unittest
@@ -227,6 +228,49 @@ class ContinuationTests(unittest.TestCase):
         for path, raw in self.old_attempt_bytes.items():
             self.assertEqual(raw, path.read_bytes())
 
+    @contextmanager
+    def reconciliation_fixture(self):
+        """Controller lifecycle fixture; the shared verifier has its own native tests."""
+        old_day = str(datetime.fromisoformat(self.sessions[0]).date() - timedelta(days=1))
+        spec = captures.RequestSpec("adjustment_factors", dict(start_date="1990-01-01", end_date=old_day,
+            codes=["sh." + str(600001 + 2 * n) for n in range(50)]), old_day,
+            role="FULL_ANCHORED_FACTOR_WINDOW")
+        old = self.root / "TEST_FIXTURE_ancestor" / spec.key / "raw/TEST_FIXTURE_unknown"
+        refs = [self.write(old / (str(index) + ".json"), dict(TEST_FIXTURE=index)) for index in range(6)]
+        self.old_attempt_bytes.update({Path(ref["path"]): Path(ref["path"]).read_bytes() for ref in refs})
+        unknown = dict(current_observation_only=True, predating_parent_content_proof_found=False,
+            retry_authorized=False, source_capability_issued=False, source_request_key=spec.key,
+            attempt=str(old), request_spec=spec.to_dict(),
+            directory_manifest=[dict(type="FILE", **{k: ref[k] for k in ("path", "sha256", "bytes")}) for ref in refs],
+            existing_complete_counterparts_verified_now=[dict(request_key=spec.key, request_spec=spec.to_dict(),
+                status="COMPLETE", pagination_complete=True, receipt_id="e" * 64)])
+        review = dict(schema_version="PRIVATE_INHERITED_UNKNOWN_INVENTORY_REVIEW_V1",
+            checked_at=datetime.now(timezone.utc).isoformat(),
+            original_operation_id=self.operation_path.stem, current_cache=str(self.state / "cache"),
+            other_inventory_anomalies=[], provider_requests=0, source_request_execution=False,
+            continuation_claim_created=False, original_failed_job_retained=True, unknown_attempts=[unknown])
+        path = self.root / "TEST_FIXTURE_reconciliation_review.json"
+        path.write_text(json.dumps(review, indent=2))  # Retain original bytes, not a reserialization.
+        selection = dict(path=str(path), sha256=hashlib.sha256(path.read_bytes()).hexdigest())
+        calls = []
+        def builder(cache, **kwargs):
+            calls.append(kwargs)
+            case = kwargs["expected_case"]
+            return dict(schema_version="TEST_FIXTURE_VERIFIED_FACTOR_RECONCILIATION",
+                review_ref=deepcopy(case["review_ref"]), expected_case=deepcopy(case),
+                references=deepcopy(case["unknown_attempt_refs"]), current_verification_only=True,
+                actual_counts_status="UNKNOWN_RETAINED", source_capability_issued=False,
+                old_request_retry_authorized=False, operation_id=kwargs["operation"]["operation_id"])
+        def verify(cache, evidence):
+            if set(old.parent.iterdir()) != {old}:
+                raise ValueError("TEST_FIXTURE_RECONCILIATION_ADDITIONAL_ATTEMPT")
+            for reference in evidence["references"]:
+                cache._read(reference)
+            return evidence
+        module = SimpleNamespace(prepare_factor_reconciliation=builder, verify_factor_reconciliation=verify)
+        with patch.dict(sys.modules, {"stockfish_core.yaogu.collection_factor_reconciliation": module}):
+            yield selection, calls
+
     def test_prepare_reuses_old_calendar_and_recomputes_reserved_budgets(self):
         proposal = self.prepare()
         self.assertEqual(3, proposal["parent_provider_counts"]["requests"])
@@ -360,6 +404,112 @@ class ContinuationTests(unittest.TestCase):
 
     def test_owned_proof_change_after_action_refuses_success(self):
         self.changed_control("parent-snapshot-proof.json")
+
+    def test_reconciliation_preview_preserves_budget_and_requires_explicit_execute_authorization(self):
+        baseline = self.prepare()
+        with self.reconciliation_fixture() as (selection, calls):
+            proposal = self.prepare(factor_reconciliation=selection)
+            self.assertEqual(baseline["remaining_limits"], proposal["remaining_limits"])
+            self.assertEqual(6, len(calls[0]["expected_case"]["unknown_attempt_refs"]))
+            self.assertEqual(50, len(calls[0]["expected_case"]["codes"]))
+            self.assertFalse(continuation._slot(self.runtime, proposal["operation_id"]).exists())
+            with self.assertRaisesRegex(ValueError, "EXPLICIT_FACTOR_RECONCILIATION_AUTHORIZATION_REQUIRED"):
+                continuation.execute(self.runtime, proposal, action=lambda *_: self.fail("action"), validate=lambda *_: {})
+            self.assertFalse(continuation._slot(self.runtime, proposal["operation_id"]).exists())
+            with self.assertRaisesRegex(ValueError, "EXPLICIT_FACTOR_RECONCILIATION_AUTHORIZATION_REQUIRED"):
+                continuation.execute(self.runtime, baseline, action=lambda *_: self.fail("action"),
+                    validate=lambda *_: {}, authorize_existing_factor_reconciliation=True)
+        self.assert_parent_unchanged()
+
+    def test_reconciliation_is_sealed_once_and_reuses_without_private_review_file(self):
+        with self.reconciliation_fixture() as (selection, builds):
+            proposal = self.prepare(factor_reconciliation=selection)
+            original_review = Path(selection["path"]).read_bytes()
+            calls, action, validate = self.success_callbacks()
+            result = continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                authorize_existing_factor_reconciliation=True)
+            claim = json.loads(Path(result["authorization"]["claim"]["path"]).read_bytes())
+            record_path = Path(claim["factor_reconciliation_ref"]["path"])
+            record = json.loads(record_path.read_bytes())
+            self.assertEqual(continuation.RECONCILIATION_VERSION, record["schema_version"])
+            self.assertEqual(original_review, record["review_json"].encode("utf-8"))
+            self.assertEqual(proposal["factor_reconciliation"], record["reconciliation"])
+            self.assertEqual(6, len(result["authorization"]))
+            Path(selection["path"]).unlink()
+            reused = continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                authorize_existing_factor_reconciliation=True)
+            self.assertEqual("REUSED", reused["status"])
+            self.assertEqual(1, len(calls))
+            self.assertEqual(2, len(builds))
+            self.assertEqual(result["authorization"], continuation.authorization(self.runtime, proposal))
+        self.assert_parent_unchanged()
+
+    def test_reconciliation_review_sha_and_case_inventory_are_not_trusted(self):
+        with self.reconciliation_fixture() as (selection, calls):
+            with self.assertRaisesRegex(ValueError, "RECONCILIATION_REVIEW_SHA_CHANGED"):
+                self.prepare(factor_reconciliation={**selection, "sha256": "0" * 64})
+            path = Path(selection["path"])
+            review = json.loads(path.read_bytes())
+            review["unknown_attempts"][0]["directory_manifest"].pop()
+            self.write(path, review)
+            selection["sha256"] = hashlib.sha256(path.read_bytes()).hexdigest()
+            with self.assertRaisesRegex(ValueError, "RECONCILIATION_EXACT_SIX_FILES_REQUIRED"):
+                self.prepare(factor_reconciliation=selection)
+            self.assertEqual([], calls)
+
+    def test_reconciliation_record_tamper_after_action_refuses_success_and_is_sticky(self):
+        with self.reconciliation_fixture() as (selection, _):
+            proposal = self.prepare(factor_reconciliation=selection)
+            calls, success, validate = self.success_callbacks()
+            def action(limits, authorization):
+                receipt = success(limits, authorization)
+                path = Path(authorization["claim"]["path"]).parent / "reconciliation.json"
+                raw = path.read_bytes()
+                path.write_bytes(raw.replace(b'"registered_at"', b'"registered_aT"', 1))
+                return receipt
+            with self.assertRaisesRegex(BudgetExceeded, "FILE_REFERENCE_CHANGED"):
+                continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                    authorize_existing_factor_reconciliation=True)
+            slot = continuation._slot(self.runtime, proposal["operation_id"])
+            self.assertEqual("FAILED_OR_UNKNOWN", json.loads((slot / "terminal.json").read_bytes())["status"])
+            with self.assertRaisesRegex(ValueError, "CLAIM_EXISTS_NO_RETRY"):
+                continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                    authorize_existing_factor_reconciliation=True)
+            self.assertEqual(1, len(calls))
+        self.assert_parent_unchanged()
+
+    def test_reconciliation_record_without_provider_claim_is_reused_without_rewriting(self):
+        with self.reconciliation_fixture() as (selection, _):
+            proposal = self.prepare(factor_reconciliation=selection)
+            slot = continuation._slot(self.runtime, proposal["operation_id"])
+            record_path = slot / "reconciliation.json"
+            self.write(record_path, dict(schema_version=continuation.RECONCILIATION_VERSION,
+                reconciliation=proposal["factor_reconciliation"], registered_at=datetime.now(timezone.utc).isoformat(),
+                review_json=Path(selection["path"]).read_text()))
+            original = record_path.read_bytes()
+            calls, action, validate = self.success_callbacks()
+            continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                authorize_existing_factor_reconciliation=True)
+            self.assertEqual(original, record_path.read_bytes())
+            self.assertEqual(1, len(calls))
+        self.assert_parent_unchanged()
+
+    def test_additional_ancestor_attempt_after_action_blocks_terminal_success(self):
+        with self.reconciliation_fixture() as (selection, _):
+            proposal = self.prepare(factor_reconciliation=selection)
+            calls, success, validate = self.success_callbacks()
+            def action(limits, authorization):
+                receipt = success(limits, authorization)
+                old = Path(proposal["factor_reconciliation"]["expected_case"]["unknown_attempt_dir"])
+                (old.parent / "TEST_FIXTURE_additional_unknown").mkdir()
+                return receipt
+            with self.assertRaisesRegex(ValueError, "TEST_FIXTURE_RECONCILIATION_ADDITIONAL_ATTEMPT"):
+                continuation.execute(self.runtime, proposal, action=action, validate=validate,
+                    authorize_existing_factor_reconciliation=True)
+            terminal = continuation._slot(self.runtime, proposal["operation_id"]) / "terminal.json"
+            self.assertEqual("FAILED_OR_UNKNOWN", json.loads(terminal.read_bytes())["status"])
+            self.assertEqual(1, len(calls))
+        self.assert_parent_unchanged()
 
 
 if __name__ == "__main__":

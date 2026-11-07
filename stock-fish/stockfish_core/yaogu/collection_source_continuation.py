@@ -101,6 +101,12 @@ def authorized_source_attempt(cache):
           and content_equal(proposal.get('source_retry'), claim.get('source_retry')),
           'CONTINUATION_CLAIM_AND_PROPOSAL_BINDING_CHANGED')
     _need(_stamp(claim['claimed_at']) <= datetime.now(timezone.utc), 'CONTINUATION_CLAIM_CLOCK_INVALID')
+    if proposal.get('factor_reconciliation') is not None or claim.get('factor_reconciliation_ref') is not None:
+        _need(isinstance(proposal.get('factor_reconciliation'), dict)
+              and isinstance(claim.get('factor_reconciliation_ref'), dict),
+              'CONTINUATION_RECONCILIATION_RECORD_REQUIRED')
+        from .collection_factor_reconciliation import verify_claimed_factor_reconciliation
+        verify_claimed_factor_reconciliation(cache)
     operation, _ = read(claim['original_operation_ref'], directory / 'operations' / (operation_id + '.json'))
     _need(operation.get('schema_version') == 'CODEX_CHAT_WORKSPACE_V1'
           and operation.get('scope') == scope and operation.get('operation_id') == operation_id

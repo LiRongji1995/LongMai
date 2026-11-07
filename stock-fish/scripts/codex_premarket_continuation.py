@@ -25,6 +25,7 @@ VERSION = "PREMARKET_CONTINUATION_PROPOSAL_V1"
 CLAIM_VERSION = "PREMARKET_CONTINUATION_CLAIM_V1"
 TERMINAL_VERSION = "PREMARKET_CONTINUATION_TERMINAL_V1"
 AUTHORIZATION_VERSION = "PREMARKET_CONTINUATION_AUTHORIZATION_V1"
+RECONCILIATION_VERSION = "PREMARKET_FACTOR_RECONCILIATION_RECORD_V1"
 PROOF_VERSION = "ENGINEERING_ORIGINAL_SNAPSHOT_PROOF_V1"
 ADMITTED = "ADMITTED_ONE_EXACT_SOURCE_RECOVERY_AND_CONTINUATION"
 SH = timezone(timedelta(hours=8))
@@ -268,12 +269,65 @@ def _snapshot(runtime, operation, proof, registry, reader):
     return per_snapshot, sum(r["bytes"] for r in ledger_refs)
 
 
-def _attempts(cache_root, operation, completion, reader, *, allowed_key, allowed_receipt, fixture, now):
+def _factor_review(selection, operation, cache_root, reader):
+    """Bind the one reviewed case, without treating the review as authority."""
+    if selection is None:
+        return None
+    _need(isinstance(selection, dict) and set(selection) == {"path", "sha256"}
+          and isinstance(selection["sha256"], str)
+          and re.fullmatch("[0-9a-f]{64}", selection["sha256"]), "EXACT_RECONCILIATION_REVIEW_REQUIRED")
+    review, reference = reader.read(selection["path"])
+    _need(reference["sha256"] == selection["sha256"], "RECONCILIATION_REVIEW_SHA_CHANGED")
+    _need(review.get("schema_version") == "PRIVATE_INHERITED_UNKNOWN_INVENTORY_REVIEW_V1"
+          and review.get("original_operation_id") == operation["operation_id"]
+          and review.get("current_cache") == str(cache_root)
+          and review.get("other_inventory_anomalies") == []
+          and review.get("provider_requests") == 0
+          and review.get("source_request_execution") is False
+          and review.get("continuation_claim_created") is False
+          and review.get("original_failed_job_retained") is True,
+          "RECONCILIATION_REVIEW_SCOPE_CHANGED")
+    unknown = review.get("unknown_attempts")
+    _need(isinstance(unknown, list) and len(unknown) == 1, "ONE_REVIEWED_UNKNOWN_ATTEMPT_REQUIRED")
+    old = unknown[0]
+    _need(old.get("current_observation_only") is True
+          and old.get("predating_parent_content_proof_found") is False
+          and old.get("retry_authorized") is False and old.get("source_capability_issued") is False,
+          "CURRENT_RECONCILIATION_NOT_HISTORICAL_PROOF")
+    manifest = old.get("directory_manifest")
+    _need(isinstance(manifest, list) and len(manifest) <= 64
+          and all(isinstance(row, dict) and row.get("type") in ("FILE", "DIRECTORY") for row in manifest),
+          "RECONCILIATION_EXACT_FILE_INVENTORY_REQUIRED")
+    refs = [{key: row[key] for key in ("path", "sha256", "bytes")}
+            for row in manifest if row["type"] == "FILE"]
+    _need(len(refs) == 6 and len({ref["path"] for ref in refs}) == 6,
+          "RECONCILIATION_EXACT_SIX_FILES_REQUIRED")
+    complete = old.get("existing_complete_counterparts_verified_now")
+    _need(isinstance(complete, list) and len(complete) == 1, "ONE_EXISTING_COMPLETE_COUNTERPART_REQUIRED")
+    spec = RequestSpec(**old["request_spec"])
+    _need(spec.key == old.get("source_request_key") and spec.endpoint == "adjustment_factors"
+          and complete[0].get("request_key") == spec.key
+          and complete[0].get("request_spec") == spec.to_dict()
+          and complete[0].get("status") == "COMPLETE" and complete[0].get("pagination_complete") is True,
+          "RECONCILIATION_REVIEW_REQUEST_CHANGED")
+    return dict(request_key=spec.key, unknown_attempt_dir=old["attempt"], unknown_attempt_refs=refs,
+        complete_receipt_id=complete[0]["receipt_id"], codes=deepcopy(spec.parameters["codes"]),
+        review_ref=_content(reference))
+
+
+def _attempts(cache_root, operation, completion, reader, *, allowed_key, allowed_receipt, fixture, now,
+              reconciliation_case=None, operation_ref=None, runtime=None, source_job=None):
     for name in ("index", "raw", "raw-index", "locators"):
         _path(cache_root / name, directory=True)
     cache = CaptureCache(cache_root, reader.budget,
         config=dict(offline=True, retry_failed=False, allow_test_fixture=fixture),
         executor=lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("CONTINUATION_NETWORK_FORBIDDEN")))
+    reconciliation = None
+    if reconciliation_case is not None:
+        from stockfish_core.yaogu.collection_factor_reconciliation import prepare_factor_reconciliation
+        reconciliation = prepare_factor_reconciliation(cache, operation_ref=operation_ref, operation=operation,
+            scope=runtime.scope, scope_directory=str(runtime.directory), source_job=str(source_job),
+            expected_case=reconciliation_case)
     indices, inventory, index_values = {}, [], []
     paths = sorted((cache_root / "index").glob("*/*.json"))
     _need(len(paths) <= MAX_ITEMS, "INDEX_SCAN_BOUND")
@@ -298,10 +352,14 @@ def _attempts(cache_root, operation, completion, reader, *, allowed_key, allowed
             # Only the existing fully authenticated inherited marker grammar
             # is understood. Merely finding an index never excuses unknown
             # files, an uncommitted attempt, or an invented seed directory.
-            inherited = inherited_attempt_scope(cache, folder, entries=index_values,
-                                                retain_known_terminal_failures=True)
+            if reconciliation is not None and folder.name == reconciliation_case["request_key"]:
+                from stockfish_core.yaogu.collection_factor_reconciliation import reconciled_inherited_scope
+                inherited = reconciled_inherited_scope(cache, folder, reconciliation)
+            else:
+                inherited = inherited_attempt_scope(cache, folder, entries=index_values,
+                                                    retain_known_terminal_failures=True)
             _need(inherited is not None and inherited.get("status") in
-                  ("VERIFIED_COMPLETE_ORIGINAL", "VERIFIED_RETAINED_ORIGINAL"),
+                  ("VERIFIED_COMPLETE_ORIGINAL", "VERIFIED_RETAINED_ORIGINAL", "INVENTORY_RECONCILED_UNKNOWN_RETAINED"),
                   "UNKNOWN_RAW_FOLDER")
             related = [value for value in index_values if value["receipt_id"] in inherited["receipt_ids"]]
             _need({v["receipt_id"] for v in related} == set(inherited["receipt_ids"])
@@ -392,7 +450,7 @@ def _attempts(cache_root, operation, completion, reader, *, allowed_key, allowed
         _need(content_reference_equal(prior, reference), "CACHE_REFERENCE_CHANGED_DURING_SCAN")
         inventory.append(reference)
     return source_retry, parent, workspace._digest(sorted(
-        {(r["path"], r["sha256"], r["bytes"]) for r in inventory})), counts, calendar_result["rows"], calendar_refs, historical_inventory
+        {(r["path"], r["sha256"], r["bytes"]) for r in inventory})), counts, calendar_result["rows"], calendar_refs, historical_inventory, reconciliation
 
 
 def _remaining(operation, job, final, completion, original, per_snapshot, ledger_bytes):
@@ -447,7 +505,63 @@ def _verify_references(proposal, reader):
             document, _ = reader.read(local)
             _need(document == proposal["parent_snapshot_proof"], "OWNED_SNAPSHOT_PROOF_CHANGED")
             continue
+        reconciliation = proposal.get("factor_reconciliation")
+        if (reconciliation is not None and reference["path"] == reconciliation["review_ref"]["path"]
+                and not Path(reference["path"]).exists()):
+            _reconciliation_record(proposal, reader)
+            continue
         reader.budget.read(reference["path"], expected=reference, limit=max(reference["bytes"], 1))
+    if proposal.get("factor_reconciliation") is not None:
+        # Content references alone cannot detect a newly appended ancestor
+        # attempt. Recheck this one reviewed inventory at both admission and
+        # terminal delivery, without rescanning unrelated historical sources.
+        from stockfish_core.yaogu.collection_factor_reconciliation import verify_factor_reconciliation
+        cache = CaptureCache(Path(proposal["identity"]["state_root"]) / "cache", reader.budget,
+            config=dict(offline=True, retry_failed=False,
+                allow_test_fixture=proposal["preparation_arguments"].get("allow_test_fixture", False)),
+            executor=lambda *args, **kwargs: (_ for _ in ()).throw(ValueError("CONTINUATION_NETWORK_FORBIDDEN")))
+        verify_factor_reconciliation(cache, proposal["factor_reconciliation"])
+        for reference in cache.terminal():
+            prior = reader.refs.setdefault(reference["path"], reference)
+            _need(content_reference_equal(prior, reference), "RECONCILIATION_TERMINAL_REFERENCE_CHANGED")
+
+
+def _references(value):
+    if isinstance(value, dict):
+        if {"path", "sha256", "bytes"}.issubset(value):
+            yield value
+        else:
+            for nested in value.values():
+                yield from _references(nested)
+    elif isinstance(value, list):
+        for nested in value:
+            yield from _references(nested)
+
+
+def _reconciliation_record(proposal, reader, expected=None, claimed_at=None):
+    slot = Path(proposal["scope_directory"]) / "operations" / proposal["operation_id"] / "continuation"
+    path = slot / "reconciliation.json"
+    if expected is not None:
+        _need(expected.get("path") == str(path), "RECONCILIATION_FIXED_SLOT_REQUIRED")
+    record, reference = reader.read(expected if expected is not None else path)
+    _need(record.get("schema_version") == RECONCILIATION_VERSION
+          and content_equal(record.get("reconciliation"), proposal.get("factor_reconciliation")),
+          "SEALED_RECONCILIATION_CHANGED")
+    review_ref = proposal["factor_reconciliation"]["review_ref"]
+    raw = record.get("review_json")
+    _need(isinstance(raw, str), "OWNED_RECONCILIATION_REVIEW_REQUIRED")
+    raw = raw.encode("utf-8")
+    _need(len(raw) == review_ref["bytes"] and hashlib.sha256(raw).hexdigest() == review_ref["sha256"],
+          "OWNED_RECONCILIATION_REVIEW_CHANGED")
+    parent, _ = reader.read(proposal["original_operation_ref"])
+    reviewed = strict_json(raw)
+    registered = _clock(record["registered_at"])
+    _need(max(_clock(parent["finished_at"]), _clock(reviewed["checked_at"])) <= registered
+          <= datetime.now(timezone.utc)
+          and str(registered.astimezone(SH).date()) == proposal["source_retry"]["request_spec"]["business_session"]
+          and (claimed_at is None or registered <= _clock(claimed_at)),
+          "RECONCILIATION_CURRENT_REGISTRATION_CLOCK_REQUIRED")
+    return record, reference
 
 
 def _proposal_digest(proposal):
@@ -457,7 +571,7 @@ def _proposal_digest(proposal):
 
 def prepare(runtime, *, operation_path, source_job, snapshot_proof_path,
             expected_snapshot_proof_sha256, allowed_source_key, allowed_receipt_id,
-            allow_test_fixture=False, _now_value=None):
+            allow_test_fixture=False, factor_reconciliation=None, _now_value=None):
     """Authenticate originals and return a bounded proposal; write nothing."""
     now = _now(_now_value, allow_test_fixture)
     if allow_test_fixture:
@@ -478,18 +592,25 @@ def prepare(runtime, *, operation_path, source_job, snapshot_proof_path,
                   and stored.get("source_job") == str(source_job)
                   and stored.get("source_retry", {}).get("request_key") == allowed_source_key
                   and stored["source_retry"].get("prior_receipt_id") == allowed_receipt_id
-                  and stored.get("snapshot_proof_ref", {}).get("sha256") == expected_snapshot_proof_sha256,
+                  and stored.get("snapshot_proof_ref", {}).get("sha256") == expected_snapshot_proof_sha256
+                  and stored.get("preparation_arguments", {}).get("factor_reconciliation") == factor_reconciliation,
                   "CLAIM_EXISTS_NO_RETRY")
             _verify_references(stored, reader)
+            if stored.get("factor_reconciliation") is not None:
+                _need(isinstance(claim.get("factor_reconciliation_ref"), dict), "BOUND_RECONCILIATION_REFERENCE_REQUIRED")
+                _reconciliation_record(stored, reader, claim["factor_reconciliation_ref"], claim["claimed_at"])
             return stored
         proof, proof_ref = reader.read(snapshot_proof_path)
         _need(proof_ref["sha256"] == expected_snapshot_proof_sha256
               and content_reference_equal(proof["original_operation"], operation_ref), "EXPECTED_SNAPSHOT_PROOF_CHANGED")
         job, final, completion, registry, original = _parent(runtime, operation, source_job, proof, reader)
         per_snapshot, ledger_bytes = _snapshot(runtime, operation, proof, registry, reader)
-        retry, parent, inventory, counts, calendar, calendar_refs, historical = _attempts(Path(original["state_root"]) / "cache", operation,
+        cache_root = Path(original["state_root"]) / "cache"
+        case = _factor_review(factor_reconciliation, operation, cache_root, reader)
+        retry, parent, inventory, counts, calendar, calendar_refs, historical, reconciliation = _attempts(cache_root, operation,
             completion, reader, allowed_key=allowed_source_key, allowed_receipt=allowed_receipt_id,
-            fixture=allow_test_fixture, now=now)
+            fixture=allow_test_fixture, now=now, reconciliation_case=case, operation_ref=operation_ref,
+            runtime=runtime, source_job=job)
         _need(retry["request_spec"]["business_session"] == str(now.astimezone(SH).date())
               == completion["expected_sessions"][2], "CURRENT_SOURCE_DAY_CHANGED")
         from stockfish_core.yaogu.premarket_workflow_v1 import _latest_gate
@@ -507,6 +628,16 @@ def prepare(runtime, *, operation_path, source_job, snapshot_proof_path,
         keep.update(r["path"] for r in proof["operation_ledger_references"])
         keep.update(parent_paths)
         keep.update(r["path"] for r in calendar_refs)
+        if reconciliation is not None:
+            _need(content_reference_equal(reconciliation.get("review_ref"), case["review_ref"]),
+                  "RECONCILIATION_REVIEW_BINDING_CHANGED")
+            for reference in _references(reconciliation):
+                _, actual = reader.budget.read(_path(reference["path"]), expected=reference["sha256"],
+                                               limit=max(reference["bytes"], 1))
+                _need(content_reference_equal(actual, reference), "RECONCILIATION_REFERENCE_CHANGED")
+                prior = reader.refs.setdefault(reference["path"], actual)
+                _need(content_reference_equal(prior, actual), "RECONCILIATION_REFERENCE_CHANGED")
+                keep.add(reference["path"])
         proposal = dict(schema_version=VERSION, status=ADMITTED, operation_id=operation["operation_id"],
             scope=deepcopy(runtime.scope), scope_directory=str(runtime.directory), identity=deepcopy(operation["identity"]),
             request_key=operation["identity"]["request_key"], source_job=str(job),
@@ -521,6 +652,9 @@ def prepare(runtime, *, operation_path, source_job, snapshot_proof_path,
                 snapshot_proof_path=str(snapshot_proof_path), expected_snapshot_proof_sha256=expected_snapshot_proof_sha256,
                 allowed_source_key=allowed_source_key, allowed_receipt_id=allowed_receipt_id,
                 allow_test_fixture=allow_test_fixture))
+        if reconciliation is not None:
+            proposal["factor_reconciliation"] = reconciliation
+            proposal["preparation_arguments"]["factor_reconciliation"] = deepcopy(factor_reconciliation)
         reader.verify_all()
         proposal["proposal_id"] = _proposal_digest(proposal)
     proposal["preparation_metrics"] = budget.metrics
@@ -547,6 +681,11 @@ def authorization(runtime, proposal):
           and content_reference_equal(claim["proposal_ref"], proposal_ref)
           and content_equal(claim["source_retry"], proposal["source_retry"])
           and claim["remaining_limits"] == proposal["remaining_limits"], "FIXED_AUTHORIZATION_CHANGED")
+    if stored.get("factor_reconciliation") is not None:
+        _need(isinstance(claim.get("factor_reconciliation_ref"), dict), "BOUND_RECONCILIATION_REFERENCE_REQUIRED")
+        _reconciliation_record(stored, reader, claim["factor_reconciliation_ref"], claim["claimed_at"])
+    else:
+        _need("factor_reconciliation_ref" not in claim, "UNEXPECTED_RECONCILIATION_AUTHORIZATION")
     return _authorization(runtime, stored, claim_ref, proposal_ref)
 
 
@@ -597,7 +736,7 @@ def _terminal_metrics(reader, receipt, validation, proposal):
                           for name in ("requests", "sdk_reserved", "http_reserved", "sdk_actual", "http_actual")})
 
 
-def execute(runtime, proposal, *, action, validate):
+def execute(runtime, proposal, *, action, validate, authorize_existing_factor_reconciliation=False):
     """Append one claim; action(limits, authorization) is never repeated.
 
     validate(receipt, proposal) must authenticate the new sealed job, effective
@@ -605,6 +744,9 @@ def execute(runtime, proposal, *, action, validate):
     and appends a terminal failure when possible; a bare claim is equally sticky.
     """
     _need(callable(action) and callable(validate), "CALLBACKS_REQUIRED")
+    _need(type(authorize_existing_factor_reconciliation) is bool
+          and authorize_existing_factor_reconciliation == (proposal.get("factor_reconciliation") is not None),
+          "EXPLICIT_FACTOR_RECONCILIATION_AUTHORIZATION_REQUIRED")
     _need(proposal.get("schema_version") == VERSION and proposal.get("status") == ADMITTED
           and proposal.get("proposal_id") == _proposal_digest(proposal), "PROPOSAL_CHANGED")
     _need(proposal.get("scope") == runtime.scope
@@ -631,6 +773,10 @@ def execute(runtime, proposal, *, action, validate):
                       and terminal.get("status") == "SUCCEEDED"
                       and content_reference_equal(terminal["claim_ref"], claim_ref)
                       and content_reference_equal(claim["proposal_ref"], proposal_ref), "CLAIM_EXISTS_NO_RETRY")
+                if stored.get("factor_reconciliation") is not None:
+                    _need(isinstance(claim.get("factor_reconciliation_ref"), dict),
+                          "BOUND_RECONCILIATION_REFERENCE_REQUIRED")
+                    _reconciliation_record(stored, reader, claim["factor_reconciliation_ref"], claim["claimed_at"])
             validation_started = time.monotonic()
             validation = validate(deepcopy(terminal["receipt"]), deepcopy(stored))
             with control.meter_files():
@@ -650,6 +796,25 @@ def execute(runtime, proposal, *, action, validate):
         claim_ref = proposal_ref = None
         try:
             with control.meter_files():
+                reconciliation_ref = None
+                reconciliation = proposal.get("factor_reconciliation")
+                if reconciliation is not None:
+                    reconciliation_path = slot / "reconciliation.json"
+                    if reconciliation_path.exists():
+                        record, reconciliation_ref = _reconciliation_record(proposal, reader)
+                    else:
+                        review_ref = reconciliation["review_ref"]
+                        raw, actual_review = reader.budget.read(_path(review_ref["path"]), expected=review_ref["sha256"],
+                                                   limit=max(review_ref["bytes"], 1))
+                        _need(content_reference_equal(actual_review, review_ref), "RECONCILIATION_REVIEW_CHANGED")
+                        record = dict(schema_version=RECONCILIATION_VERSION, reconciliation=reconciliation,
+                            registered_at=datetime.now(timezone.utc).isoformat(), review_json=raw.decode("utf-8"))
+                        fixed_bytes = sum(len(workspace._canonical(value)) for value in
+                                          (proposal, proposal["parent_snapshot_proof"], record))
+                        _need(fixed_bytes + 64 * 1024 <= JOURNAL_OUTPUT_BYTES - workspace.MAX_RECEIPT,
+                              "RECONCILIATION_OUTPUT_RESERVE_INSUFFICIENT")
+                        workspace._write(reconciliation_path, record)
+                        _, reconciliation_ref = _reconciliation_record(proposal, reader)
                 if (slot / "proposal.json").exists():
                     stored, proposal_ref = reader.read(slot / "proposal.json")
                     _need(stored.get("proposal_id") == proposal["proposal_id"], "EXISTING_PROPOSAL_CHANGED")
@@ -668,6 +833,8 @@ def execute(runtime, proposal, *, action, validate):
                     snapshot_proof_ref=snapshot_ref, original_snapshot_proof_ref=proposal["snapshot_proof_ref"], proposal_ref=proposal_ref,
                     source_retry=deepcopy(proposal["source_retry"]), remaining_limits=deepcopy(proposal["remaining_limits"]),
                     claimed_at=datetime.now(timezone.utc).isoformat(), original_failure_rewritten=False)
+                if reconciliation_ref is not None:
+                    claim["factor_reconciliation_ref"] = reconciliation_ref
                 _need(len(workspace._canonical(proposal)) + len(workspace._canonical(claim)) < JOURNAL_OUTPUT_BYTES // 2,
                       "CONTROL_OUTPUT_RESERVE_INSUFFICIENT")
                 _need(str(datetime.now(SH).date()) == proposal["source_retry"]["request_spec"]["business_session"],
