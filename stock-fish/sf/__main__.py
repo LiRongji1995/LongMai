@@ -239,9 +239,9 @@ def cmd_mainline(args) -> int:
             trades.to_csv(store_path / f"mainline-trades-{time.strftime('%Y%m%dT%H%M%S')}.csv", encoding="utf-8-sig", index=False)
     table = pd.DataFrame(rows).set_index("variant")
     print("主线龙头 + 拥挤离场 回测（按入场日等权、t值按天数；板块成分为当前快照，存在幸存偏差）")
-    print(table.drop(columns=["exit_mix"]).to_string())
+    print(table.drop(columns=["exit_mix"], errors="ignore").to_string())
     print("\n离场原因占比:")
-    for name, mix in table["exit_mix"].items():
+    for name, mix in table.get("exit_mix", pd.Series(dtype=object)).items():
         print(f"  {name}: {mix}")
     print(f"耗时 {time.monotonic() - started:.0f}s")
     return 0

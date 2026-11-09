@@ -1,3 +1,31 @@
+# 2026-11-10 Lean `sf` CLI; legacy pipeline frozen
+
+- New `stock-fish/sf/` package and `bin/sf` wrapper replace the daily use of `codex_daily_v2.py`, which is
+  frozen. AGENTS.md now rests on three invariants: point-in-time correctness, explicit missing data,
+  reproducible results.
+- Data: one parquet snapshot per session (BaoStock full-market daily), 1,127 sessions 2022-03 → 2026-11
+  (318 MB); adjusted prices from the exchange preclose chain, so no adjustment-factor downloads.
+  Daily Eastmoney limit-up / failed-board / limit-down pools and LHB rows; theme boards with
+  board-visibility dates to limit look-ahead.
+- Speed: core R2 computation 293 s → ~3 s; a full pre-market run is ~1.5 min (mostly network).
+- Commands: update, premarket (3-column list), show, auction, review, backtest, research, themes,
+  mainline, status. Offline tests in `tests/sf`.
+- Research findings (per-day statistics, 60/20/20 time split, entry at target open, 0.15% cost):
+  - R2 selections: negative in every segment (train −0.57%/day t=−4.7; tests −0.17%, −0.13%).
+  - Raising the absolute turnover floor (1/3/5/10/20 亿) does not make R2 positive out of sample.
+  - Buying yesterday's limit-ups at the open is consistently negative (first board t=−6.0/−2.2/−2.3).
+  - Buying on COLD sentiment days was flat 2022–2025 and positive only in the last year: not robust.
+  - A scan of 367 single/pairwise bucket rules × 3 exits found no rule valid in both test segments.
+- Mainline leader + crowded exit (`SF_MAINLINE_LEADER_V1`, `sf mainline`): leader of a top-3 theme by
+  limit-up count, entry at next open, exits on failed board / churn / MA / theme fade / stop / time.
+  - Relative turnover rank matters monotonically (avg per trade: no limit −2.21%, top 200 −1.61%,
+    top 100 −1.48%, top 50 −1.16%, top 30 −0.85%), but every variant is still negative overall.
+  - Pre-declared variants (top-30 rank, gap ≥ 0, leader rank 1, MA5/MA10/no MA exit, churn 2×/3×):
+    none is positive in both test segments. Best: top 30 + gap ≥ 0 (test1 −1.26% t=−0.84,
+    test2 +3.30% t=1.70). The strategy stays research-only; it is not used for the pre-market list.
+  - Noise concept boards (price-action/popularity buckets) are now filtered when themes are loaded;
+    `trend_ma` makes the MA exit configurable (0 disables).
+
 # 2026-11-09 按日因子审查与重复处理优化
 
 - 核对按日因子事件接口及SDK分页边界，未取得完整历史修订保证，保持原全锚定复权采集，不接入不充分的日增量。

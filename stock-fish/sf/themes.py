@@ -25,7 +25,11 @@ NOISE = ("昨日", "融资融券", "沪股通", "深股通", "MSCI", "标准普�
          "举牌", "央视50", "茅指数", "宁组合", "ST股", "微盘股", "专精特新", "注册制", "北交所", "超级品牌",
          "壳资源", "养老金", "长江三角", "大湾区", "京津冀", "成渝", "西部大开发", "一带一路", "国企改革",
          "央企改革", "地方国资", "MLOps", "季报", "年报", "增持", "回购", "分拆", "IPO受益", "创投", "AB股",
-         "GDR", "科创", "广东板块", "浙江板块", "江苏板块", "上海板块", "北京板块", "深圳特区")
+         "GDR", "科创", "广东板块", "浙江板块", "江苏板块", "上海板块", "北京板块", "深圳特区",
+         # price-action / popularity / status buckets (not themes)
+         "多板", "连板", "首板", "热股", "人气", "题材股", "新高", "新低", "涨停", "跌停", "龙虎榜", "活跃",
+         "亏损", "微利", "破发", "低市盈率", "高股息", "外资背景", "大盘", "中盘", "小盘", "绩优", "蓝筹", "白马",
+         "东方财富", "百元", "异动", "放量", "缩量", "强势", "弱势", "历史", "近期", "重仓", "持股", "陆股通")
 
 
 def _meta(name: str):
@@ -73,7 +77,10 @@ def load() -> tuple[pd.DataFrame, pd.DataFrame] | None:
     b, m = _meta("theme_boards.parquet"), _meta("theme_members.parquet")
     if not (b.exists() and m.exists()):
         return None
-    return pd.read_parquet(b), pd.read_parquet(m)
+    boards, members = pd.read_parquet(b), pd.read_parquet(m)
+    noise = boards["board"].map(lambda n: any(word in n for word in NOISE)) & boards["kind"].eq("concept")
+    keep = set(boards.loc[~noise, "board"])
+    return boards[boards["board"].isin(keep)], members[members["board"].isin(keep)]
 
 
 if __name__ == "__main__":

@@ -21,7 +21,7 @@ Entry (target session open, auction-time filter)
 Exit (decided at each close from the entry day on; executed at the next open)
   BROKEN       touched limit-up but closed below (炸板)
   CHURN        turnover >= churn_mult x prior-5-day average and ret1 <= 2% (放量滞涨, crowded)
-  TREND        close below MA5
+  TREND        close below MA(trend_ma); trend_ma=0 disables
   THEME_FADE   the leader's best mainline board has lu < fade_ratio x its signal-day lu (退潮/分化)
   STOP         close <= entry x (1 - stop_loss)
   TIME         held max_hold sessions
@@ -38,7 +38,7 @@ from . import outcomes, store, strategy, themes
 
 VERSION = "SF_MAINLINE_LEADER_V1"
 DEFAULTS = dict(top_k=3, min_theme_limit_ups=3, amount_rank_max=100, leader_rank_max=2,
-                gap_min=-0.03, churn_mult=2.0, fade_ratio=0.34, stop_loss=0.07, max_hold=10)
+                gap_min=-0.03, churn_mult=2.0, fade_ratio=0.34, stop_loss=0.07, max_hold=10, trend_ma=5)
 
 
 def params(overrides=None):
@@ -116,16 +116,17 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
     rows = []
     for board in lines:
         member_codes = [cols[j] for j in np.flatnonzero(ts["M"][ts["names"].index(board)])]
-        cand = pd.DataFrame(index=pd.Index(member_codes).intersection(w["close"].columns))
+        index = pd.Index(member_codes).intersection(w["close"].columns)
+        if not len(index):
+            continue
+        cand = pd.DataFrame({"height": height.reindex(index), "amount": raw["amount"].reindex(index)})
+        # Rank only today's strong, eligible members: weak members can't be the leader.
+        cand = cand[pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)]
         if cand.empty:
             continue
-        cand["height"] = height.reindex(cand.index)
-        cand["amount"] = raw["amount"].reindex(cand.index)
         cand["leader_rank"] = cand.sort_values(["height", "amount"], ascending=False).assign(
             r=range(1, len(cand) + 1))["r"]
-        ok = (pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)
-              & (amount_rank.reindex(cand.index) <= p["amount_rank_max"])
-              & (cand["leader_rank"] <= p["leader_rank_max"]))
+        ok = (amount_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
         for code in cand.index[ok]:
             rows.append(dict(code=code, board=board, board_lu=float(ts["lu"].loc[day, board]),
                              leader_rank=int(cand.loc[code, "leader_rank"]), height=int(cand.loc[code, "height"]),
@@ -164,7 +165,7 @@ def simulate(w: dict, ts: dict, t: int, code: str, board: str, board_lu: float, 
         elif turn.iloc[k] >= p["churn_mult"] * turn.iloc[max(0, k - 5):k].mean() and \
                 close.iloc[k] / w["preclose"][code].iloc[k] - 1 <= 0.02:
             reason = "CHURN"
-        elif c_adj < adj.iloc[k - 4:k + 1].mean():
+        elif p["trend_ma"] and c_adj < adj.iloc[max(0, k - p["trend_ma"] + 1):k + 1].mean():
             reason = "TREND"
         elif ts["lu"].iloc[k].get(board, 0) < p["fade_ratio"] * board_lu:
             reason = "THEME_FADE"
