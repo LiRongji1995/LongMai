@@ -443,7 +443,6 @@ class CaptureCache:
                   and hashlib.sha256(raw).hexdigest() == ref['sha256'],
                   'MATURE_CAPTURE_SNAPSHOT_CONTENT_CHANGED')
         self._authentication_objects(refs)
-        original_bytes, original_text = Path.read_bytes, Path.read_text
         def get(path):
             resolved = str(Path(path).resolve(strict=True))
             _need(resolved in allowed, 'UNREGISTERED_MATURE_CAPTURE_READ')
@@ -454,6 +453,7 @@ class CaptureCache:
         def read_text(path, encoding=None, errors=None):
             return io.TextIOWrapper(io.BytesIO(get(path)), encoding=encoding, errors=errors).read()
         with _VERIFY_LOCK:
+            original_bytes, original_text = Path.read_bytes, Path.read_text
             Path.read_bytes, Path.read_text = read_bytes, read_text
             try:
                 authenticated = historical_replay.verify_capture(archive_root, result)

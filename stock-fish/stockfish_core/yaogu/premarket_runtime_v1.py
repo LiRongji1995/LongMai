@@ -155,20 +155,25 @@ def _control_directory_lock(directory, *, exclusive, _scan_binding=None):
         # Only directory_bytes supplies this invocation-owned descriptor. Its
         # parent descriptor anchors the name, so no ancestor path is resolved
         # again and no child symlink can redirect the scan.
-        directory = Path(directory)
-        if os.name != 'posix' or not directory.is_absolute() or '..' in directory.parts:
+        directory = os.fspath(directory)
+        if (os.name != 'posix' or not isinstance(directory, str)
+                or not os.path.isabs(directory) or '..' in directory.split(os.sep)):
             raise RuntimeError('ATOMIC_CONTROL_INVALID_SCAN_BINDING')
-        descriptor, expected_identity, parent_fd, name = _scan_binding
-        before = os.fstat(descriptor)
-        current = _scan_directory_stat(directory, parent_fd, name)
-        if any(_directory_identity(value) != expected_identity for value in (before, current)):
-            raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
+        directory = os.path.normpath(directory)
+        descriptor, identity, parent_fd, name = _scan_binding
+        if (type(descriptor) is not int or descriptor < 0
+                or not isinstance(identity, tuple) or len(identity) != 3
+                or any(type(value) is not int for value in identity)
+                or (parent_fd is None and name is not None)
+                or (parent_fd is not None and (type(parent_fd) is not int or parent_fd < 0
+                    or not isinstance(name, str) or name in ('', '.', '..') or os.sep in name))):
+            raise RuntimeError('ATOMIC_CONTROL_INVALID_SCAN_BINDING')
     else:
         directory = Path(directory).resolve(strict=True)
         before = directory.stat()
-    if not stat.S_ISDIR(before.st_mode):
+        identity = _directory_identity(before)
+    if not stat.S_ISDIR(identity[2]):
         raise NotADirectoryError(str(directory))
-    identity = _directory_identity(before)
     key = (os.path.normcase(str(directory)), *identity)
     owner_pid = os.getpid()
     active_key = (owner_pid, *key)
@@ -177,6 +182,13 @@ def _control_directory_lock(directory, *, exclusive, _scan_binding=None):
         active = _CONTROL_LOCKS.active = {}
     prior = active.get(active_key)
     if prior is not None:
+        if borrowed:
+            # Reentry does not acquire a lock below, so authenticate both the
+            # supplied descriptor and anchored name before borrowing it.
+            opened = os.fstat(descriptor)
+            current = _scan_directory_stat(directory, parent_fd, name)
+            if any(_directory_identity(value) != identity for value in (opened, current)):
+                raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
         if exclusive and not prior['exclusive']:
             raise RuntimeError('ATOMIC_CONTROL_LOCK_UPGRADE_FORBIDDEN')
         yield prior['descriptor']
@@ -203,6 +215,9 @@ def _control_directory_lock(directory, *, exclusive, _scan_binding=None):
                     time.sleep(min(CONTROL_LOCK_POLL_SECONDS, remaining))
             opened = os.fstat(descriptor)
             current = (_scan_directory_stat(directory, parent_fd, name) if borrowed else directory.stat())
+            # The expected scan identity came from parent enumeration (or the
+            # canonical root). Checking after acquisition also covers objects
+            # replaced while waiting; nothing is scanned before this check.
             if any(_directory_identity(v) != identity for v in (opened, current)):
                 raise RuntimeError('ATOMIC_CONTROL_DIRECTORY_IDENTITY_CHANGED')
             active[active_key] = dict(descriptor=descriptor, exclusive=exclusive)
@@ -324,6 +339,7 @@ def _directory_bytes_anchored(root):
     while descendants are visited; identities are rechecked on return. No size
     or directory-mtime cache survives even one call.
     """
+    root = os.fspath(root)
     flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
     root_identity = _directory_identity(os.stat(root, follow_symlinks=False))
     descriptor = os.open(root, flags)
@@ -362,7 +378,7 @@ def _directory_bytes_anchored(root):
                 os.close(frame['descriptor'])
                 continue
             child_fd = os.open(name, flags, dir_fd=frame['descriptor'])
-            stack.append(dict(path=frame['path'] / name, descriptor=child_fd, identity=identity,
+            stack.append(dict(path=os.path.join(frame['path'], name), descriptor=child_fd, identity=identity,
                               parent_fd=frame['descriptor'], name=name, children=None))
     finally:
         primary, closing_error = sys.exc_info()[1], None

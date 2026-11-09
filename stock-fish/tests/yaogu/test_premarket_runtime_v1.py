@@ -161,6 +161,80 @@ class RuntimeFixture(unittest.TestCase):
             with self.assertRaises(OSError): os.fstat(descriptor)
         self.assertEqual(runtime.directory_bytes(tree), 0)
 
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_opened_child_replaced_before_shared_lock_is_rejected_and_fds_close(self):
+        import fcntl
+        tree = self.root/'tree'; child = tree/'child'
+        child.mkdir(parents=True); (child/'payload').write_bytes(b'x'*5000)
+        child_inode = child.stat().st_ino
+        original_open, original_flock = os.open, fcntl.flock
+        descriptors, replaced = [], []
+        def opened(*args, **kwargs):
+            descriptor = original_open(*args, **kwargs)
+            descriptors.append(descriptor)
+            return descriptor
+        def flock(descriptor, operation):
+            if operation & fcntl.LOCK_SH and os.fstat(descriptor).st_ino == child_inode and not replaced:
+                child.rename(tree/'retained-child')
+                child.mkdir(); (child/'foreign').write_bytes(b'foreign')
+                replaced.append(True)
+            return original_flock(descriptor, operation)
+        with patch.object(runtime.os, 'open', side_effect=opened), patch.object(fcntl, 'flock', side_effect=flock):
+            with self.assertRaisesRegex(RuntimeError, 'DIRECTORY_IDENTITY_CHANGED'):
+                runtime.directory_bytes(tree)
+        self.assertEqual(replaced, [True])
+        self.assertEqual(len(descriptors), 2)
+        for descriptor in descriptors:
+            with self.assertRaises(OSError): os.fstat(descriptor)
+        self.assertEqual((tree/'retained-child'/'payload').stat().st_size, 5000)
+        self.assertEqual(runtime.directory_bytes(tree), 5007)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_borrowed_reentrant_lock_rechecks_bound_name_and_descriptor(self):
+        tree, other = self.root/'tree', self.root/'other'
+        tree.mkdir(); other.mkdir()
+        directory = tree.resolve()
+        flags = os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW
+        descriptor, foreign = os.open(directory, flags), os.open(other, flags)
+        identity = runtime._directory_identity(os.fstat(descriptor))
+        try:
+            with runtime._control_directory_lock(directory, exclusive=False):
+                with self.assertRaisesRegex(RuntimeError, 'DIRECTORY_IDENTITY_CHANGED'):
+                    with runtime._control_directory_lock(directory, exclusive=False,
+                            _scan_binding=(foreign, identity, None, None)):
+                        self.fail('foreign descriptor must not borrow a held lock')
+                directory.rename(self.root/'retained-tree'); directory.mkdir()
+                with self.assertRaisesRegex(RuntimeError, 'DIRECTORY_IDENTITY_CHANGED'):
+                    with runtime._control_directory_lock(directory, exclusive=False,
+                            _scan_binding=(descriptor, identity, None, None)):
+                        self.fail('replaced path must not borrow the old lock')
+            os.fstat(descriptor); os.fstat(foreign)
+        finally:
+            os.close(descriptor); os.close(foreign)
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX descriptor-anchored directory scan')
+    def test_borrowed_scan_binding_rejects_relative_parent_and_non_directory_identity(self):
+        import fcntl
+        tree = (self.root/'tree'); tree.mkdir()
+        directory = tree.resolve()
+        descriptor = os.open(directory, os.O_RDONLY | os.O_DIRECTORY | os.O_NOFOLLOW)
+        identity = runtime._directory_identity(os.fstat(descriptor))
+        try:
+            for path in ('relative', str(directory/'..'/'tree')):
+                with self.subTest(path=path), patch.object(fcntl, 'flock') as flock:
+                    with self.assertRaisesRegex(RuntimeError, 'INVALID_SCAN_BINDING'):
+                        with runtime._control_directory_lock(path, exclusive=False,
+                                _scan_binding=(descriptor, identity, None, None)):
+                            self.fail('unanchored path must not be used')
+                    flock.assert_not_called()
+            regular = runtime._directory_identity(self.path.stat())
+            with self.assertRaises((NotADirectoryError, RuntimeError)):
+                with runtime._control_directory_lock(directory, exclusive=False,
+                        _scan_binding=(descriptor, regular, None, None)):
+                    self.fail('a regular-file identity cannot authorize a directory scan')
+        finally:
+            os.close(descriptor)
+
     def test_phase_entry_and_exit_force_complete_growth_checks(self):
         for scope in ('job', 'cache'):
             for boundary in ('entry', 'exit'):
@@ -549,6 +623,37 @@ class AtomicControlFixture(unittest.TestCase):
                 if scanner is not None: self.joined(scanner)
         self.assertEqual(pe, []); self.assertEqual(se, [])
         self.assertEqual(result, [self.target.stat().st_size])
+
+    @unittest.skipUnless(os.name == 'posix', 'POSIX directory FD flock test')
+    def test_waiting_scan_rechecks_directory_replacement_after_lock_acquisition(self):
+        import fcntl
+        child = self.root/'child'; child.mkdir()
+        (child/'payload').write_bytes(b'own'*1000)
+        old_inode = child.stat().st_ino
+        attempted = self.threading.Event()
+        original_flock = fcntl.flock
+        def flock(descriptor, operation):
+            if (operation & fcntl.LOCK_SH and os.fstat(descriptor).st_ino == old_inode
+                    and self.threading.current_thread().name == 'replacement-scanner'):
+                attempted.set()
+            return original_flock(descriptor, operation)
+        scanner = None
+        with patch.object(fcntl, 'flock', side_effect=flock):
+            try:
+                with runtime._control_directory_lock(child, exclusive=True):
+                    scanner, errors, result = self.start(lambda: runtime.directory_bytes(self.root),
+                                                        name='replacement-scanner')
+                    self.wait(attempted)
+                    self.assertTrue(scanner.is_alive())
+                    child.rename(self.root/'retained-child')
+                    child.mkdir(); (child/'replacement').write_bytes(b'foreign')
+            finally:
+                if scanner is not None: self.joined(scanner)
+        self.assertEqual(result, [])
+        self.assertEqual(len(errors), 1)
+        self.assertRegex(str(errors[0]), 'DIRECTORY_IDENTITY_CHANGED')
+        self.assertEqual((self.root/'retained-child'/'payload').stat().st_size, 3000)
+        self.assertEqual(runtime.directory_bytes(self.root), len(self.old) + 3007)
 
     def test_different_parent_publish_does_not_wait_for_unrelated_lock(self):
         other = self.root/'other'; other.mkdir()

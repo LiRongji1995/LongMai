@@ -54,6 +54,36 @@ def _derived_clock(source_by,refs,session=None):
     clocks=[_clock(source_by[ref],session) for ref in dict.fromkeys(refs)]
     return {field:max(clock[field] for clock in clocks) for field in
             ('event_time','source_published_at','first_seen_at','ingested_at')}
+
+def _normalization_clock_projections():
+    """Reuse pure clock projections within one normalization, never evidence.
+
+    Receipt clocks and reference order remain part of each key. No source
+    authentication is cached, and returned dictionaries never alias the memo.
+    The fixed bound also covers unusual inputs with many distinct sources.
+    """
+    single, composed = {}, {}
+    maximum = 4096
+
+    def clock(receipt,session=None):
+        key=(receipt['first_seen_at'],receipt['ingested_at'],session)
+        value=single.get(key)
+        if value is None:
+            value=_clock(receipt,session)
+            if len(single)<maximum:single[key]=value
+        return dict(value)
+
+    def derived_clock(source_by,refs,session=None):
+        refs=tuple(dict.fromkeys(refs))
+        key=(tuple((source_by[ref]['first_seen_at'],source_by[ref]['ingested_at'])
+                   for ref in refs),session)
+        value=composed.get(key)
+        if value is None:
+            value=_derived_clock(source_by,refs,session)
+            if len(composed)<maximum:composed[key]=value
+        return dict(value)
+
+    return clock,derived_clock
 def _theme_type(name,endpoint):
     if endpoint.startswith('industry'):return 'INDUSTRY_PROXY'
     if not name:return 'UNKNOWN'
@@ -68,6 +98,7 @@ from .e2e_tracing import traced_stage
 def normalize_capture_with_report(results,observation_date,now,sessions,*,history_store=None,history_base_ref=None,
                                   coverage_type='PROSPECTIVE_CAPTURED',progress=None,retained_identity_base=None,
                                   review_factor_conflicts=False,factor_review_base=None,factor_review_limits=None):
+    _clock,_derived_clock=_normalization_clock_projections()
     day=_date(observation_date)
     if day is None or now.tzinfo is None:raise ValueError('OBSERVATION_DATE_AND_AWARE_CLOCK_REQUIRED')
     if coverage_type not in {'PROSPECTIVE_CAPTURED','RECONSTRUCTED_HISTORICAL','TEST_FIXTURE'}:

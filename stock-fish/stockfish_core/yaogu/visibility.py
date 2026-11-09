@@ -8,11 +8,12 @@ from __future__ import annotations
 from dataclasses import dataclass
 from datetime import date, datetime
 from zoneinfo import ZoneInfo
-from .contracts import SourceReceipt, digest
+from .contracts import Clocked, SourceReceipt, digest
 
 POLICY_ID = 'R03_EVIDENCE_VISIBILITY_V1'
 SH = ZoneInfo('Asia/Shanghai')
 CLOCKS = ('event_time', 'source_published_at', 'first_seen_at', 'ingested_at')
+_CLOCK_FIELDS = frozenset(CLOCKS)
 
 
 def mapping(value):
@@ -33,7 +34,11 @@ def day(value):
 def clock_visible(obj, cutoff, *, allow_late_capture=False):
     """Clock predicate only; it cannot authorize an unresolved source."""
     try:
-        row = mapping(obj)
+        # Typed evidence can contain a whole universe or a large receipt scope.
+        # Preserve Pydantic's JSON clock semantics without serializing unrelated
+        # business fields on every clock predicate. Nothing is cached across calls.
+        row = (obj.model_dump(mode='json', include=_CLOCK_FIELDS)
+               if isinstance(obj, Clocked) else mapping(obj))
         clocks = tuple(stamp(row[k]) for k in CLOCKS)
         cutoff = stamp(cutoff)
         if clocks[2] > clocks[3]:
