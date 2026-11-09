@@ -78,6 +78,37 @@ def _expected_gate(expected, now=None):
     return current
 
 
+def _premarket_gate(expected, now=None):
+    current = _expected_gate(expected, now)
+    if current is None:
+        raise ValueError("SHARED_PREMARKET_DEADLINE_REQUIRES_EXPECTED_SESSIONS")
+    deadline = datetime.combine(date.fromisoformat(expected[1]), wall_time(9, 30), legacy.SH)
+    if current >= deadline:
+        raise BudgetExceeded("SHARED_PREMARKET_OPENING_DEADLINE_EXCEEDED")
+    return deadline.isoformat()
+
+
+def _premarket_cache(base, gate):
+    """Restrict new requests without changing the original commit transaction."""
+    class PremarketCache(base):
+        _premarket_stopped = False
+
+        def _capture_new(self, spec, **kwargs):
+            if self._premarket_stopped:
+                raise ValueError("SHARED_PREMARKET_FAILED_NO_MORE_REQUESTS")
+            try:
+                gate()
+                record = super()._capture_new(spec, **kwargs)
+                # The original implementation has already retained the result
+                # and commit. A late result must not be relabeled UNKNOWN.
+                gate()
+                return record
+            except BaseException:
+                self._premarket_stopped = True
+                raise
+    return PremarketCache
+
+
 def _clone(function, bindings):
     scope = dict(function.__globals__)
     scope.update(bindings)
@@ -166,6 +197,11 @@ def _workflow_budget(*args, **kwargs):
 
 
 def _shared_completion(job, *, status, phases, budget, **fields):
+    deadline = getattr(budget, "premarket_deadline", None)
+    if deadline is not None:
+        fields["premarket_deadline"] = deadline
+        if status in SUCCESS:
+            budget.premarket_gate()
     if status in SUCCESS:
         # These are control/source reads, charged to the original capture
         # allocation. No phase borrows another allocation and exhaustion stays
@@ -179,6 +215,8 @@ def _shared_completion(job, *, status, phases, budget, **fields):
             if not content_reference_equal(prior, reference):
                 raise ValueError("SHARED_PREMARKET_SOURCE_REFERENCE_CONFLICT")
         fields["validation_references"] = list(references.values())
+        if deadline is not None:
+            budget.premarket_gate()
     fields.update(execution_version=VERSION,
         native_core_algorithm="UNCHANGED_ORIGINAL_NATIVE_CORE",
         theme_execution="UNCHANGED_ORIGINAL_NATIVE_THEME",
@@ -190,7 +228,8 @@ def _shared_completion(job, *, status, phases, budget, **fields):
         status=status, phases=phases, budget=budget, **fields)
 
 
-def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expected_sessions=None, engine="original"):
+def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expected_sessions=None, engine="original",
+                            require_premarket=False):
     """Run capture through display and terminal checks in the owned worker.
 
     ``adapters`` retains the exact original explicit TEST_FIXTURE restriction.
@@ -198,12 +237,17 @@ def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expecte
     """
     engine = _engine(engine)
     expected = _expected_sessions(expected_sessions)
+    if type(require_premarket) is not bool:
+        raise ValueError("SHARED_PREMARKET_DEADLINE_FLAG_REQUIRED")
     fixture_clock = now if config.get("capture", {}).get("allow_test_fixture") is True else None
     if expected is not None and now is not None and fixture_clock is None:
         raise ValueError("SHARED_PREMARKET_PRODUCTION_CLOCK_OVERRIDE_FORBIDDEN")
     capture_now = _expected_gate(expected, fixture_clock) if expected is not None else now
+    gate = lambda: _premarket_gate(expected, fixture_clock)
+    deadline = gate() if require_premarket else None
     from stockfish_core.yaogu import premarket_capture_cache_v1 as capture
     original_import = builtins.__import__
+    cache_class = _premarket_cache(capture.CaptureCache, gate) if require_premarket else capture.CaptureCache
 
     def collect(*args, **kwargs):
         if expected is not None:
@@ -219,7 +263,7 @@ def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expecte
                 and tuple(fromlist) == ("CaptureCache", "capture_collect", "capture_theme_sources")
                 and globals is not None
                 and globals.get("__package__") == legacy.__package__):
-            return SimpleNamespace(CaptureCache=capture.CaptureCache,
+            return SimpleNamespace(CaptureCache=cache_class,
                 capture_collect=collect, capture_theme_sources=collect_themes)
         return original_import(name, globals, locals, fromlist, level)
 
@@ -230,12 +274,16 @@ def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expecte
         budget = _workflow_budget(*args, **kwargs)
         budget.expected_sessions = expected
         budget.execution_engine = engine
+        if require_premarket:
+            budget.premarket_deadline, budget.premarket_gate = deadline, gate
         return budget
 
     def latest_gate(calendar_rows, observation, target, clock=None):
         if expected is None:
             return legacy._latest_gate(calendar_rows, observation, target, clock)
         current = _expected_gate(expected, fixture_clock)
+        if require_premarket:
+            gate()
         if (str(observation), str(target)) != expected[:2]:
             raise ValueError("SHARED_PREMARKET_CAPTURE_SESSION_DIFFERS_FROM_REQUEST")
         return legacy._latest_gate(calendar_rows, observation, target, current)
@@ -247,7 +295,7 @@ def execute_workflow_shared(config, job_dir, *, now=None, adapters=None, expecte
 
 
 class _SupervisorGuard:
-    def __init__(self, limits, started_at=None, expected_sessions=None, engine="original"):
+    def __init__(self, limits, started_at=None, expected_sessions=None, engine="original", require_premarket=False):
         now = time.monotonic()
         if started_at is not None and (type(started_at) not in (int, float)
                 or not math.isfinite(started_at) or not 0 <= started_at <= now):
@@ -259,10 +307,20 @@ class _SupervisorGuard:
         self.last_output_check = 0.0
         self.expected_sessions = _expected_sessions(expected_sessions)
         self.engine = _engine(engine)
+        if type(require_premarket) is not bool:
+            raise ValueError("SHARED_PREMARKET_DEADLINE_FLAG_REQUIRED")
+        self.require_premarket = require_premarket
+        self.premarket_deadline = _premarket_gate(self.expected_sessions) if require_premarket else None
 
     def check(self, *, force=False):
         if self.failed:
             raise BudgetExceeded("SHARED_PREMARKET_SUPERVISOR_BUDGET_EXHAUSTED")
+        if self.require_premarket:
+            try:
+                _premarket_gate(self.expected_sessions)
+            except BaseException:
+                self.failed = True
+                raise
         reason = None
         if self.limits["max_seconds"] is not None and time.monotonic() - self.started > self.limits["max_seconds"]:
             reason = "TOTAL_TIME_LIMIT_EXCEEDED"
@@ -276,6 +334,8 @@ class _SupervisorGuard:
 
     def seal(self, path, value):
         self.job = Path(path).parent
+        if self.premarket_deadline is not None:
+            value["premarket_deadline"] = self.premarket_deadline
         if value.get("status") in SUCCESS:
             _expected_gate(self.expected_sessions)
             self.check(force=True)
@@ -323,6 +383,8 @@ class _WorkerSubprocess:
                 for option, value in zip(("--observation-date", "--target-session", "--planning-local-date"),
                                         self.guard.expected_sessions):
                     command += [option, value]
+            if self.guard.require_premarket:
+                command.append("--require-premarket")
         elif command != self.fixture_command:
             raise ValueError("SHARED_PREMARKET_FIXTURE_COMMAND_CHANGED")
         if Path(self.absent).exists():
@@ -336,7 +398,7 @@ class _WorkerSubprocess:
 
 
 def supervise(config, *, progress=True, started_at=None, expected_sessions=None, engine="original",
-              recovery_context=None, continuation_context=None, _fixture_worker_command=None):
+              recovery_context=None, continuation_context=None, require_premarket=False, _fixture_worker_command=None):
     """Return ``(exit_code, final)``; caller coordinates its stable request key.
 
     Registered configuration retains its original schema and every limit.
@@ -400,7 +462,7 @@ def supervise(config, *, progress=True, started_at=None, expected_sessions=None,
         session.meter = read_meter
         return _code_refs(read_meter)
 
-    guard = Guard(config["limits"], started_at, expected_sessions, engine)
+    guard = Guard(config["limits"], started_at, expected_sessions, engine, require_premarket)
     session = NativeProcessSession(config["limits"], started_at=started_at)
     _expected_gate(guard.expected_sessions)
     with tempfile.TemporaryDirectory(prefix="stockfish-premarket-bytecode-") as directory:
@@ -463,6 +525,7 @@ def parser():
     worker = commands.add_parser("_worker", help=argparse.SUPPRESS)
     worker.add_argument("--job", required=True)
     worker.add_argument("--engine", choices=("original",), default="original")
+    worker.add_argument("--require-premarket", action="store_true", help=argparse.SUPPRESS)
     for option in ("--observation-date", "--target-session", "--planning-local-date"):
         worker.add_argument(option)
     return result
@@ -482,7 +545,7 @@ def main(argv=None):
                 raise ValueError("SHARED_PREMARKET_ISOLATED_OWNED_WORKER_REQUIRED")
             job = Path(args.job).resolve(strict=True)
             value = execute_workflow_shared(legacy._read_control(job / "configuration.json"), job,
-                expected_sessions=expected, engine=args.engine)
+                expected_sessions=expected, engine=args.engine, require_premarket=args.require_premarket)
             return EXIT_CODES[value["status"]]
     except Exception as error:
         # Outer errors contain controlled codes only; raw provider exceptions

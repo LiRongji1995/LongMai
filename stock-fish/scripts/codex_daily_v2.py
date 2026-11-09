@@ -102,7 +102,7 @@ def _prior_request(runtime, identity):
 
 
 def _validate(prepared, snapshot, receipt, observation, target, expected_engine, *, recovery_context=None,
-              effective_limits=None, continuation_context=None):
+              effective_limits=None, continuation_context=None, premarket_deadline=None):
     workflow = _workflow()
     _same(prepared, snapshot)
     need(receipt.get("schema_version") == VERSION, "DAILY_SHARED_RECEIPT_VERSION")
@@ -136,6 +136,10 @@ def _validate(prepared, snapshot, receipt, observation, target, expected_engine,
          and completion.get("status") == final["status"] and completion.get("core_verified") is True
          and completion.get("observation_date") == observation and completion.get("target_session") == target,
          "DAILY_SHARED_COMPLETION_BINDING")
+    if premarket_deadline is not None:
+        need(receipt.get("premarket_deadline") == final.get("premarket_deadline") ==
+             completion.get("premarket_deadline") == premarket_deadline,
+             "REFRESH_PREMARKET_DEADLINE_BINDING")
     need(bool(completion.get("run_id")) and completion["run_id"] == receipt["run_id"]
          and completion.get("strategy_id") == "SHORT_HORIZON_STRENGTH_R2"
          and receipt.get("strategy_id") == completion["strategy_id"]
@@ -473,6 +477,119 @@ def _continue_premarket(runtime, args):
     return result["receipt"]["execution_exit_code"], result
 
 
+def _refresh_premarket(runtime, args):
+    """One same-session refresh under a sealed continuation's original budget."""
+    from scripts import codex_premarket_refresh as refresh
+    from scripts import codex_premarket_continuation as continuation
+    from stockfish_core.yaogu import premarket_workflow_v1 as frozen
+    from stockfish_core.yaogu.premarket_runtime_v1 import Budget
+
+    planning = args.command == "premarket-refresh-plan"
+    need(planning or args.authorize_missing_refresh, "REFRESH_EXPLICIT_MISSING_COLLECTION_AUTHORIZATION_REQUIRED")
+    prepared = original._prepared(runtime.profile)
+    need(prepared["source"] == ROOT and workspace.interpreter_path(sys.executable) == prepared["python"],
+         "DAILY_SHARED_REGISTERED_SOURCE_AND_PYTHON_REQUIRED")
+    proposal = refresh.prepare(runtime, operation_path=args.operation,
+        expected_terminal_sha256=args.expected_terminal_sha256,
+        allow_test_fixture=getattr(args, "allow_test_fixture", False))
+    if planning:
+        return 0, proposal
+    observation, target, local_day = proposal["expected_sessions"]
+    expected_sessions = (observation, target, local_day)
+    wrapper_budget = Budget({**proposal["remaining_limits"],
+        "max_seconds": continuation.WRAPPER_PREPARE_SECONDS,
+        "capture_read_bytes": continuation.WRAPPER_PREPARE_READ_BYTES})
+    with wrapper_budget.phase("capture"), wrapper_budget.meter_files():
+        _workflow()._expected_gate(expected_sessions)
+        snapshot = _snapshot(prepared)
+        recovery_context = runtime.capture_recovery_context()
+        original_config = frozen.load_config(str(prepared["config"]))
+        need(not original_config["capture"].get("retry_failed", False)
+             and not original_config["capture"].get("offline", False)
+             and not original_config["seed_sources"], "REFRESH_ORIGINAL_CAPTURE_POLICY_REQUIRED")
+    preparation_metrics = wrapper_budget.metrics
+    execution_budget = None
+    effective_limits = None
+
+    def action(remaining_limits, authorization):
+        nonlocal execution_budget, effective_limits
+        _bounded_continuation_limits(original_config["limits"], remaining_limits)
+        effective_limits = dict(remaining_limits)
+        execution_budget = Budget({**effective_limits,
+            "capture_read_bytes": min(effective_limits["capture_read_bytes"], effective_limits["supervisor_read_bytes"])})
+        final = None
+        try:
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _same(prepared, snapshot)
+                need(content_equal(runtime.capture_recovery_context(), recovery_context),
+                     "DAILY_SHARED_RECOVERY_CONTEXT_CHANGED")
+                _workflow()._expected_gate(expected_sessions)
+                config = frozen.load_config(str(prepared["config"]))
+                config["limits"] = effective_limits
+            options = {} if recovery_context is None else dict(recovery_context=recovery_context)
+            code, final = _workflow().supervise(config, progress=False, started_at=execution_budget.started,
+                expected_sessions=expected_sessions, engine="original", require_premarket=True, **options)
+            execution_budget.charge_read(final.get("supervisor_returned_read_bytes", 0))
+            execution_budget.check("refresh_supervisor_return", force=True)
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _same(prepared, snapshot)
+                need(code in (0, 2) and final.get("status") in original.SUCCESS
+                     and code == original.SUCCESS[final["status"]], "REFRESH_EXECUTION_FAILED_NO_RETRY")
+                job = original._job_path(prepared, final["job"])
+                saved, final_ref = original._control(job / "final-control.json")
+                need(saved == final, "DAILY_SHARED_RETURNED_FINAL_CHANGED")
+                completion, completion_ref = original._control(Path(final["completion"]["path"]))
+                return dict(schema_version=VERSION, status=final["status"], job=str(job),
+                    execution_engine="original", expected_sessions=list(expected_sessions),
+                    observation_date=observation, target_session=target, run_id=completion["run_id"],
+                    strategy_id=completion.get("strategy_id"), theme_status=completion.get("theme_status"),
+                    final=final_ref, completion=completion_ref, execution_exit_code=code,
+                    execution_seconds=time.monotonic()-execution_budget.started,
+                    display_artifacts={key: ref["path"] for key, ref in (final.get("display") or {}).get("artifacts", {}).items()},
+                    refresh_authorization=authorization, premarket_deadline=proposal["premarket_deadline"],
+                    source_authority_restored=False, result_role="ARCHIVED_REUSE_NOT_NEW_CAPTURE")
+        except BaseException as error:
+            information = dict(parent_verification_metrics=execution_budget.metrics, worker_final=None, job=None)
+            if final is not None and final.get("job"):
+                try:
+                    job = original._job_path(prepared, final["job"])
+                    information.update(worker_final=original._reference(job / "final-control.json"), job=str(job))
+                except Exception:
+                    pass
+            error.refresh_failure = information
+            raise
+
+    def validate(receipt, checked_proposal):
+        nonlocal execution_budget, effective_limits
+        fresh = execution_budget is not None
+        if not fresh:
+            effective_limits = checked_proposal["remaining_limits"]
+            _bounded_continuation_limits(original_config["limits"], effective_limits)
+            execution_budget = Budget({**effective_limits,
+                "capture_read_bytes": min(effective_limits["capture_read_bytes"], effective_limits["supervisor_read_bytes"])})
+        try:
+            with execution_budget.phase("capture"), execution_budget.meter_files():
+                _workflow()._expected_gate(expected_sessions)
+                need(content_equal(runtime.capture_recovery_context(), recovery_context),
+                     "DAILY_SHARED_RECOVERY_CONTEXT_CHANGED")
+                checked = _validate(prepared, snapshot, receipt, observation, target, "original",
+                    recovery_context=recovery_context, effective_limits=effective_limits,
+                    premarket_deadline=checked_proposal["premarket_deadline"])
+        except BaseException as error:
+            error.refresh_failure = dict(parent_verification_metrics=execution_budget.metrics,
+                worker_final=receipt.get("final"), job=receipt.get("job"))
+            raise
+        checked["parent_verification_metrics"] = execution_budget.metrics
+        checked["wrapper_preparation_metrics"] = preparation_metrics
+        checked["parent_budget_scope"] = "REFRESH_ACTION_AND_VALIDATION" if fresh else "READONLY_REFRESH_REUSE"
+        return checked
+
+    result = refresh.execute(runtime, proposal, action=action, validate=validate)
+    result.update(complete_daily_delivery=True, execution_version=VERSION,
+        daily_v1_readiness="UNKNOWN_NOT_EXECUTED", market_edge="NOT_ESTABLISHED")
+    return result["receipt"]["execution_exit_code"], result
+
+
 def _safe_reason(error):
     reason = str(error)
     return reason if re.fullmatch(r"[A-Z][A-Z0-9_:.-]{1,180}", reason) else "LOCAL_DEPENDENCY_OR_RESPONSE_SCHEMA_ERROR"
@@ -730,6 +847,14 @@ def parser():
     sub.add_argument("--engine", choices=("original",), default="original")
     sub.add_argument("--collect-missing", action="store_true",
                      help="显式允许原采集器在登记预算内补齐缺失来源；不重试旧失败")
+    for name in ("premarket-refresh-plan", "premarket-refresh"):
+        sub = commands.add_parser(name, allow_abbrev=False,
+            help="原已成功续跑任务下的一次同交易日补缺；累计扣减预算，不重试旧失败")
+        sub.add_argument("--operation", type=Path, required=True)
+        sub.add_argument("--expected-terminal-sha256", required=True)
+        if name == "premarket-refresh":
+            sub.add_argument("--authorize-missing-refresh", action="store_true",
+                             help="明确授权在原剩余额度内补齐必要的新缺失请求")
     for name in ("premarket-continue-plan", "premarket-continue"):
         sub = commands.add_parser(name, allow_abbrev=False,
             help="原失败记录下的一次限定恢复；保留原key、旧失败和累计预算")
@@ -829,6 +954,8 @@ def execute(runtime, args):
         return _premarket(runtime, args)
     if args.command in {"premarket-continue-plan", "premarket-continue"}:
         return _continue_premarket(runtime, args)
+    if args.command in {"premarket-refresh-plan", "premarket-refresh"}:
+        return _refresh_premarket(runtime, args)
     if args.command in {"premarket-factor-plan", "premarket-factor-authorize"}:
         from scripts import codex_premarket_continuation as continuation
         if args.command == "premarket-factor-authorize":

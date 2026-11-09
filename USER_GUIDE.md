@@ -44,6 +44,22 @@ python stock-fish/scripts/codex_daily_v2.py premarket \
 
 若已完成上述续跑，并另获明确授权将该核对用于未来观察日，可先执行 `premarket-factor-plan --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 SHA256`；确认原成功terminal及精确核对关系后，用 `premarket-factor-authorize` 的相同参数加 `--authorize-future-observations` 追加一次授权。入口不接受新key、日期、预算或重试来源，只在原continuation内新增固定授权文件。以后普通预检和采集自动读取该引用；旧UNKNOWN及原六文件、已有完整结果、旧操作和成功续跑链每次重新认证。仅原精确证券范围与合法新观察日的完整1990锚定复权请求可通过该旧范围阻断；旧请求、原窗口重分批、其他失败、新增UNKNOWN或证据变化仍阻断，深交所名册不会因此再试一次。
 
+### 同一交易日的增量刷新
+
+原失败任务已经通过上述一次续跑完成，但目标交易日的必要官方快照尚未取得时，可在明确授权后使用同一操作下的一次增量刷新。先查看剩余预算，再执行；不接受另传日期、请求key、预算或旧来源重试参数：
+
+```sh
+python stock-fish/scripts/codex_daily_v2.py premarket-refresh-plan \
+  --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 ORIGINAL_CONTINUATION_TERMINAL_SHA256
+python stock-fish/scripts/codex_daily_v2.py premarket-refresh \
+  --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 ORIGINAL_CONTINUATION_TERMINAL_SHA256 \
+  --authorize-missing-refresh
+```
+
+仅目标交易日开盘前接受新刷新，使用原scope、登记、缓存和jobs目录，在原operation下追加固定refresh记录。原失败、UNKNOWN、成功续跑及旧报告不改写；原耗时、请求预留、各阶段读取和输出先从此前剩余额度扣除，再预留本次准备与终验开销，未使用的旧预留不退回。已有完整来源重新认证后复用，只有必要的新缺失请求可以采集；旧失败、同窗口重分批或新增不明请求仍按原采集器拒绝。
+
+新刷新绑定目标日09:30上海时间截止，协调器、工作进程和终验共同检查。一次claim发生后，失败或中断都不能重开；成功再次调用只验证旧成果，不发生第二次采集。`show --job`可继续读取所有旧结果。耗时比较须分别列出完整新增采集到输出和封存读取，不能用后者宣称全流程提速。
+
 ## 采集范围与初筛
 
 已封存任务可用 `show --job JOB --role prescreen` 只读复核初筛；可同时指定原 `--observation-date` 和 `--target-session`。入口验证原核心、日历和同份龙虎榜原件，保留原决策截止时间，输出原封存计数与当前兼容投影的复算计数。它不重新运行策略、不补采、不覆写原任务或预算；原摘要仍由 `show --job JOB --role summary` 读取。复算入围数量不代表新增候选的详细资讯已经采集。
