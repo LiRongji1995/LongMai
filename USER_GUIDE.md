@@ -1,129 +1,102 @@
-# 使用说明
+# User Guide — `sf` CLI
 
-默认让 Codex 操作。唯一主入口为 `stock-fish/scripts/codex_daily_v2.py`；以下 `python` 指已登记的项目解释器。全局 `--runtime NAME`、`--registry-root PATH` 放在子命令之前。沿用现有登记及默认实例，不为每次聊天创建配置或账本。
-
-## 状态与盘前研究
+`sf` is the daily tool. Run it from anywhere with the wrapper:
 
 ```sh
-python stock-fish/scripts/codex_daily_v2.py doctor
-python stock-fish/scripts/codex_daily_v2.py status
-python stock-fish/scripts/codex_daily_v2.py operations
-python stock-fish/scripts/codex_daily_v2.py premarket-plan
+stockfish-qlib-quant-system/bin/sf <command>
 ```
 
-先看实际观察日、目标日、资料截止、逐阶段缺口和原预算。状态正常不代表行情或 DAILY_V1 就绪。计划允许执行且本次已有采集授权时才运行：
+The wrapper uses the Python environment `../stockfish-env` next to the checkout (override with
+`SF_PYTHON`). Data lives in `../stockfish-data` (override with `SF_HOME`). Tip: add an alias such as
+`alias sf=/path/to/stockfish-qlib-quant-system/bin/sf`.
+
+## Daily routine
+
+| When (Shanghai) | Command | What you get |
+|---|---|---|
+| After 18:00 | `sf premarket` | Updates data, captures the day's limit-up/failed/limit-down pools and LHB, writes the list for the next session: `lists/<target>/<run>/盘前清单.csv` (name, turnover, advice) |
+| 09:25–09:30 | `sf auction` | Re-ranks the latest list with call-auction data: 参与 / 观察 / 放弃 with the reason |
+| Any time | `sf show [TARGET]` | Prints a saved list |
+| Weekly | `sf review` | Forward review of every saved list (see below) |
+| Weekly | `sf themes` | Refreshes concept/industry board membership (~20 min) |
+
+`sf premarket --detail` shows tiers, scores, stages and seal facts. `sf status` shows data coverage.
+
+## Review: did the lists work?
 
 ```sh
-python stock-fish/scripts/codex_daily_v2.py premarket \
-  --observation-date YYYY-MM-DD --target-session YYYY-MM-DD \
-  --request-key ORIGINAL_REQUEST_KEY
+sf review                 # all saved lists, entry at target-session open, sell next open, cost 0.15%
+sf review --ret r_n1c     # sell at T+1 close instead
+sf review --detail        # per-stock outcomes
 ```
 
-只有 original 流程，复用有效原件，连接采集、原核心、题材解释、正式导出及终验。失败或提交不明不自动重试；换 key、版本或同会话参数不能重开旧请求。缺数据与预算不足保留原原因，不能靠凑数量形成清单。
+Outcome labels (all measured from the target-session open, the realistic entry for a pre-market list):
 
-需要更新明确缺失的数据时，仍使用这一流程，先只读检查补缺准入：
+| Label | Meaning |
+|---|---|
+| `r_n1o` | sell at next session's open (default) |
+| `r_n1c` / `r_n2c` | sell at T+1 / T+2 close |
+| `r_oc` | same-day open→close (reference only; not realizable under T+1) |
+| `unbuyable` | opened at limit-up: excluded from returns, reported as a rate |
+| `limit_up_T`, `broken_T` | closed at limit-up / touched and failed on the entry day |
+
+Tables are split by cohort (selected / near-miss / other), tier, stage, sentiment regime and score
+quintile, plus an equal-weight equity curve with max drawdown and losing streak. Lists whose future
+sessions are not in the store yet are reported as pending, never as zero.
+
+## Research: is a rule really useful?
 
 ```sh
-python stock-fish/scripts/codex_daily_v2.py premarket-plan --collect-missing
-python stock-fish/scripts/codex_daily_v2.py premarket \
-  --observation-date YYYY-MM-DD --target-session YYYY-MM-DD \
-  --request-key ORIGINAL_REQUEST_KEY --collect-missing
+sf research                                   # preset rules
+sf research --rule "r2_selected and amount >= 1e9" "regime == 'COLD' and 0 <= ret1 <= 0.03"
+sf research --scan                            # scan single + pairwise bucket rules
 ```
 
-只有计划的 `collection_admitted` 成立且本次采集已获授权时，才执行第二条命令。已保存的必需来源先按SHA与实际可见时间认证；只补真正MISSING及其明确父依赖，不把失败、不明或未来来源当缺失。使用原登记预算、请求账本和进程监督；换flag也不能重试旧失败。必须已有可认证交易日历，计划准入不保证供应商请求最终成功。普通历史查询不使用此flag。
+Statistics are per day (equal-weight basket of the day's matches; stocks on the same day are
+correlated), with three consecutive time segments: train (60%), test1 (20%), test2 (20%). A rule is
+marked **out-of-sample valid** only if both test segments are positive with t ≥ 1.5 and ≥ 20 days
+each. `--scan` tests hundreds of rules, so a few will pass by chance; prefer rules with a clear reason.
 
-### 明确授权的一次续跑
-
-旧失败仍不会被普通盘前命令重试。对已封存、调用数全部明确且核心尚未运行的任务，新增 `premarket-continue-plan` 只读核算原请求的剩余额度；`premarket-continue` 还必须提供 `--authorize-one-source-retry`，且事先已有用户对该精确失败来源追加一次尝试的明确授权。
-
-两条命令都要求 `--operation`、`--source-job`、`--snapshot-proof`、`--expected-proof-sha256`、`--source-key`、`--source-receipt`，绑定原操作、原job、已审计源码快照与唯一旧来源。日期、key、登记和预算从原记录读取，不能另传参数重置。当前实现只接受当天同一深交所名册请求的明确超时；父任务的其他失败或调用数不明、时钟或来源变化均拒绝。更早的继承库存按原件认证并保留旧失败和UNKNOWN计量，不给它们重试或来源豁免。源码快照证明只用于核算已经消耗的读取量，不让历史下载取得当时可见权威。
-
-原操作下的固定continuation目录先记录一次性claim；无论失败、不明或中断都不能再次执行。成功后只读复用封存结果。旧失败文件保持原字节，已消耗请求、SDK/HTTP预留、读取、耗时和输出均先扣除，协调校验开销另作保守预留，未用额度不退还。唯一恢复成功后才继续原流程；任一新必需来源失败先落账并停止。可选新闻等UNKNOWN仍沿用原口径。该入口不改变策略、排序、真实登记或注册预算，也不提供一般自动重试功能。
-
-若用户已明确授权核对某一祖先复权UNKNOWN与已有同请求完整结果的关系，可在这两条续跑命令上附 `--factor-reconciliation REVIEW.json --expected-reconciliation-sha256 SHA256`；真正执行还须加 `--authorize-existing-factor-reconciliation`。清单必须绑定唯一旧attempt的完整文件集合、精确证券集合及已存在的完整原件，按当前核验时间记录在原operation的continuation目录。旧UNKNOWN、未知调用次数与原件不改写，不返还预算，不重新采集旧请求；只允许原观察日所需的新复权请求在原完整锚点下覆盖明确授权的旧范围。其他失败、新增不明attempt、其他日期或证据变更继续阻断，库存清单本身不授予恢复权限。
-
-若已完成上述续跑，并另获明确授权将该核对用于未来观察日，可先执行 `premarket-factor-plan --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 SHA256`；确认原成功terminal及精确核对关系后，用 `premarket-factor-authorize` 的相同参数加 `--authorize-future-observations` 追加一次授权。入口不接受新key、日期、预算或重试来源，只在原continuation内新增固定授权文件。以后普通预检和采集自动读取该引用；旧UNKNOWN及原六文件、已有完整结果、旧操作和成功续跑链每次重新认证。仅原精确证券范围与合法新观察日的完整1990锚定复权请求可通过该旧范围阻断；旧请求、原窗口重分批、其他失败、新增UNKNOWN或证据变化仍阻断，深交所名册不会因此再试一次。
-
-### 同一交易日的增量刷新
-
-原失败任务已经通过上述一次续跑完成，但目标交易日的必要官方快照尚未取得时，可在明确授权后使用同一操作下的一次增量刷新。先查看剩余预算，再执行；不接受另传日期、请求key、预算或旧来源重试参数：
+## Backtests
 
 ```sh
-python stock-fish/scripts/codex_daily_v2.py premarket-refresh-plan \
-  --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 ORIGINAL_CONTINUATION_TERMINAL_SHA256
-python stock-fish/scripts/codex_daily_v2.py premarket-refresh \
-  --operation ORIGINAL_OPERATION.json --expected-terminal-sha256 ORIGINAL_CONTINUATION_TERMINAL_SHA256 \
-  --authorize-missing-refresh
+sf backtest                                            # replay the pre-market list strategy
+sf backtest --param STRONG_START.ret1_min=0.07         # one parameter override
+sf backtest --grid STRONG_START.ret1_min=0.05,0.06,0.07 --walk-forward 4
+sf mainline                                            # mainline-leader + crowded-exit strategy
+sf mainline --vary amount_rank_max=50,200,10000        # compare relative-turnover thresholds
 ```
 
-仅目标交易日开盘前接受新刷新，使用原scope、登记、缓存和jobs目录，在原operation下追加固定refresh记录。原失败、UNKNOWN、成功续跑及旧报告不改写；原耗时、请求预留、各阶段读取和输出先从此前剩余额度扣除，再预留本次准备与终验开销，未使用的旧预留不退回。已有完整来源重新认证后复用，只有必要的新缺失请求可以采集；旧失败、同窗口重分批或新增不明请求仍按原采集器拒绝。
+Results are saved under `stockfish-data/backtests/`. Historical replays cannot use the hot-money
+pools (seal times, LHB) because Eastmoney only serves recent days; this is stated in the output.
+Theme membership is today's snapshot (boards are only used after their index history starts).
 
-新刷新绑定目标日09:30上海时间截止，协调器、工作进程和终验共同检查。一次claim发生后，失败或中断都不能重开；成功再次调用只验证旧成果，不发生第二次采集。`show --job`可继续读取所有旧结果。耗时比较须分别列出完整新增采集到输出和封存读取，不能用后者宣称全流程提速。
+## Data store
 
-## 采集范围与初筛
+| Path (under `stockfish-data/`) | Content |
+|---|---|
+| `bars/<date>.parquet` | full-market daily snapshot (BaoStock): OHLC, exchange preclose, turnover, ST, status |
+| `pools/{zt,zbgc,dtgc,lhb}/<date>.parquet` | limit-up / failed-board / limit-down pools, LHB rows |
+| `meta/` | calendar, stock basics, industry, theme boards and members |
+| `lists/<target>/<run>/` | `盘前清单.csv`, `picks.csv`, `facts.parquet` (every stock, all features and gate results), `summary.json`, auction files |
+| `reviews/`, `backtests/`, `research/` | saved outputs; never overwritten |
 
-已封存任务可用 `show --job JOB --role prescreen` 只读复核初筛；可同时指定原 `--observation-date` 和 `--target-session`。入口验证原核心、日历和同份龙虎榜原件，保留原决策截止时间，输出原封存计数与当前兼容投影的复算计数。它不重新运行策略、不补采、不覆写原任务或预算；原摘要仍由 `show --job JOB --role summary` 读取。复算入围数量不代表新增候选的详细资讯已经采集。
+Adjusted returns are reconstructed from the exchange preclose (`adj_t / adj_{t-1} = close_t / preclose_t`),
+so no adjustment-factor download is needed. A missing session makes affected windows unknown (NaN).
 
-龙虎榜业务日期只接受纯日期 `YYYY-MM-DD` 或原供应商的明确午夜表示 `YYYY-MM-DDT00:00:00.000`，并校验真实日期和原交易日窗口。非午夜、时区后缀、额外字符、非法日期或未来可见来源不能用于证明未上榜。
+## Strategies and their status
 
-盘前流程增加 `COLLECTION_PRESCREEN_V1`，在个股资讯请求前按两条通道的并集入围：最近5个已完成交易会话内有完整来源支持的龙虎榜记录，或当日成交额达到原R2动态参考线且原近期参与度为PASS。动态参考线仍为1亿元加沪深四板A股近5会话总成交额中位数的0.02%；参与度仍为近5会话至少一天合法换手率达到5%。初筛参数尚未验证，不改变任何原策略公式、名单或排序。
+| Strategy | Version | Status |
+|---|---|---|
+| R2 short-horizon strength (pre-market list core) | `SF_R2_LEAN_V1` | Frozen thresholds from `config/short_horizon_strength_r1.yaml`/`_r2.yaml`. Historical replay (2025-11 → 2026-11): **negative expectancy** under T+1-open entry; use as a watchlist, not a buy list |
+| Tier + score layer | `SF_TIER_SCORE_V1` | Heuristic; replay shows no monotonic edge |
+| Auction re-rank | `SF_AUCTION_V1` | DAILY_V1 auction thresholds; not yet validated |
+| Mainline leader + crowded exit | `SF_MAINLINE_LEADER_V1` | Under validation with `sf mainline` |
 
-龙虎榜使用一次明确日期区间的汇总请求，沿用原缓存、请求账本和累计预算；榜单PARTIAL、失败、缺页、晚于截止或日期异常均为UNKNOWN，不当成未上榜。净卖出上榜也可作为调查线索，上榜后收益不进入初筛。计划中的 `PRESCREEN_LHB` 列出来源与成本，`prescreen_plan` 的候选数量在原核心计算前为null，不冒充零；缺源仍须显式 `--collect-missing` 准入，不能改变日期窗口重试旧失败。
+Nothing here is investment advice. Engineering tests passing does not show investment value.
 
-每次任务的 `collection-prescreen.json` 保存全资格池入围、暂不优先和证据未知的原因及原始来源引用。报告显示三类数量；原研究入选但未通过采集初筛的股票仍保留在原名单中。个股资讯只抓取标题包含入围股票名称的文章；零可用名称时不发新闻请求，未采不代表没有新闻。此有界名称匹配不是全网新闻覆盖证明。
+## Legacy pipeline (frozen)
 
-主动补采只保留原核心必需的近25交易会话全市场行情/master、交易日历、官方身份和资格资料、复权及龙虎榜汇总。复权前复用原资格规则检查当日身份，仅跳过明确不合资格的证券；全部合资格证券及资格未知者仍保留，完整历史复权锚点不截短。已有同窗口批次原样复用，不因缩小代码范围重新下载；改批次或日期也不能绕过旧失败、未完成请求。
-
-跨交易日行情/master继续复用已有完整日期，只补必要的新日期；复权目前仍要求覆盖新观察日的完整锚定窗口。BaoStock的按日复权接口只返回当天除权除息事件，不能证明旧日期因子未被补报、删除或修订，因此未用于拼接并替代原完整窗口。接口有返回值或当天无事件，都不代表全池历史因子已经更新完整。按原日历和数据就绪规则，新的观察日须到上海时间18:00后才进入完整日常采集；预检仍指向旧观察日时，不以重读旧结果冒充新交易日实测。
-
-个股新闻和可选题材解释在初筛后处理。新闻只请求入围股票的相关文章；题材解释只读取入围且原策略入选股票相关的已保存同日目录和完整成员节点，并按需要读取既有额外42会话行情。不再为可选解释主动扫全行业/概念或补齐这42日的全市场资料。缺少缓存时显示UNKNOWN；部分缓存只支持部分解释，不能宣称完整题材覆盖。原研究名单、排序与题材计算公式不变，原题材节点的全体成员和原入选名单分母不裁剪。
-
-冷缓存下，全市场行情/master这一部分从67×2降为25×2个逻辑请求，减少84次（约62.7%）；这不是总采集量或实际耗时降幅，缓存命中时节省会更少。计划中三个可选题材阶段显示`CACHE_ONLY_AFTER_PRESCREEN`与零网络预算；资格预览正常化次数单独列出，不冒充已经执行策略。仍不新增逐股席位或资金流采集。
-
-## 已保存成果、历史与导出
-
-```sh
-python stock-fish/scripts/codex_daily_v2.py views
-python stock-fish/scripts/codex_daily_v2.py show --view-id VIEW_ID
-python stock-fish/scripts/codex_daily_v2.py export --view-id VIEW_ID --role all.csv --output NEW_FILE.csv
-python stock-fish/scripts/codex_daily_v2.py show --job EXISTING_JOB_DIRECTORY
-```
-
-view 查看验证本地封签和五份原导出，保留原日期及最后完整认证时间，明确本次没有重新认证供应商来源。`--job` 核验指定原任务及其控制件，不把部分阶段成功当成完整交付。`export` 只写新文件，不覆盖旧报告。可选 role 用 `show --help` 查看。
-
-SQLite 中的原研究结果：
-
-```sh
-python stock-fish/scripts/codex_daily_v2.py history --db EXISTING_DB --state EXISTING_STATE
-python stock-fish/scripts/codex_daily_v2.py history --db EXISTING_DB --state EXISTING_STATE \
-  --run-id ORIGINAL_RUN --format csv --output NEW_FILE.csv
-```
-
-历史查询不重新选股。旧结果中的淘汰策略字段仍按原 JSON 只读保留。
-
-## 对明确输入研究与后验
-
-对已有、已通过来源校验的输入运行 PV 与主动 V2，并单列冻结 DAILY 可用性：
-
-```sh
-python stock-fish/scripts/codex_daily_v2.py research \
-  --db EXISTING_DB --state EXISTING_STATE --input-id AUTHENTICATED_INPUT \
-  --request-key ORIGINAL_REQUEST_KEY
-python stock-fish/scripts/codex_daily_v2.py research-outcomes \
-  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN
-```
-
-追加后验须显式加 `--update --input-id AUTHENTICATED_INPUT --request-key ORIGINAL_REQUEST_KEY`；观察仍缺失或未成熟时保留 UNKNOWN/PENDING，不当零收益。`jobs --db ... --state ...` 查看已保存作业状态。
-
-R2 原生归档和后验由同入口 `outcomes` 分发：
-
-```sh
-python stock-fish/scripts/codex_daily_v2.py outcomes r2-daily-plan \
-  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN --input-id AUTHENTICATED_INPUT
-python stock-fish/scripts/codex_daily_v2.py outcomes --request-key ORIGINAL_REQUEST_KEY r2-daily-run \
-  --db EXISTING_DB --state EXISTING_STATE --run-id ORIGINAL_RUN --input-id AUTHENTICATED_INPUT
-```
-
-仅保留 `r2-archive-verify/import`、`r2-daily-plan/pending/run/status`。归档导入同样须在 `outcomes` 后先提供 `--request-key`，并显式给原任务目录及 `--expected-final-sha256`；完整认证缺原代码字节或证据时拒绝。旧失败、过时输入、来源不齐或不满足标签时间的请求不会被换入口补跑。日常不运行全历史回测。
-
-备份、恢复及登记方法见 [DEPLOYMENT](DEPLOYMENT.md)。本轮实际验证范围见 [CURRENT_STATUS](CURRENT_STATUS.md)。
+`stock-fish/scripts/codex_daily_v2.py` and `stockfish_core/` are frozen since 2026-11-10. Their
+historical documents (`CURRENT_STATUS.md`, `CURRENT_STRATEGY.md`, `DEPLOYMENT.md`) describe that
+pipeline. To read old saved results, see those documents; use `--registry-root ../stockfish-legacy/registry`.

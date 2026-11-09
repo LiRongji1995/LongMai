@@ -10,6 +10,26 @@ permissions:
   contents: read
 
 jobs:
+  sf:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 15
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
+        with:
+          persist-credentials: false
+      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
+        with:
+          python-version: '3.12'
+      - name: Install dependencies
+        run: |
+          python -m pip install -r stock-fish/requirements-dev.txt
+          python -m pip check
+      - name: Run sf offline tests
+        working-directory: stock-fish
+        env:
+          SF_HOME: ${{ runner.temp }}/sf-home
+        run: python -m pytest -q -p no:cacheprovider tests/sf
+
   research:
     runs-on: macos-15-intel
     # One complete suite; below the former daily allocation of 3 x 45 minutes.

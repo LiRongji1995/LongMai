@@ -1,0 +1,43 @@
+#!/usr/bin/env python3
+"""Render refactor progress from ../stockfish-progress.json (stdlib only).
+
+    bin/sf-progress            # detailed view with per-item bars
+    bin/sf-progress --line     # one-line bar (used by the Claude Code status line)
+"""
+import json
+import os
+import sys
+from pathlib import Path
+
+PATH = Path(os.environ.get("SF_PROGRESS", Path(__file__).resolve().parents[2] / "stockfish-progress.json"))
+
+
+def bar(pct, width=20):
+    filled = round(pct / 100 * width)
+    return "█" * filled + "░" * (width - filled)
+
+
+def main():
+    try:
+        data = json.loads(PATH.read_text())
+    except Exception:
+        print("progress: n/a")
+        return
+    items = [i for s in data["sections"] for i in s["items"]]
+    total = sum(i["pct"] for i in items) / len(items)
+    if "--line" in sys.argv:
+        print(f"{data['title']} {bar(total, 15)} {total:.0f}% · {data.get('current', '')}")
+        return
+    print(f"{data['title']}  {bar(total, 30)} {total:.0f}%   (更新于 {data['updated_at']})")
+    print(f"当前: {data.get('current', '')}\n")
+    for section in data["sections"]:
+        sect = sum(i["pct"] for i in section["items"]) / len(section["items"])
+        print(f"■ {section['name']}  {bar(sect, 20)} {sect:.0f}%")
+        for item in section["items"]:
+            note = f"  — {item['note']}" if item.get("note") else ""
+            print(f"   {bar(item['pct'], 10)} {item['pct']:>3}%  {item['name']}{note}")
+        print()
+
+
+if __name__ == "__main__":
+    main()

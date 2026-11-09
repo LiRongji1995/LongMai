@@ -1,0 +1,5 @@
+#!/bin/sh
+# Wrapper for the `sf` CLI. Uses ../stockfish-env next to the checkout unless SF_PYTHON is set.
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+PY="${SF_PYTHON:-$HERE/../stockfish-env/bin/python}"
+cd "$HERE/stock-fish" && exec "$PY" -m sf "$@"
