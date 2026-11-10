@@ -43,6 +43,9 @@ bounded, logged retry.
 
 ## Engineering
 
+- **Language.** User-facing documents (README, USER_GUIDE, CHANGELOG, everything under `docs/`) and CLI
+  output are written in Simplified Chinese; keep them Chinese when adding or editing. Code, comments,
+  docstrings, this file and commit messages stay in English.
 - Python 3.12. Runtime deps in `stock-fish/requirements.txt`; keep them minimal.
 - Tests for `sf` live in `stock-fish/tests/sf/` and must run offline with synthetic data.
 - Publish target: `LiRongji1995/stockfish-qlib-quant-system`, branch `main`. Commit only the files of the

@@ -1,244 +1,244 @@
-# A-share exchange monitoring of speculative trading in hot stocks: research notes
+# 沪深交易所对热门股投机交易的监控：研究笔记
 
-Compiled 2026-11-10. Scope: SSE/SZSE main board, with ChiNext (创业板) and STAR (科创板) differences noted.
-The 3-day ±20% abnormal-volatility (异常波动) announcement rule is mentioned only where other rules build on it.
+整理于 2026-11-10。范围：沪深主板，并注明创业板和科创板的差异。
+3 日 ±20% 的异常波动公告规则只在其他规则以它为基础时提及。
 
-**Verification legend**
-- **[P]**: verified against the primary rule text or the exchange's own publication. For the rule PDFs/DOCX I downloaded and read the full text.
-- **[S]**: secondary source (financial media or broker material quoting the rule). Not checked against the primary text.
-- **[?]**: uncertain or unverified. Treat with caution.
+**核实程度标记**
+- **[P]**：已对照规则原文或交易所自己的发布核实。规则 PDF/DOCX 均已下载并通读全文。
+- **[S]**：二手来源（财经媒体或引用规则的券商材料），未对照原文核实。
+- **[?]**：不确定或未核实，谨慎使用。
 
 ---
 
-## 0. Rule map and change history (what is current as of 2026-11)
+## 0. 规则地图与变更历史（截至 2026-11 的现行版本）
 
-| Rule | Current version | Status / change notes |
+| 规则 | 现行版本 | 状态 / 变更说明 |
 |---|---|---|
-| 《上海证券交易所主板股票异常交易实时监控细则》 | 上证发〔2023〕39号, published 2023-02-17, effective from the first registration-based main-board IPO (2023-04-10) | [P] SSE rule library shows it as 现行有效. It replaced 《上海证券交易所证券异常交易实时监控细则》, and 上证发〔2018〕62号 was repealed. No newer revision found as of 2026-11. The 2025 URL path (`sselawsrules2025`) reflects only a rule-library migration. https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779397.shtml |
-| 《上海证券交易所科创板股票异常交易实时监控细则》 | 上证发〔2023〕40号, 2023-02-17 (replaces the 2019 试行 version) | [P] Thresholds are essentially identical to the SSE main board rule (see table). https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779400.shtml |
-| 《深圳证券交易所主板股票异常交易实时监控细则》 | 2023-02-17 (part of the 30 registration-reform rules) | [P] Full text: http://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217570611262391.pdf . No newer version found. |
-| 《深圳证券交易所创业板股票异常交易实时监控细则（试行）（2023年修订）》 | 2023 revision. Baidu says 2023-08-25 [S]. A copy is attached to the SZSE notice of 2025-03-27 (关于修改、废止部分业务规则和业务指南的通知), which made a wording change to Art. 24 [P] | https://docs.static.szse.cn/www/lawrules/rule/all/W020250327502095568538.pdf ; notice: https://www.szse.cn/lawrules/rule/all/t20250327_612561.html |
-| 《深圳证券交易所交易规则（2026年修订）》 / 《上海证券交易所交易规则（2026年修订）》 | Published 2026-04-24, effective **2026-07-06** | [P] SZSE full text: https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf ; SSE release: https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_10816474.shtml . Main changes: main-board risk-warning (ST) price limit 5% → **10%**; post-close fixed-price trading extended to all A-shares and ETFs; SSE fund closing call auction. The abnormal-volatility threshold for ST stocks moved from ±12% to ±20% [S, Jiemian/Sina]. **Severe-abnormal-volatility thresholds unchanged** [P, SZSE 2026 text Art. 5.4.4]. |
-| 《上海/深圳证券交易所程序化交易管理实施细则》 | Published 2025-04-03, effective **2025-07-07** | [P] SSE Q&A: http://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20250403_10776805.shtml . Based on the CSRC 《证券市场程序化交易管理规定（试行）》 of 2024-05-15. Indicators trial-run since **April 2024**. |
-| 《上海证券交易所纪律处分和监管措施实施办法（2026年修订）》 | 上证发〔2026〕9号, 2026-01-27 | [S, search snippet of SSE page] https://www.sse.com.cn/lawandrules/sselawsrules2025/disciplinary/c/c_20260127_10807093.shtml . Contents not reviewed. |
-| Margin (融资保证金) ratio | 80% → **100%** for new contracts, from 2026-01-19 (announced 2026-01-14) | [P, SSE release] https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260114_10805178.shtml . Explicitly a counter-cyclical cooling tool. It had been cut 100% → 80% in Aug 2023. |
+| 《上海证券交易所主板股票异常交易实时监控细则》 | 上证发〔2023〕39号，2023-02-17 发布，自首批注册制主板 IPO（2023-04-10）起施行 | [P] 上交所规则库显示为现行有效。它取代了《上海证券交易所证券异常交易实时监控细则》，上证发〔2018〕62号同时废止。截至 2026-11 未发现更新的修订。2025 年的 URL 路径（`sselawsrules2025`）只反映规则库迁移。https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779397.shtml |
+| 《上海证券交易所科创板股票异常交易实时监控细则》 | 上证发〔2023〕40号，2023-02-17（取代 2019 年试行版） | [P] 阈值与上交所主板规则基本一致（见下表）。https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779400.shtml |
+| 《深圳证券交易所主板股票异常交易实时监控细则》 | 2023-02-17（注册制改革 30 项规则之一） | [P] 全文：http://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217570611262391.pdf 。未发现更新版本。 |
+| 《深圳证券交易所创业板股票异常交易实时监控细则（试行）（2023年修订）》 | 2023 年修订。百度显示为 2023-08-25 [S]。深交所 2025-03-27 通知（关于修改、废止部分业务规则和业务指南的通知）附有一份文本，对第 24 条做了措辞修改 [P] | https://docs.static.szse.cn/www/lawrules/rule/all/W020250327502095568538.pdf ；通知：https://www.szse.cn/lawrules/rule/all/t20250327_612561.html |
+| 《深圳证券交易所交易规则（2026年修订）》 / 《上海证券交易所交易规则（2026年修订）》 | 2026-04-24 发布，**2026-07-06** 施行 | [P] 深交所全文：https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf ；上交所发布：https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_10816474.shtml 。主要变化：主板风险警示（ST）股票涨跌幅 5% → **10%**；盘后固定价格交易扩展到全部 A 股和 ETF；上交所基金收盘集合竞价。ST 股异常波动阈值由 ±12% 改为 ±20% [S，界面/新浪]。**严重异常波动阈值不变** [P，深交所 2026 文本第 5.4.4 条]。 |
+| 《上海/深圳证券交易所程序化交易管理实施细则》 | 2025-04-03 发布，**2025-07-07** 施行 | [P] 上交所答记者问：http://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20250403_10776805.shtml 。依据证监会 2024-05-15 的《证券市场程序化交易管理规定（试行）》。相关指标自 **2024 年 4 月**起试运行。 |
+| 《上海证券交易所纪律处分和监管措施实施办法（2026年修订）》 | 上证发〔2026〕9号，2026-01-27 | [S，上交所页面搜索摘要] https://www.sse.com.cn/lawandrules/sselawsrules2025/disciplinary/c/c_20260127_10807093.shtml 。内容未审阅。 |
+| 融资保证金比例 | 新开合约 80% → **100%**，自 2026-01-19 起（2026-01-14 公布） | [P，上交所发布] https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260114_10805178.shtml 。明确是逆周期降温工具。2023 年 8 月曾由 100% 下调至 80%。 |
 
-**No 2025/2026 revision of the real-time monitoring 细则 was found.** Some 自媒体 posts (e.g. Sohu, "2025年12月12日沪深同步发布异动新规：10天4次同向涨停即停牌") claim one exists. They are not supported by any exchange source and look fabricated **[?]**.
+**未发现 2025/2026 年对实时监控细则的修订。** 部分自媒体文章（如搜狐“2025年12月12日沪深同步发布异动新规：10天4次同向涨停即停牌”）声称存在新规，但没有任何交易所来源支持，看起来是编造的 **[?]**。
 
 ---
 
-## 1. Real-time monitoring rules (异常交易实时监控细则): categories, thresholds, measures
+## 1. 实时监控细则：类别、阈值、措施
 
-### 1.1 Categories (identical structure on all four boards) [P]
-"5 大类 14 种" typical behaviours, plus a catch-all:
-1. **虚假申报** (spoofing): orders placed and cancelled to mislead, not to trade.
-2. **拉抬打压股价** (ramping/pressing): large, continuous or dense orders, or orders priced far from the last trade, during a marked price move.
-3. **维持涨（跌）幅限制价格** (holding the limit price, i.e. 封板): large, continuous or dense orders that keep the price pinned at the limit.
-4. **自买自卖 / 互为对手方交易** (wash trades among own, controlled or suspected-related accounts).
-5. **严重异常波动股票申报速率异常** (order-rate abnormality in a severe-abnormal-volatility stock).
-6. Other violations.
+### 1.1 类别（四个板块结构相同）[P]
+“5 大类 14 种”典型行为，外加一个兜底条款：
+1. **虚假申报**：以误导为目的、不以成交为目的的申报和撤单。
+2. **拉抬打压股价**：在价格明显变动期间，大笔、连续或密集申报，或以偏离最新成交价的价格申报。
+3. **维持涨（跌）幅限制价格**（即封板）：大笔、连续或密集申报，使价格维持在涨跌停价。
+4. **自买自卖 / 互为对手方交易**：在自己、实际控制或涉嫌关联的账户之间交易。
+5. **严重异常波动股票申报速率异常**。
+6. 其他违规行为。
 
-**Aggregation rule** [P, Art. 8]. Ordinary, credit and "suspected-related" (涉嫌关联) accounts are **merged** before thresholds are applied. Relatedness is judged by account-opening info, trading terminal info, trading-behaviour similarity, or source of funds. Splitting orders across accounts does not avoid the thresholds.
+**合并计算规则** [P，第 8 条]。普通账户、信用账户和“涉嫌关联”账户在套用阈值前**合并计算**。关联性依据开户信息、交易终端信息、交易行为相似性或资金来源判断。把订单拆到多个账户无法规避阈值。
 
-**Near-miss rule** [P, Art. 7]. Behaviour that comes close to a threshold and repeats ("接近指标且多次实施") can be classified as abnormal.
+**接近阈值规则** [P，第 7 条]。行为接近阈值且反复实施（“接近指标且多次实施”）的，可以认定为异常交易。
 
-### 1.2 Defined quantity terms (附则 Art. 33) [P]
+### 1.2 数量术语定义（附则第 33 条）[P]
 
-| Term | SSE main / STAR; SZSE main: non-ST stock | SSE main / STAR; SZSE main: risk-warning (ST) stock | SZSE ChiNext |
+| 术语 | 上交所主板/科创板、深交所主板：非 ST 股 | 上交所主板/科创板、深交所主板：风险警示（ST）股 | 深交所创业板 |
 |---|---|---|---|
-| 数量或金额**较大** (large) | ≥30万股 or ≥300万元 | ≥30万股 or ≥100万元 | ≥30万股 or ≥300万元 |
-| 数量或金额**巨大** (huge) | ≥100万股 or ≥1000万元 | ≥50万股 or ≥200万元 | ≥100万股 or ≥1000万元 |
-| 比例/占比**较高** (high share) | ≥30% | ≥30% | ≥30% |
-| **多次** (multiple) | ≥3 times | ≥3 times | "反复多次" = same type ≥3 times in the same day |
+| 数量或金额**较大** | ≥30万股 或 ≥300万元 | ≥30万股 或 ≥100万元 | ≥30万股 或 ≥300万元 |
+| 数量或金额**巨大** | ≥100万股 或 ≥1000万元 | ≥50万股 或 ≥200万元 | ≥100万股 或 ≥1000万元 |
+| 比例/占比**较高** | ≥30% | ≥30% | ≥30% |
+| **多次** | ≥3 次 | ≥3 次 | “反复多次” = 同一交易日内同类行为 ≥3 次 |
 
-### 1.3 Thresholds by behaviour (main board; ChiNext/STAR differences noted) [P]
+### 1.3 各行为的阈值（主板；注明创业板/科创板差异）[P]
 
-All conditions in a row must hold **at the same time** ("同时存在下列情形") before the behaviour becomes a 重点监控 (focus-monitoring) case.
+一行中的所有条件必须**同时满足**（“同时存在下列情形”），该行为才成为重点监控案例。
 
-| # | Behaviour / phase | Main-board conditions (SSE & SZSE) | Differences |
+| # | 行为 / 时段 | 主板条件（沪深） | 差异 |
 |---|---|---|---|
-| 1a | 虚假申报, opening call auction (Art. 11) | Order price deviates ≥5% from previous close (ST ≥3%); cumulative orders 较大; share of same-side orders ≥30%; cancellations ≥50% of orders; opposite-side orders at crossing prices; virtual opening reference price moves ≥5% (ST ≥3%) | ChiNext/STAR: 5% (no ST variant on ChiNext) |
-| 1b | 虚假申报, continuous trading, best-5 levels (Art. 12) | Orders within best 5 levels; after a single order the account's resting orders in best 5 are 巨大 **and** ≥30% of same-side best-5 depth; this happens ≥3 times; cancels ≥50%; plus opposite-direction fills (SSE: "存在反向卖出（买入）成交") | ChiNext: "≥3 times" stated in the article heading; no reverse-fill condition |
-| 1c | 虚假申报 **at limit price** (Art. 13). This is the "封单撤单" pattern | **≥2 times** in continuous trading: price at limit; after a single limit-price order the account's resting limit-price orders are 巨大 (≥100万股 / ≥1000万元) **and** ≥30% of all resting orders at that price; after a single cancel, cumulative cancels ≥50% of the account's limit-price orders | Same on all boards |
-| 2a | 拉抬打压, opening call (Art. 15) | Fills 较大; ≥30% of auction volume; opening move ≥5% (ST ≥3%); if opening at the limit, the account's limit-price orders ≥10% of all orders at that price | Same structure |
-| 2b | 拉抬打压, **any 3-minute window** in continuous trading (Art. 16) | Rising buy-fill prices (or falling sell-fill prices); fills 较大 (≥30万股/300万元); ≥30% of market volume in the window; price move **≥4%** (SSE: SSE 50 constituents ≥2%) | ChiNext/STAR: 4% (STAR: SSE 50 constituents 2%). [?] With a 20% limit, 4% in 3 minutes is easier to reach |
-| 2c | 拉抬打压, closing call (Art. 17) | Fills 较大; ≥30% of closing-auction volume; move ≥3% (SSE 50 ≥2%) | Same |
-| 2d–f | Ramp then reverse (Arts. 18–20) | Open move ≥2% with large share, then reverse fills ≥10万股 / ≥100万元 before 10:00; or a 3-min ramp ≥2% plus ≥10万股/100万元 reverse within 30 min; or a close ramp ≥2% plus reverse before 10:00 next day | STAR adds post-close fixed-price phase windows |
-| 3a | **维持涨（跌）幅限制价格**, continuous (Art. 22). This is the key 封板 rule | Price at limit; after a single limit-price order the account's resting orders at the limit are **巨大 (≥100万股 or ≥1000万元; ST ≥50万股/200万元)** and **≥30%** of all resting orders at that price; this state lasts **≥10 minutes** or until the end of continuous trading; of those resting plus new orders at that price, **<70% get filled** that day | **ChiNext**: only "巨大 + ≥30% + lasting ≥10 minutes" (no 70% fill test), so it is stricter in practice |
-| 3b | 维持涨跌停, closing call (Art. 23) | At limit at 14:57; market resting at limit 巨大 at 14:57 and 15:00; new limit orders in the closing call 较大; account share of resting ≥30% | Same |
-| 4 | 自买自卖 / 对倒 (Arts. 25–26) | Trades among own/controlled/related accounts ≥10% of day volume, or ≥30% of closing-auction volume | Same |
-| 5 | **严重异常波动股票申报速率异常** (Art. 29; ChiNext Art. 26) | Within **10 trading days after** a severe-abnormal-volatility event, a single-direction **buy (or sell) order total in 1 minute that is 巨大**: non-ST **≥1000万元** (ST ≥200万元; SSE/SZSE main also ≥100万股 / 50万股 by the definition) | ChiNext: "金额超过1000万元" (strictly more than 10m) |
+| 1a | 虚假申报，开盘集合竞价（第 11 条） | 申报价格偏离前收盘价 ≥5%（ST ≥3%）；累计申报较大；占同方向申报 ≥30%；撤单 ≥申报的 50%；存在可成交价格的反方向申报；虚拟开盘参考价变动 ≥5%（ST ≥3%） | 创业板/科创板：5%（创业板无 ST 变体） |
+| 1b | 虚假申报，连续竞价，最优五档（第 12 条） | 在最优五档内申报；单笔申报后账户在最优五档的未成交申报巨大**且** ≥同方向最优五档总量的 30%；发生 ≥3 次；撤单 ≥50%；并有反方向成交（上交所：“存在反向卖出（买入）成交”） | 创业板：条款标题写明“≥3 次”；无反向成交条件 |
+| 1c | **涨跌停价**虚假申报（第 13 条），即“封单撤单”模式 | 连续竞价中 **≥2 次**：价格处于涨跌停；单笔涨跌停价申报后账户在该价位的未成交申报巨大（≥100万股 / ≥1000万元）**且** ≥该价位全部未成交申报的 30%；单笔撤单后累计撤单 ≥账户在该价位申报的 50% | 各板块相同 |
+| 2a | 拉抬打压，开盘集合竞价（第 15 条） | 成交较大；≥竞价成交量的 30%；开盘涨跌幅 ≥5%（ST ≥3%）；若以涨跌停价开盘，账户在该价位的申报 ≥该价位全部申报的 10% | 结构相同 |
+| 2b | 拉抬打压，连续竞价中**任意 3 分钟**（第 16 条） | 买入成交价逐笔上升（或卖出成交价逐笔下降）；成交较大（≥30万股/300万元）；≥该时段市场成交量的 30%；价格变动 **≥4%**（上交所：上证 50 成分股 ≥2%） | 创业板/科创板：4%（科创板：上证 50 成分股 2%）。[?] 涨跌幅为 20% 时，3 分钟 4% 更容易达到 |
+| 2c | 拉抬打压，收盘集合竞价（第 17 条） | 成交较大；≥收盘竞价成交量的 30%；变动 ≥3%（上证 50 ≥2%） | 相同 |
+| 2d–f | 先拉抬后反向（第 18–20 条） | 开盘变动 ≥2% 且占比大，随后 10:00 前反向成交 ≥10万股 / ≥100万元；或 3 分钟拉抬 ≥2%，30 分钟内反向 ≥10万股/100万元；或收盘拉抬 ≥2%，次日 10:00 前反向 | 科创板增加盘后固定价格交易时段的窗口 |
+| 3a | **维持涨（跌）幅限制价格**，连续竞价（第 22 条）。这是封板的关键规则 | 价格处于涨跌停；单笔涨跌停价申报后账户在该价位的未成交申报**巨大（≥100万股或 ≥1000万元；ST ≥50万股/200万元）**且 **≥该价位全部未成交申报的 30%**；该状态持续 **≥10 分钟**或至连续竞价结束；该价位的未成交申报加新增申报当日**成交不足 70%** | **创业板**：只要求“巨大 + ≥30% + 持续 ≥10 分钟”（没有 70% 成交检验），实际上更严 |
+| 3b | 维持涨跌停，收盘集合竞价（第 23 条） | 14:57 处于涨跌停；14:57 和 15:00 市场在该价位的未成交申报巨大；收盘竞价新增涨跌停申报较大；账户占未成交申报 ≥30% | 相同 |
+| 4 | 自买自卖 / 对倒（第 25–26 条） | 在自己/控制/关联账户之间的成交 ≥当日成交量的 10%，或 ≥收盘竞价成交量的 30% | 相同 |
+| 5 | **严重异常波动股票申报速率异常**（第 29 条；创业板第 26 条） | 严重异常波动发生**后 10 个交易日内**，单方向**买入（或卖出）申报 1 分钟内合计巨大**：非 ST **≥1000万元**（ST ≥200万元；按定义，沪深主板还包括 ≥100万股 / 50万股） | 创业板：“金额超过1000万元”（严格大于） |
 
-**Stricter-application clause** [P, SSE/SZSE main Art. 31; STAR Art. 31; ChiNext Art. 28]. The exchange may cut the thresholds above by **up to 50%** (more "in especially serious cases") and impose heavier measures when the abnormal trading involves:
-- repeated or continuous behaviour;
-- **severe-abnormal-volatility stocks**, ST, delisting-arrangement (退市整理) stocks, or stocks with delisting risk;
-- **"重点监控股票" that the exchange has publicly named in its trading-supervision disclosures**. This links the weekly reports (section 3) to the rule: once a stock is named there, effective thresholds can be halved;
-- suspected manipulation, or a prior restriction or sanction.
+**从严适用条款** [P，沪深主板第 31 条；科创板第 31 条；创业板第 28 条]。异常交易涉及下列情形时，交易所可将上述阈值**最多下调 50%**（“情节特别严重的”可更多），并采取更重的措施：
+- 反复或持续实施；
+- **严重异常波动股票**、ST、退市整理股票或有退市风险的股票；
+- **交易所在交易监管信息中公开点名的“重点监控股票”**。这把周报（第 3 节）和规则联系起来：股票一旦被点名，实际阈值可能减半；
+- 涉嫌操纵，或此前已被限制或处分。
 
-ChiNext's list adds "abnormal trading together with reverse trading". It does not say "up to 50%".
+创业板的清单另加“异常交易同时存在反向交易”，且没有写“最多 50%”。
 
-So for a named hot stock, the effective 封板 threshold can drop to roughly **50万股 / 500万元 and 15% of the resting queue**, and the 1-minute order-rate threshold to **500万元**. This is an inference from the 50% clause **[?]**; the exchange does not publish the actual cut.
+因此，对一只被点名的热门股，封板的实际阈值可能降到约 **50万股 / 500万元、未成交申报的 15%**，1 分钟申报速率阈值降到 **500万元**。这是根据 50% 条款推断的 **[?]**；交易所不公布实际下调幅度。
 
-### 1.4 Measures (escalation ladder)
+### 1.4 措施（升级阶梯）
 
-| SSE main/STAR (Art. 30) [P] | SZSE main/ChiNext (Art. 30/27) [P] |
+| 上交所主板/科创板（第 30 条）[P] | 深交所主板/创业板（第 30/27 条）[P] |
 |---|---|
-| 口头警示 (oral warning, in practice by phone via the broker) | 口头警示 |
-| 书面警示 (written warning letter) | 书面警示 |
-| 监管谈话 (regulatory talk) | 约见谈话 |
+| 口头警示（实际由券商电话通知） | 口头警示 |
+| 书面警示（警示函） | 书面警示 |
+| 监管谈话 | 约见谈话 |
 | 将账户列为重点监控账户 | 将证券账户列入重点监控账户 |
 | 要求提交合规交易承诺书 | 要求提交合规交易承诺书 |
-| **暂停投资者账户交易** (suspension, typically intraday / same day) | **盘中暂停当日交易** |
-| **限制投资者账户交易** (restriction, post-close for a period; a disciplinary sanction under SSE rules) | **盘后限制交易** |
+| **暂停投资者账户交易**（通常盘中/当日） | **盘中暂停当日交易** |
+| **限制投资者账户交易**（盘后一段时间；上交所规则下属于纪律处分） | **盘后限制交易** |
 
-The SZSE 2026 trading rules Art. 6.8 list the same ladder [P]. An investor can request a review (复核) of a 限制交易 decision within 15 trading days; the measure stays in force during review.
+深交所 2026 年交易规则第 6.8 条列出了同样的阶梯 [P]。投资者可在 15 个交易日内对限制交易决定申请复核；复核期间措施继续有效。
 
-**What triggers the "large account cannot buy" outcome.** No public rule says "an account holding X% of a severe-volatility stock cannot buy". In practice the 限制/暂停 measure is imposed on an **account (group)**:
-- (a) that repeatedly hits the 封板 / limit-price spoofing / ramping / 1-minute order-rate thresholds above, with related accounts merged;
-- (b) especially when the stock is severe-abnormal-volatility, ST or publicly named, where thresholds can be halved;
-- (c) usually after warnings have been ignored.
+**什么情况会导致“大资金买不进去”。** 没有任何公开规则写明“持有严重异常波动股票 X% 的账户不能买入”。实际上，限制/暂停措施是针对**账户（组）**的：
+- (a) 反复触及上述封板 / 涨跌停价虚假申报 / 拉抬 / 1 分钟申报速率阈值，关联账户合并计算；
+- (b) 尤其是股票处于严重异常波动、ST 或被公开点名时，阈值可能减半；
+- (c) 通常是在警示被无视之后。
 
-The weekly reports in 2025–2026 show a consistent sequence:
-1. The stock hits severe abnormal volatility.
-2. 停牌核查 (suspension for verification).
-3. The stock resumes trading and keeps hitting the limit.
-4. The exchange announces "对相关投资者采取了暂停交易等自律监管措施".
+2025–2026 年的周报显示出一致的顺序：
+1. 股票触发严重异常波动。
+2. 停牌核查。
+3. 复牌后继续涨停。
+4. 交易所公告“对相关投资者采取了暂停交易等自律监管措施”。
 
-Examples: *ST宇顺 (2025-08), *ST铖昌 (2026-01-16), 锋龙股份 (2026-01-23), 嘉美包装 (2026-02-13), ST京蓝 (2026-03); SSE: 天普股份 (2025-09) [S], 沈鼓集团 IPO (2026-09). Details in section 4.
+例子：*ST宇顺（2025-08）、*ST铖昌（2026-01-16）、锋龙股份（2026-01-23）、嘉美包装（2026-02-13）、ST京蓝（2026-03）；上交所：天普股份（2025-09）[S]、沈鼓集团 IPO（2026-09）。详见第 4 节。
 
-Brokers also act on the investor's behalf. Under 《会员客户交易行为管理》 rules, brokers send warnings and can refuse orders; the SZSE 2026 trading rules Art. 6.5 [P] require it.
+券商也会代为执行。按照《会员客户交易行为管理》相关规则，券商会发出警示并可拒绝委托；深交所 2026 年交易规则第 6.5 条有此要求 [P]。
 
-**Hard quantity cap, ST stocks only** [P, SZSE 2026 Art. 4.5.4; SSE has an equivalent rule [? not re-verified]]. An investor may buy at most **50万股 per day** of a single risk-warning stock (auction + block + post-close combined). Brokers monitor this. This is the only explicit per-account buy cap. It does **not** apply to normal hot stocks.
-
----
-
-## 2. Severe abnormal volatility (严重异常波动): definitions and consequences
-
-### 2.1 Definitions per board [P: SZSE 2026 trading rules Art. 5.4.4; SSE trading rules (2023修订) Art. 5.4.3 main / 6.1.11 STAR, via broker copy [S] and consistent with SSE monitoring rule Art. 27 [P]]
-
-Deviation (偏离值) = (stock close at end / previous close at start − 1) − (index end / index start − 1).
-- Benchmark index for SSE main board: 上证A股指数 [S].
-- SZSE main board: 深证A股指数; ChiNext: 创业板综合指数 [P, SZSE Art. 5.4.1].
-- STAR: 科创50 [S].
-
-Adjust for ex-rights. Limit-free days (IPO first 5 days, etc.) and 退市整理 days are excluded.
-
-| Board | 3-day abnormal (异常波动, for reference) | Severe abnormal (严重异常波动): count rule | Severe: 10-day cumulative deviation | Severe: 30-day cumulative deviation | Price limit (2026-07-06 →) |
-|---|---|---|---|---|---|
-| SSE main | ±20% (ST: ±12% before 2026-07-06; ±20% after [S]) | **4 same-direction abnormal-volatility events (3-day ±20% type) within 10 trading days** | **+100% / −50%** | **+200% / −70%** | 10% (ST 10%, was 5%) |
-| SZSE main | ±20% (also: 3-day avg turnover ≥30× prior-5-day avg and 3-day cumulative turnover ≥20%) | 4 within 10 days | +100% / −50% | +200% / −70% | 10% (ST 10%, was 5%) |
-| ChiNext | ±30% | **3** within 10 days | +100% / −50% | +200% / −70% | 20% |
-| STAR | ±30% | **3** within 10 days | +100% / −50% | +200% / −70% | 20% |
-
-Counters reset from the trading day after the exchange publishes the event, or from resumption [P, SZSE 5.4.5].
-
-The exchange "may adjust the standards according to market conditions" [P, SZSE 5.4.5]. **No 2025–2026 change to these thresholds** was found; the 2026 trading-rule revision kept them [P]. Main board SSE/SZSE moved to these "10-day 4 times / +100% / +200%" standards with the 2023 registration-reform rules (effective 2023-04-10) [S].
-
-### 2.2 What happens after a severe-abnormal-volatility event
-1. **Exchange disclosure** [P]. The exchange publishes **投资者分类交易统计** (trading statistics by investor type) for the severe-volatility period.
-2. **Company verification** [S: SSE 上市规则 7.1.4 / SZSE 7.1.3, quoted in secondary sources]. The company must publish a **核查公告** (verification announcement) on the next trading day. If it cannot, the stock is **停牌核查** (suspended for verification) from the next trading day and resumes on the day the 核查公告 is published.
-   - In practice the suspension is typically "不超过3个交易日" (e.g. 上纬新材 688585, 2025-07-31 [S]). Repeat offenders such as 天普股份 had longer suspensions (4 days) [S].
-   - ChiNext additionally may require an investor briefing (投资者说明会) [S].
-   - If, after verification, nothing undisclosed is found and the move cannot be explained, the exchange may add warnings, **strengthen abnormal-trading monitoring**, and ask brokers to warn clients [P, SZSE 2026 Art. 5.4.6]. SSE 上市规则 7.1.6 says the exchange may publicly warn and suspend again [S].
-3. **10-day order-rate window** [P]. For 10 trading days after the event the 1-minute ≥1000万元 single-direction order rule applies (section 1.3 row 5). All other thresholds can be cut by up to 50% because the stock is a severe-volatility stock (Art. 31).
-4. **Public 重点监控 naming** in the weekly report (section 3). It triggers the further 50%-cut clause and signals intraday scrutiny.
-5. **Account suspensions** if limit-up continues after resumption (section 1.4 examples).
-
-**Not found** [?]:
-- any official rule capping a single account's cumulative buy share during the severe-volatility period;
-- any 盘中临停 (intraday halt) for price-limited stocks.
-
-These appear only in 自媒体 posts, not in exchange rules. Intraday halts apply only to stocks without price limits (see 5.3).
+**硬性数量上限，仅限 ST 股** [P，深交所 2026 第 4.5.4 条；上交所有对应规则 [? 未再次核实]]。投资者每日买入单只风险警示股票最多 **50万股**（竞价 + 大宗 + 盘后合计）。券商负责监控。这是唯一明确的单账户买入上限，**不**适用于普通热门股。
 
 ---
 
-## 3. Weekly regulatory disclosures
+## 2. 严重异常波动：定义与后果
 
-### 3.1 SZSE: 《深市监管动态》 (weekly PDF) [P]
-- **Listing page**: https://www.szse.cn/disclosure/supervision/dynamic/index.html (pages `index_1.html` … `index_26.html`, 27 pages, 20 items per page).
-- **Item URL pattern**: `https://www.szse.cn/disclosure/supervision/dynamic/P0YYYYMMDD<digits>.pdf`. The listing page embeds `var curHref = './P02026....pdf'; var curTitle ='深市监管动态（2026年11月2日-2026年11月6日）'` and a `<span class="time">` date, so it is easy to regex.
-- **Coverage**: **2016-04-25 → present** (527 weekly PDFs as of 2026-11-06). Published every Friday after the close (the 2016–17 issues came on the following Monday).
-- **Machine-readability**: text-based PDF (pypdf extracts it cleanly), one short paragraph per section. No tables, CSV or API.
-- **Content (section 二、市场交易监管动态)**:
-  - "本所共对 **N 起证券异常交易行为**采取了自律监管措施，涉及盘中拉抬打压、虚假申报等"
-  - "对 **'XXX'** 进行**重点监控**" (named stocks; frequent 2022–2026)
-  - "共对 **M 起上市公司重大事项**进行核查"
-  - "上报证监会 **K 起**涉嫌违法违规案件线索"
-  - since 2025-08, narrative lines like "对相关投资者采取了**暂停交易**等自律监管措施" for named stocks.
-  - Format change: 2016 issues had full detail (电话警示 count, 警示函 count, 限制账户交易 count, accounts involved). From about 2017 on, only aggregate counts. **No breakdown by measure type** (书面警示 vs 暂停 vs 限制) since then.
-  - Other sections: 一、上市公司监管 (监管函, 问询函, 其他函件 counts) and 三、会员监管.
+### 2.1 各板块定义 [P：深交所 2026 交易规则第 5.4.4 条；上交所交易规则（2023修订）主板第 5.4.3 条 / 科创板第 6.1.11 条，来自券商转载 [S]，与上交所监控细则第 27 条 [P] 一致]
 
-### 3.2 SSE: weekly press release 《沪市市场运行情况例行发布》 / 新闻发布会 (weekly PDF) [P]
-- **Listing page**: https://www.sse.com.cn/aboutus/mediacenter/conference/ (`s_list.shtml`, `s_list_2.shtml` … `s_list_35.shtml`, 516 items). Items read "第五百二十四期新闻发布会", dated 2026-11-06.
-- **Item URL pattern**: `/aboutus/mediacenter/conference/c/<id>/files/<hash>.pdf`. The earliest items (2015) are `.shtml` pages.
-- **Coverage**: 2015-03-20 → present, weekly (Friday).
-- **Machine-readability**: text PDF. The section "3、沪市监管概览 → 交易监管" reads:
-  - "上交所对 **N 起**拉抬打压、虚假申报等证券异常交易行为采取了自律监管措施"
-  - "对 **XXX 等严重异常波动股票 / 波动幅度较大的股票**进行重点监控"
-  - "对 **M 起**上市公司重大事项等进行专项核查"
-  - "向证监会上报涉嫌违法违规案件线索 **K 起**"
-  - Occasionally it names account suspensions (e.g. 2026-09-18: 沈鼓集团 IPO accounts "暂停账户交易").
-  - The 上市公司监管 subsection gives 监管工作函 count, and since about 2024 "提请启动内幕交易、异常交易核查 N 单".
-  - Older (around 2015–2016) issues had full detail ("共对222起证券异常交易行为进行调查，涉及…证券账户875个次，共出具书面警示函121份，…盘中暂停账户交易56次").
-- **Also**: SSE 监管动态 (individual named measures such as the 2024-02-20 宁波灵均 restriction): http://www.sse.com.cn/disclosure/credibility/regulatory/news/ ; STAR-specific: https://star.sse.com.cn/regulation/trading/dynamic/
+偏离值 = （期末收盘价 / 期初前收盘价 − 1）−（期末指数 / 期初指数 − 1）。
+- 上交所主板基准指数：上证A股指数 [S]。
+- 深交所主板：深证A股指数；创业板：创业板综合指数 [P，深交所第 5.4.1 条]。
+- 科创板：科创50 [S]。
 
-### 3.3 Sample numbers / time series
+按除权除息调整。无涨跌幅限制的交易日（IPO 前 5 日等）和退市整理期不计入。
 
-**SZSE: full series parsed** (527 weeks; CSV saved as `stockfish-data/research/szse_weekly_supervision.csv`; 6 weeks without a parsable count). Yearly statistics of "abnormal-trading cases with self-regulatory measures per week":
-
-| Year | Weeks | Mean | Median | Min | Max |
+| 板块 | 3 日异常波动（参考） | 严重异常波动：次数规则 | 严重：10 日累计偏离 | 严重：30 日累计偏离 | 涨跌幅（2026-07-06 起） |
 |---|---|---|---|---|---|
-| 2016 (from Apr) | 35 | 32 | 28 | 13 | 87 |
+| 上交所主板 | ±20%（ST：2026-07-06 前 ±12%，之后 ±20% [S]） | **10 个交易日内 4 次同向异常波动（3 日 ±20% 类）** | **+100% / −50%** | **+200% / −70%** | 10%（ST 10%，原为 5%） |
+| 深交所主板 | ±20%（另有：3 日日均换手率 ≥前 5 日均值 30 倍且 3 日累计换手率 ≥20%） | 10 日内 4 次 | +100% / −50% | +200% / −70% | 10%（ST 10%，原为 5%） |
+| 创业板 | ±30% | 10 日内 **3** 次 | +100% / −50% | +200% / −70% | 20% |
+| 科创板 | ±30% | 10 日内 **3** 次 | +100% / −50% | +200% / −70% | 20% |
+
+计数从交易所公告该事件的次一交易日或复牌日起重新计算 [P，深交所第 5.4.5 条]。
+
+交易所“可以根据市场情况调整标准” [P，深交所第 5.4.5 条]。**未发现 2025–2026 年对这些阈值的调整**；2026 年交易规则修订保留了它们 [P]。沪深主板随 2023 年注册制规则（2023-04-10 施行）改用“10 日 4 次 / +100% / +200%”的标准 [S]。
+
+### 2.2 严重异常波动之后会发生什么
+1. **交易所披露** [P]。交易所公布严重异常波动期间的**投资者分类交易统计**。
+2. **公司核查** [S：上交所上市规则 7.1.4 / 深交所 7.1.3，引自二手来源]。公司须在下一交易日发布**核查公告**。如不能发布，股票自下一交易日起**停牌核查**，于核查公告发布当日复牌。
+   - 实践中停牌通常“不超过3个交易日”（如上纬新材 688585，2025-07-31 [S]）。天普股份等多次触发的股票停牌更久（4 天）[S]。
+   - 创业板还可能要求召开投资者说明会 [S]。
+   - 核查后如未发现应披露未披露的事项、涨幅也无法解释，交易所可追加警示、**加强异常交易监控**，并要求券商提示客户 [P，深交所 2026 第 5.4.6 条]。上交所上市规则 7.1.6 规定交易所可公开警示并再次停牌 [S]。
+3. **10 日申报速率窗口** [P]。事件后 10 个交易日内适用 1 分钟 ≥1000万元单方向申报规则（第 1.3 节第 5 行）。因为股票处于严重异常波动，其他所有阈值都可能最多下调 50%（第 31 条）。
+4. **周报中公开点名重点监控**（第 3 节）。这会触发进一步的 50% 下调条款，也意味着盘中受到重点关注。
+5. 复牌后继续涨停的，**暂停账户交易**（见第 1.4 节例子）。
+
+**未发现** [?]：
+- 任何限制单个账户在严重异常波动期间累计买入比例的正式规则；
+- 任何针对有涨跌幅限制股票的盘中临停。
+
+这些只出现在自媒体文章里，不在交易所规则中。盘中临停只适用于无涨跌幅限制的股票（见 5.3）。
+
+---
+
+## 3. 每周监管披露
+
+### 3.1 深交所：《深市监管动态》（每周 PDF）[P]
+- **列表页**：https://www.szse.cn/disclosure/supervision/dynamic/index.html （分页 `index_1.html` … `index_26.html`，共 27 页，每页 20 条）。
+- **条目 URL 格式**：`https://www.szse.cn/disclosure/supervision/dynamic/P0YYYYMMDD<数字>.pdf`。列表页内嵌 `var curHref = './P02026....pdf'; var curTitle ='深市监管动态（2026年11月2日-2026年11月6日）'` 和 `<span class="time">` 日期，用正则很容易提取。
+- **覆盖范围**：**2016-04-25 至今**（截至 2026-11-06 共 527 份周报）。每周五收盘后发布（2016–17 年的期次在下周一发布）。
+- **机器可读性**：文本型 PDF（pypdf 能干净提取），每节一小段。没有表格、CSV 或 API。
+- **内容（第二部分“市场交易监管动态”）**：
+  - “本所共对 **N 起证券异常交易行为**采取了自律监管措施，涉及盘中拉抬打压、虚假申报等”
+  - “对 **‘XXX’** 进行**重点监控**”（点名股票；2022–2026 年很常见）
+  - “共对 **M 起上市公司重大事项**进行核查”
+  - “上报证监会 **K 起**涉嫌违法违规案件线索”
+  - 2025-08 起，对点名股票出现“对相关投资者采取了**暂停交易**等自律监管措施”之类的叙述。
+  - 格式变化：2016 年的期次有完整细项（电话警示次数、警示函份数、限制账户交易次数、涉及账户数）。约 2017 年起只给汇总数。此后**没有按措施类型的细分**（书面警示 vs 暂停 vs 限制）。
+  - 其他部分：一、上市公司监管（监管函、问询函、其他函件数量）和三、会员监管。
+
+### 3.2 上交所：每周新闻发布会《沪市市场运行情况例行发布》（每周 PDF）[P]
+- **列表页**：https://www.sse.com.cn/aboutus/mediacenter/conference/ （`s_list.shtml`、`s_list_2.shtml` … `s_list_35.shtml`，共 516 条）。条目名如“第五百二十四期新闻发布会”，日期 2026-11-06。
+- **条目 URL 格式**：`/aboutus/mediacenter/conference/c/<id>/files/<hash>.pdf`。最早的条目（2015 年）是 `.shtml` 页面。
+- **覆盖范围**：2015-03-20 至今，每周（周五）。
+- **机器可读性**：文本 PDF。“3、沪市监管概览 → 交易监管”一节写道：
+  - “上交所对 **N 起**拉抬打压、虚假申报等证券异常交易行为采取了自律监管措施”
+  - “对 **XXX 等严重异常波动股票 / 波动幅度较大的股票**进行重点监控”
+  - “对 **M 起**上市公司重大事项等进行专项核查”
+  - “向证监会上报涉嫌违法违规案件线索 **K 起**”
+  - 偶尔点名账户暂停（如 2026-09-18：沈鼓集团 IPO 相关账户“暂停账户交易”）。
+  - 上市公司监管小节给出监管工作函数量，约 2024 年起还有“提请启动内幕交易、异常交易核查 N 单”。
+  - 较早（约 2015–2016 年）的期次有完整细项（“共对222起证券异常交易行为进行调查，涉及…证券账户875个次，共出具书面警示函121份，…盘中暂停账户交易56次”）。
+- **另见**：上交所监管动态（具体点名的措施，如 2024-02-20 对宁波灵均的限制）：http://www.sse.com.cn/disclosure/credibility/regulatory/news/ ；科创板专页：https://star.sse.com.cn/regulation/trading/dynamic/
+
+### 3.3 样本数字 / 时间序列
+
+**深交所：完整序列已解析**（527 周；CSV 保存为 `stockfish-data/research/szse_weekly_supervision.csv`；6 周无法解析出数字）。“每周采取自律监管措施的异常交易起数”的年度统计：
+
+| 年份 | 周数 | 均值 | 中位数 | 最小 | 最大 |
+|---|---|---|---|---|---|
+| 2016（4 月起） | 35 | 32 | 28 | 13 | 87 |
 | 2017 | 51 | 42 | 34 | 14 | 130 |
-| 2018 | 47 | **166** | 138 | 37 | **467** (2018-02-02) |
+| 2018 | 47 | **166** | 138 | 37 | **467**（2018-02-02） |
 | 2019 | 49 | 30 | 31 | 1 | 64 |
 | 2020 | 51 | 63 | 48 | 23 | 159 |
 | 2021 | 49 | 66 | 67 | 32 | 111 |
 | 2022 | 50 | 73 | 70.5 | 24 | 123 |
 | 2023 | 49 | 71 | 62 | 33 | 143 |
-| 2024 | 49 | **123** | 106 | 30 | **447** (2024-10-11) |
+| 2024 | 49 | **123** | 106 | 30 | **447**（2024-10-11） |
 | 2025 | 50 | **132** | 124 | 64 | 287 |
-| 2026 (to 11-06) | 41 | **168** | 149 | 92 | **387** (2026-01-16) |
+| 2026（至 11-06） | 41 | **168** | 149 | 92 | **387**（2026-01-16） |
 
-SZSE monthly mean, 2023–2026:
+深交所月度均值，2023–2026：
 
-| | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+| | 1月 | 2月 | 3月 | 4月 | 5月 | 6月 | 7月 | 8月 | 9月 | 10月 | 11月 | 12月 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2023 | 43 | 89 | 51 | 65 | 68 | 92 | 61 | 48 | 61 | 101 | 114 | 68 |
 | 2024 | 82 | 124 | 75 | 83 | 142 | 101 | 83 | 95 | 88 | **244** | **234** | 145 |
 | 2025 | 84 | 133 | 107 | 104 | 138 | 112 | 83 | 152 | 186 | 127 | **228** | 130 |
-| 2026 | **294** | 179 | 176 | 151 | **227** | 179 | 180 | 111 | 99 | 118 | 119 (1 wk) | |
+| 2026 | **294** | 179 | 176 | 151 | **227** | 179 | 180 | 111 | 99 | 118 | 119（1 周） | |
 
-Selected SZSE weeks (count / company matters checked / CSRC clues / named focus stocks):
-- 2023-07-14: 61 / 3 / 2. Quiet market.
-- 2023-11-24: 112 / 7 / 2. Named: 三柏硕, 西陇科学, 森远股份, 中文在线, *ST左江 (late-2023 small-cap and ST mania).
-- 2024-02-23: 82 / 7 / 1. "*ST左江等涨跌异常证券**以及量化交易行为**" (quant crackdown after the Feb 2024 sell-off).
-- 2024-09-20: 34 / 5 / –. Pre-"924" quiet.
-- **2024-10-11: 447** / 5 / 2. Post-924 rally week; named "上市初期的新股交易".
-- 2024-11-08: 304 / 8 / 6. Named 中化岩土, 华映科技.
-- 2025-08-29: 278. Named 思泉新材, 北方长龙.
-- 2025-11-14: 256 / 4 / 1. Named 平潭发展 (严重异常波动).
-- **2026-01-16: 387** / 15 / 5. *ST铖昌 account suspensions; same week as the margin-ratio hike.
-- 2026-01-23: 326. 锋龙股份 account suspensions.
-- 2026-05-15: 293.
-- 2026-08-14: 114. Named 蓝盾光电.
-- 2026-11-06: 119.
+深交所部分周次（起数 / 核查公司重大事项 / 上报证监会线索 / 点名重点监控股票）：
+- 2023-07-14：61 / 3 / 2。市场平静。
+- 2023-11-24：112 / 7 / 2。点名：三柏硕、西陇科学、森远股份、中文在线、*ST左江（2023 年底小盘股和 ST 炒作）。
+- 2024-02-23：82 / 7 / 1。“*ST左江等涨跌异常证券**以及量化交易行为**”（2024 年 2 月下跌后整治量化）。
+- 2024-09-20：34 / 5 / –。“924”之前的平静期。
+- **2024-10-11：447** / 5 / 2。924 行情周；点名“上市初期的新股交易”。
+- 2024-11-08：304 / 8 / 6。点名中化岩土、华映科技。
+- 2025-08-29：278。点名思泉新材、北方长龙。
+- 2025-11-14：256 / 4 / 1。点名平潭发展（严重异常波动）。
+- **2026-01-16：387** / 15 / 5。*ST铖昌 暂停账户交易；与融资保证金比例上调同一周。
+- 2026-01-23：326。锋龙股份 暂停账户交易。
+- 2026-05-15：293。
+- 2026-08-14：114。点名蓝盾光电。
+- 2026-11-06：119。
 
-**SSE**: see section 3.4 (full series parsed from the weekly PDFs).
+**上交所**：见第 3.4 节（从周报 PDF 解析的完整序列）。
 
-**Caveats for using these counts as an "enforcement intensity" index**
-- (1) They are counts of *cases handled* (mostly 口头/书面警示), so they scale with market turnover and the number of hot stocks. Normalise by turnover or by the number of limit-up stocks.
-- (2) Definitions shifted: 2016 counted "进行调查"; from 2018 on, "采取了自律监管措施".
-- (3) Holiday-short weeks are lower.
-- (4) Neither exchange breaks the count down by measure type, so the number of 暂停/限制 actions is **not** observable. Only narrative mentions are.
+**把这些数字当作“执法强度”指数时的注意事项**
+- (1) 它们是*处理的案例数*（大多是口头/书面警示），会随市场成交额和热门股数量变化。应按成交额或涨停股数量归一化。
+- (2) 口径有变化：2016 年统计“进行调查”；2018 年起统计“采取了自律监管措施”。
+- (3) 节假日造成的短周数字偏低。
+- (4) 两家交易所都不按措施类型细分，所以暂停/限制措施的数量**无法观察**，只有叙述中的提及。
 
-### 3.4 SSE weekly series (parsed) [P]
-Source: 516 weekly items from the SSE press-conference listing, parsed into `stockfish-data/research/sse_weekly_supervision.csv`.
-- 282 items are PDFs.
-- 234 items (mostly 2015–2022, some 2023–24) are `.shtml` intro pages whose body lacks the supervision paragraph, so counts are missing there.
-- **Coverage of counts is good only from about 2022-H2 onward.** 2016–2021 is sparse.
+### 3.4 上交所周度序列（已解析）[P]
+来源：上交所新闻发布会列表中的 516 条周报，解析为 `stockfish-data/research/sse_weekly_supervision.csv`。
+- 282 条是 PDF。
+- 234 条（大多为 2015–2022 年，部分 2023–24 年）是 `.shtml` 介绍页，正文没有监管段落，因此缺少数字。
+- **只有约 2022 年下半年起数字覆盖较好。** 2016–2021 年很稀疏。
 
-| Year | Weeks with count | Mean | Median | Min | Max |
+| 年份 | 有数字的周数 | 均值 | 中位数 | 最小 | 最大 |
 |---|---|---|---|---|---|
 | 2016 | 7 | 91 | 82 | 55 | 144 |
 | 2017 | 15 | 73 | 61 | 42 | 159 |
@@ -247,174 +247,174 @@ Source: 516 weekly items from the SSE press-conference listing, parsed into `sto
 | 2020 | 21 | 36 | 33 | 17 | 79 |
 | 2021 | 9 | 90 | 78 | 41 | 182 |
 | 2022 | 24 | 80 | 71 | 37 | 189 |
-| 2023 | 36 | 82 | 48 | 22 | 471 (2023-03-10) |
-| 2024 | 37 | 99 | 70 | 25 | 353 (2024-11-01) |
-| 2025 | 47 | **152** | 146 | 44 | 360 (2025-11-21) |
-| 2026 (to 11-06) | 39 | **214** | 165 | 50 | **629 (2026-06-26)** |
+| 2023 | 36 | 82 | 48 | 22 | 471（2023-03-10） |
+| 2024 | 37 | 99 | 70 | 25 | 353（2024-11-01） |
+| 2025 | 47 | **152** | 146 | 44 | 360（2025-11-21） |
+| 2026（至 11-06） | 39 | **214** | 165 | 50 | **629（2026-06-26）** |
 
-SSE monthly mean, 2023–2026:
+上交所月度均值，2023–2026：
 
-| | Jan | Feb | Mar | Apr | May | Jun | Jul | Aug | Sep | Oct | Nov | Dec |
+| | 1月 | 2月 | 3月 | 4月 | 5月 | 6月 | 7月 | 8月 | 9月 | 10月 | 11月 | 12月 |
 |---|---|---|---|---|---|---|---|---|---|---|---|---|
 | 2023 | 67 | 142 | 272 | 52 | 77 | 153 | 41 | 36 | 42 | 52 | 32 | 50 |
 | 2024 | 50 | 74 | 75 | 58 | 67 | 54 | 58 | 82 | 41 | 110 | **240** | 140 |
 | 2025 | 66 | 218 | 99 | 112 | 167 | 96 | 190 | 230 | 194 | 139 | 191 | 114 |
-| 2026 | 234 | 133 | 285 | 170 | 364 | **437** | 228 | 106 | **73** | 145 | 119 (1 wk) | |
+| 2026 | 234 | 133 | 285 | 170 | 364 | **437** | 228 | 106 | **73** | 145 | 119（1 周） | |
 
-**Measure breakdown, an important finding** [P].
-- From **2021-12-17 to 2023-06-30** the SSE weekly text split the count into two parts: "对 X 起加剧市场波动、误导投资者决策、影响交易秩序的异常交易行为及时采取了**暂停投资者账户交易**等监管措施" and "对 Y 起拉抬打压、虚假申报等…采取了**书面警示**等监管措施". The CSV column `of_which_account_suspension_cases` holds X.
-  - Examples: 2023-03-10: **452 suspension cases** + 19 warning cases (ST stocks *ST泽达, *ST紫晶, *ST辅仁, *ST瑞德 under 重点监控). 2023-06-16: 167 + 40 (退市整理 stocks). 2022-12-23: 166 + 23.
-  - Most suspension cases in this window relate to **risk-warning and delisting-arrangement stocks**, not ordinary hot stocks.
-- From mid-2023 to about 2025-10 the wording is "采取了书面警示等监管措施". It occasionally reads "书面警示、暂停交易等" (e.g. 2025-07-25 → 2025-08-29, during 上纬新材 / 东芯股份 / 长城军工 / *ST亚振).
-- From about 2025-11 the wording is "采取了自律监管措施", with no breakdown.
-- So **the number of suspensions is only directly observable for 2021-12 → 2023-06.** After that it is only a flag.
+**措施细分：一个重要发现** [P]。
+- **2021-12-17 至 2023-06-30** 期间，上交所周报把起数分成两部分：“对 X 起加剧市场波动、误导投资者决策、影响交易秩序的异常交易行为及时采取了**暂停投资者账户交易**等监管措施”和“对 Y 起拉抬打压、虚假申报等…采取了**书面警示**等监管措施”。CSV 中的 `of_which_account_suspension_cases` 列保存 X。
+  - 例子：2023-03-10：**452 起暂停** + 19 起警示（ST 股 *ST泽达、*ST紫晶、*ST辅仁、*ST瑞德 被重点监控）。2023-06-16：167 + 40（退市整理股票）。2022-12-23：166 + 23。
+  - 这一时期的暂停案例大多涉及**风险警示和退市整理股票**，而不是普通热门股。
+- 2023 年年中至约 2025-10，措辞为“采取了书面警示等监管措施”，偶尔为“书面警示、暂停交易等”（如 2025-07-25 至 2025-08-29，正值上纬新材 / 东芯股份 / 长城军工 / *ST亚振）。
+- 约 2025-11 起措辞为“采取了自律监管措施”，没有细分。
+- 所以**只有 2021-12 至 2023-06 能直接观察到暂停的数量**，之后只是一个标记。
 
-Selected SSE weeks (total / matters checked / CSRC clues / named):
-- 2023-07-14: 39 / 23 / 1.
-- 2023-11-24: 22 / 21 / –. "个别近期涨跌幅异常的股票".
-- 2023-12-08/15: *ST同达 plus severe-volatility stocks 惠发食品, 东安动力.
-- 2024-02-23: 64 / 26. "近期波动较大的退市风险警示股票".
-- 2024-03-15: 艾艾精工. 2024-04-12: 莱绅通灵. 2024-05-24: 南京化纤.
-- 2024-09-20: 25 / 16. Pre-924 low.
-- **2024-11-01: 353** / 18 / 1. Severe-volatility stocks. 2024-11-29: 日出东方 plus new listings.
-- 2025-07-25 → 08-29: 上纬新材 (from 07-25), 西藏旅游, 南方路机, 东芯股份, 长城军工, *ST亚振, *ST苏吴; "暂停交易" mentioned.
-- 2025-09-05 → 2026-02-13: **天普股份** named almost every week (about 5 months). 首开股份 (09-19); 大有能源 (10-24).
-- 2025-11-14/21: 合富中国, 华盛锂电; **360** cases on 11-21.
-- 2026-01-09/16: 国晟科技, 航天动力, 天普股份, 上纬新材; **365** on 01-16. 2026-01-30: 白银有色; 南方原油LOF (fund premiums).
-- 2026-03-27: **457**. 标普油气ETF, 南方原油LOF, 中韩半导体ETF (QDII premium), *ST熊猫, *ST正平, 华电辽能.
-- 2026-05-15 → 07-10: 445 / 360 / 301 / 250 / 433 / **629 (06-26)** / 366 / 277. Named 福达合金, 海泰新光, 长盈通, 泰金新能, 中船特气, 昀冢科技, 恒尚节能, 有研硅, and premium LOFs (全球芯片LOF, 财通福鑫LOF). **This is the highest SSE intensity on record.**
-- 2026-07-31 → 08-28: 爱丽家居 (after its 停牌核查 from 08-03); 百花医药.
-- 2026-09-11/18: 龙版传媒; 50 cases (lowest since 2024); 沈鼓集团 IPO accounts suspended.
-- 2026-10-16: 新华传媒 (severe volatility). 2026-11-06: 119 / 31 / 1.
+上交所部分周次（总数 / 核查事项 / 上报证监会线索 / 点名）：
+- 2023-07-14：39 / 23 / 1。
+- 2023-11-24：22 / 21 / –。“个别近期涨跌幅异常的股票”。
+- 2023-12-08/15：*ST同达，以及严重异常波动股票惠发食品、东安动力。
+- 2024-02-23：64 / 26。“近期波动较大的退市风险警示股票”。
+- 2024-03-15：艾艾精工。2024-04-12：莱绅通灵。2024-05-24：南京化纤。
+- 2024-09-20：25 / 16。924 之前的低点。
+- **2024-11-01：353** / 18 / 1。严重异常波动股票。2024-11-29：日出东方及新股。
+- 2025-07-25 至 08-29：上纬新材（07-25 起）、西藏旅游、南方路机、东芯股份、长城军工、*ST亚振、*ST苏吴；提及“暂停交易”。
+- 2025-09-05 至 2026-02-13：**天普股份**几乎每周被点名（约 5 个月）。首开股份（09-19）；大有能源（10-24）。
+- 2025-11-14/21：合富中国、华盛锂电；11-21 当周 **360** 起。
+- 2026-01-09/16：国晟科技、航天动力、天普股份、上纬新材；01-16 当周 **365** 起。2026-01-30：白银有色；南方原油LOF（基金溢价）。
+- 2026-03-27：**457**。标普油气ETF、南方原油LOF、中韩半导体ETF（QDII 溢价）、*ST熊猫、*ST正平、华电辽能。
+- 2026-05-15 至 07-10：445 / 360 / 301 / 250 / 433 / **629（06-26）** / 366 / 277。点名福达合金、海泰新光、长盈通、泰金新能、中船特气、昀冢科技、恒尚节能、有研硅，以及溢价 LOF（全球芯片LOF、财通福鑫LOF）。**这是上交所有记录以来的最高强度。**
+- 2026-07-31 至 08-28：爱丽家居（08-03 停牌核查之后）；百花医药。
+- 2026-09-11/18：龙版传媒；50 起（2024 年以来最低）；沈鼓集团 IPO 相关账户被暂停交易。
+- 2026-10-16：新华传媒（严重异常波动）。2026-11-06：119 / 31 / 1。
 
-**Cross-exchange read.**
-- Both series are pro-cyclical with turnover. Peaks: Feb–Mar 2023 (SSE, ST/delisting suspensions), Oct–Nov 2024, Aug–Sep 2025, Nov 2025, Jan 2026, Mar 2026 and May–Jul 2026 (SSE).
-- Both have a clear trough in Sep–Oct 2026 (SSE 73/145, SZSE 99/118).
-- The SSE series diverges from SZSE in May–Jul 2026: SSE 364–437 monthly mean vs SZSE 179–227. Much of that is fund-premium (LOF/QDII ETF) and STAR severe-volatility names.
+**两所对照。**
+- 两个序列都随成交额顺周期变化。高峰：2023 年 2–3 月（上交所，ST/退市股暂停）、2024 年 10–11 月、2025 年 8–9 月、2025 年 11 月、2026 年 1 月、2026 年 3 月和 2026 年 5–7 月（上交所）。
+- 两者在 2026 年 9–10 月都有明显低谷（上交所 73/145，深交所 99/118）。
+- 2026 年 5–7 月上交所与深交所背离：上交所月均 364–437，深交所 179–227。其中很大一部分来自基金溢价（LOF/QDII ETF）和科创板严重异常波动股票。
 
 ---
 
-## 4. Evidence of enforcement elasticity (监管松紧)
+## 4. 监管松紧的证据
 
-### 4.1 Episodes (dated)
-| Period | Direction | Evidence |
+### 4.1 时期（有日期）
+| 时期 | 方向 | 证据 |
 |---|---|---|
-| 2018 H1 | Tight | SZSE weekly counts averaged 166 in 2018 (max 467 on 2018-02-02); 2018-04-27 SZSE article "加强重点监控账户管理 精准打击异常交易行为" [P, SZSE news]. Followed by a collapse to about 30/week in 2019 when the market was weak. Counts are pro-cyclical. |
-| 2022–2023 | Moderate; frequent naming | SZSE named a 近期涨幅异常 stock almost every week in 2022 (雅本化学, 浙江建投, 中通客车, 竞业达, ST大集, 安奈儿, 西安饮食 …) [P] |
-| 2022-12 → 2023-06 | Tight on ST/delisting stocks (SSE) | SSE reported separate counts of **account-suspension cases**: 166 (2022-12-23), 215 (2023-03-03), **452 (2023-03-10)**, 167 (2023-06-16), mostly in *ST and 退市整理 stocks (*ST泽达, *ST紫晶, 退市辅仁 …) [P]. |
-| 2023-08 | Loosening (pro-market) | Margin ratio cut 100% → 80% (2023-08) [S]; stamp-duty halving in the same package (2023-08-28) [? memory]. |
-| Late 2023 → Q1 2024 | Tight on ST/small-cap speculation; quant | *ST左江 named on 重点监控 continuously for about 4 months (2023-11-17 → 2024-04-19) [P]. 2024-02-20 SSE/SZSE restricted 宁波灵均 accounts (quant sell-off) [S/P listing]. 2024-02-23 SZSE names "量化交易行为" [P]. CSRC programmatic-trading rules 2024-05-15. Exchange indicators trial from 2024-04 [P]. |
-| 2024-10/11 (post-924) | Very high volume of handling | SZSE 447 (2024-10-11), 304 (11-08); named new-listing trading, 中化岩土, 华映科技, *ST景峰, ST加加 [P]. SSE 353 (2024-11-01) and 235 (2024-11-08), naming severe-volatility stocks [P]. |
-| 2025 H2 | Tight on 连板妖股 | Frequent 停牌核查 of streak stocks: 天普股份 (three 停牌核查 in Aug–Sep 2025, account measures) [S]; 上纬新材 (2025-07-31) [S]; 合富中国 (12 limit-ups in 14 days, 3 severe-volatility hits, +256%, SSE 重点监控 2025-11-14) [S]; 平潭发展 (+255% in a month, SZSE 停牌核查, 重点监控 2025-11-14) [P/S]; *ST宇顺 (SZSE 重点监控 2025-05 → 2025-10, accounts suspended 2025-08-22) [P]. |
-| 2026-01 | Peak tightness | Market turnover record (≈3.99万亿 on 2026-01-14) [S]. Margin ratio 80% → 100% from 2026-01-19 [P]. "1月12日以来百余家公司发布异常波动公告，多家连板股停牌核查" [S]. SZSE weekly counts 387 / 326 / 261. Account suspensions in *ST铖昌, 锋龙股份 and the premium LOF 国投白银LOF [P]. |
-| 2026-02/03 | Still tight | 嘉美包装 (2026-02-13), ST京蓝 (2026-03-06/13/20) suspensions after 停牌核查 and continued limit-ups [P]. SSE 457 cases in the week of 2026-03-23→27, with 标普油气ETF and 华电辽能 named [P]. |
-| 2026-07/08 | Moderate | SZSE names 万邦医药, 传智教育, 高争民爆, 蓝盾光电 as 严重异常波动 [P]. 爱丽家居 (9 one-word limit-ups, +135.8% in 10 days, P/E 317) 停牌核查 from 2026-08-03 [S]. |
-| 2026-09 → 11 | Relatively relaxed | SZSE counts back to about 100–120/week (2026-09: 99 avg; 2026-10: 118) [P]. SSE 50 cases on 2026-09-18 [P] (沈鼓集团 IPO account suspensions); SSE 119 on 2026-11-06 [P]. |
+| 2018 上半年 | 紧 | 2018 年深交所周均 166 起（2018-02-02 最高 467）；2018-04-27 深交所文章“加强重点监控账户管理 精准打击异常交易行为” [P，深交所新闻]。2019 年市场走弱后回落到每周约 30 起。数字是顺周期的。 |
+| 2022–2023 | 中等；频繁点名 | 2022 年深交所几乎每周点名一只近期涨幅异常的股票（雅本化学、浙江建投、中通客车、竞业达、ST大集、安奈儿、西安饮食 …）[P] |
+| 2022-12 至 2023-06 | 对 ST/退市股严（上交所） | 上交所单独报告**暂停账户交易案例**：166（2022-12-23）、215（2023-03-03）、**452（2023-03-10）**、167（2023-06-16），主要在 *ST 和退市整理股票（*ST泽达、*ST紫晶、退市辅仁 …）[P]。 |
+| 2023-08 | 放松（利好市场） | 融资保证金比例 100% → 80%（2023-08）[S]；同一揽子政策中印花税减半（2023-08-28）[? 凭记忆]。 |
+| 2023 年底至 2024 一季度 | 对 ST/小盘投机和量化从严 | *ST左江 连续约 4 个月被重点监控（2023-11-17 至 2024-04-19）[P]。2024-02-20 沪深交易所限制宁波灵均账户（量化砸盘）[S/P 列表]。2024-02-23 深交所点名“量化交易行为” [P]。证监会程序化交易规定 2024-05-15。交易所指标 2024-04 起试运行 [P]。 |
+| 2024-10/11（924 之后） | 处理量极高 | 深交所 447（2024-10-11）、304（11-08）；点名新股交易、中化岩土、华映科技、*ST景峰、ST加加 [P]。上交所 353（2024-11-01）和 235（2024-11-08），点名严重异常波动股票 [P]。 |
+| 2025 下半年 | 对连板妖股从严 | 连板股频繁停牌核查：天普股份（2025 年 8–9 月三次停牌核查，账户措施）[S]；上纬新材（2025-07-31）[S]；合富中国（14 天 12 个涨停，3 次严重异常波动，+256%，上交所 2025-11-14 重点监控）[S]；平潭发展（一个月 +255%，深交所停牌核查，2025-11-14 重点监控）[P/S]；*ST宇顺（深交所 2025-05 至 2025-10 重点监控，2025-08-22 暂停账户交易）[P]。 |
+| 2026-01 | 最紧 | 市场成交额创纪录（2026-01-14 约 3.99 万亿）[S]。融资保证金比例 2026-01-19 起 80% → 100% [P]。“1月12日以来百余家公司发布异常波动公告，多家连板股停牌核查” [S]。深交所周数 387 / 326 / 261。*ST铖昌、锋龙股份和溢价的国投白银LOF 被暂停账户交易 [P]。 |
+| 2026-02/03 | 仍紧 | 嘉美包装（2026-02-13）、ST京蓝（2026-03-06/13/20）在停牌核查后继续涨停，被暂停交易 [P]。上交所 2026-03-23 至 27 当周 457 起，点名标普油气ETF 和华电辽能 [P]。 |
+| 2026-07/08 | 中等 | 深交所点名万邦医药、传智教育、高争民爆、蓝盾光电为严重异常波动 [P]。爱丽家居（9 个一字涨停，10 天 +135.8%，市盈率 317）2026-08-03 起停牌核查 [S]。 |
+| 2026-09 至 11 | 相对宽松 | 深交所周数回到约 100–120（2026-09 均值 99；2026-10 均值 118）[P]。上交所 2026-09-18 当周 50 起 [P]（沈鼓集团 IPO 账户暂停）；2026-11-06 当周 119 起 [P]。 |
 
-### 4.2 Specific stocks named on 重点监控 or with account action (subset; primary = SZSE/SSE weekly PDFs)
-- SZSE [P]:
-  - 2023: 汉王科技, 赛为智能 (02-10); 丰立智能 (05-26); 鸿博股份, 铭普光磁 (06-16); 捷荣技术 (09-28 → 10-20); 高新发展 (11-03); *ST左江 (11-17 → 2024-04); 亚世光电 (12-29).
-  - 2024: 深中华A (01-19); 正丹股份 (04-19 → 05-24); 朗源股份 (05-10); *ST围海 (05-17); 英力股份 (05-31); 百邦科技 (06-28); *ST景峰 (08-30 → 11-15); 银之杰 (09-27); 中化岩土, 华映科技 (11-08); ST加加 (11-15); *ST同洲 (12-13/20).
-  - 2025: *ST旭蓝 (03-14); *ST东通 (05-09); *ST宇顺 (05-16 → 10-24, **accounts suspended 08-22**); 广生堂 (08-15); 思泉新材, 北方长龙 (08-29); *ST东易, ST中迪 (11-07); 平潭发展 (11-14); 胜通能源 (12-26, 2026-01-09); 嘉美包装 (12-31; **suspensions 2026-02-13**).
-  - 2026: 锋龙股份 (01-09; **suspensions 01-23**); *ST铖昌 (**suspensions 01-16**); *ST立方, *ST长药 (01-23); 国投白银LOF (**suspensions 01-30**); ST京蓝 (**suspensions 03-06/13/20**); 豫能控股 (03-06); 兴业科技 (06-26); 万邦医药 (07-17); 传智教育, 高争民爆 (08-07); 蓝盾光电 (08-14).
-- SSE [P, weekly PDFs; full list in sse_weekly_supervision.csv `focus_monitor_text`]:
-  - 2023: *ST泽达, *ST紫晶, *ST辅仁, *ST瑞德 (03-10); *ST同达, 惠发食品, 东安动力 (12).
-  - 2024: 艾艾精工 (03-15); 莱绅通灵 (04-12); 南京化纤 (05-24); *ST富润 (09-06); 日出东方 (11-29); *ST卓朗 (12-13).
-  - 2025: *ST锦港, 中毅达 (05); *ST亚振 (06 → 2026-01); 上纬新材, 西藏旅游, 南方路机, 东芯股份, 长城军工 (07–08, 暂停交易 mentioned); 天普股份 (09 → 2026-02); 首开股份 (09-19); *ST正平 (10 → 2026); 大有能源 (10-24); 合富中国, 华盛锂电 (11-14).
-  - 2026: 国晟科技, 航天动力 (01); 白银有色 (01-30); *ST岩石, *ST精伦, *ST熊猫, *ST观典; 华电辽能 (03-27); 福达合金, 海泰新光, 长盈通, 泰金新能, *ST春天 (05); 中船特气, 昀冢科技, 恒尚节能, 有研硅 (06–07); 爱丽家居 (07-31 → 09-04); 百花医药 (08-14); 龙版传媒 (09; plus 沈鼓集团 IPO account suspensions on 09-18); 新华传媒 (10-16).
-  - Funds: premium LOF/QDII ETFs named repeatedly in 2026 (标普油气ETF, 中韩半导体ETF, 南方原油LOF, 全球芯片LOF, 财通福鑫LOF).
+### 4.2 被点名重点监控或有账户措施的股票（部分；一手来源为沪深交易所周报 PDF）
+- 深交所 [P]：
+  - 2023：汉王科技、赛为智能（02-10）；丰立智能（05-26）；鸿博股份、铭普光磁（06-16）；捷荣技术（09-28 至 10-20）；高新发展（11-03）；*ST左江（11-17 至 2024-04）；亚世光电（12-29）。
+  - 2024：深中华A（01-19）；正丹股份（04-19 至 05-24）；朗源股份（05-10）；*ST围海（05-17）；英力股份（05-31）；百邦科技（06-28）；*ST景峰（08-30 至 11-15）；银之杰（09-27）；中化岩土、华映科技（11-08）；ST加加（11-15）；*ST同洲（12-13/20）。
+  - 2025：*ST旭蓝（03-14）；*ST东通（05-09）；*ST宇顺（05-16 至 10-24，**08-22 暂停账户交易**）；广生堂（08-15）；思泉新材、北方长龙（08-29）；*ST东易、ST中迪（11-07）；平潭发展（11-14）；胜通能源（12-26、2026-01-09）；嘉美包装（12-31；**2026-02-13 暂停交易**）。
+  - 2026：锋龙股份（01-09；**01-23 暂停交易**）；*ST铖昌（**01-16 暂停交易**）；*ST立方、*ST长药（01-23）；国投白银LOF（**01-30 暂停交易**）；ST京蓝（**03-06/13/20 暂停交易**）；豫能控股（03-06）；兴业科技（06-26）；万邦医药（07-17）；传智教育、高争民爆（08-07）；蓝盾光电（08-14）。
+- 上交所 [P，周报 PDF；完整列表见 sse_weekly_supervision.csv 的 `focus_monitor_text` 列]：
+  - 2023：*ST泽达、*ST紫晶、*ST辅仁、*ST瑞德（03-10）；*ST同达、惠发食品、东安动力（12 月）。
+  - 2024：艾艾精工（03-15）；莱绅通灵（04-12）；南京化纤（05-24）；*ST富润（09-06）；日出东方（11-29）；*ST卓朗（12-13）。
+  - 2025：*ST锦港、中毅达（05）；*ST亚振（06 至 2026-01）；上纬新材、西藏旅游、南方路机、东芯股份、长城军工（07–08，提及暂停交易）；天普股份（09 至 2026-02）；首开股份（09-19）；*ST正平（10 至 2026）；大有能源（10-24）；合富中国、华盛锂电（11-14）。
+  - 2026：国晟科技、航天动力（01）；白银有色（01-30）；*ST岩石、*ST精伦、*ST熊猫、*ST观典；华电辽能（03-27）；福达合金、海泰新光、长盈通、泰金新能、*ST春天（05）；中船特气、昀冢科技、恒尚节能、有研硅（06–07）；爱丽家居（07-31 至 09-04）；百花医药（08-14）；龙版传媒（09；另有 09-18 沈鼓集团 IPO 账户暂停）；新华传媒（10-16）。
+  - 基金：2026 年溢价 LOF/QDII ETF 多次被点名（标普油气ETF、中韩半导体ETF、南方原油LOF、全球芯片LOF、财通福鑫LOF）。
 
 ---
 
-## 5. Other practical limits on hot-money behaviour
+## 5. 游资行为的其他现实限制
 
-### 5.1 Company-side announcements
-- **股票交易异常波动公告** (3-day ±20%), **严重异常波动公告 / 核查公告**, and repeated **风险提示公告**. Companies often add self-imposed warnings such as P/E far above the industry, "no undisclosed matters", or major shareholders' reduction plans. These are disclosed through cninfo/SSE disclosure and can be scraped.
-- Exchange **问询函 / 关注函 / 监管工作函**:
-  - SZSE weekly counts these: e.g. 2026-11-06 issue: "问询函3份，其他函件36份" [P].
-  - SSE counts 监管工作函 weekly, e.g. 10 in the 2026-11-06 issue [P].
-  - SZSE publishes each letter under "监管信息公开 → 问询函件" [S, not checked]. A letter to a hot stock often lands the day after a streak.
+### 5.1 公司公告
+- **股票交易异常波动公告**（3 日 ±20%）、**严重异常波动公告 / 核查公告**，以及反复的**风险提示公告**。公司常常自行加上警示，例如市盈率远高于行业、“不存在应披露未披露事项”、大股东减持计划。这些通过巨潮资讯/上交所披露，可以抓取。
+- 交易所**问询函 / 关注函 / 监管工作函**：
+  - 深交所周报统计这些函件，例如 2026-11-06 期：“问询函3份，其他函件36份” [P]。
+  - 上交所每周统计监管工作函，例如 2026-11-06 期 10 份 [P]。
+  - 深交所在“监管信息公开 → 问询函件”下公布每一份函件 [S，未核实]。热门股的函件常在连板后的第二天到来。
 
 ### 5.2 停牌核查
-See 2.2. Mandatory if the company cannot publish the 核查公告 the next day. In 2025–2026 the exchanges have repeatedly required 停牌核查 for 连板 stocks even when they were barely past the thresholds [S]. The exchanges can also suspend a stock directly for abnormal trading: SZSE 2026 Art. 4.3.3 says "证券交易出现第6.1条规定的异常交易行为或情形的，本所可以视情况对相关证券实施停牌" [P].
+见 2.2。如果公司不能在次日发布核查公告，就必须停牌核查。2025–2026 年交易所多次要求连板股停牌核查，即使它们只是刚超过阈值 [S]。交易所也可以因异常交易直接让股票停牌：深交所 2026 第 4.3.3 条规定“证券交易出现第6.1条规定的异常交易行为或情形的，本所可以视情况对相关证券实施停牌” [P]。
 
-### 5.3 盘中临时停牌 (intraday halts) [P, SZSE 2026 Art. 4.3.4]
-- Applies **only to stocks without price limits**: IPO first 5 trading days, relisting day, first day of 退市整理.
-- Halt of 10 minutes when the price first moves **±30%** from the day's open, and again at **±60%**. If the halt would cross 14:57, the stock resumes at 14:57.
-- Same structure on SSE main board, ChiNext and STAR since the 2023 registration reform [S].
-- Price-limited stocks (including hot main-board 10% stocks) have **no** intraday halt. The old pre-2023 main-board first-day IPO halt rules (halts at ±10%/±20% from the open, 44% cap) were replaced [? memory].
+### 5.3 盘中临时停牌 [P，深交所 2026 第 4.3.4 条]
+- **只适用于无涨跌幅限制的股票**：IPO 前 5 个交易日、重新上市首日、退市整理首日。
+- 价格首次较当日开盘价涨跌 **±30%** 时停牌 10 分钟，达到 **±60%** 时再停 10 分钟。如果停牌会跨过 14:57，则于 14:57 复牌。
+- 自 2023 年注册制改革以来，上交所主板、创业板和科创板结构相同 [S]。
+- 有涨跌幅限制的股票（包括热门的主板 10% 股票）**没有**盘中临停。2023 年以前主板新股首日的临停规则（较开盘价 ±10%/±20% 停牌，44% 上限）已被取代 [? 凭记忆]。
 
-### 5.4 Price cage (价格笼子 / 有效申报价格范围), main board since 2023-04-10 [P, SZSE 2026 Art. 3.3.16; S for the start date]
-- In continuous trading, a limit buy order may not exceed **max(102% × buy benchmark, buy benchmark + 10 ticks)**. A sell order may not be below **min(98% × sell benchmark, sell benchmark − 10 ticks)**.
-- Buy benchmark = best ask; if there is none, best bid; then last trade; then previous close.
-- Orders outside the cage are rejected as invalid. They are **not** queued; some brokers hold them locally and release them later.
-- Effect: you cannot place a single order at the limit-up price (110%) while the stock trades well below it. Chasing a stock to the limit needs repeated sweeps, and 封板 orders can only be added once the price is within 2% of the limit. This interacts with the "维持涨跌停" and "limit-price spoofing" rules, which measure the account's share of the resting queue at the limit.
-- ChiNext: same rule per the SZSE 2026 text [P] (ChiNext had the 2% cage since its 2020-08 reform [? memory]). STAR: 2% only, no 10-tick floor [S]. Not applicable during call auctions or intraday-halt call auctions.
+### 5.4 价格笼子（有效申报价格范围），主板自 2023-04-10 起 [P，深交所 2026 第 3.3.16 条；起始日期为 S]
+- 连续竞价中，限价买入申报不得高于**买入基准价的 102% 与买入基准价 + 10 个价位中的较大者**；卖出申报不得低于**卖出基准价的 98% 与卖出基准价 − 10 个价位中的较小者**。
+- 买入基准价 = 即时最低卖出申报价；没有的，取即时最高买入申报价；再没有的取最近成交价；再没有的取前收盘价。
+- 超出笼子的申报作为无效申报被拒绝，**不会**排队；部分券商会在本地暂存，之后再报出。
+- 影响：当股价远低于涨停价时，无法一笔直接挂在涨停价（110%）。追到涨停需要反复扫单，封板单只有在价格进入涨停价 2% 以内后才能挂上。这与“维持涨跌停”和“涨跌停价虚假申报”规则相互作用，后两者衡量的是账户在涨停价未成交队列中的占比。
+- 创业板：按深交所 2026 文本规则相同 [P]（创业板自 2020-08 改革起就有 2% 笼子 [? 凭记忆]）。科创板：只有 2%，没有 10 个价位的下限 [S]。不适用于集合竞价和盘中临停的集合竞价。
 
-### 5.5 Programmatic / high-frequency trading rules (2024–2025) [P, SSE Q&A 2025-04-03]
-- CSRC 《证券市场程序化交易管理规定（试行）》 issued **2024-05-15**, effective 2024-10-08 [? from memory, not re-verified]. Exchange implementation rules issued **2025-04-03**, effective **2025-07-07**.
-- **Reporting**: all programmatic traders report to the exchange via their broker (account, funds size, strategy type, trading software, etc.). The earlier stock/convertible-bond reporting notices stay valid.
-- **High-frequency definition**: an account reaching **≥300 orders+cancels per second** or **≥20,000 orders+cancels per day**. HFT accounts must also report server location, system test reports and contingency plans. Differential (higher) order/cancel fees are planned.
-- **Four programmatic abnormal behaviours**, monitored on top of the 5 types / 14 behaviours: 瞬时申报速率异常, 频繁瞬时撤单, 频繁拉抬打压 (small moves across many stocks), 短时间大额成交 (same manager's products trading together, merged). Numeric thresholds are **not public**. During the trial (from 2024-04), mostly quant private funds and broker proprietary desks triggered them.
-- **Measures**: if an account is restricted more than once within a month for abnormal trading, the broker must suspend its co-location (主机托管) access. Cases can be referred to the CSRC local office or industry associations.
-- Relevance for hot-money retail: HFT and quant-like "打板" bots and order-splitting scripts that reach 300/sec are reportable. Typical 游资 discretionary trading is unaffected.
+### 5.5 程序化 / 高频交易规则（2024–2025）[P，上交所 2025-04-03 答记者问]
+- 证监会《证券市场程序化交易管理规定（试行）》于 **2024-05-15** 发布，2024-10-08 施行 [? 凭记忆，未再次核实]。交易所实施细则于 **2025-04-03** 发布，**2025-07-07** 施行。
+- **报告**：所有程序化交易者通过券商向交易所报告（账户、资金规模、策略类型、交易软件等）。此前的股票/可转债报告通知继续有效。
+- **高频交易定义**：账户**每秒申报+撤单 ≥300 笔**，或**每日申报+撤单 ≥20,000 笔**。高频账户还须报告服务器位置、系统测试报告和应急方案。计划实行差异化（更高的）申报/撤单费用。
+- **四类程序化异常行为**，在“5 类 14 种”之外另行监控：瞬时申报速率异常、频繁瞬时撤单、频繁拉抬打压（在多只股票上的小幅拉抬）、短时间大额成交（同一管理人的产品同时交易，合并计算）。具体数值阈值**不公开**。试运行期间（2024-04 起）主要是量化私募和券商自营触发。
+- **措施**：账户一个月内因异常交易被限制超过一次的，券商须暂停其主机托管服务。案例可移交证监会派出机构或行业协会。
+- 对游资散户的意义：达到每秒 300 笔的高频或类量化“打板”机器人、拆单脚本需要报告。典型游资的主观交易不受影响。
 
-### 5.6 Other levers
-- Margin ratio (2026-01-19 → 100%).
-- Removal from the 融资融券 target list (not researched).
-- Daily disclosure of **龙虎榜** (top-5 seats) for ±7% deviation, 15% amplitude or 20% turnover (main board), and for 3-day abnormal volatility. These make hot-money seats visible [P, SZSE 2026 Art. 5.4.1–5.4.3].
-- ST daily buy cap of 50万股 per investor [P].
+### 5.6 其他手段
+- 融资保证金比例（2026-01-19 起 100%）。
+- 调出融资融券标的名单（未研究）。
+- 每日公布**龙虎榜**（前 5 席位）：主板涨跌幅偏离 ±7%、振幅 15% 或换手率 20%，以及 3 日异常波动。这让游资席位可见 [P，深交所 2026 第 5.4.1–5.4.3 条]。
+- ST 股每位投资者每日买入上限 50万股 [P]。
 
 ---
 
-## 6. Implications for a quantitative signal
+## 6. 对量化信号的启示
 
-### 6.1 Computable from daily OHLC + index data (no scraping)
-| Item | How |
+### 6.1 可以从日线 OHLC + 指数数据计算（无需抓取）
+| 项目 | 方法 |
 |---|---|
-| 3-day abnormal volatility count (main ±20%, ChiNext/STAR ±30%; ST main-board ±12% before 2026-07-06, ±20% after) | Rolling 3-day cumulative deviation vs board index (上证A股 / 深证A股 / 创业板综指 / 科创50). Apply the "reset after publication" logic: after an event, restart counting from the next day. |
-| **Severe abnormal volatility flags**: (i) 4 (main) / 3 (ChiNext/STAR) same-direction 3-day events in 10 days, (ii) 10-day cum. deviation ≥ +100%, (iii) 30-day ≥ +200% | Same deviation series. **Also compute the "distance to trigger"** (e.g. remaining % to +100% in the 10-day window, number of abnormal events left). Traders front-run the expected 停牌核查; stocks often stall or reverse just before or after the trigger. |
-| 10-trading-day "post-severe window" | Days since the last severe flag ≤ 10 means the 1-minute ≥1000万 rule is active and thresholds can be halved. This is a regime dummy for "harder to 封板 with big money". |
-| Price-limit status, 一字板, 封板 streak length, limit price (10% / 20%; ST 5% before 2026-07-06, 10% after) | OHLC (close == limit, high == low == limit). Mind the board/date switch for ST stocks. |
-| Approximate 封板 threshold in shares: 100万股 or 1000万元 / limit price (ST: 50万股/200万元), halved if the stock is "named" | Gives a rough estimate of what limit-up order size a single account can keep resting without hitting the "巨大 + 30% + 10 min" rule. Needs order-book data to use properly. |
-| Market-wide regime proxies | Count of limit-up stocks, number of stocks in a severe-volatility state, total turnover. These correlate with the weekly enforcement counts (pro-cyclical). |
-| 龙虎榜 trigger conditions | From OHLC + turnover (requires float shares). |
+| 3 日异常波动次数（主板 ±20%，创业板/科创板 ±30%；主板 ST 在 2026-07-06 前 ±12%，之后 ±20%） | 相对板块指数（上证A股 / 深证A股 / 创业板综指 / 科创50）的 3 日滚动累计偏离。套用“公告后重置”的逻辑：一次事件之后，从次日起重新计数。 |
+| **严重异常波动标记**：(i) 10 日内同向 3 日事件主板 4 次 / 创业板科创板 3 次，(ii) 10 日累计偏离 ≥ +100%，(iii) 30 日 ≥ +200% | 同一偏离序列。**同时计算“距离触发”**（例如 10 日窗口内距 +100% 还剩多少、还剩几次异常事件）。交易者会抢跑预期中的停牌核查；股票常在触发前后停滞或反转。 |
+| 10 个交易日的“严重异常波动后窗口” | 距上次严重异常波动 ≤ 10 天，意味着 1 分钟 ≥1000万 规则生效、阈值可能减半。这是“大资金更难封板”的状态哑变量。 |
+| 涨跌停状态、一字板、连板高度、涨停价（10% / 20%；ST 2026-07-06 前 5%，之后 10%） | 来自 OHLC（收盘 == 涨停价，最高 == 最低 == 涨停价）。注意 ST 股按板块和日期切换。 |
+| 封板阈值的大致股数：100万股或 1000万元 / 涨停价（ST：50万股/200万元），被点名时减半 | 粗略估计单个账户能挂住多大的涨停单而不触发“巨大 + 30% + 10 分钟”规则。要真正使用需要盘口数据。 |
+| 全市场状态代理 | 涨停股数量、处于严重异常波动状态的股票数量、总成交额。这些与每周执法数字相关（顺周期）。 |
+| 龙虎榜上榜条件 | 来自 OHLC + 换手率（需要流通股本）。 |
 
-### 6.2 Needs scraping announcements / exchange publications
-| Item | Source | Notes |
+### 6.2 需要抓取公告 / 交易所发布
+| 项目 | 来源 | 说明 |
 |---|---|---|
-| Weekly enforcement intensity (cases handled, matters checked, CSRC clues) | SZSE 深市监管动态 PDF listing (2016→); SSE weekly 新闻发布会 PDF (2015→) | Both regex-friendly, see section 3. Normalise by turnover. Publication is Friday evening, so it is usable from the next Monday. |
-| **Publicly named 重点监控 stocks** | Same weekly PDFs | Strongest single "regulatory heat" flag per stock: the 50%-threshold cut applies, and it often precedes account suspensions. Extract names inside “ ” quotes. |
-| Account-suspension events per stock | Same weekly PDFs (narrative), SSE 监管动态 page | Rare but high-signal: in all the 2025–2026 SZSE cases they followed 停牌核查 plus continued limit-ups. |
-| 停牌核查 / 核查公告 / 风险提示公告 / 异常波动公告 | Company announcements (cninfo / SSE disclosure / Eastmoney announcement API) | Exact suspension and resumption dates. The number of 风险提示 announcements in N days is a good escalation counter. |
-| 问询函 / 关注函 | SZSE 监管信息公开 (问询函件), SSE 监管问询 pages | Per-stock date of the letter. |
-| 严重异常波动 investor-type trading statistics | Exchange 公开信息 on the event day | Shows institutional vs retail share. |
-| Rule-regime dates | This file | 2023-04-10 (main-board price cage and registration rules), 2025-07-07 (programmatic rules), 2026-01-19 (margin 100%), 2026-07-06 (ST 10% limit, ST abnormal-volatility ±20%). |
+| 每周执法强度（处理案例、核查事项、上报证监会线索） | 深交所《深市监管动态》PDF 列表（2016 起）；上交所每周新闻发布会 PDF（2015 起） | 都适合正则提取，见第 3 节。按成交额归一化。周五晚上发布，从下周一起可用。 |
+| **被公开点名重点监控的股票** | 同上周报 PDF | 单只股票最强的“监管热度”标记：适用阈值减半条款，且常在暂停账户交易之前出现。提取引号“ ”内的名称。 |
+| 单只股票的账户暂停事件 | 同上周报 PDF（叙述）、上交所监管动态页 | 罕见但信号强：2025–2026 年深交所所有案例都发生在停牌核查加继续涨停之后。 |
+| 停牌核查 / 核查公告 / 风险提示公告 / 异常波动公告 | 公司公告（巨潮资讯 / 上交所披露 / 东方财富公告接口） | 准确的停牌和复牌日期。N 天内风险提示公告的数量是很好的升级计数器。 |
+| 问询函 / 关注函 | 深交所监管信息公开（问询函件）、上交所监管问询页 | 单只股票收到函件的日期。 |
+| 严重异常波动的投资者分类交易统计 | 事件当日交易所公开信息 | 显示机构与散户的占比。 |
+| 规则阶段日期 | 本文件 | 2023-04-10（主板价格笼子和注册制规则）、2025-07-07（程序化规则）、2026-01-19（融资保证金 100%）、2026-07-06（ST 涨跌幅 10%、ST 异常波动 ±20%）。 |
 
-### 6.3 Suggested features
-- `sev_flag_10d4x`, `sev_flag_10d100`, `sev_flag_30d200`, `dist_to_sev_10d` (pct points), `dist_to_sev_30d`, `days_since_sev` (≤10 = post-severe window). All from OHLC.
-- `named_focus_szse/sse` (stock named in this week's report), `weeks_named_consecutive`, `acct_suspension_flag`. From scraping.
-- `reg_intensity_z` = z-score of (SZSE weekly cases + SSE weekly cases) / market turnover over a 52-week window. Use it as a regime variable for the persistence of 连板 / 妖股 runs. Hypothesis to test **[?]**: high intensity shortens streaks and lowers the next-day return after the 3rd+ limit-up.
-- `halt_check_flag` (company in or just out of 停牌核查), `risk_notice_count_5d`. From announcements.
+### 6.3 建议的特征
+- `sev_flag_10d4x`、`sev_flag_10d100`、`sev_flag_30d200`、`dist_to_sev_10d`（百分点）、`dist_to_sev_30d`、`days_since_sev`（≤10 为严重异常波动后窗口）。全部来自 OHLC。
+- `named_focus_szse/sse`（本周报告点名）、`weeks_named_consecutive`、`acct_suspension_flag`。需要抓取。
+- `reg_intensity_z` = （深交所周案例数 + 上交所周案例数）/ 市场成交额，在 52 周窗口内的 z 值。作为连板/妖股持续性的状态变量。待检验的假设 **[?]**：强度高时连板更短，第 3 板及以上之后的次日收益更低。
+- `halt_check_flag`（公司处于或刚结束停牌核查）、`risk_notice_count_5d`。来自公告。
 
 ---
 
-## Sources (main)
-- SSE main board monitoring rule (上证发〔2023〕39号) and drafting note: https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779397.shtml [P]
-- SSE STAR monitoring rule (上证发〔2023〕40号): https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779400.shtml [P]
-- SZSE main board monitoring rule: http://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217570611262391.pdf [P]
-- SZSE ChiNext monitoring rule (2023修订): https://docs.static.szse.cn/www/lawrules/rule/all/W020250327502095568538.pdf [P]
-- SZSE trading rules (2026修订): https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf [P]
-- SSE trading rules 2026 release: https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_10816474.shtml [P]
-- SSE trading rules (2023修订) broker copy: https://www.mgzq.com/userfiles/ecb5375bc6ab4174a6d9fb405222c2a7/files/cms/article/%E4%B8%8A%E6%B5%B7%E8%AF%81%E5%88%B8%E4%BA%A4%E6%98%93%E6%89%80%E4%BA%A4%E6%98%93%E8%A7%84%E5%88%99%EF%BC%882023%E5%B9%B4%E4%BF%AE%E8%AE%A2%EF%BC%89.pdf [S]
-- SSE programmatic trading Q&A (2025-04-03): http://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20250403_10776805.shtml [P]
-- Margin ratio change (2026-01-14): https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260114_10805178.shtml [P]
-- SZSE 深市监管动态 listing: https://www.szse.cn/disclosure/supervision/dynamic/index.html [P]
-- SSE weekly press conference listing: https://www.sse.com.cn/aboutus/mediacenter/conference/ [P]
-- 2026 rule change coverage: https://www.xinhuanet.com/money/20260706/6fc6123488fc42c1852d5775089ae460/c.html ; https://www.stcn.com/article/detail/3998201.html [S]
-- Price cage explanation: https://www.cls.cn/detail/1272303 ; https://stcn.com/article/detail/836446.html [S]
-- 2025-11 SSE 重点监控 (合富中国, 华盛锂电): https://finance.sina.com.cn/roll/2025-11-14/doc-infxkhuy3026762.shtml [S]
-- 合富中国 停牌核查: https://www.cls.cn/detail/2201181 [S]
-- 上纬新材 停牌核查 announcement: https://file.finance.qq.com/finance/hs/pdf/2025/07/31/1224342574.PDF [S]
-- 爱丽家居 停牌核查: https://www.sina.cn/news/detail/5327462557813610.html [S]
-- 2026-01 margin / cooling coverage: https://m.21jingji.com/article/20260115/aa9be3e162c1f471390f5e9d15b40863.html [S]
+## 主要来源
+- 上交所主板监控细则（上证发〔2023〕39号）及起草说明：https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779397.shtml [P]
+- 上交所科创板监控细则（上证发〔2023〕40号）：https://www.sse.com.cn/lawandrules/sselawsrules2025/stocks/exchange/c/c_20250519_10779400.shtml [P]
+- 深交所主板监控细则：http://docs.static.szse.cn/www/lawrules/rule/stock/trade/W020230217570611262391.pdf [P]
+- 深交所创业板监控细则（2023修订）：https://docs.static.szse.cn/www/lawrules/rule/all/W020250327502095568538.pdf [P]
+- 深交所交易规则（2026修订）：https://docs.static.szse.cn/www/lawrules/rule/trade/current/W020260424690713155663.pdf [P]
+- 上交所 2026 交易规则发布：https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260424_10816474.shtml [P]
+- 上交所交易规则（2023修订）券商转载：https://www.mgzq.com/userfiles/ecb5375bc6ab4174a6d9fb405222c2a7/files/cms/article/%E4%B8%8A%E6%B5%B7%E8%AF%81%E5%88%B8%E4%BA%A4%E6%98%93%E6%89%80%E4%BA%A4%E6%98%93%E8%A7%84%E5%88%99%EF%BC%882023%E5%B9%B4%E4%BF%AE%E8%AE%A2%EF%BC%89.pdf [S]
+- 上交所程序化交易答记者问（2025-04-03）：http://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20250403_10776805.shtml [P]
+- 融资保证金比例调整（2026-01-14）：https://www.sse.com.cn/aboutus/mediacenter/hotandd/c/c_20260114_10805178.shtml [P]
+- 深交所《深市监管动态》列表：https://www.szse.cn/disclosure/supervision/dynamic/index.html [P]
+- 上交所每周新闻发布会列表：https://www.sse.com.cn/aboutus/mediacenter/conference/ [P]
+- 2026 年规则变化报道：https://www.xinhuanet.com/money/20260706/6fc6123488fc42c1852d5775089ae460/c.html ；https://www.stcn.com/article/detail/3998201.html [S]
+- 价格笼子解释：https://www.cls.cn/detail/1272303 ；https://stcn.com/article/detail/836446.html [S]
+- 2025-11 上交所重点监控（合富中国、华盛锂电）：https://finance.sina.com.cn/roll/2025-11-14/doc-infxkhuy3026762.shtml [S]
+- 合富中国停牌核查：https://www.cls.cn/detail/2201181 [S]
+- 上纬新材停牌核查公告：https://file.finance.qq.com/finance/hs/pdf/2025/07/31/1224342574.PDF [S]
+- 爱丽家居停牌核查：https://www.sina.cn/news/detail/5327462557813610.html [S]
+- 2026-01 融资与降温报道：https://m.21jingji.com/article/20260115/aa9be3e162c1f471390f5e9d15b40863.html [S]

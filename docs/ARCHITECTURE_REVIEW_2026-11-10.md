@@ -1,113 +1,106 @@
-# Architecture Review — 2026-11-10
+# 架构评审 — 2026-11-10
 
-Scope: the whole repository after the move to the lean `sf` CLI and 龙脉 V7. Goals: as fast as
-possible, as small as possible, a score, and the feasibility of turning this screening tool into a
-quantitative trading system. The slimming plan below was carried out on the same day; the numbers
-show the state before and after.
+范围：迁移到精简的 `sf` 命令行和龙脉 V7 之后的整个仓库。目标：尽可能快、尽可能小、打分，以及评估把这个选股工具
+做成量化交易系统的可行性。下面的瘦身计划已在当天完成，数字给出前后对比。
 
-## 1. Facts
+## 1. 事实
 
-| Measure | Before (tag `legacy-r2`) | After the first cut | After slimming |
+| 指标 | 之前（标签 `legacy-r2`） | 第一刀之后 | 瘦身之后 |
 |---|---|---|---|
-| Tracked files | 416 | 55 | 43 |
-| Tracked lines | ~217k | ~6.8k | ~5.0k |
-| `sf` package lines | — | 4,431 | 3,174 |
-| `sf` modules (files) | — | 25 | 20 |
-| CLI commands | — | 16 | 11 |
-| Test lines / tests | — | ~560 / 38 | 494 / 33 |
-| Data directory | 1.0 GB | 1.0 GB | 377 MB |
-| Python environment | 404 MB | 404 MB | 404 MB |
-| `sf premarket` list build (warm, no network) | — | 14.7 s | 2.6 s |
-| `sf evaluate` (full history, screening + temperature) | — | — | 50 s |
+| 受版本管理的文件 | 416 | 55 | 43 |
+| 受版本管理的行数 | 约 21.7 万 | 约 6,800 | 约 5,000 |
+| `sf` 包行数 | — | 4,431 | 3,174 |
+| `sf` 模块（文件） | — | 25 | 20 |
+| 命令数 | — | 16 | 11 |
+| 测试行数 / 测试数 | — | 约 560 / 38 | 494 / 33 |
+| 数据目录 | 1.0 GB | 1.0 GB | 377 MB |
+| Python 环境 | 404 MB | 404 MB | 404 MB |
+| `sf premarket` 清单生成（热启动，不联网） | — | 14.7 秒 | 2.6 秒 |
+| `sf evaluate`（全历史，选股 + 温度） | — | — | 50 秒 |
 
-The list for 2026-11-10 was rebuilt before and after every step and compared as text (header and all
-32 rows): identical.
+每一步前后都重新生成了 2026-11-10 的清单并按文本对比（表头和全部 32 行）：完全一致。
 
-## 2. Issues found, ranked
+## 2. 发现的问题（按严重程度）
 
-1. **Dead strategy versions in the live path.** V1–V6 parameters and branches lived inside the
-   functions that build today's list (`vetoes`, `crowded`, `decide`, `mainlines`, `signals`), plus a
-   portfolio replay, robustness grids and next-open P&L code that the evaluation no longer uses. Every
-   reader had to work out which branch V7 takes.
-2. **Duplicate panel work.** The same long bar table was pivoted column by column twice (all A shares
-   and the main board), and the mood indicators were computed twice (mood and temperature). This was
-   about 9 of the 14.7 seconds.
-3. **One module doing two jobs.** `longmai.py` mixed screening rules with list assembly, text and file
-   output (624 lines).
-4. **Legacy commands that measure the wrong thing.** `sf backtest`, `sf research`, `sf mainline`,
-   `sf longmai` and `sf review` all scored next-open entries, which the person trading rarely takes.
-5. **An unattended scheduler** (`sf auto`, `bin/sf-schedule`) that the user does not want.
-6. **A 630 MB research dataset** for the retired R2 rules.
-7. **Pending outcomes counted as misses.** In `evaluate.stock_outcomes`, `max3` / `out5` at the end
-   of the history used whatever later sessions existed, so a list from the last days scored as "did not
-   break out". Found while rewriting the tests; fixed (NaN until all later sessions are stored).
+1. **已废弃的策略版本留在实盘路径里。** V1–V6 的参数和分支散落在生成当日清单的函数中（`vetoes`、`crowded`、
+   `decide`、`mainlines`、`signals`），另外还有评估已不再使用的组合回放、稳健性网格和次日开盘盈亏代码。
+   每个读代码的人都得先弄清 V7 走的是哪个分支。
+2. **面板重复计算。** 同一张长表被逐列透视两遍（全部 A 股和主板），情绪指标也算了两遍（情绪和温度各一次）。
+   这占了 14.7 秒中的约 9 秒。
+3. **一个模块干两件事。** `longmai.py` 把选股规则和清单组装、文本、文件输出混在一起（624 行）。
+4. **旧命令衡量的东西不对。** `sf backtest`、`sf research`、`sf mainline`、`sf longmai` 和 `sf review`
+   都按次日开盘买入计分，而实际交易的人很少这样买。
+5. **一个无人值守的定时任务**（`sf auto`、`bin/sf-schedule`），用户并不需要。
+6. **一份 630 MB 的研究数据集**，服务于已退役的 R2 规则。
+7. **待定的结果被算成未命中。** `evaluate.stock_outcomes` 中，历史末尾的 `max3` / `out5` 用的是现有的不完整
+   窗口，于是最近几天的清单被算成“没走出来”。在重写测试时发现，已修复（后续交易日全部入库之前为 NaN）。
 
-## 3. What was done
+## 3. 已做的工作
 
-- Removed `premarket.py` (R2 list), `risk.py`, `ranking.py`, `backtest.py`, `research.py`,
-  `outcomes.py`, `sf auto` and `bin/sf-schedule`, the commands `backtest`, `research`, `mainline`,
-  `longmai` and `premarket --r2`, and the V1–V6 specs. All are at tag `legacy-r2`.
-- `longmai.py` is now V7 screening only (163 lines): one flat `PARAMS`, `context`, `gate`,
-  `mainline_table`, `vetoes`, `crowded`, `notes`, `decide`, `seat_day`.
-- New `listing.py`: list assembly, header text, saving, and the saved-run lookups (`latest_run`,
-  `all_runs`) used by `show`, `auction` and `review`.
-- `mainline.py` is V7 only: panels, theme statistics, concentration, mainlines, leaders.
-- `store.wide()` builds every session × code frame with one numpy scatter instead of repeated pivots;
-  `temperature.table()` reuses the mood indicators.
-- `sf review` reports entry-free hit rates by list group against all main-board limit-ups, plus the
-  recall of realized 妖股. New `sf evaluate` runs the full-history screening and temperature report.
-- Deleted the R2 research dataset (630 MB).
+- 删除了 `premarket.py`（R2 清单）、`risk.py`、`ranking.py`、`backtest.py`、`research.py`、`outcomes.py`、
+  `sf auto` 和 `bin/sf-schedule`，命令 `backtest`、`research`、`mainline`、`longmai` 和 `premarket --r2`，
+  以及 V1–V6 的规格。全部保存在标签 `legacy-r2`。
+- `longmai.py` 现在只有 V7 选股（163 行）：一个扁平的 `PARAMS`，以及 `context`、`gate`、`mainline_table`、
+  `vetoes`、`crowded`、`notes`、`decide`、`seat_day`。
+- 新增 `listing.py`：清单组装、表头文本、保存，以及 `show`、`auction`、`review` 使用的已保存运行查找
+  （`latest_run`、`all_runs`）。
+- `mainline.py` 只保留 V7：面板、题材统计、集中度、主线、龙头。
+- `store.wide()` 用一次 numpy 散列赋值构建所有“交易日 × 股票”表，取代反复透视；`temperature.table()`
+  复用情绪指标。
+- `sf review` 报告不设买入价的命中率：按清单分组与全部主板涨停对比，外加已实现妖股的召回率。新增
+  `sf evaluate`，运行全历史的选股和温度报告。
+- 删除了 R2 研究数据集（630 MB）。
 
-Remaining time in the 2.6 s build: loading 320 parquet files (0.8 s), building the panels (1.1 s),
-the name scan (0.6 s) and the severe-volatility windows (0.6 s). Getting under 1 s needs an
-incremental panel cache (append one session per day instead of rebuilding 320); not worth it yet.
+2.6 秒构建时间中剩余的部分：读取 320 个 parquet 文件（0.8 秒）、构建面板（1.1 秒）、名字扫描（0.6 秒）、
+严重异常波动窗口（0.6 秒）。要降到 1 秒以内，需要增量的面板缓存（每天追加一个交易日，而不是重建 320 个），
+目前不值得做。
 
-## 4. Scores (0–10)
+## 4. 评分（0–10）
 
-| Area | Score | Note |
+| 方面 | 分数 | 说明 |
 |---|---|---|
-| Core leanness | 7 | V7 path is short and single-version; `listing.build` is still one long function |
-| Repository leanness | 2 → 7 | 416 files to 43; legacy only behind a tag |
-| Speed | 6 → 8 | 14.7 s to 2.6 s; evaluation 50 s for four and a half years |
-| Module boundaries | 5 → 7 | screening, list assembly, evaluation and data are separate modules |
-| Data layer | 5 | daily snapshots are simple and point-in-time, but rebuilt from scratch on every run |
-| Research discipline | 8 | segments, frozen specs, entry-free outcomes, golden snapshot for refactors |
-| Tests | 5 → 6 | offline and synthetic; list assembly is covered only by the golden snapshot |
-| Operability | 6 | one wrapper, no scheduler, explicit missing-data notes |
-| **Overall** | **6.0 → 7.0** | |
+| 核心精简度 | 7 | V7 路径短且只有一个版本；`listing.build` 仍是一个长函数 |
+| 仓库精简度 | 2 → 7 | 416 个文件降到 43 个；旧代码只在标签里 |
+| 速度 | 6 → 8 | 14.7 秒降到 2.6 秒；四年半的评估 50 秒 |
+| 模块边界 | 5 → 7 | 选股、清单组装、评估和数据是独立模块 |
+| 数据层 | 5 | 每日快照简单且时点正确，但每次运行都从头重建 |
+| 研究纪律 | 8 | 分段、冻结的规格、不设买入价的结果、重构时用黄金快照对比 |
+| 测试 | 5 → 6 | 离线、合成数据；清单组装只有黄金快照覆盖 |
+| 可运维性 | 6 | 一个包装脚本，没有定时任务，缺失数据有明确提示 |
+| **总分** | **6.0 → 7.0** | |
 
-## 5. From screening tool to quantitative trading system
+## 5. 从选股工具到量化交易系统
 
-**Feasibility of an unattended fully automatic system: 2 / 10.**
+**无人值守的全自动系统，可行性：2 / 10。**
 
-- **No edge in daily bars.** Every next-open replay of V1–V6 lost money over the full history. The
-  screening has real skill at finding stocks that keep rising (candidates break out 1.4–1.7× as
-  often as the average limit-up), but the same stocks have 1.5–1.7× its next-day 大面 rate. The
-  money is made or lost in the entry, which the daily data cannot see.
-- **The deciding data is missing.** The person enters on the call-auction volume and price path, the
-  first minutes of trading, pullbacks to the 分时 line and the order book. None of this is stored; L1
-  snapshots are only partly free, and L2 order-by-order data is paid.
-- **Execution and compliance.** Retail automation goes through broker terminals such as QMT or PTrade.
-  Under the CSRC programmatic-trading rules (in force since 2024-10), programmatic accounts must be
-  reported to the broker, and high order rates face extra monitoring; the exchanges' abnormal-trading
-  rules (resting limit-up orders, rapid price pushes) are aimed exactly at short-term limit-up play.
-- **Main board only**, T+1, and limit-up queues that a retail order rarely reaches.
+- **日线里没有优势。** V1–V6 的每一次次日开盘买入重放在全历史上都是亏损。选股确实能找到继续上涨的股票
+  （候选股走出来的比例是平均涨停股的 1.4–1.7 倍），但同一批股票的次日大面比例也是平均的 1.5–1.7 倍。
+  钱是在买点上赚或亏的，而日线数据看不到买点。
+- **起决定作用的数据缺失。** 人是根据竞价量价走势、开盘头几分钟、分时回踩和盘口来买的。这些都没有存储；
+  L1 快照只有部分免费，L2 逐笔数据要付费。
+- **执行与合规。** 散户的自动化要经过 QMT、PTrade 等券商终端。按证监会程序化交易规定（2024-10 起施行），
+  程序化账户须向券商报告，高频报单受到额外监控；交易所的异常交易规则（涨停板挂单、快速拉抬）正是针对
+  短线涨停玩法的。
+- **只能做主板**，T+1，而且散户的单子很少能排进涨停队列。
 
-**A semi-automatic system is realistic: about 5–6 / 10 within a year,** in three steps:
+**半自动系统是现实的：一年内约 5–6 / 10**，分三步：
 
-1. **Collect what decides entries.** Save 09:15–09:25 auction snapshots and the first 30 minutes for
-   every listed stock, and record the person's actual trades (time, price, reason). This gives the
-   first honest dataset of the entries that are really taken.
-2. **Auction and intraday alerts.** Rules learned from that data ("auction volume above X% of
-   yesterday with the price holding", "first pullback to the 分时 line holds"), shown as alerts, judged
-   by hit rates like the list.
-3. **One-click confirmed orders** through a broker terminal API: the system prepares the order, the
-   person confirms it. Unattended full automation stays at ≤ 3 / 10 unless steps 1–2 show a stable
-   edge out of sample.
+1. **收集决定买点的数据。** 保存每只清单股票 09:15–09:25 的竞价快照和开盘后 30 分钟的数据，并记录人的实际
+   交易（时间、价格、理由）。这会成为第一份关于真实买点的可靠数据。
+2. **竞价和盘中提醒。** 从这些数据中学出规则（“竞价量超过昨日的 X% 且价格守住”“首次回踩分时线守住”），
+   以提醒的形式给出，像清单一样用命中率评价。
+3. **一键确认下单**，通过券商终端接口：系统准备好委托，由人确认。除非第 1–2 步在样本外显示出稳定的优势，
+   无人值守的全自动始终 ≤ 3 / 10。
 
-**Decision 2026-11-10 (after this review):** auction-level judgment stays with the person. `sf auction`
-was removed, and step 2's auction alerts are not planned. Checked on 浙文影业 and 冰山冷热, the
-inherited SF_AUCTION_V1 rules would have marked every 一字 day "观察" and the 冰山冷热 10-16 low open
-(-4.2%, closed limit-up) "放弃".
+**2026-11-10 的决定（本评审之后）：** 竞价层面的判断留给人。`sf auction` 已移除，第 2 步的竞价提醒不在计划内。
+用浙文影业和冰山冷热检验，沿用下来的 SF_AUCTION_V1 规则会把每个一字板日标为“观察”，并把冰山冷热 10-16 的
+低开（-4.2%，收盘涨停）标为“放弃”。
 
-Nothing here is investment advice. Engineering checks passing does not show investment value.
+## 6. 补充评审：数据完整性（同日）
+
+对三条不变量逐条检查后，又发现并修复了四个 P0 问题（见 CHANGELOG 同日条目）：缺失的龙虎榜席位被存成
+“当天无上榜”；不完整的行情快照会被永久冻结；清单依赖的板块成分等输入会被覆盖，无法重现；2026-07-06 起
+主板 ST 股涨跌幅已改为 10%，代码仍按 5% 计算。仍待处理的问题：实盘与评估的分组逻辑各写一份、评估时不带
+席位数据、复盘可能把事后重跑当作前向记录、召回率会随清单变长而上升。
+
+这里的内容都不构成投资建议。工程检查通过不代表有投资价值。

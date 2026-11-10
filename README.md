@@ -1,23 +1,22 @@
-# StockFish — Personal A-Share Short-Term Screening
+# StockFish — 个人 A 股短线选股工具
 
-Local, single-user tool for SSE/SZSE main-board short-term trading support: daily data, a pre-market
-list (mainline leaders, 连板梯队, 观察, 高波动) with a market-temperature read
-and hit-rate review. The 09:25 call auction is read by the person, not the tool. It never connects to a broker or places orders: a person decides every trade.
+本地、单人使用的沪深主板短线辅助工具：每日数据、盘前清单（主线龙头、连板梯队、观察、高波动）、
+市场温度判断和命中率复盘。09:25 的集合竞价由人来看，工具不判断。它不连接券商、不下单：每一笔交易都由人决定。
 
 ```sh
-bin/sf premarket     # after 18:00: list and temperature for the next session
-bin/sf crowding      # short-term money temperature, last N sessions
-bin/sf evaluate      # entry-free hit rates of the screening and the temperature calls
+bin/sf premarket     # 18:00 以后：生成下一交易日的清单和温度
+bin/sf crowding      # 最近 N 个交易日的短线资金水温
+bin/sf evaluate      # 选股与温度判断的命中率（不按买入价算盈亏）
 bin/sf --help
 ```
 
-- [User guide](USER_GUIDE.md) — commands, outputs, data store.
-- [Agent rules](AGENTS.md) — point-in-time, explicit missing data, reproducible results.
-- [Current screening spec (V7)](docs/STRATEGY_LONGMAI_V7.md) and [architecture review](docs/ARCHITECTURE_REVIEW_2026-11-10.md).
-- [Changelog](CHANGELOG.md)
+- [使用说明](USER_GUIDE.md)：命令、输出、数据目录。
+- [Agent 规则](AGENTS.md)：时点正确、缺失显式、结果可复现。
+- [当前选股规格（V7）](docs/STRATEGY_LONGMAI_V7.md)和[架构评审](docs/ARCHITECTURE_REVIEW_2026-11-10.md)。
+- [更新日志](CHANGELOG.md)
 
-Setup: Python 3.12, `python3.12 -m venv ../stockfish-env && ../stockfish-env/bin/pip install -r stock-fish/requirements.txt`.
-Tests: `cd stock-fish && ../../stockfish-env/bin/python -m pytest tests/sf`.
+安装：Python 3.12，`python3.12 -m venv ../stockfish-env && ../stockfish-env/bin/pip install -r stock-fish/requirements.txt`。
+测试：`cd stock-fish && ../../stockfish-env/bin/python -m pytest tests/sf`。
 
-The legacy R2/qlib pipeline and the V1–V6 strategy code are preserved at git tag `legacy-r2`.
-Licenses: [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+旧的 R2/qlib 流水线和 V1–V6 策略代码保存在 git 标签 `legacy-r2`。
+许可证：[THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md)。

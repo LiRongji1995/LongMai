@@ -1,296 +1,245 @@
-# 2026-11-10 Data integrity: missing is not empty, partial snapshots, ST limits, run manifest
+# 2026-11-10 数据完整性：缺失不等于空、不完整快照、ST 涨跌幅、运行记录
 
-Fixes from the architecture review (P0: the three invariants). Screening rules are unchanged (still
-`SF_LONGMAI_V7`); limit-up detection changes for ST stocks from 2026-07-06 (`SF_LIMITS_V2`).
+架构评审中 P0 问题（三条不变量）的修复。选股规则不变（仍为 `SF_LONGMAI_V7`）；ST 股的涨停判断自
+2026-07-06 起改变（`SF_LIMITS_V2`）。
 
-- **ST price limits by date.** Main-board ST/*ST stocks moved from 5% to 10% on 2026-07-06. The code used
-  5% throughout, so since July a +5% ST stock counted as a limit-up in the board statistics (mainline z3,
-  radar, short-term share). New `strategy.limit_ratio()` is used by the main-board panel, the all-A-share
-  panel and the seat outcome panel.
-- **Missing vs empty.** An empty or one-exchange LHB seat answer is "not published yet": it raises and
-  stores nothing (was stored as an empty, permanently "captured" day, silently disabling the Lhasa retail
-  veto). Legacy empty seat files count as not captured and are retried. Empty limit-up and LHB pools are
-  not stored. A benchmark index gap within 30 sessions marks a stock's abnormal-volatility state unknown
-  (a note on every row) instead of counting as zero deviation. The list header (saved in `盘前概况.txt`)
-  gets a `数据缺失` line for missing seats or index data. `sf premarket --no-update` no longer fetches seats.
-- **Partial snapshots.** `store.write_session` refuses a snapshot with < 97% of its nearest stored
-  neighbour's rows or > 1% traded rows without a close; session files are immutable, so a partial one
-  would have stayed forever.
-- **Theme refresh failures.** A board whose request fails keeps its previous members (`source=carried`,
-  old `captured_at`); a new board that fails is reported missing; `sf themes` exits 1 in either case.
-  Files are replaced atomically.
-- **Run manifest.** Saved lists (`summary.json` → `manifest`), reviews and evaluations record the git
-  commit (and uncommitted changes under `stock-fish/sf`), the version of every rule module, thresholds kept
-  outside `longmai.PARAMS`, the bar window, and content ids of the mutable inputs; each input version is
-  archived under `meta/archive/`, so a list can be re-derived after `sf themes` overwrites the membership.
+- **ST 涨跌幅按日期切换。** 主板 ST/*ST 股票于 2026-07-06 由 5% 改为 10%。代码一直按 5% 计算，所以 7 月以来
+  ST 股涨 5% 就在板块统计中被算成涨停（主线 z3、题材雷达、短线资金占比）。新增 `strategy.limit_ratio()`，
+  主板面板、全 A 面板和席位结果面板都改用它。
+- **缺失与空的区分。** 龙虎榜席位返回空或只有一个交易所的数据，视为“尚未发布”：报错且不存盘（以前会存成空文件，
+  永久显示“已采集”，拉萨散户否决因此悄悄失效）。旧版本留下的空席位文件按未采集处理并重抓。涨停池和龙虎榜池
+  返回空时不存盘。30 个交易日内基准指数有缺口时，股票的异常波动状态标为未知（每行一条提示），不再按 0 偏离计算。
+  清单表头（保存在 `盘前概况.txt`）在席位或指数缺失时增加“数据缺失”一行。`sf premarket --no-update` 不再联网抓席位。
+- **不完整快照。** `store.write_session` 拒绝写入行数不到最近相邻已存交易日 97%、或有成交股票中超过 1% 缺收盘价
+  的快照；交易日文件写入后不可变，不完整的快照会永远留下。
+- **板块刷新失败。** 请求失败的板块沿用上次的成分（`source=carried`，保留原 `captured_at`）；以前没有、这次又
+  失败的板块报告为缺失；任一情况下 `sf themes` 以 1 退出。文件原子替换。
+- **运行记录（manifest）。** 保存的清单（`summary.json` → `manifest`）、复盘和评估都记录 git 提交号（以及
+  `stock-fish/sf` 下有无未提交改动）、每个规则模块的版本、`longmai.PARAMS` 以外的阈值、行情窗口，以及各可变
+  输入的内容 ID；每个输入版本都归档到 `meta/archive/`，因此 `sf themes` 覆盖成分之后仍能重现清单。
+- 面向用户的文档（README、USER_GUIDE、CHANGELOG、`docs/`）全部改为中文。
 
-# 2026-11-10 Removed `sf auction`: the call auction is read by the person
+# 2026-11-10 移除 `sf auction`：集合竞价由人来看
 
-- Removed `sf/auction.py` and the `sf auction` command. Its SF_AUCTION_V1 rules came from DAILY_V1
-  unvalidated and assumed an open-price entry: 一字/≥8% gaps were "观察" (no fill) and gaps ≤ -3%
-  were "放弃". On 浙文影业 (11-03, 11-05, 11-06 一字) and 冰山冷热 (10-14 一字, 10-16 -4.2% open →
-  limit-up, 11-10 一字) it would have rejected the strongest days. After V7 it also read the list group
-  as `tier`, so the A/B gap bands never applied.
-- The tool stays at pre-market screening and market temperature; auction and intraday entry decisions
-  are the person's. The pre-market list is unchanged.
+- 移除 `sf/auction.py` 和 `sf auction` 命令。它的 SF_AUCTION_V1 规则沿用自未经验证的 DAILY_V1，并假定以开盘价
+  买入：一字/高开 ≥8% 为“观察”（买不到），低开 ≤ -3% 为“放弃”。用浙文影业（11-03、11-05、11-06 一字）和冰山冷热
+  （10-14 一字，10-16 低开 -4.2% 后涨停，11-10 一字）检验，它会否掉最强的那几天。V7 之后它还把清单分组当作
+  `tier` 读取，所以 A/B 档的高开区间从未生效。
+- 工具停留在盘前选股和市场温度；竞价和盘中买点由人决定。盘前清单不变。
 
-# 2026-11-10 List themes: 炒作 (news notes) before 板块 (membership)
+# 2026-11-10 清单题材：炒作（新闻记录）优先于板块（成分）
 
-- Problem: the role said "归属建筑节能" for 腾达科技 while the market traded it as 商业航天. Its Eastmoney
-  boards do not include 商业航天, and both board-based rankings fail as attribution (z3 favours tiny
-  boards; limit-up counts favour umbrella boards, e.g. 冰山冷热 → 通用设备); co-movement over 20 sessions
-  was also tried and is dominated by market beta.
-- New `sf/notes.py` and `sf note CODE THEME`: themes from news, stored in `meta/hype_notes.csv`, shown as
-  `炒作<theme>(新闻MM-DD)` for 10 sessions; the board label is renamed `板块<board>` (membership only).
-- Header: 市场高标 shows the noted theme; new 新闻题材 line (listed stocks grouped by noted theme) and
-  待查题材 line (空间板, 3板+ and high-flyers without a note). Screening rules unchanged (still V7): the
-  2026-11-10 list differs only in the role labels and these header lines.
+- 问题：腾达科技的角色显示“归属建筑节能”，而市场按商业航天炒作它。它的东方财富板块里没有商业航天，两种基于板块的
+  排序都无法正确归因（z3 偏向小板块，涨停家数偏向大而泛的板块，例如冰山冷热 → 通用设备）；也试过 20 个交易日的
+  联动，结果被市场 beta 主导。
+- 新增 `sf/notes.py` 和 `sf note 代码 题材`：来自新闻的题材，保存在 `meta/hype_notes.csv`，在 10 个交易日内显示为
+  `炒作<题材>(新闻MM-DD)`；板块标签改名为 `板块<板块>`（只代表成分）。
+- 表头：市场高标显示记录的题材；新增“新闻题材”一行（按记录题材给清单内股票分组）和“待查题材”一行（没有记录的
+  空间板、3 板以上和市场高标）。选股规则不变（仍为 V7）：2026-11-10 的清单只有角色标签和这几行表头不同。
 
-# 2026-11-10 Slimming: V7-only `sf`, list in 2.6 s, hit-rate review
+# 2026-11-10 瘦身：只保留 V7 的 `sf`，清单 2.6 秒，命中率复盘
 
-Review and scores: `docs/ARCHITECTURE_REVIEW_2026-11-10.md`. The list for 2026-11-10 is identical
-before and after (golden text snapshot).
+评审和评分：`docs/ARCHITECTURE_REVIEW_2026-11-10.md`。2026-11-10 的清单前后完全一致（黄金文本快照）。
 
-- Removed `premarket.py` (R2 list), `risk.py`, `ranking.py`, `backtest.py`, `research.py`, `outcomes.py`,
-  `sf auto` and `bin/sf-schedule`, the commands `backtest`, `research`, `mainline`, `longmai`,
-  `premarket --r2`, and the V1–V6 specs (all at tag `legacy-r2`; links to them below refer to that tag).
-- `longmai.py` is V7 screening only with one flat `PARAMS`; list assembly, header and saving moved to
-  `listing.py`; `mainline.py` keeps only the V7 mainline and leader rules.
-- Speed: `store.wide()` builds the session × code frames in one numpy scatter, and the temperature reuses
-  the mood indicators: list build 14.7 s → 2.6 s.
-- `sf review` now reports entry-free hit rates (lu1, max3, out5, bigloss1) by list group against all
-  main-board limit-ups, plus 妖股 recall; new `sf evaluate [screening|temperature]`.
-- Fix: `max3` / `out5` at the end of the history used partial windows and counted recent lists as misses;
-  they are now pending until all later sessions are stored (test2 recall 46.9% → 46.7%).
-- Deleted the 630 MB R2 research dataset; data directory 1.0 GB → 377 MB.
+- 移除 `premarket.py`（R2 清单）、`risk.py`、`ranking.py`、`backtest.py`、`research.py`、`outcomes.py`、
+  `sf auto` 和 `bin/sf-schedule`，命令 `backtest`、`research`、`mainline`、`longmai`、`premarket --r2`，以及
+  V1–V6 的规格（全部保存在标签 `legacy-r2`；下文提到它们的链接指向该标签）。
+- `longmai.py` 只保留 V7 选股，只有一个扁平的 `PARAMS`；清单组装、表头和保存移到 `listing.py`；`mainline.py`
+  只保留 V7 的主线和龙头规则。
+- 速度：`store.wide()` 用一次 numpy 散列赋值构建“交易日 × 股票”表，温度复用情绪指标：清单生成 14.7 秒 → 2.6 秒。
+- `sf review` 改为报告不设买入价的命中率（lu1、max3、out5、bigloss1），按清单分组与全部主板涨停对比，外加妖股
+  召回率；新增 `sf evaluate [screening|temperature]`。
+- 修复：历史末尾的 `max3` / `out5` 使用了不完整窗口，把最近的清单算成未命中；现在在后续交易日全部入库之前为待定
+  （test2 召回率 46.9% → 46.7%）。
+- 删除 630 MB 的 R2 研究数据集；数据目录 1.0 GB → 377 MB。
 
-# 2026-11-10 龙脉 V7: screening without an amount threshold, 连板梯队, 高波动, two-axis temperature
+# 2026-11-10 龙脉 V7：取消成交额门槛、连板梯队、高波动、双轴温度
 
-- Spec and first hit-rate check: `docs/STRATEGY_LONGMAI_V7.md`. Judged by entry-free hit rates, not P&L.
-- Recall of realized 妖股 rises from 8–9% (V6) to 47–53%, with about 14 listed stocks per day. Mainline
-  candidates without the 5亿 threshold: 5-session breakout 35.7 / 36.8 / 34.8% vs baseline 25.1 / 24.1 / 20.6%.
-- `sf/temperature.py`: heat × pain reading printed as the 水温 line (cell, historical next-day
-  loss-effect rate, pressure sources). The 短线资金 background line is folded into heat.
-- List: liquidity note (< 1亿) and one-price-board note; candidate text no longer carries mechanical
-  position and exit rules; groups 主线龙头 / 连板梯队 / 观察 / 高波动.
+- 规格和首次命中率检验：`docs/STRATEGY_LONGMAI_V7.md`。用不设买入价的命中率评价，不看盈亏。
+- 已实现妖股的召回率从 8–9%（V6）升到 47–53%，每天约列出 14 只股票。没有 5 亿门槛的主线候选：5 日走出来
+  35.7 / 36.8 / 34.8%，基准为 25.1 / 24.1 / 20.6%。
+- `sf/temperature.py`：热度 × 亏钱效应的读数，打印为“水温”一行（格子、历史上次日亏钱效应比例、压力来源）。
+  “短线资金”背景行并入热度。
+- 清单：流动性提示（< 1 亿）和一字板提示；候选文字不再带机械的仓位和卖出规则；分组为主线龙头 / 连板梯队 / 观察 / 高波动。
 
-# 2026-11-10 Entry-free evaluation (`sf/evaluate.py`): screening hit rates and temperature calls
+# 2026-11-10 不设买入价的评估（`sf/evaluate.py`）：选股命中率和温度判断
 
-Next-open P&L backtests are dropped: the person trading enters intraday (auction, 分时 pullbacks,
-order book), so the system is judged on whether its picks broke out and its temperature calls came
-true. Segments as before (cuts 2025-02-06 / 2025-12-17).
+放弃次日开盘买入的盈亏回测：交易的人在盘中买入（竞价、分时回踩、盘口），所以系统按“选出的股票是否走出来”和
+“温度判断是否应验”来评价。分段同前（分界 2025-02-06 / 2025-12-17）。
 
-- Screening (V6 rules replayed daily; baseline = all main-board limit-ups that day):
-  - candidates: 5-session breakout (≥ 2 limit-ups or +20% high) 27.7 / 32.3 / 30.9% vs baseline 25.1 / 24.1
-    / 20.6%; next-day 大面 30 / 28 / 27% vs 16 / 15 / 16% (higher beta both ways);
-  - crowded flag works: next-day limit-up 8 / 8 / 3%, breakout 10 / 15 / 6%;
-  - vetoed (near severe abnormal) are the strongest and the most dangerous: next-day limit-up 45 / 35 / 24%,
-    大面 45 / 58 / 38%;
-  - recall: only 8–9% of realized 妖股 (≥ 3 limit-ups in the next 5 sessions) were listed the day before.
-    75% of them were outside the top-3 mainlines, 52% outside the theme radar, 52% were first boards.
-    Height is the strongest marker (winner rate 首板 4.9%, 2板 12.2%, 3板 18.0%, 4板+ 20.6%); all 2板+
-    stocks (~12 per day) hold 48% of the winners. The 5亿 amount threshold removes winners: among 2板+,
-    below-threshold winner rate 20 / 20 / 17% vs above 12 / 11 / 7.5%.
-- Temperature: the SF_MOOD_V1 phase nodes mostly fail against real outcomes (next-day profit / loss effect
-  = limit-up premium and 大面 count versus their trailing 250-day medians). Only 退潮 is consistently
-  (modestly) right. New two-axis reading: heat (limit-ups, promotion rate, max height, short-term share)
-  and pain (大面, limit-downs, weak failed-board premium, low up ratio). Next-day loss-effect rate by cell
-  (train / test1 / test2): 热痛 54 / 50 / 57%, 热顺 38 / 41 / 46%, 冷痛 24 / 41 / 51%, 冷顺 17 / 17 / 27%
-  (base 33 / 37 / 48%). Combined stress top quintile 55 / 40 / 66% vs bottom 16 / 17 / 33%.
-  Indicator signs were chosen on train; the test segments were inspected before.
+- 选股（每天重放 V6 规则；基准 = 当日全部主板涨停）：
+  - 候选：5 日走出来（≥ 2 个涨停或最高 +20%）27.7 / 32.3 / 30.9%，基准 25.1 / 24.1 / 20.6%；次日大面
+    30 / 28 / 27%，基准 16 / 15 / 16%（两个方向的 beta 都更高）；
+  - 拥挤标记有效：次日涨停 8 / 8 / 3%，走出来 10 / 15 / 6%；
+  - 被否决的（接近严重异常波动）最强也最危险：次日涨停 45 / 35 / 24%，大面 45 / 58 / 38%；
+  - 召回率：已实现妖股（之后 5 个交易日内 ≥ 3 个涨停）中只有 8–9% 在前一天被列入清单。其中 75% 在前 3 条主线
+    之外，52% 在题材雷达之外，52% 是首板。高度是最强的标记（妖股比例：首板 4.9%，2 板 12.2%，3 板 18.0%，
+    4 板以上 20.6%）；全部 2 板以上股票（每天约 12 只）包含 48% 的妖股。5 亿成交额门槛去掉了妖股：在 2 板以上
+    股票中，门槛以下的妖股比例 20 / 20 / 17%，门槛以上 12 / 11 / 7.5%。
+- 温度：SF_MOOD_V1 的阶段节点对照真实结果大多失败（次日赚钱/亏钱效应 = 涨停溢价和大面数相对各自 250 日滚动
+  中位数）。只有“退潮”一贯（小幅）正确。新的双轴读数：热度（涨停数、晋级率、最高板、短线资金占比）和亏钱效应
+  （大面、跌停、炸板股次日弱、上涨家数少）。各格子的次日亏钱效应比例（train / test1 / test2）：热痛 54 / 50 / 57%，
+  热顺 38 / 41 / 46%，冷痛 24 / 41 / 51%，冷顺 17 / 17 / 27%（基准 33 / 37 / 48%）。综合压力最高五分位
+  55 / 40 / 66%，最低五分位 16 / 17 / 33%。指标符号在 train 上选定；测试段之前已被看过。
 
-# 2026-11-10 龙脉 V6 backtest (rule proxy) — negative; the 空间板 class is the cause
+# 2026-11-10 龙脉 V6 回测（规则代理）——为负；原因是空间板这一类
 
-- Spec `docs/STRATEGY_LONGMAI_V6.md` (commit d13642e), code 75adb86. 738 trades, −1.54% per trade;
-  train / test1 / test2 −2.04% (t −3.3) / −1.82% (t −2.5) / +0.11%. Every robustness neighbour
-  negative over the full history. Run: `backtests/SF_LONGMAI_V6-20261110T133743Z`.
-- Split by candidate class: 空间板 trades (170) −4.89% / −6.53% / −1.70% per trade in train / test1 /
-  test2, negative at every height (4: −5.3%, 5: −2.0%, 6: −8.6%, 7: −2.0%). Mainline trades (568)
-  −1.37% / −0.04% / +0.73%, close to V5 (−1.23% / −0.48% / +1.10%). Buying the market's tallest
-  board at the next open when it gaps up loses in every segment: the 空间板 is a sentiment anchor to
-  watch, not a next-open buy.
+- 规格 `docs/STRATEGY_LONGMAI_V6.md`（提交 d13642e），代码 75adb86。738 笔交易，每笔 −1.54%；
+  train / test1 / test2 −2.04%（t −3.3）/ −1.82%（t −2.5）/ +0.11%。全历史上每个稳健性邻域都为负。
+  运行：`backtests/SF_LONGMAI_V6-20261110T133743Z`。
+- 按候选类别拆分：空间板交易（170 笔）在 train / test1 / test2 每笔 −4.89% / −6.53% / −1.70%，每个高度都为负
+  （4 板：−5.3%，5 板：−2.0%，6 板：−8.6%，7 板：−2.0%）。主线交易（568 笔）−1.37% / −0.04% / +0.73%，
+  接近 V5（−1.23% / −0.48% / +1.10%）。在高开时以次日开盘价买入市场最高板，每个分段都亏：空间板是用来观察的
+  情绪锚，不是次日开盘的买点。
 
-# 2026-11-10 龙脉 V5 backtest (rule proxy) — negative over the full history, positive in test2
+# 2026-11-10 龙脉 V5 回测（规则代理）——全历史为负，test2 为正
 
-- 840 trades (190 crowded, 248 vetoed), −0.60% per trade after 0.15% cost, hit 37.9%, payoff 1.40;
-  train / test1 / test2 −1.23% (t −2.6) / −0.48% (t −0.7) / +1.10% (t 1.0). By year 2022 −1.6%,
-  2023 −2.0%, 2024 +0.2%, 2025 −0.6%, 2026 +1.2%. Run: `backtests/SF_LONGMAI_V5-20261110T131844Z`.
-- Robustness: every neighbour negative over the full history (best: top_k 4 −0.19%, max_hold 5
-  −0.18%); test2 positive for 23 of 25 neighbours. Not re-selected.
-- Exits: theme fade 46%, failed limit-up 26%, churn 22%. Relative crowding blocks far fewer leaders
-  than V4's absolute line (190 vs 1402).
+- 840 笔交易（190 笔拥挤，248 笔被否决），扣 0.15% 成本后每笔 −0.60%，胜率 37.9%，盈亏比 1.40；
+  train / test1 / test2 −1.23%（t −2.6）/ −0.48%（t −0.7）/ +1.10%（t 1.0）。按年：2022 −1.6%，
+  2023 −2.0%，2024 +0.2%，2025 −0.6%，2026 +1.2%。运行：`backtests/SF_LONGMAI_V5-20261110T131844Z`。
+- 稳健性：全历史上每个邻域都为负（最好：top_k 4 −0.19%，max_hold 5 −0.18%）；25 个邻域中 23 个在 test2 为正。
+  未重新选参。
+- 卖出原因：题材退潮 46%，炸板 26%，换手过高 22%。相对拥挤拦下的龙头远少于 V4 的绝对线（190 vs 1402）。
 
-# 2026-11-10 龙脉 V5 code; theme radar, high-flyers, attribution; human-only wording
+# 2026-11-10 龙脉 V5 代码；题材雷达、市场高标、归因；只由人决定的措辞
 
-- The system never trades: the list shows candidates ("候选（由你决定）") and a rule position cap; the
-  backtest is a rule proxy. Main board only stays (account constraint).
-- V5 implemented per `docs/STRATEGY_LONGMAI_V5.md` (concentration mainlines with overlap dedupe,
-  amount threshold before ranking, relative crowding). `sf premarket` / `sf longmai` default to V5.
-- `sf/radar.py` (information only, no rule): theme radar by 3-session limit-up concentration, so a
-  running theme with a split day stays visible (e.g. 冰雪经济 with 2 limit-ups today, 8 in 3 days);
-  市场高标 line for the tallest boards whatever their theme; each stock attributed to its most
-  concentrated hot board (龙江交通 → 冰雪经济, not 光伏概念); a shared-name link whose stocks share a
-  hot concept is shown as 同概念联动 instead of 玄学. Board data says what a stock belongs to, not why
-  it rises: high-flyer reasons come from news, checked by the assistant on each daily run.
+- 系统从不交易：清单显示候选（“候选（由你决定）”）和规则仓位上限；回测只是规则代理。仍只做主板（账户限制）。
+- 按 `docs/STRATEGY_LONGMAI_V5.md` 实现 V5（集中度主线并去重重叠、排序前先过成交额门槛、相对拥挤）。
+  `sf premarket` / `sf longmai` 默认使用 V5。
+- `sf/radar.py`（只提供信息，不是规则）：按 3 日涨停集中度排序的题材雷达，使正在发酵但当天分歧的题材仍然可见
+  （例如冰雪经济当天 2 个涨停、3 日 8 个）；“市场高标”一行显示最高板，不论其题材；每只股票归到它所属的最集中的
+  热门板块（龙江交通 → 冰雪经济，而不是光伏概念）；同名联动的股票若同属一个热门概念，显示为“同概念联动”而不是
+  “玄学”。板块数据说明一只股票属于什么，不说明它为什么涨：市场高标的上涨原因来自新闻，由助手在每天运行时查核。
 
-# 2026-11-10 龙脉 V4 (`SF_LONGMAI_V4`) — forward-test version; negative full-history backtest
+# 2026-11-10 龙脉 V4（`SF_LONGMAI_V4`）——前向检验版本；全历史回测为负
 
-- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V4.md` (commit f5c1df3). V1 retired.
-  Leaders by board height then turnover rate; amount only as a fixed threshold (today or 3-session
-  mean ≥ 5亿); no 3-session abnormal veto; V3 crowding block kept. `sf premarket` / `sf longmai`
-  default to V4.
-- Backtest: 424 trades (1402 crowded skipped), −0.80% per trade, hit 38.4%, payoff 1.35;
-  train / test1 / test2 −2.34% (t −3.0) / +1.38% (t 1.0) / +0.68% (t 0.4). By year 2022–2024
-  negative (−2.0 / −2.5 / −1.4%), 2025–2026 positive (+0.4 / +0.8%), when market turnover roughly
-  doubled. Robustness: every neighbour negative over the full history; removing the crowding block
-  is the worst (−1.82%), so the block helps; 8亿 threshold −0.53%, 3亿 −1.39%.
-- The full-history equity figures are additive per-slot sums and exceed −100%; per-trade averages
-  are the meaningful statistic here.
+- 回测前冻结规格：`docs/STRATEGY_LONGMAI_V4.md`（提交 f5c1df3）。V1 退役。龙头先比连板高度，再比换手率；
+  成交额只作为固定门槛（当日或 3 日均值 ≥ 5 亿）；不设 3 日异常波动否决；保留 V3 的拥挤拦截。
+  `sf premarket` / `sf longmai` 默认使用 V4。
+- 回测：424 笔交易（跳过 1402 笔拥挤），每笔 −0.80%，胜率 38.4%，盈亏比 1.35；train / test1 / test2
+  −2.34%（t −3.0）/ +1.38%（t 1.0）/ +0.68%（t 0.4）。按年 2022–2024 为负（−2.0 / −2.5 / −1.4%），
+  2025–2026 为正（+0.4 / +0.8%），这时市场成交额大约翻倍。稳健性：全历史上每个邻域都为负；去掉拥挤拦截最差
+  （−1.82%），说明拦截有用；8 亿门槛 −0.53%，3 亿 −1.39%。
+- 全历史净值曲线是各仓位的累加和，会超过 −100%；这里有意义的是每笔平均收益。
 
-# 2026-11-10 Forward test: 龙脉 V1; `sf crowding`
+# 2026-11-10 前向检验：龙脉 V1；`sf crowding`
 
-- V1 is the version under forward test (`longmai.FORWARD_VERSION = 1`); `sf premarket` and
-  `sf longmai` default to it. V2/V3 stay available for comparison. V1 is unchanged, including its
-  3-session abnormal veto, because the forward test needs the frozen spec.
-- `sf crowding [--days N]`: daily short-term money temperature for review (market turnover vs
-  20-day mean, short-term share and its 250-day percentile, high-turnover share, mainline shares
-  with a 60-session-high flag). Context only; it does not select stocks or identify leaders.
+- V1 是正在前向检验的版本（`longmai.FORWARD_VERSION = 1`）；`sf premarket` 和 `sf longmai` 默认使用它。
+  V2/V3 仍可用于对比。V1 保持不变，包括它的 3 日异常波动否决，因为前向检验需要冻结的规格。
+- `sf crowding [--days N]`：每天的短线资金水温，用于复盘（全市场成交额与 20 日均值之比、短线资金占比及其 250 日
+  分位、高换手占比、主线成交占比及 60 日新高标记）。只作背景；不选股，也不确定龙头。
 
-# 2026-11-10 Crowding study (拥挤度) — no market-level threshold
+# 2026-11-10 拥挤度研究——不存在市场层面的阈值
 
-- `sf/crowding.py`: market short-term share (`spec_share`, `hot_turn_share`, changes, amount vs
-  20-day mean, top-3 mainline share) and theme share / 60-session percentile / 5-day change.
-- Study pre-registered and reported in `docs/CROWDING_STUDY.md`. Negative for every market-level
-  indicator (no threshold separates relay or leader outcomes; more money and more concentration
-  were slightly better, not worse). Positive descriptive finding: a mainline at its 60-session
-  turnover-share high fades within 2 sessions about 1.5x as often (train 33% / test1 23% / test2
-  34% vs 19% / 16% / 21%), but leader returns do not differ consistently.
-- Pre-market summary: each mainline shows its share of market turnover; a 题材拥挤 warning for a
-  mainline at its share high; a 短线资金 background line. No rule or version change.
+- `sf/crowding.py`：市场短线资金占比（`spec_share`、`hot_turn_share`、变化、成交额相对 20 日均值、前 3 条主线
+  占比）以及题材占比 / 60 日分位 / 5 日变化。
+- 研究已预注册，结果见 `docs/CROWDING_STUDY.md`。所有市场层面指标的结论都是否定的（没有阈值能区分接力或龙头的
+  结果；钱更多、更集中反而略好）。正面的描述性发现：主线成交占比处于 60 日最高位时，2 个交易日内退潮的概率约为
+  1.5 倍（train 33% / test1 23% / test2 34%，对比 19% / 16% / 21%），但龙头收益没有一致差异。
+- 盘前概况：每条主线显示其占全市场成交额的比例；主线处于占比高位时给出“题材拥挤”提示；增加“短线资金”背景行。
+  规则和版本不变。
 
-# 2026-11-10 龙脉 V3 (`SF_LONGMAI_V3`) — turnover identifies, crowding blocks entry (negative backtest)
+# 2026-11-10 龙脉 V3（`SF_LONGMAI_V3`）——用换手识别、用拥挤拦截买入（回测为负）
 
-- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V3.md` (commit 30f1060). Leaders as in V2;
-  crowded (turnover ≥ 30% or ≥ 2× the previous 5-session average) leaders are shown but not bought.
-- Backtest: 164 trades (551 crowded signals skipped), −1.13% per trade, train / test1 / test2
-  −1.13% / −2.44% / +0.18%. Better than V2 (−1.61%), far below V1 (+0.25%). All robustness neighbours
-  negative (best: crowd surge 1.5×, −0.55%).
-- Why: activity ranking admits smaller, higher-turnover stocks even below the crowding line. Median
-  turnover of traded leaders: V1 10.2% (amount rank median 15), V3 20.2% (amount rank median 52).
-  Leaders identified by traded amount, i.e. where large money concentrates, did better than leaders
-  identified by turnover.
+- 回测前冻结规格：`docs/STRATEGY_LONGMAI_V3.md`（提交 30f1060）。龙头同 V2；拥挤的龙头（换手率 ≥ 30% 或
+  ≥ 前 5 日均值 2 倍）只显示、不买入。
+- 回测：164 笔交易（跳过 551 个拥挤信号），每笔 −1.13%，train / test1 / test2 −1.13% / −2.44% / +0.18%。
+  好于 V2（−1.61%），远低于 V1（+0.25%）。所有稳健性邻域为负（最好：拥挤倍数 1.5 倍，−0.55%）。
+- 原因：活跃度排序让规模更小、换手更高的股票进来，即使它们在拥挤线以下。成交龙头的换手率中位数：V1 10.2%
+  （成交额排名中位数 15），V3 20.2%（成交额排名中位数 52）。按成交额识别的龙头（也就是大资金集中的地方）表现
+  好于按换手识别的龙头。
 
-# 2026-11-10 龙脉 V2 (`SF_LONGMAI_V2`) — activity and no 3-day veto (negative backtest)
+# 2026-11-10 龙脉 V2（`SF_LONGMAI_V2`）——活跃度，不设 3 日否决（回测为负）
 
-- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V2.md` (commit bd09827). Activity = mean of the
-  whole-market percentile ranks of traded amount and turnover rate; leader condition activity rank ≤ 30;
-  the 3-session abnormal-volatility veto is removed. V1 stays reproducible (`sf longmai --version 1`).
-- Backtest (same period and slots): 307 trades, −1.61% per trade, hit 37.5%, train / test1 / test2
-  −1.20% / −3.56% (t=−3.3) / −0.55%. Every robustness neighbour is negative. Decomposition: V2 with
-  activity switched off (amount only, no 3-day veto) is +0.03% per trade, so the turnover component
-  causes most of the loss and dropping the 3-day veto costs about 0.2% per trade versus V1 (+0.25%).
-  Reading: very high turnover on the signal day marks crowding — the condition the thesis exits on.
-- Post-list name links (`namethemes.links`): each listed stock is checked against today's strong stocks
-  for a shared word, character, homophone or 3-digit code suffix (binomial tail < 0.1%, strict because of
-  multiple comparisons). Shown as 玄学线索 for human judgement; no effect on the decision.
-- List columns: 成交额 now shows amount, turnover rate and activity rank.
+- 回测前冻结规格：`docs/STRATEGY_LONGMAI_V2.md`（提交 bd09827）。活跃度 = 成交额和换手率在全市场的百分位排名
+  均值；龙头条件为活跃度排名 ≤ 30；去掉 3 日异常波动否决。V1 仍可复现（`sf longmai --version 1`）。
+- 回测（同一时段和仓位数）：307 笔交易，每笔 −1.61%，胜率 37.5%，train / test1 / test2 −1.20% / −3.56%
+  （t=−3.3）/ −0.55%。每个稳健性邻域都为负。分解：关闭活跃度的 V2（只用成交额，无 3 日否决）每笔 +0.03%，
+  所以亏损主要来自换手成分，去掉 3 日否决相对 V1（+0.25%）每笔约损失 0.2%。解读：信号日换手率极高标志着拥挤——
+  这正是该思路的卖出条件。
+- 清单后的名字联动（`namethemes.links`）：把每只清单股票与当天的强势股比对，看是否有相同的词、字、谐音或代码后
+  3 位（二项尾概率 < 0.1%，因多重比较而从严）。显示为“玄学线索”供人判断；不影响决策。
+- 清单列：成交额列现在显示成交额、换手率和活跃度排名。
 
-# 2026-11-10 Name contagion (名字/谐音扩散)
+# 2026-11-10 名字扩散（名字/谐音炒作）
 
-- `sf/namethemes.py` (`SF_NAME_CONTAGION_V1`): groups built from every stock name — same character,
-  same two-character word (e.g. 东方), same toneless pinyin (e.g. yang: 羊阳洋扬杨) — with industry,
-  legal-form, commodity and delisting words excluded. A group is hot when its limit-ups are improbable
-  under the market limit-up rate (binomial tail < 1e-4, at least 3 limit-ups). No seed keywords: all
-  ~800 groups are scanned daily. Detected without prompting: the 羊/洋/阳 wave (2026-10-21 → 11-03), the
-  东方 wave (11-06 → 11-09), 华 on 2026-09-21.
-- Out of sample (next-open entry, next-open exit): limit-ups inside a hot name group do no better than
-  all limit-ups (−0.22% / +0.29% / −0.44% excess); members not yet limit-up do worse the next day
-  (test1 −0.52% t=−1.7, test2 −0.94% t=−2.1). Informational + risk note only; candidate mainline source
-  for V2. The 龙脉 list shows up to three distinct waves with their leaders and tags followers.
+- `sf/namethemes.py`（`SF_NAME_CONTAGION_V1`）：从所有股票名称构建分组——相同的字、相同的两字词（如东方）、相同的
+  无声调拼音（如 yang：羊阳洋扬杨）——排除行业、公司形式、大宗商品和退市相关的词。按市场涨停率计算，一个分组的
+  涨停数不太可能出现时（二项尾概率 < 1e-4，至少 3 个涨停），该分组为热门。没有预设关键词：每天扫描全部约 800 个
+  分组。无需提示就发现了：羊/洋/阳 波（2026-10-21 至 11-03）、东方 波（11-06 至 11-09）、2026-09-21 的 华。
+- 样本外（次日开盘买入，再次日开盘卖出）：热门名字分组内的涨停股并不比全部涨停股好（超额 −0.22% / +0.29% /
+  −0.44%）；尚未涨停的成员次日更差（test1 −0.52% t=−1.7，test2 −0.94% t=−2.1）。只作信息和风险提示；是 V2
+  的候选主线来源。龙脉清单最多显示 3 个不同的波及其龙头，并标记跟风股。
 
-# 2026-11-10 龙脉 V1 (`SF_LONGMAI_V1`) — first formal strategy
+# 2026-11-10 龙脉 V1（`SF_LONGMAI_V1`）——第一个正式策略
 
-- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V1.md` (commit d58af71). `sf premarket` now
-  builds the 龙脉 list by default (header: sentiment, regulatory temperature, position budget, mainlines;
-  groups 主线龙头 / 观察 / 回避; columns 名称 / 角色 / 成交额(排名) / 参与建议 / 风险提示). The R2 list
-  stays available with `sf premarket --r2`. `sf longmai [--robust]` runs the portfolio backtest.
-- Noise filter completed before accepting the backtest: earnings-status, valuation, style and ownership
-  buckets (e.g. 2026中报首亏, 破增发价股, 超跌股, 风格, 基金增仓) were being picked as mainlines. The run
-  before the fix (126→127 trades, +0.09%/trade) is kept in `backtests/longmai-v1-prefix-noise-run.log`.
-- Backtest (2022-06 → 2026-11, 4 slots × 1/4, cost 0.15%): 126 trades, +0.25% per trade, hit 39.7%,
-  payoff 1.63, realized total +8.0%, max drawdown −23.4%; train / test1 / test2 per-trade
-  +0.07% / +0.21% / +0.71% (t ≈ 0). At 0.30% cost: +0.10% per trade. Essentially break-even.
-- Robustness (one step either way, not re-selected): results move a lot (turnover rank 20: +1.24%,
-  leader rank 1: −0.03%, gap ≥ −1%: −0.46%), so V1 is fragile. The gap filter and the vetoes matter
-  (no vetoes: +0.01%); the market gate lowers return but also drawdown (no gate: +0.62%, DD −30%).
-- Observed structural issue: the height leader (e.g. a 7-board small cap) and the turnover leader
-  (中军) are usually different stocks, so V1 rarely trades (~28 trades a year). Candidate for V2.
+- 回测前冻结规格：`docs/STRATEGY_LONGMAI_V1.md`（提交 d58af71）。`sf premarket` 现在默认生成龙脉清单（表头：
+  情绪、监管温度、仓位预算、主线；分组主线龙头 / 观察 / 回避；列 名称 / 角色 / 成交额(排名) / 参与建议 / 风险提示）。
+  R2 清单仍可通过 `sf premarket --r2` 生成。`sf longmai [--robust]` 运行组合回测。
+- 接受回测前补全了噪声过滤：业绩状态、估值、风格和持股类的板块（如 2026中报首亏、破增发价股、超跌股、风格、
+  基金增仓）曾被选为主线。修复前的运行（126→127 笔，每笔 +0.09%）保留在 `backtests/longmai-v1-prefix-noise-run.log`。
+- 回测（2022-06 至 2026-11，4 个仓位 × 1/4，成本 0.15%）：126 笔交易，每笔 +0.25%，胜率 39.7%，盈亏比 1.63，
+  实现总收益 +8.0%，最大回撤 −23.4%；train / test1 / test2 每笔 +0.07% / +0.21% / +0.71%（t ≈ 0）。
+  成本 0.30% 时每笔 +0.10%。基本是盈亏平衡。
+- 稳健性（每个方向一步，未重新选参）：结果波动很大（换手排名 20：+1.24%，龙头排名 1：−0.03%，高开 ≥ −1%：
+  −0.46%），所以 V1 很脆弱。高开过滤和否决条件有作用（无否决：+0.01%）；市场闸门降低收益，也降低回撤
+  （无闸门：+0.62%，回撤 −30%）。
+- 观察到的结构性问题：高度龙头（例如一只 7 板小盘股）和成交龙头（中军）通常是不同的股票，所以 V1 很少交易
+  （每年约 28 笔）。作为 V2 的改进方向。
 
-# 2026-11-10 Exchange monitoring rules and regulatory temperature
+# 2026-11-10 交易所监控规则与监管温度
 
-- `docs/REGULATION_NOTES.md`: SSE/SZSE abnormal-trading real-time monitoring rules (2023 versions, still
-  current), severe-abnormal-volatility definitions, measures ladder, weekly supervision reports and dated
-  enforcement episodes, with source grades ([P] primary, [S] secondary, [?] unverified).
-- `abnormal.severe`: severe abnormal volatility (4 three-day triggers in 10 sessions on the main board,
-  3 on ChiNext/STAR; 10-day +100%; 30-day +200%), distance to the trigger and days since the last one.
-- `sf/regulation.py`: regulatory temperature = SZSE weekly abnormal-trading cases per unit of market
-  turnover, percentile over the last 52 reports, usable from the first session after publication; the
-  weekly report is fetched and parsed automatically (`pypdf`).
-- Out-of-sample (per day, next-open entry, sell at the following open):
-  - Limit-ups with high vs low regulatory temperature: −1.20% / −1.15% / −1.23% vs
-    −0.92% / −0.52% / −0.75% (train / test1 / test2).
-  - Limit-ups within 30% of the 10-day severe trigger: −2.72% / −1.99% / −1.50% (all limit-ups:
-    −1.11% / −0.75% / −0.71%).
-  - Both are added to the risk notes; neither makes a buy rule positive.
+- `docs/REGULATION_NOTES.md`：沪深交易所异常交易实时监控细则（2023 版，仍现行）、严重异常波动的定义、措施阶梯、
+  每周监管报告和有日期的执法事件，附来源等级（[P] 一手、[S] 二手、[?] 未核实）。
+- `abnormal.severe`：严重异常波动（主板 10 个交易日内 4 次 3 日异常，创业板/科创板 3 次；10 日 +100%；30 日
+  +200%）、距触发的距离以及距上次的天数。
+- `sf/regulation.py`：监管温度 = 深交所每周异常交易起数除以市场成交额，取最近 52 期中的分位，从发布后的第一个
+  交易日起可用；周报自动抓取并解析（`pypdf`）。
+- 样本外（按天，次日开盘买入，再次日开盘卖出）：
+  - 监管温度高与低时的涨停股：−1.20% / −1.15% / −1.23% 对比 −0.92% / −0.52% / −0.75%（train / test1 / test2）。
+  - 距 10 日严重异常波动触发不足 30% 的涨停股：−2.72% / −1.99% / −1.50%（全部涨停股：−1.11% / −0.75% / −0.71%）。
+  - 两者都加入风险提示；都不能让任何买入规则变为正收益。
 
-# 2026-11-10 LHB seats, sentiment switch, abnormal-volatility status
+# 2026-11-10 龙虎榜席位、情绪开关、异常波动状态
 
-- `sf seats`: full LHB seat detail since 2022-03 (1,127 sessions, Eastmoney datacenter, two requests
-  per session), seat types (institution / northbound / Lhasa retail / other branch) and point-in-time
-  seat skill (outcomes used only after they are known). Captured daily by `sf update`/`sf premarket`.
-- `sf mood` (`SF_MOOD_V1`): 12 bar-based sentiment indicators as 250-session percentiles; the composite
-  uses 5 indicators selected on the training segment only. A high promotion rate predicts a worse
-  next day (crowding).
-- `SF_ABNORMAL_V1`: 3-session deviation against the exchange benchmark with reset after a trigger;
-  matches actual LHB listing reasons with precision 81% / recall 74%.
-- The pre-market advice now ends with a risk context (sentiment tier, abnormal-volatility status, LHB
-  seat structure). The list stays 3 columns.
-- Out-of-sample findings (per day, entry at next open, sell at the following open, 0.15% cost):
-  - Buying LHB stocks is negative in every segment (all: −0.92% / −0.68% / −0.67%). Seat information
-    ranks consistently but never turns positive: institutions ≥2 −0.46% / −0.25% / −0.46%; Lhasa retail
-    net buying −1.17% / −0.98% / −1.54% (worst); skilled hot-money net buying −0.89% / −0.58% / −0.30%.
-  - Sentiment top tercile vs bottom tercile for the relay basket: −0.22% vs −0.85% (test1),
-    −0.16% vs −1.01% (test2): a risk filter, not alpha.
-  - Stocks that triggered the 3-day rule today did worse the next day in every segment.
-  - None of the three filters makes the mainline-leader strategy positive in both test segments.
+- `sf seats`：2022-03 以来完整的龙虎榜席位明细（1,127 个交易日，东方财富数据中心，每个交易日两次请求），席位
+  类型（机构 / 北向 / 拉萨散户 / 其他营业部）以及时点正确的席位能力（结果只在已知之后使用）。由
+  `sf update` / `sf premarket` 每天采集。
+- `sf mood`（`SF_MOOD_V1`）：12 个基于日线的情绪指标，取 250 个交易日分位；综合值只用在训练段上选出的 5 个指标。
+  晋级率高预示次日更差（拥挤）。
+- `SF_ABNORMAL_V1`：相对交易所基准的 3 日偏离，触发后重置；与龙虎榜实际上榜原因对照，精确率 81% / 召回率 74%。
+- 盘前建议末尾增加风险背景（情绪档位、异常波动状态、龙虎榜席位结构）。清单仍为 3 列。
+- 样本外结果（按天，次日开盘买入，再次日开盘卖出，成本 0.15%）：
+  - 买入龙虎榜股票每个分段都为负（全部：−0.92% / −0.68% / −0.67%）。席位信息排序一致但从不转正：机构 ≥2 家
+    −0.46% / −0.25% / −0.46%；拉萨散户净买 −1.17% / −0.98% / −1.54%（最差）；有效游资净买 −0.89% / −0.58% / −0.30%。
+  - 接力篮子的情绪最高三分位对比最低三分位：−0.22% 对 −0.85%（test1），−0.16% 对 −1.01%（test2）：是风险过滤，
+    不是超额收益。
+  - 当天触发 3 日规则的股票次日在每个分段都更差。
+  - 三个过滤条件都不能让主线龙头策略在两个测试段都为正。
 
-# 2026-11-10 Lean `sf` CLI; legacy pipeline frozen
+# 2026-11-10 精简的 `sf` 命令行；旧流水线冻结
 
-- New `stock-fish/sf/` package and `bin/sf` wrapper replace the daily use of `codex_daily_v2.py`, which is
-  frozen. AGENTS.md now rests on three invariants: point-in-time correctness, explicit missing data,
-  reproducible results.
-- Data: one parquet snapshot per session (BaoStock full-market daily), 1,127 sessions 2022-03 → 2026-11
-  (318 MB); adjusted prices from the exchange preclose chain, so no adjustment-factor downloads.
-  Daily Eastmoney limit-up / failed-board / limit-down pools and LHB rows; theme boards with
-  board-visibility dates to limit look-ahead.
-- Speed: core R2 computation 293 s → ~3 s; a full pre-market run is ~1.5 min (mostly network).
-- Commands: update, premarket (3-column list), show, auction, review, backtest, research, themes,
-  mainline, status. Offline tests in `tests/sf`.
-- Research findings (per-day statistics, 60/20/20 time split, entry at target open, 0.15% cost):
-  - R2 selections: negative in every segment (train −0.57%/day t=−4.7; tests −0.17%, −0.13%).
-  - Raising the absolute turnover floor (1/3/5/10/20 亿) does not make R2 positive out of sample.
-  - Buying yesterday's limit-ups at the open is consistently negative (first board t=−6.0/−2.2/−2.3).
-  - Buying on COLD sentiment days was flat 2022–2025 and positive only in the last year: not robust.
-  - A scan of 367 single/pairwise bucket rules × 3 exits found no rule valid in both test segments.
-- Mainline leader + crowded exit (`SF_MAINLINE_LEADER_V1`, `sf mainline`): leader of a top-3 theme by
-  limit-up count, entry at next open, exits on failed board / churn / MA / theme fade / stop / time.
-  - Relative turnover rank matters monotonically (avg per trade: no limit −2.21%, top 200 −1.61%,
-    top 100 −1.48%, top 50 −1.16%, top 30 −0.85%), but every variant is still negative overall.
-  - Pre-declared variants (top-30 rank, gap ≥ 0, leader rank 1, MA5/MA10/no MA exit, churn 2×/3×):
-    none is positive in both test segments. Best: top 30 + gap ≥ 0 (test1 −1.26% t=−0.84,
-    test2 +3.30% t=1.70). The strategy stays research-only; it is not used for the pre-market list.
-  - Noise concept boards (price-action/popularity buckets) are now filtered when themes are loaded;
-    `trend_ma` makes the MA exit configurable (0 disables).
+- 新的 `stock-fish/sf/` 包和 `bin/sf` 包装脚本取代日常使用的 `codex_daily_v2.py`，后者冻结。AGENTS.md 现在建立在
+  三条不变量之上：时点正确、缺失显式、结果可复现。
+- 数据：每个交易日一个 parquet 快照（BaoStock 全市场日线），1,127 个交易日，2022-03 至 2026-11（318 MB）；
+  复权价由交易所前收盘价连乘得到，无需下载复权因子。每天采集东方财富涨停 / 炸板 / 跌停池和龙虎榜；题材板块带
+  可见日期，以限制前视偏差。
+- 速度：核心 R2 计算 293 秒 → 约 3 秒；完整的盘前运行约 1.5 分钟（主要是网络）。
+- 命令：update、premarket（3 列清单）、show、auction、review、backtest、research、themes、mainline、status。
+  离线测试在 `tests/sf`。
+- 研究结果（按天统计，60/20/20 时间切分，目标日开盘买入，成本 0.15%）：
+  - R2 入选股：每个分段都为负（train 每天 −0.57%，t=−4.7；测试段 −0.17%、−0.13%）。
+  - 提高绝对成交额门槛（1/3/5/10/20 亿）不能让 R2 在样本外转正。
+  - 开盘买入昨日涨停股一贯为负（首板 t=−6.0/−2.2/−2.3）。
+  - 在情绪 COLD 的日子买入，2022–2025 年持平，只在最近一年为正：不稳健。
+  - 扫描 367 条单桶/双桶规则 × 3 种卖出方式，没有一条在两个测试段都有效。
+- 主线龙头 + 拥挤卖出（`SF_MAINLINE_LEADER_V1`，`sf mainline`）：按涨停数选出的前 3 题材中的龙头，次日开盘买入，
+  在炸板 / 换手过高 / 均线 / 题材退潮 / 止损 / 时间到时卖出。
+  - 相对换手排名的作用是单调的（每笔平均：不限 −2.21%，前 200 −1.61%，前 100 −1.48%，前 50 −1.16%，
+    前 30 −0.85%），但每个变体总体仍为负。
+  - 预先声明的变体（前 30 排名、高开 ≥ 0、龙头排名 1、MA5/MA10/无均线卖出、换手 2×/3×）：没有一个在两个测试段
+    都为正。最好：前 30 + 高开 ≥ 0（test1 −1.26% t=−0.84，test2 +3.30% t=1.70）。该策略只用于研究，不用于盘前清单。
+  - 噪声概念板块（价格走势/人气类）现在在加载题材时过滤；`trend_ma` 让均线卖出可配置（0 为关闭）。
 
 # 2026-11-09 按日因子审查与重复处理优化
 

@@ -1,47 +1,39 @@
-# Screening spec: 龙脉 V7 (`SF_LONGMAI_V7`)
+# 选股规格：龙脉 V7（`SF_LONGMAI_V7`）
 
-Status: current version (user decision, 2026-11-10). The forward record starts with the 2026-11-11 session.
+状态：当前版本（用户于 2026-11-10 决定）。前向记录从 2026-11-11 交易日开始。
 
-## Role and evaluation
+## 定位与评价方式
 
-The system never trades. It screens stocks and reads the short-term market temperature; a person
-decides every entry and exit intraday (auction volume and price, 分时 pullbacks, order book). V7 is
-therefore **not** judged by next-open P&L. It is judged by entry-free hit rates (`sf/evaluate.py`):
+系统从不交易。它负责选股和判断短线市场温度；每一次买入和卖出都由人在盘中决定（竞价量价、分时回踩、盘口）。
+因此 V7 **不**用次日开盘买入的盈亏来评价，而是用不设买入价的命中率（`sf/evaluate.py`）：
 
-- Screening: share of listed stocks that continue (next-day limit-up), break out within 5 sessions
-  (≥ 2 limit-ups or +20% high), or fall hard next day (大面), each compared with all main-board
-  limit-ups that day. Recall: the share of realized 妖股 (≥ 3 limit-ups in the next 5 sessions) that
-  were listed the day before.
-- Temperature: next-day loss-effect rate per temperature cell, compared with all days.
+- 选股：清单内股票次日继续涨停的比例、5 个交易日内走出来的比例（≥ 2 个涨停或最高 +20%）、次日大跌（大面）的比例，
+  都与当日全部主板涨停股对比。召回率：已实现的妖股（之后 5 个交易日内 ≥ 3 个涨停）中，前一天被列入清单的比例。
+- 温度：每个温度格子的次日亏钱效应比例，与全部交易日对比。
 
-Model adjustments are made from these hit rates (train segment first, then checked on the tests and
-the forward record).
+模型调整依据这些命中率进行（先看 train 段，再用两个测试段和前向记录检验）。
 
-## Changes from V6
+## 相对 V6 的变化
 
-1. **No amount threshold.** Amount and turnover are displayed, with a liquidity note below 1亿 and
-   a one-price-board note. Evidence: among 2板+ stocks the 5亿 threshold removed the stocks most
-   likely to become 妖股 (winner rate below 20 / 20 / 17% vs above 12 / 11 / 7.5%).
-2. **连板梯队.** Every main-board, eligible 2板+ stock that is not already a mainline leader is listed,
-   sorted by height then turnover, with its theme attribution, crowding / high-volatility flags and
-   distance to severe abnormal volatility.
-3. **高波动 instead of 回避.** Stocks hitting a severe-abnormal veto are the strongest and the most
-   dangerous (next-day limit-up 24–45%, 大面 38–58%); they are shown as 高波动 for intraday judgement.
-4. **Two-axis temperature** (`sf/temperature.py`): heat × pain cells with their historical next-day
-   loss-effect rate and the pressure sources; replaces the five SF_MOOD_V1 phase nodes, which failed
-   against real outcomes (only 退潮 was modestly right).
+1. **取消成交额门槛。** 成交额和换手率只显示；成交额低于 1 亿时提示流动性，一字板单独提示。依据：在 2 板及以上
+   股票中，5 亿门槛恰好去掉了最可能成为妖股的那部分（门槛以下的妖股比例 20 / 20 / 17%，门槛以上 12 / 11 / 7.5%）。
+2. **连板梯队。** 所有符合条件、但不是主线龙头的主板 2 板及以上股票都列出，按高度、再按换手率排序，附题材归属、
+   拥挤/高波动标记和距严重异常波动的距离。
+3. **用“高波动”取代“回避”。** 触发严重异常波动否决的股票最强也最危险（次日涨停 24–45%，大面 38–58%），
+   列为“高波动”，留给盘中判断。
+4. **双轴温度**（`sf/temperature.py`）：热度 × 亏钱效应的格子，附历史上次日亏钱效应比例和压力来源；取代
+   SF_MOOD_V1 的五个阶段节点——后者对照真实结果失败（只有“退潮”略有效）。
 
-Mainlines, leaders, relative crowding and the 空间板 class are as in V6; the mood tier still sets
-the displayed position cap.
+主线、龙头、相对拥挤和空间板的规则与 V6 相同；情绪档位仍决定显示的仓位上限。
 
-## First hit-rate check (V7 rules replayed, train / test1 / test2)
+## 首次命中率检验（按 V7 规则重放，train / test1 / test2）
 
-| group | next-day limit-up | 5-session breakout | next-day 大面 |
+| 分组 | 次日涨停 | 5 日走出来 | 次日大面 |
 |---|---|---|---|
-| all main-board limit-ups (baseline) | 24.9 / 24.3 / 20.0% | 25.1 / 24.1 / 20.6% | 15.7 / 14.8 / 16.4% |
-| mainline leaders (candidates) | 36.9 / 36.1 / 32.1% | 35.7 / 36.8 / 34.8% | 26.8 / 25.6 / 24.9% |
+| 全部主板涨停（基准） | 24.9 / 24.3 / 20.0% | 25.1 / 24.1 / 20.6% | 15.7 / 14.8 / 16.4% |
+| 主线龙头（候选） | 36.9 / 36.1 / 32.1% | 35.7 / 36.8 / 34.8% | 26.8 / 25.6 / 24.9% |
 | 连板梯队 | 40.6 / 40.6 / 33.4% | 38.7 / 40.2 / 32.0% | 31.0 / 28.0 / 24.5% |
-| crowded | 11.3 / 14.3 / 5.3% | 16.1 / 21.4 / 5.3% | 40.3 / 21.4 / 36.8% |
+| 拥挤 | 11.3 / 14.3 / 5.3% | 16.1 / 21.4 / 5.3% | 40.3 / 21.4 / 36.8% |
 | 高波动 | 55.5 / 41.8 / 46.2% | 57.5 / 34.3 / 45.6% | 36.8 / 53.7 / 28.8% |
 
-Recall of realized 妖股: 52.7 / 47.3 / 46.9% (V6: 7.9 / 9.0 / 9.3%), with about 14 listed stocks per day.
+已实现妖股的召回率：52.7 / 47.3 / 46.9%（V6：7.9 / 9.0 / 9.3%），每天约列出 14 只股票。

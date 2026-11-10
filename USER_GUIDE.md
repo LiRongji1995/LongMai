@@ -1,120 +1,115 @@
-# User Guide — `sf` CLI
+# 使用说明 — `sf` 命令行
 
-`sf` is the daily tool. Run it from anywhere with the wrapper:
+`sf` 是日常使用的工具。可以在任何目录通过包装脚本运行：
 
 ```sh
-stockfish-qlib-quant-system/bin/sf <command>
+stockfish-qlib-quant-system/bin/sf <命令>
 ```
 
-The wrapper uses the Python environment `../stockfish-env` next to the checkout (override with
-`SF_PYTHON`). Data lives in `../stockfish-data` (override with `SF_HOME`). Tip: add an alias such as
-`alias sf=/path/to/stockfish-qlib-quant-system/bin/sf`.
+包装脚本使用仓库旁边的 Python 环境 `../stockfish-env`（可用 `SF_PYTHON` 覆盖）。数据放在
+`../stockfish-data`（可用 `SF_HOME` 覆盖）。建议加一个别名，例如
+`alias sf=/path/to/stockfish-qlib-quant-system/bin/sf`。
 
-The system never trades. The list is a screening and temperature read for a person who decides
-entries and exits intraday (auction, 分时 pullbacks, order book). Nothing here is investment advice.
+系统从不交易。清单只是选股和温度参考，买卖时机由人在盘中决定（竞价、分时回踩、盘口）。
+本工具的任何内容都不构成投资建议。
 
-## Daily routine
+## 每日流程
 
-| When (Shanghai) | Command | What you get |
+| 时间（北京时间） | 命令 | 结果 |
 |---|---|---|
-| After 18:00 | `sf premarket` | Updates data, captures the day's limit-up/failed/limit-down pools and LHB, writes the list for the next session (`lists/<target>/<run>/盘前清单.csv` + `盘前概况.txt`) |
-| 09:25–09:30 | — | You read the call auction yourself; the tool gives no auction verdicts |
-| Any time | `sf show [TARGET]` | Prints a saved list |
-| Weekly | `sf review [--since D]` | Hit rates of every saved list (below) |
-| Weekly | `sf themes` | Refreshes concept/industry board membership (~20 min) |
-| Any time | `sf mood [--days N]` | Sentiment indicators, percentile level and tier (低/中/高) |
-| Any time | `sf crowding [--days 20]` | Short-term money temperature: market turnover vs its 20-day mean, short-term share, high-turnover share, mainlines with their turnover share (`!` = at a 60-session high). Review context only |
-| Any time | `sf seats --code 600000 [--date D]` | One stock's LHB seats; `sf seats` prints the seat leaderboard |
-| Any time | `sf status` | Data coverage |
-| After the news check | `sf note 001379 商业航天 [--date D] [--source URL]` | Records why a stock is really traded; `sf note` lists the records |
+| 18:00 以后 | `sf premarket` | 更新数据，采集当日涨停/炸板/跌停池和龙虎榜，生成下一交易日的清单（`lists/<目标日>/<运行>/盘前清单.csv` + `盘前概况.txt`） |
+| 09:25–09:30 | — | 集合竞价由你自己看，工具不给竞价结论 |
+| 随时 | `sf show [目标日]` | 打印一份已保存的清单 |
+| 每周 | `sf review [--since 日期]` | 所有已保存清单的命中率（见下文） |
+| 每周 | `sf themes` | 刷新概念/行业板块成分（约 20 分钟） |
+| 随时 | `sf mood [--days N]` | 情绪指标、分位和档位（低/中/高） |
+| 随时 | `sf crowding [--days 20]` | 短线资金水温：全市场成交额与 20 日均值之比、短线资金占比、高换手占比、主线及其成交占比（`!` 表示处于 60 日最高位）。只用于复盘 |
+| 随时 | `sf seats --code 600000 [--date 日期]` | 某只股票的龙虎榜席位；`sf seats` 打印席位榜 |
+| 随时 | `sf status` | 数据覆盖情况 |
+| 查完新闻后 | `sf note 001379 商业航天 [--date 日期] [--source 链接]` | 记录一只股票真正的炒作题材；`sf note` 列出已有记录 |
 
-Nothing is scheduled automatically; run the commands yourself.
+没有任何自动定时任务，命令都由你自己运行。
 
-## The list (龙脉 V7)
+## 清单（龙脉 V7）
 
-Spec: [docs/STRATEGY_LONGMAI_V7.md](docs/STRATEGY_LONGMAI_V7.md). Main-board stocks only.
+规格见 [docs/STRATEGY_LONGMAI_V7.md](docs/STRATEGY_LONGMAI_V7.md)。只包含主板股票。
 
-| Group | Content |
+| 分组 | 内容 |
 |---|---|
-| 主线龙头 | Leaders (rank ≤ 2 by height, then turnover rate) of the top-3 mainlines (3-session limit-up concentration, overlapping waves merged), plus the 空间板 (tallest main-board stock, ≥ 4 boards) |
-| 连板梯队 | Every other eligible main-board 2板+ stock |
-| 观察 | R2 strength matches outside the mainlines, and name-wave leaders |
-| 高波动 | Near or after severe abnormal volatility, or heavy Lhasa retail buying: the strongest and the most dangerous |
+| 主线龙头 | 前 3 条主线（3 日涨停集中度，重叠的题材合并）中排名 ≤ 2 的龙头（先比连板高度，再比换手率），外加空间板（主板最高板，≥ 4 板） |
+| 连板梯队 | 其余所有符合条件的主板 2 板及以上股票 |
+| 观察 | 主线以外符合 R2 强势条件的股票，以及名字扩散的龙头 |
+| 高波动 | 接近或刚经历严重异常波动，或拉萨散户席位大额净买：最强也最危险 |
 
-`拥挤` (turnover ≥ 2× its own 5-day mean without a sealed limit-up) is a flag, not a group. Amount is
-displayed, not filtered. Header lines: 情绪 / 监管温度 / position ceiling, 主线, 题材拥挤, 水温 (heat × pain
-cell with the historical next-day loss-effect rate and the pressure sources), 名字扩散, 市场高标,
-题材雷达, 同概念联动 / 玄学线索, 新闻题材, 待查题材.
+`拥挤`（换手率 ≥ 自身前 5 日均值的 2 倍且未封板）是标记，不是分组。成交额只显示、不过滤。
+表头依次为：情绪 / 监管温度 / 仓位上限、主线、题材拥挤、水温（热度 × 亏钱效应的格子，附历史上次日亏钱效应比例和压力来源）、
+名字扩散、市场高标、题材雷达、同概念联动 / 玄学线索、新闻题材、待查题材，有数据缺失时还有一行“数据缺失”。
 
-**Themes: 炒作 vs 板块.** Board data says what a stock belongs to, not why it rises, and the membership
-snapshot misses new stories (on 2026-11-10 腾达科技 traded as 商业航天 but is not a member of that board).
-So the role shows `炒作<theme>(新闻MM-DD)` when a note exists (`sf note`, from news and announcements,
-used for 10 sessions) and `板块<board>` for the most concentrated hot board it is a member of, which is
-membership only. The 待查题材 line names the 空间板, 3板+ and high-flyers with no note yet; the
-新闻题材 line groups listed stocks by their noted theme. Notes live in `meta/hype_notes.csv`.
+**题材：炒作 vs 板块。** 板块数据说明一只股票属于什么，不说明它为什么涨；而且成分快照会漏掉新故事
+（2026-11-10 腾达科技按商业航天炒作，但不在该板块成分里）。所以有新闻记录（`sf note`，来自新闻和公告，
+有效 10 个交易日）时，角色显示 `炒作<题材>(新闻MM-DD)`；`板块<板块>` 表示它所属的最集中的热门板块，
+只代表成分归属。“待查题材”一行列出还没有新闻记录的空间板、3 板以上和市场高标；“新闻题材”一行按记录的
+题材给清单内股票分组。记录保存在 `meta/hype_notes.csv`。
 
-## Judging the system: hit rates, not P&L
+## 评价系统：看命中率，不看盈亏
 
 ```sh
-sf review                 # saved lists: hit rates by group vs all main-board limit-ups, recall of 妖股
-sf evaluate               # full history replay: screening hit rates and temperature calls
-sf evaluate temperature   # temperature only (seconds)
+sf review                 # 已保存清单：各分组命中率与当日全部主板涨停对比，妖股召回率
+sf evaluate               # 全历史重放：选股命中率和温度判断
+sf evaluate temperature   # 只算温度（几秒）
 ```
 
-Outcomes are measured from the observation close, with no entry price:
+结果从观察日收盘价起算，不设买入价：
 
-| Label | Meaning |
+| 标签 | 含义 |
 |---|---|
-| `lu1` | limit-up on the next session |
-| `max3` | highest high over the next 3 sessions |
-| `out5` | "走出来": ≥ 2 limit-ups within 5 sessions, or a +20% high |
-| `bigloss1` | next-day 大面: low ≤ −7% or close ≤ −5% |
-| recall | of the realized 妖股 (limit-up today, ≥ 3 limit-ups in the next 5 sessions), the share listed |
+| `lu1` | 下一交易日涨停 |
+| `max3` | 之后 3 个交易日内的最高涨幅 |
+| `out5` | “走出来”：5 个交易日内 ≥ 2 个涨停，或最高涨幅达 +20% |
+| `bigloss1` | 次日大面：最低 ≤ −7% 或收盘 ≤ −5% |
+| 召回率 | 已实现的妖股（当日涨停、之后 5 个交易日内再涨停 ≥ 3 次）中被列入清单的比例 |
 
-Outcomes whose sessions are not in the store yet are pending, never misses. `sf evaluate` splits the
-history into train / test1 / test2 (cuts 2025-02-06 / 2025-12-17); change rules on train evidence
-first. Outputs go to `stockfish-data/reviews/` and `stockfish-data/evaluations/`, never overwritten.
+后续交易日尚未入库的结果算“待定”，不算未命中。`sf evaluate` 把历史分为 train / test1 / test2
+（分界 2025-02-06 / 2025-12-17）；调整规则先看 train 的证据。输出写入 `stockfish-data/reviews/` 和
+`stockfish-data/evaluations/`，从不覆盖。
 
-## Sentiment, seats and abnormal volatility
+## 情绪、席位和异常波动
 
-- **Sentiment (`SF_MOOD_V1`)**: 12 daily indicators from bars, each as its percentile over the last 250
-  sessions; the composite uses limit-downs (−), promotion rate (−), big losses (−), failed-board premium
-  (+) and breadth (+). Tiers are terciles. Used for the position ceiling line and as context.
-- **Temperature (`sf/temperature.py`)**: heat (limit-ups, promotion rate, max height, short-term share)
-  and pain (大面, limit-downs, weak failed-board premium, low up ratio), each a mean percentile.
-- **LHB seats**: full seat detail since 2022 (`pools/seats/`). A seat's skill uses only outcomes
-  already known on the day (two-session lag).
-- **Abnormal volatility (`SF_ABNORMAL_V1`)**: 3-session cumulative deviation against the exchange
-  benchmark (precision 81%, recall 74% against the LHB reasons). Severe abnormal volatility (main board:
-  4 triggers in 10 sessions, 10-day +100%, or 30-day +200%; daily deviations are summed) drives 高波动.
-- **Regulatory temperature**: SZSE weekly abnormal-trading cases per unit of market turnover, as a
-  percentile of the last 52 reports. Rules and history: [docs/REGULATION_NOTES.md](docs/REGULATION_NOTES.md).
+- **情绪（`SF_MOOD_V1`）**：从日线算 12 个每日指标，各取最近 250 个交易日内的分位；综合值使用跌停数（−）、
+  晋级率（−）、大面数（−）、炸板股次日表现（+）和上涨家数占比（+）。档位按三等分。用于仓位上限一行和背景参考。
+- **水温（`sf/temperature.py`）**：热度（涨停数、晋级率、最高板、短线资金占比）和亏钱效应（大面、跌停、
+  炸板股次日弱、上涨家数少），各取分位的平均值。
+- **龙虎榜席位**：2022 年以来的完整席位明细（`pools/seats/`）。席位能力只用当天已知的结果（滞后两个交易日）。
+- **异常波动（`SF_ABNORMAL_V1`）**：相对交易所基准指数的 3 日累计偏离（与龙虎榜上榜原因对照：精确率 81%，
+  召回率 74%）。严重异常波动（主板：10 个交易日内触发 4 次，或 10 日累计 +100%，或 30 日累计 +200%；
+  按日偏离值累加）决定“高波动”分组。
+- **监管温度**：深交所每周异常交易处置起数除以市场成交额，取最近 52 期报告中的分位。规则和历史见
+  [docs/REGULATION_NOTES.md](docs/REGULATION_NOTES.md)。
 
-## Data store
+## 数据目录
 
-| Path (under `stockfish-data/`) | Content |
+| 路径（在 `stockfish-data/` 下） | 内容 |
 |---|---|
-| `bars/<date>.parquet` | full-market daily snapshot (BaoStock): OHLC, exchange preclose, turnover, ST, status |
-| `pools/{zt,zbgc,dtgc,lhb,seats}/<date>.parquet` | limit-up / failed-board / limit-down pools, LHB rows and seats |
-| `meta/` | calendar, stock basics, theme boards and members, index returns, hype notes |
-| `meta/archive/` | every version of those mutable inputs, named by content id (`<name>-<id>`), kept for re-derivation |
-| `lists/<target>/<run>/` | `盘前清单.csv`, `盘前概况.txt`, `picks.csv`, `leaders.csv`, `facts.parquet` (every stock with its features and list group), `summary.json` (incl. `manifest`: git commit, module versions, input ids) |
-| `reviews/`, `evaluations/`, `research/` | saved outputs; never overwritten |
+| `bars/<日期>.parquet` | 全市场日线快照（BaoStock）：OHLC、交易所前收盘价、换手率、ST、交易状态 |
+| `pools/{zt,zbgc,dtgc,lhb,seats}/<日期>.parquet` | 涨停池、炸板池、跌停池、龙虎榜和席位明细 |
+| `meta/` | 交易日历、股票基础信息、板块及成分、指数收益、炒作题材记录 |
+| `meta/archive/` | 上述可变输入的每个版本，按内容 ID 命名（`<名称>-<ID>`），用于重现历史清单 |
+| `lists/<目标日>/<运行>/` | `盘前清单.csv`、`盘前概况.txt`、`picks.csv`、`leaders.csv`、`facts.parquet`（每只股票的特征和分组）、`summary.json`（含 `manifest`：git 提交号、各模块版本、输入 ID） |
+| `reviews/`、`evaluations/`、`research/` | 保存的输出，从不覆盖 |
 
-Missing is never "nothing happened": a market snapshot with fewer than 97% of its neighbour's rows (or
-traded rows without a close) is not stored; an empty or one-exchange LHB seat answer and an empty
-limit-up / LHB pool are "not published yet" and are not stored either (rerun later). When seats or the
-benchmark index are missing, the list header shows a `数据缺失` line and the affected checks are marked
-unknown. `sf themes` keeps the previous members of a board whose request failed (`source=carried`) and
-exits non-zero when any board was carried or is missing.
+缺失永远不等于“没发生”：
+- 行情快照的行数不到相邻交易日的 97%，或有成交的股票缺收盘价，就不入库。
+- 龙虎榜席位返回空、或只有一个交易所的数据，以及涨停池、龙虎榜池返回空，都视为“尚未发布”，不入库（稍后重跑）。
+- 席位或基准指数缺失时，清单表头显示“数据缺失”一行，相关检查标为未知。
+- `sf themes` 中请求失败的板块沿用上次的成分（`source=carried`）；只要有板块沿用或缺失，命令就以非 0 退出。
 
-Price limits: main board 10% (ST/*ST 5% before 2026-07-06, 10% from then on), ChiNext/STAR 20%.
+涨跌幅：主板 10%（ST/*ST 在 2026-07-06 之前为 5%，之后为 10%），创业板和科创板 20%。
 
-Adjusted prices are reconstructed from the exchange preclose (`adj_t / adj_{t-1} = close_t / preclose_t`).
-A missing session makes affected windows unknown (NaN).
+复权价由交易所前收盘价连乘得到（`adj_t / adj_{t-1} = close_t / preclose_t`）。缺少某个交易日时，
+涉及该日的窗口结果为未知（NaN）。
 
-## Legacy
+## 旧版本
 
-The R2/qlib pipeline, the next-open backtests (`sf backtest`, `sf research`, `sf mainline`,
-`sf longmai`), the launchd scheduler and the V1–V6 specs and code were removed from `main` on
-2026-11-10. They are preserved at git tag `legacy-r2` (`git checkout legacy-r2`).
+R2/qlib 流水线、按次日开盘买入的回测（`sf backtest`、`sf research`、`sf mainline`、`sf longmai`）、
+launchd 定时任务以及 V1–V6 的规格和代码已于 2026-11-10 从 `main` 移除，保存在 git 标签 `legacy-r2`
+（`git checkout legacy-r2`）。
