@@ -96,11 +96,38 @@ def theme_stats(aw: dict, boards: pd.DataFrame, members: pd.DataFrame) -> dict:
     exists = pd.DataFrame(np.asarray(days)[:, None] >= first.fillna("9999-12-31").to_numpy()[None, :],
                           index=days, columns=names)
     lu, share = lu.where(exists), share.where(exists)
-    return dict(lu=lu, lu3=lu.rolling(3, min_periods=1).sum(), share=share, M=M, names=names, cols=cols)
+    traded = aw["amount"].notna().to_numpy(dtype=np.float32)
+    n = pd.DataFrame(traded @ M.T, index=days, columns=names).where(exists)
+    lu_all, tr_all = lu_m.sum(axis=1), traded.sum(axis=1)
+    rate3 = pd.Series(lu_all, index=days).rolling(3, min_periods=1).sum() / \
+        pd.Series(tr_all, index=days).rolling(3, min_periods=1).sum()
+    return dict(lu=lu, lu3=lu.rolling(3, min_periods=1).sum(), share=share, M=M, names=names, cols=cols,
+                n=n, n3=n.rolling(3, min_periods=1).sum(), rate3=rate3, limit_up=aw["limit_up"])
+
+
+def concentration(ts: dict, t: int) -> pd.Series:
+    """V5 board score z3: 3-session limit-ups against the market limit-up rate (binomial z)."""
+    day = ts["lu"].index[t]
+    k, n, r = ts["lu3"].loc[day], ts["n3"].loc[day], float(ts["rate3"].loc[day])
+    return (k - n * r) / np.sqrt(n * r * (1 - r)).replace(0, np.nan)
 
 
 def mainlines(ts: dict, t: int, p: dict) -> list[str]:
     day = ts["lu"].index[t]
+    if p.get("mainline_mode") == "concentration":
+        frame = pd.DataFrame({"lu": ts["lu"].loc[day], "n": ts["n"].loc[day], "z": concentration(ts, t)}).dropna()
+        frame = frame[(frame["lu"] >= p["min_theme_limit_ups"]) & (frame["n"] >= 5)].sort_values("z", ascending=False)
+        lu_today = ts["limit_up"].iloc[t].reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
+        taken, covered = [], np.zeros(len(ts["cols"]), dtype=bool)
+        for board in frame.index:
+            members = (ts["M"][ts["names"].index(board)] > 0) & lu_today
+            if members.sum() == 0 or (members & covered).sum() >= p["overlap_max"] * members.sum():
+                continue
+            taken.append(board)
+            covered |= members
+            if len(taken) >= p["top_k"]:
+                break
+        return taken
     frame = pd.DataFrame({"lu": ts["lu"].loc[day], "lu3": ts["lu3"].loc[day], "share": ts["share"].loc[day]}).dropna()
     frame = frame[frame["lu"] >= p["min_theme_limit_ups"]]
     return frame.sort_values(["lu3", "lu", "share"], ascending=False).head(p["top_k"]).index.tolist()
@@ -142,6 +169,8 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
             turn_today.reindex(index) if use_turn else cand["amount"]
         # Rank only today's strong, eligible members: weak members can't be the leader.
         cand = cand[pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)]
+        if p.get("threshold_first"):
+            cand = cand[amount_ok.reindex(cand.index).fillna(False)]
         if cand.empty:
             continue
         cand["leader_rank"] = cand.sort_values(["height", "act"], ascending=False).assign(

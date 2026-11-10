@@ -12,11 +12,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import abnormal, crowding, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
+from . import abnormal, crowding, mainline, radar, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-# V4 is the version under forward test (user decision 2026-11-10); V1-V3 stay for backtest comparison only.
-FORWARD_VERSION = 4
-VERSION = "SF_LONGMAI_V4"
+# V5 is the version under forward test (user decision 2026-11-10); V1-V4 stay for backtest comparison only.
+FORWARD_VERSION = 5
+VERSION = "SF_LONGMAI_V5"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -32,7 +32,11 @@ PARAMS = dict(PARAMS_V2, version="SF_LONGMAI_V3", crowd_turn=30.0, crowd_surge=2
 # threshold (today or 3-session mean >= 5亿); no 3-day veto; V3 crowding block kept.
 PARAMS_V4 = dict(PARAMS_V1, version="SF_LONGMAI_V4", veto_3day=False, leader_key="turn", amount_min=5e8,
                  crowd_turn=30.0, crowd_surge=2.0)
-VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4}
+# V5 (docs/STRATEGY_LONGMAI_V5.md): concentration mainlines with overlap dedupe, amount threshold before
+# ranking, relative crowding (turnover surge without a sealed limit-up).
+PARAMS_V5 = dict(PARAMS_V4, version="SF_LONGMAI_V5", mainline_mode="concentration", overlap_max=0.6,
+                 threshold_first=True, crowd_mode="relative", crowd_turn=0)
+VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4, 5: PARAMS_V5}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
@@ -127,6 +131,14 @@ def vetoes(ctx: dict, t: int, code: str, p: dict, seat_day: pd.DataFrame | None)
 
 def crowded(ctx: dict, t: int, code: str, p: dict) -> list[str]:
     """V3 crowding: absolute turnover rate or a surge against the stock's own previous 5 sessions."""
+    if p.get("crowd_mode") == "relative":  # V5: surge without a sealed limit-up (放量分歧)
+        turn = ctx["aw"]["turn"]
+        today = turn.iloc[t].get(code, np.nan)
+        prior = turn.iloc[max(0, t - 5):t][code].mean() if code in turn else np.nan
+        sealed = bool(ctx["aw"]["limit_up"].iloc[t].get(code, False))
+        if pd.notna(today) and pd.notna(prior) and prior > 0 and today >= p["crowd_surge"] * prior and not sealed:
+            return [f"放量分歧：换手{today:.1f}%为前5日均值{today / prior:.1f}倍且未封板"]
+        return []
     if not p.get("crowd_turn"):
         return []
     turn = ctx["aw"]["turn"]
@@ -270,6 +282,7 @@ ROBUST = {
     "severe_margin": (0.2, 0.4), "gap_min": (-0.01, 0.01),
 }
 ROBUST_V3 = {"crowd_turn": (25.0, 35.0), "crowd_surge": (1.5, 2.5)}
+ROBUST_V5 = {"overlap_max": (0.5, 0.7), "crowd_surge": (1.5, 2.5), "amount_min": (3e8, 8e8)}
 ROBUST_V4 = {"amount_min": (3e8, 8e8), "crowd_turn": (25.0, 35.0, 0), "crowd_surge": (1.5, 2.5)}
 
 
@@ -336,6 +349,7 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         a, a3 = ctx["w"]["amount"].iloc[t].get(code, np.nan), amt3_all.get(code, np.nan)
         return not ((pd.notna(a) and a >= p["amount_min"]) or (pd.notna(a3) and a3 >= p["amount_min"]))
 
+    zt = mainline.concentration(ctx["ts"], t)
     rows = []
     slots_left = g["slots"]
     for code, s in leaders.iterrows():
@@ -350,15 +364,18 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         if s["vetoes"]:
             group, plan = "回避", "主线龙头但触发风险否决，不参与"
         elif crowd:
-            group, plan = "主线龙头", "拥挤不买：换手过高，等换手回落、分歧转一致再看"
+            group, plan = "主线龙头", "拥挤：不列为候选，等分歧转一致再看"
         elif g["slots"] == 0:
-            group, plan = "主线龙头", f"{g['mood_tier']}档情绪不开新仓，只观察"
+            group, plan = "主线龙头", f"{g['mood_tier']}档情绪：规则不开新仓，只观察"
         else:
             group = "主线龙头"
-            tag = "可参与" if slots_left > 0 else "备选(仓位已满)"
+            tag = "候选（由你决定）" if slots_left > 0 else "候选·超出规则仓位上限"
             slots_left -= 1 if slots_left > 0 else 0
-            plan = (f"{tag}：竞价高开才买，低开/平开放弃；仓位1/4；离场：炸板/放量滞涨/题材退潮/"
-                    f"跌破{stop}/满{p['max_hold']}日，次日开盘卖")
+            plan = (f"{tag}：规则条件为竞价高开，低开/平开放弃；单只1/4仓；规则离场信号：炸板/放量滞涨/"
+                    f"题材退潮/跌破{stop}/满{p['max_hold']}日")
+        home = radar.home_board(ctx["ts"], t, code, zt)
+        if home and home != s["board"]:
+            role += f"·归属{home}"
         rows.append(dict(分组=group, 名称=name.get(code, code), code=code, amount_raw=float(s["amount"]),
                          close=float(close[code]), 角色=role + (f"·{stage}" if stage else ""),
                          成交额=activity_text(code, s["amount"]), 参与建议=plan, 风险提示=risk))
@@ -392,7 +409,9 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         v = vetoes(ctx, t, code, p, seat_day)
         n = notes(ctx, t, code, seat_day)
         rank = f["act_rank"]
-        role = f"非主线龙头·{f['stages']}" + (f"·名字扩散({wave_of[code]})" if code in wave_of else "")
+        home = radar.home_board(ctx["ts"], t, code, zt)
+        role = f"非主线龙头·{f['stages']}" + (f"·归属{home}" if home else "") + \
+            (f"·名字扩散({wave_of[code]})" if code in wave_of else "")
         if code in wave_of and not bool(ctx["aw"]["limit_up"].iloc[t].get(code, False)):
             n = n + ["名字跟风(历史次日偏弱)"]
         row = dict(名称=name.get(code, code), code=code, amount_raw=float(f["amount"]), close=float(close[code]), 角色=role,
@@ -430,10 +449,49 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         ((ctx["aw"]["close"].iloc[t] / ctx["aw"]["preclose"].iloc[t] - 1) >= 0.05)
     traded = ctx["aw"]["amount"].iloc[t].notna()
     links = namethemes.links(table["code"].tolist(), names_all, strong[strong & traded].index, traded[traded].index)
+    # theme radar, high-flyers, and name links that are really a shared hot concept
+    hot_boards = radar.radar(ctx["ts"], t)
+    h_all = radar.heights_all(ctx["aw"]).iloc[t]
+    turn_t = ctx["aw"]["turn"].iloc[t]
+
+    def label(c):
+        return name.get(c, c) + ("(创)" if c[3:5] in ("30", "68") else "")
+
+    for hb in hot_boards:
+        core = sorted(hb.pop("codes"), key=lambda c: (-float(h_all.get(c, 0)), -float(turn_t.get(c, 0) or 0)))
+        hb["core"] = [f"{label(c)}{int(h_all.get(c, 0))}板" if h_all.get(c, 0) >= 2 else label(c) for c in core[:4]]
+    flyers = []
+    for c in radar.high_flyers(ctx["aw"], ctx["ts"], t):
+        j = list(ctx["ts"]["cols"]).index(c) if c in ctx["ts"]["cols"] else None
+        own = [] if j is None else [ctx["ts"]["names"][i] for i in np.flatnonzero(ctx["ts"]["M"][:, j] > 0)]
+        hot_own = zt.reindex(own).dropna().sort_values(ascending=False)
+        flyers.append(dict(code=c, name=label(c), height=int(h_all[c]),
+                           boards=[b for b in hot_own.index[:3] if hot_own[b] >= 2.0],
+                           main_board=c[3:5] not in ("30", "68"),
+                           in_list=table.loc[table["code"] == c, "分组"].tolist()[:1]))
+    code_of = {v: k for k, v in names_all.items()}
+    M, cols_l = ctx["ts"]["M"], list(ctx["ts"]["cols"])
+    hot_names = set(zt[zt >= 2.0].index)
+    for link in links:
+        if link["code"] not in cols_l:
+            continue
+        own = {ctx["ts"]["names"][i] for i in np.flatnonzero(M[:, cols_l.index(link["code"])] > 0)} & hot_names
+        same, other, concept = [], [], None
+        for n in link["partners"]:
+            c = code_of.get(n)
+            theirs = set() if c not in cols_l else {ctx["ts"]["names"][i] for i in np.flatnonzero(M[:, cols_l.index(c)] > 0)}
+            common = own & theirs
+            if common:
+                concept = concept or max(common, key=lambda b: zt[b])
+                same.append(n)
+            else:
+                other.append(n)
+        if same:
+            link.update(concept=concept, same=same, other=other)
     spec = crowding.spec_share(ctx["aw"])
     spec_now, spec_pct = float(spec.iloc[t]), float(spec.iloc[max(0, t - 249):t + 1].rank(pct=True).iloc[-1])
     return dict(observation=observation, target=target, strategy_version=p["version"], regime=g["mood_tier"],
-                name_links=links, spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
+                name_links=links, radar=hot_boards, high_flyers=flyers, spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status,
@@ -442,11 +500,12 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
 
 def header(result: dict) -> list[str]:
     g = result["gate"]
-    pos = {4: "满仓(4只×1/4)", 2: "半仓(2只×1/4)", 1: "1/4仓(1只)", 0: "空仓：不开新仓"}.get(g["slots"], f"{g['slots']}只×1/4")
+    pos = {4: "满仓(4只×1/4)", 2: "半仓(2只×1/4)", 1: "1/4仓(1只)", 0: "空仓：规则不开新仓"}.get(g["slots"], f"{g['slots']}只×1/4")
     tag = result.get("strategy_version", "SF_LONGMAI_V1").rsplit("_", 1)[-1]
     lines = [f"龙脉{tag} 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}",
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
-             f"（深市周处置 {g['szse_cases']} 起）   建议仓位：{pos}"]
+             f"（深市周处置 {g['szse_cases']} 起）   规则仓位上限：{pos}",
+             "说明：本系统不自动交易，以下为盯盘候选与风险提示，买卖时机和仓位由你决定。"]
     if result["mainlines"]:
         lines.append("主线：" + "；".join(f"{m['board']}（今日涨停{m['lu']}家，3日{m['lu3']}家，连续{m['days']}天，"
                                        f"成交占全市场{m.get('share', 0):.1%}）" for m in result["mainlines"]))
@@ -462,7 +521,19 @@ def header(result: dict) -> list[str]:
     for wv in result.get("name_waves", []):
         lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
                      f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")
+    for fl in result.get("high_flyers", []):
+        where = f"，所属热点：{'、'.join(fl['boards'])}" if fl["boards"] else "，所属板块都不热"
+        status = f"，清单中为{fl['in_list'][0]}" if fl["in_list"] else ("，非主板不可买" if not fl["main_board"] else "，不在清单")
+        lines.append(f"市场高标：{fl['name']} {fl['height']}板{where}{status}；炒作逻辑需查新闻公告")
+    if result.get("radar"):
+        lines.append("题材雷达（3日涨停集中度）：" + "；".join(
+            f"{r['board']} 今{r['lu']}/3日{r['lu3']}（{'、'.join(r['core'])}）" for r in result["radar"]))
     for link in result.get("name_links", []):
+        if link.get("concept"):
+            tail = f"；{'、'.join(link['other'])} 只是名字同「{link['key']}」" if link["other"] else ""
+            lines.append(f"同概念联动：{link['name']} 与 {'、'.join(link['same'])} 同属热门概念「{link['concept']}」，"
+                         f"不是名字玄学{tail}")
+            continue
         lines.append(f"玄学线索：{link['name']} 与今日强势股 {'、'.join(link['partners'])} 同{link['kind']}「{link['key']}」"
                      f"（{link['k']}只，随机期望{link['expected']}）")
     lines.append(f"回测说明：本策略为冻结的{tag}假设，规格与前向检验见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")

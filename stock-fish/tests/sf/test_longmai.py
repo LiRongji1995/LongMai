@@ -106,4 +106,73 @@ def test_v4_leaders_by_turnover_with_amount_threshold():
     p_hi = longmai.params({"amount_min": 8e8}, version=4)
     sig = mainline.signals(w, aw, ts, pool, 2, p_hi)
     assert list(sig.index) == []  # 600001 passes 8亿 but is leader rank 3 by turnover
-    assert longmai.params()["version"] == "SF_LONGMAI_V4" and not longmai.params()["veto_3day"]
+    assert not longmai.params(version=4)["veto_3day"]
+
+
+def test_v5_relative_crowding_and_threshold_first():
+    import numpy as np
+    from sf import mainline
+    code = "sh.600001"
+    days = [f"2026-01-{d:02d}" for d in range(5, 12)]
+    turn = pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 40.0]}, index=days)
+    sealed = pd.DataFrame({code: [False] * 5 + [False, True]}, index=days)
+    ctx = {"aw": {"turn": turn, "limit_up": sealed}}
+    p = longmai.params()
+    assert p["version"] == "SF_LONGMAI_V5" == longmai.VERSION
+    assert longmai.crowded(ctx, 5, code, p)[0].startswith("放量分歧")   # 2.4x, not sealed
+    assert longmai.crowded(ctx, 6, code, p) == []                         # 40% but sealed: full hand-over
+    # threshold first: the small top-height stock is dropped before ranking, so rank 3 moves up
+    d3 = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    codes = ["sh.600001", "sh.600002", "sh.600003"]
+    frame = lambda vals: pd.DataFrame([vals] * 3, index=d3, columns=codes)
+    amount = frame([2e8, 9e8, 6e8])
+    w = dict(close=frame([11.0] * 3), preclose=frame([10.0] * 3), high=frame([11.0] * 3), low=frame([10.0] * 3),
+             amount=amount, limit_up=frame([True] * 3), height=frame([3, 1, 1]))
+    aw = dict(amount=amount, turn=frame([5.0, 20.0, 10.0]))
+    lu = pd.DataFrame({"B": [3.0] * 3}, index=d3)
+    ts = dict(lu=lu, lu3=lu * 3, share=lu * 0 + 0.1, M=np.ones((1, 3), dtype=np.float32), names=["B"], cols=codes)
+    pool = pd.Series(True, index=codes)
+    v4 = mainline.signals(w, aw, ts, pool, 2, longmai.params(version=4))
+    v5 = mainline.signals(w, aw, ts, pool, 2, dict(p, mainline_mode=None))
+    assert list(v4.index) == ["sh.600002"]                      # V4: 600001 ranks 1 but fails the threshold
+    assert sorted(v5.index) == ["sh.600002", "sh.600003"]       # V5: filtered first, two leaders remain
+
+
+def test_v5_concentration_mainlines_dedupe():
+    import numpy as np
+    from sf import mainline
+    days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    codes = [f"sh.6000{i:02d}" for i in range(40)]
+    lu_row = [i < 6 for i in range(40)]                 # 6 limit-ups: codes 0-5
+    limit_up = pd.DataFrame([lu_row] * 3, index=days, columns=codes)
+    amount = pd.DataFrame(1e8, index=days, columns=codes)
+    names = ["BIG", "NARROW", "SAME"]
+    M = np.zeros((3, 40), dtype=np.float32)
+    M[0, :] = 1          # umbrella board: all 40, 6 limit-ups
+    M[1, :8] = 1         # narrow board: 8 members, 6 limit-ups -> most concentrated
+    M[2, :10] = 1        # overlaps NARROW's limit-ups entirely -> skipped as the same wave
+    boards = pd.DataFrame({"board": names, "first_date": ["2000-01-01"] * 3})
+    members = pd.DataFrame([(names[b], codes[c]) for b in range(3) for c in range(40) if M[b, c]], columns=["board", "code"])
+    aw = dict(close=amount, amount=amount, limit_up=limit_up)
+    ts = mainline.theme_stats(aw, boards, members)
+    p = dict(longmai.params(), min_theme_limit_ups=3)
+    assert mainline.mainlines(ts, 2, p) == ["NARROW"]
+
+
+def test_radar_home_board_and_high_flyers():
+    import numpy as np
+    from sf import mainline, radar
+    days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    codes = [f"sh.6000{i:02d}" for i in range(40)]
+    limit_up = pd.DataFrame(False, index=days, columns=codes)
+    limit_up.iloc[:, 0] = True                       # 3 boards in a row
+    limit_up.iloc[2, 1:5] = True                     # four first boards today
+    amount = pd.DataFrame(1e8, index=days, columns=codes)
+    names = ["BIG", "ICE"]
+    members = pd.DataFrame([("BIG", c) for c in codes] + [("ICE", c) for c in codes[:6]], columns=["board", "code"])
+    boards = pd.DataFrame({"board": names, "first_date": ["2000-01-01"] * 2})
+    aw = dict(close=amount, amount=amount, limit_up=limit_up)
+    ts = mainline.theme_stats(aw, boards, members)
+    assert radar.home_board(ts, 2, codes[0]) == "ICE"          # the concentrated board, not the umbrella
+    assert [r["board"] for r in radar.radar(ts, 2, min_lu3=3)] == ["ICE"]   # BIG covers the same wave
+    assert radar.high_flyers(aw, ts, 2) == [codes[0]]          # tallest level when nothing reaches 4 boards

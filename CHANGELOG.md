@@ -1,3 +1,16 @@
+# 2026-11-10 龙脉 V5 code; theme radar, high-flyers, attribution; human-only wording
+
+- The system never trades: the list shows candidates ("候选（由你决定）") and a rule position cap; the
+  backtest is a rule proxy. Main board only stays (account constraint).
+- V5 implemented per `docs/STRATEGY_LONGMAI_V5.md` (concentration mainlines with overlap dedupe,
+  amount threshold before ranking, relative crowding). `sf premarket` / `sf longmai` default to V5.
+- `sf/radar.py` (information only, no rule): theme radar by 3-session limit-up concentration, so a
+  running theme with a split day stays visible (e.g. 冰雪经济 with 2 limit-ups today, 8 in 3 days);
+  市场高标 line for the tallest boards whatever their theme; each stock attributed to its most
+  concentrated hot board (龙江交通 → 冰雪经济, not 光伏概念); a shared-name link whose stocks share a
+  hot concept is shown as 同概念联动 instead of 玄学. Board data says what a stock belongs to, not why
+  it rises: high-flyer reasons come from news, checked by the assistant on each daily run.
+
 # 2026-11-10 龙脉 V4 (`SF_LONGMAI_V4`) — forward-test version; negative full-history backtest
 
 - Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V4.md` (commit f5c1df3). V1 retired.
