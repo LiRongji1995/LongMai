@@ -1,4 +1,4 @@
-# Agent Rules — Personal Short-Term Stock Research
+# Agent Rules — LongMai (龙脉), Personal Short-Term Stock Research
 
 This is a single-user, local tool for A-share (SSE/SZSE main board) short-term screening: data update,
 pre-market candidate lists with a market-temperature read and hit-rate review (the call auction is read by the person). It
@@ -51,3 +51,54 @@ bounded, logged retry.
 - Publish target: `LiRongji1995/longmai` (renamed from `stockfish-qlib-quant-system` on 2026-11-10), branch `main`. Commit only the files of the
   task; no force push or history rewrite. Verify the remote SHA after pushing. Commit messages in English.
 - Keep existing licenses and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+- **Two sets of instructions.** Every operation has a human guide in [USER_GUIDE](USER_GUIDE.md) (Chinese)
+  and an agent runbook below (English). When an operation changes, update both in the same commit.
+
+## Runbooks (for AI agents)
+
+A new conversation may start with no context. When the user asks for one of these operations (in any
+wording, e.g. "恢复数据", "换电脑了", "备份一下", "生成今天的清单"), follow the runbook step by step,
+report each check's result, and stop and ask at every **STOP**. Run commands from the repository root.
+`bin/sf` uses `../stockfish-env` and `../stockfish-data` next to the checkout (override with
+`SF_PYTHON` / `SF_HOME`); relative file arguments are relative to the caller's directory.
+
+### R1. Set up a new machine (code and environment)
+1. Clone `LiRongji1995/longmai` (ask the user where; default: any folder they name).
+2. Python 3.12 is required. If `python3.12` is missing, install it without touching system settings:
+   `python3 -m pip install --user uv`, then `<user-base>/bin/uv python install 3.12` and use
+   `$(uv python find 3.12)` (Homebrew may be outdated on the user's Mac; do not run `brew update` unasked).
+3. `<python3.12> -m venv ../stockfish-env && ../stockfish-env/bin/pip install -r stock-fish/requirements-dev.txt`.
+4. Check: `cd stock-fish && SF_HOME=$(mktemp -d) ../../stockfish-env/bin/python -m pytest -q tests/sf` — all
+   pass. Otherwise **STOP** and report.
+
+### R2. Restore data from a backup archive (`sf restore`)
+1. The user downloads `longmai-data-<stamp>.tar.gz` and its `.sha256` file (e.g. from Baidu Netdisk) into one
+   folder. Ask for the path if not given. Use the newest archive unless the user names one.
+2. `bin/sf restore <archive>`. It checks the archive's sha256 against the sidecar, never overwrites existing
+   files, and verifies every file. Exit 0 = fine. Exit 1: report the printed conflicts / damaged / missing
+   files and **STOP**; never delete or overwrite data files to resolve a conflict.
+3. `bin/sf status` — report the bar range and pool coverage.
+4. Fill sessions after the backup date: `bin/sf update --sessions 320` (network; about 15 s per missing
+   session). Seats for those sessions: `bin/sf seats --backfill <N>` with N = missing sessions.
+5. Data that cannot be re-fetched (limit-up / failed-board / limit-down / LHB pools for old sessions, saved
+   lists, hype notes, archived board snapshots, intraday raw data) exists only in the archive; if missing,
+   say so — never fill it with placeholders.
+
+### R3. Monthly backup (`sf backup`)
+1. Make sure no other `sf` command is running.
+2. `bin/sf backup` (or `--out <folder>`). It writes `longmai-data-<UTC stamp>.tar.gz` plus `.sha256` into
+   `../stockfish-backups/` by default and never overwrites an archive.
+3. Report the archive path, size, file count and bar range, and tell the user to upload both files.
+   Uploading to a cloud drive is done by the user; never upload or send data anywhere yourself.
+4. Old archives are the user's to delete; do not delete them.
+
+### R4. Build the pre-market list
+1. After 18:00 Shanghai time: `bin/sf premarket` (updates data, captures pools and seats,
+   then builds the list). `--no-update` builds from stored data only.
+2. Report the header lines, especially any `数据缺失` line, and the saved path. Never present the list as
+   investment advice; the person decides every trade.
+
+### R5. Rebuild data from scratch (no backup available)
+Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`
+(~70 min), `bin/sf themes` (~50 min, can run in parallel), `bin/sf seats --backfill 320` (~6 min), then R4.
+Pools, saved lists, hype notes, board snapshots and intraday data from before the rebuild cannot be recovered.

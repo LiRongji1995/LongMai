@@ -9,6 +9,7 @@
     sf seats / sf themes      LHB seats; board membership refresh
     sf note CODE THEME        record why a stock is traded (from news); shown in the list
     sf status                 data store coverage
+    sf backup / sf restore    one portable archive of the data directory (moving to another machine)
 """
 from __future__ import annotations
 
@@ -25,6 +26,14 @@ pd.set_option("display.width", 200)
 pd.set_option("display.max_columns", 30)
 pd.set_option("display.max_rows", 300)
 pd.set_option("display.unicode.east_asian_width", True)
+
+
+def _user_path(text: str):
+    """A path argument as the user typed it: relative to the caller's directory (bin/sf cds into stock-fish/)."""
+    import os
+    from pathlib import Path
+    path = Path(text).expanduser()
+    return path if path.is_absolute() else Path(os.environ.get("SF_CWD", ".")) / path
 
 
 def _quiet():
@@ -255,6 +264,48 @@ def cmd_themes(args) -> int:
     return 1 if result["failures"] or result["carried"] else 0
 
 
+def cmd_backup(args) -> int:
+    from pathlib import Path
+
+    from . import backup, store
+    out = _user_path(args.out) if args.out else store.home().parent / "stockfish-backups"
+    started = time.monotonic()
+    print(f"打包数据目录 {store.home()} ...（打包期间不要运行其他 sf 命令）")
+    result = backup.create(out)
+    b = result["bars"]
+    print(f"已生成 {result['archive']}\n校验文件 {result['archive']}.sha256\n"
+          f"共 {result['files']} 个文件，行情 {b['first']} ~ {b['last']}（{b['sessions']} 天），"
+          f"耗时 {time.monotonic() - started:.0f}s")
+    print("请把这两个文件一起上传到网盘。恢复：sf restore <压缩包>")
+    return 0
+
+
+def cmd_restore(args) -> int:
+    import tarfile
+    from pathlib import Path
+
+    from . import backup, store
+    archive = _user_path(args.archive)
+    print(f"恢复到数据目录 {store.home()}（已有文件不覆盖）...")
+    try:
+        result = backup.restore(archive, expected_sha256=args.sha256)
+    except (ValueError, OSError, tarfile.TarError) as error:
+        print(f"恢复失败：{error}", file=sys.stderr)
+        return 1
+    b = result["bars"]
+    print(f"备份时间 {result['created_at']}，行情 {b['first']} ~ {b['last']}（{b['sessions']} 天）")
+    print(f"新恢复 {result['restored']} 个，已存在且相同 {result['skipped']} 个")
+    problems = [("内容不同、未覆盖", result["conflicts"]), ("压缩包内损坏", result["damaged"]),
+                ("压缩包内缺失", result["missing"])]
+    for label, items in problems:
+        for item in items[:20]:
+            print(f"  {label}: {item}", file=sys.stderr)
+    if any(items for _, items in problems):
+        return 1
+    print("下一步：sf status 检查覆盖情况，sf update 补上备份之后的交易日。")
+    return 0
+
+
 # ------------------------------------------------------------------ parser
 
 def parser() -> argparse.ArgumentParser:
@@ -311,6 +362,15 @@ def parser() -> argparse.ArgumentParser:
     no.add_argument("--source", help="新闻链接")
     no.add_argument("--last", type=int, default=30)
     no.set_defaults(func=cmd_note)
+
+    bk = sub.add_parser("backup", help="把数据目录打成一个压缩包（换设备用），附校验文件")
+    bk.add_argument("--out", help="输出目录（默认数据目录旁的 stockfish-backups）")
+    bk.set_defaults(func=cmd_backup)
+
+    rs = sub.add_parser("restore", help="从压缩包恢复数据目录（不覆盖已有文件，逐个校验）")
+    rs.add_argument("archive", help="longmai-data-*.tar.gz")
+    rs.add_argument("--sha256", help="压缩包校验值（默认读同目录的 .sha256 文件）")
+    rs.set_defaults(func=cmd_restore)
 
     st = sub.add_parser("status", help="数据覆盖情况")
     st.set_defaults(func=cmd_status)
