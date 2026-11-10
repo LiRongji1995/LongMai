@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import abnormal, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
+from . import abnormal, crowding, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
 VERSION = "SF_LONGMAI_V3"
 PARAMS_V1 = dict(
@@ -96,8 +96,10 @@ def mainline_table(ctx: dict, t: int, p: dict, lookback: int = 10) -> pd.DataFra
                 streak += 1
             else:
                 break
+        share, pct = crowding.theme_heat(ctx["ts"], t, board)
         rows.append(dict(board=board, lu=int(ctx["ts"]["lu"].loc[day, board]),
-                         lu3=int(ctx["ts"]["lu3"].loc[day, board]), days=streak))
+                         lu3=int(ctx["ts"]["lu3"].loc[day, board]), days=streak,
+                         share=round(share, 4), share_pct60=None if pd.isna(pct) else round(pct, 3)))
     return pd.DataFrame(rows)
 
 
@@ -408,8 +410,10 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         ((ctx["aw"]["close"].iloc[t] / ctx["aw"]["preclose"].iloc[t] - 1) >= 0.05)
     traded = ctx["aw"]["amount"].iloc[t].notna()
     links = namethemes.links(table["code"].tolist(), names_all, strong[strong & traded].index, traded[traded].index)
+    spec = crowding.spec_share(ctx["aw"])
+    spec_now, spec_pct = float(spec.iloc[t]), float(spec.iloc[max(0, t - 249):t + 1].rank(pct=True).iloc[-1])
     return dict(observation=observation, target=target, strategy_version=p["version"], regime=g["mood_tier"],
-                name_links=links,
+                name_links=links, spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status,
@@ -424,10 +428,17 @@ def header(result: dict) -> list[str]:
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
              f"（深市周处置 {g['szse_cases']} 起）   建议仓位：{pos}"]
     if result["mainlines"]:
-        lines.append("主线：" + "；".join(f"{m['board']}（今日涨停{m['lu']}家，3日{m['lu3']}家，连续{m['days']}天）"
-                                       for m in result["mainlines"]))
+        lines.append("主线：" + "；".join(f"{m['board']}（今日涨停{m['lu']}家，3日{m['lu3']}家，连续{m['days']}天，"
+                                       f"成交占全市场{m.get('share', 0):.1%}）" for m in result["mainlines"]))
+        hot = [m["board"] for m in result["mainlines"]
+               if m.get("share_pct60") is not None and m["share_pct60"] >= crowding.HOT_PCT]
+        if hot:
+            lines.append(f"题材拥挤：{'、'.join(hot)} 成交占比处于60日最高位，历史上2日内退潮概率约高出一半（提示，不是规则）")
     else:
         lines.append("主线：无（没有题材当日涨停≥3家）")
+    if result.get("spec_share") is not None:
+        lines.append(f"短线资金：近5日涨停股成交占全市场{result['spec_share']:.1%}（近250日分位{result['spec_pct']:.0%}；"
+                     "回测中对次日接力无稳定预测力，仅作背景）")
     for wv in result.get("name_waves", []):
         lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
                      f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")

@@ -63,3 +63,19 @@ def test_v3_crowding_rules():
     assert longmai.crowded(ctx, 5, code, p) == ["换手为前5日均值2.4倍"]
     assert longmai.crowded(ctx, 6, code, p)[0].startswith("换手31.0%")
     assert longmai.crowded(ctx, 6, code, longmai.params(version=2)) == []
+
+
+def test_crowding_spec_share_and_theme_heat():
+    import numpy as np
+    import pandas as pd
+    from sf import crowding
+    days = [f"2026-01-{d:02d}" for d in range(1, 31)]
+    amount = pd.DataFrame({"a": 10.0, "b": 30.0}, index=days)
+    lu = pd.DataFrame({"a": False, "b": False}, index=days)
+    lu.iloc[10, 0] = True
+    s = crowding.spec_share(dict(amount=amount, limit_up=lu))
+    assert s.iloc[9] == 0 and s.iloc[10] == 0.25 and s.iloc[14] == 0.25 and s.iloc[15] == 0
+    share = pd.DataFrame({"X": np.linspace(0.1, 0.3, 30)}, index=days)
+    sh, pct = crowding.theme_heat(dict(share=share), 29, "X")
+    assert abs(sh - 0.3) < 1e-9 and pct == 1.0 >= crowding.HOT_PCT
+    assert np.isnan(crowding.theme_heat(dict(share=share), 5, "X")[1])

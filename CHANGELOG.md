@@ -1,3 +1,15 @@
+# 2026-11-10 Crowding study (拥挤度) — no market-level threshold
+
+- `sf/crowding.py`: market short-term share (`spec_share`, `hot_turn_share`, changes, amount vs
+  20-day mean, top-3 mainline share) and theme share / 60-session percentile / 5-day change.
+- Study pre-registered and reported in `docs/CROWDING_STUDY.md`. Negative for every market-level
+  indicator (no threshold separates relay or leader outcomes; more money and more concentration
+  were slightly better, not worse). Positive descriptive finding: a mainline at its 60-session
+  turnover-share high fades within 2 sessions about 1.5x as often (train 33% / test1 23% / test2
+  34% vs 19% / 16% / 21%), but leader returns do not differ consistently.
+- Pre-market summary: each mainline shows its share of market turnover; a 题材拥挤 warning for a
+  mainline at its share high; a 短线资金 background line. No rule or version change.
+
 # 2026-11-10 龙脉 V3 (`SF_LONGMAI_V3`) — turnover identifies, crowding blocks entry (negative backtest)
 
 - Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V3.md` (commit 30f1060). Leaders as in V2;
