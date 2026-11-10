@@ -1,3 +1,14 @@
+# 2026-11-10 龙脉 V6 backtest (rule proxy) — negative; the 空间板 class is the cause
+
+- Spec `docs/STRATEGY_LONGMAI_V6.md` (commit d13642e), code 75adb86. 738 trades, −1.54% per trade;
+  train / test1 / test2 −2.04% (t −3.3) / −1.82% (t −2.5) / +0.11%. Every robustness neighbour
+  negative over the full history. Run: `backtests/SF_LONGMAI_V6-20261110T133743Z`.
+- Split by candidate class: 空间板 trades (170) −4.89% / −6.53% / −1.70% per trade in train / test1 /
+  test2, negative at every height (4: −5.3%, 5: −2.0%, 6: −8.6%, 7: −2.0%). Mainline trades (568)
+  −1.37% / −0.04% / +0.73%, close to V5 (−1.23% / −0.48% / +1.10%). Buying the market's tallest
+  board at the next open when it gaps up loses in every segment: the 空间板 is a sentiment anchor to
+  watch, not a next-open buy.
+
 # 2026-11-10 龙脉 V5 backtest (rule proxy) — negative over the full history, positive in test2
 
 - 840 trades (190 crowded, 248 vetoed), −0.60% per trade after 0.15% cost, hit 37.9%, payoff 1.40;
