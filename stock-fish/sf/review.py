@@ -33,8 +33,8 @@ def collect(since: str | None = None) -> pd.DataFrame:
         selected = facts.get("r2_selected", pd.Series(False, index=facts.index)).fillna(False).astype(bool)
         near = facts.get("near_miss", pd.Series("", index=facts.index)).fillna("")
         labels = outcomes.label(w, summary["target"], facts.index)
-        if "lm_group" in facts:  # 龙脉 lists: leader / watch / avoid groups
-            cohort = facts["lm_group"].map({"leader": "selected", "watch": "watch", "avoid": "avoid"}).fillna("other")
+        if "lm_group" in facts:  # 龙脉 lists: leader / ladder / watch / avoid groups
+            cohort = facts["lm_group"].map({"leader": "selected", "ladder": "ladder", "watch": "watch", "avoid": "avoid"}).fillna("other")
         else:
             cohort = np.where(selected, "selected", np.where(near != "", "near_miss", "other"))
         frame = pd.DataFrame({

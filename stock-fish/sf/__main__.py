@@ -236,7 +236,7 @@ def _premarket_longmai(args, started) -> int:
     path = longmai.save(result)
     print("\n".join(longmai.header(result)))
     table = result["table"]
-    for group in ("主线龙头", "观察", "回避"):
+    for group in ("主线龙头", "连板梯队", "观察", "高波动"):
         part = table[table["分组"] == group]
         print(f"\n【{group}】{len(part)} 只")
         if len(part):
@@ -518,7 +518,7 @@ def parser() -> argparse.ArgumentParser:
 
     lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
-    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3, 4, 5, 6], help="默认为前向检验版本V6")
+    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3, 4, 5, 6, 7], help="默认为前向检验版本V7")
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")

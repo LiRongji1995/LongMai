@@ -190,8 +190,7 @@ def test_v6_three_session_mainlines_and_space_board():
     members = pd.DataFrame([("BIG", c) for c in codes] + [("ICE", c) for c in codes[:8]], columns=["board", "code"])
     boards = pd.DataFrame({"board": ["BIG", "ICE"], "first_date": ["2000-01-01"] * 2})
     ts = mainline.theme_stats(dict(close=amount, amount=amount, limit_up=limit_up), boards, members)
-    p6 = longmai.params()
-    assert p6["version"] == "SF_LONGMAI_V6" == longmai.VERSION
+    p6 = longmai.params(version=6)
     assert mainline.mainlines(ts, 2, p6) == ["ICE"]
     assert mainline.mainlines(ts, 2, longmai.params(version=5)) == []     # V5 needs 3 limit-ups today
     # 空间板: tallest eligible main-board stock, outside any mainline
@@ -213,3 +212,15 @@ def test_evaluate_nodes():
     level = pd.Series([0.1, 0.3, 0.3, 0.6, 0.6, 0.9, None])
     direction = pd.Series([0.1, -0.1, 0.1, 0.1, -0.1, 0.0, 0.1])
     assert evaluate.nodes(level, direction).tolist() == ["冰点", "退潮", "升温", "升温", "分歧", "高潮", ""]
+
+
+def test_v7_default_and_temperature_cells():
+    from sf import temperature
+    p = longmai.params()
+    assert p["version"] == "SF_LONGMAI_V7" == longmai.VERSION and p["amount_min"] == 0
+    days = [f"d{i:03d}" for i in range(80)]
+    tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",
+                        **{k + "_o": 0.5 for k in temperature.HEAT + temperature.PAIN}}, index=days)
+    tab.loc[days[-1], "promo_rate_o"] = 0.95
+    r = temperature.reading(tab, 79)
+    assert r["name"] == "高潮延续" and r["sources"] == ["晋级率(分位95%)"] and 0.4 < r["loss_rate"] < 0.45

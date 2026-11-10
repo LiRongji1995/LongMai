@@ -12,11 +12,11 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import abnormal, crowding, mainline, radar, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
+from . import abnormal, crowding, mainline, radar, temperature, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-# V6 is the version under forward test (user decision 2026-11-10); V1-V5 stay for backtest comparison only.
-FORWARD_VERSION = 6
-VERSION = "SF_LONGMAI_V6"
+# V7 is the version under forward test (user decision 2026-11-10); V1-V6 stay for comparison only.
+FORWARD_VERSION = 7
+VERSION = "SF_LONGMAI_V7"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -39,7 +39,10 @@ PARAMS_V5 = dict(PARAMS_V4, version="SF_LONGMAI_V5", mainline_mode="concentratio
 # V6 (docs/STRATEGY_LONGMAI_V6.md): mainline eligibility over 3 sessions; 空间板 candidate class.
 PARAMS_V6 = dict(PARAMS_V5, version="SF_LONGMAI_V6", mainline_mode="concentration3", min_theme_lu3=5,
                  space_board=True, space_min_height=4)
-VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4, 5: PARAMS_V5, 6: PARAMS_V6}
+# V7 (docs/STRATEGY_LONGMAI_V7.md): no amount threshold (amount only displayed); list adds the 连板梯队
+# (all main-board 2板+) and the two-axis temperature; judged by entry-free hit rates, not P&L.
+PARAMS_V7 = dict(PARAMS_V6, version="SF_LONGMAI_V7", amount_min=0.0)
+VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4, 5: PARAMS_V5, 6: PARAMS_V6, 7: PARAMS_V7}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
@@ -350,6 +353,16 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         return (f"{amount / 1e8:.1f}亿·换手{tv:.1f}%" if pd.notna(tv) else f"{amount / 1e8:.1f}亿") + \
             (f"·{'换手' if by_turn else '活跃'}第{int(r)}" if pd.notna(r) else "")
 
+    one_price = (ctx["w"]["high"].iloc[t] == ctx["w"]["low"].iloc[t]) & ctx["w"]["limit_up"].iloc[t].fillna(False).astype(bool)
+
+    def liquidity(code, amount):
+        out = []
+        if bool(one_price.get(code, False)):
+            out.append("一字板(今日几乎无换手)")
+        if pd.notna(amount) and amount < 1e8:
+            out.append(f"成交额仅{amount / 1e8:.1f}亿，流动性差")
+        return out
+
     def below_amount(code):
         a, a3 = ctx["w"]["amount"].iloc[t].get(code, np.nan), amt3_all.get(code, np.nan)
         return not ((pd.notna(a) and a >= p["amount_min"]) or (pd.notna(a3) and a3 >= p["amount_min"]))
@@ -362,27 +375,25 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         role = f"空间板(市场最高板)·{int(s['height'])}板" if s["board"] == mainline.SPACE else \
             f"{s['board']}·龙{int(s['leader_rank'])}·{int(s['height'])}板" if s["height"] >= 1 else \
             f"{s['board']}·龙{int(s['leader_rank'])}·趋势"
-        risk = "；".join(s["vetoes"] + s["notes"])
+        risk = "；".join(liquidity(code, s["amount"]) + s["vetoes"] + s["notes"])
         stop = round(float(close[code]) * (1 - p["stop_loss"]), 2)
         crowd = s.get("crowded") or []
         if crowd:
             risk = "；".join(["拥挤：" + "，".join(crowd)] + ([risk] if risk else []))
         if s["vetoes"]:
-            group, plan = "回避", "主线龙头但触发风险否决，不参与"
+            group, plan = "高波动", f"主线龙头·{HIGH_VOL}"
         elif crowd:
             group, plan = "主线龙头", "拥挤：不列为候选，等分歧转一致再看"
         elif g["slots"] == 0:
             group, plan = "主线龙头", f"{g['mood_tier']}档情绪：规则不开新仓，只观察"
         else:
             group = "主线龙头"
-            tag = "候选（由你决定）" if slots_left > 0 else "候选·超出规则仓位上限"
+            tag = "候选（由你决定）" if slots_left > 0 else "候选·超出仓位上限的备选"
             slots_left -= 1 if slots_left > 0 else 0
-            fade = "" if s["board"] == mainline.SPACE else "题材退潮/"
-            plan = (f"{tag}：规则条件为竞价高开，低开/平开放弃；单只1/4仓；规则离场信号：炸板/放量滞涨/"
-                    f"{fade}跌破{stop}/满{p['max_hold']}日")
+            plan = f"{tag}：看竞价量价与分时承接；参考止损{stop}（-{p['stop_loss']:.0%}）"
             left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
             if s["board"] == mainline.SPACE:  # information only (V6 backtest, CHANGELOG 2026-11-10)
-                risk = "；".join(([risk] if risk else []) + ["回测提示：空间板次日高开买入历史上三段均亏(每笔约-2%~-6%)"])
+                risk = "；".join(([risk] if risk else []) + ["历史提示：空间板次日开盘追高三段均亏(每笔约-2%~-6%)"])
             if s["board"] == mainline.SPACE and left <= 2:
                 risk = "；".join(([risk] if risk else []) + [f"10日偏离{ctx['severe']['dev10'].iloc[t][code]:.0%}，再触发{int(left)}次3日异动即严重异动"])
         home = radar.home_board(ctx["ts"], t, code, zt)
@@ -430,31 +441,64 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
                    成交额=activity_text(code, f["amount"]),
                    风险提示="；".join(v + n))
         if v:
-            avoid.append(dict(row, 分组="回避", 参与建议="强势形态但触发风险否决，不参与"))
+            avoid.append(dict(row, 分组="高波动", 参与建议=HIGH_VOL))
         else:
             if by_turn:
                 why = f"成交额未达{p['amount_min'] / 1e8:.0f}亿门槛(当日或近3日均)" if below_amount(code) else "不在当前前3主线或非题材内前2"
             else:
                 why = "活跃度(成交额+换手)排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
             watch.append(dict(row, 分组="观察", 参与建议=f"只观察：{why}"))
-    shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]}
+    # 连板梯队: every main-board 2板+ stock not already a mainline leader (they hold ~half of the 妖股)
+    ladder = []
+    h_main = ctx["w"]["height"].iloc[t]
+    pool_t = pool.reindex(h_main.index).fillna(False)
+    turn_t = ctx["aw"]["turn"].iloc[t]
+    for code in h_main[(h_main >= 2) & pool_t].index:
+        if code in taken:
+            continue
+        v = vetoes(ctx, t, code, p, seat_day)
+        flags = crowded(ctx, t, code, p)
+        left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
+        home = radar.home_board(ctx["ts"], t, code, zt)
+        risk = (["高波动：" + "，".join(v)] if v else []) + (["拥挤：" + "，".join(flags)] if flags else [])
+        if left <= 2:
+            risk.append(f"再触发{int(left)}次3日异动即严重异动")
+        amt = float(ctx["w"]["amount"].iloc[t].get(code, np.nan))
+        risk = liquidity(code, amt) + risk + notes(ctx, t, code, seat_day)
+        if v:
+            plan = HIGH_VOL
+        elif flags:
+            plan = "拥挤：历史上次日续板约3-8%，5日走出来约6-15%"
+        else:
+            plan = "梯队候选：历史上2板+约12-21%在5日内再涨停3次（看竞价与分时，由你决定）"
+        amt = float(ctx["w"]["amount"].iloc[t].get(code, np.nan))
+        ladder.append(dict(分组="连板梯队", 名称=name.get(code, code), code=code, amount_raw=amt, close=float(close[code]),
+                           角色=f"{int(h_main[code])}板" + (f"·归属{home}" if home else "·题材未明(需查新闻)"),
+                           成交额=activity_text(code, amt), 参与建议=plan, 风险提示="；".join(risk),
+                           _h=float(h_main[code]), _t=float(turn_t.get(code, 0) or 0)))
+    ladder = [{k: v for k, v in r.items() if not k.startswith("_")}
+              for r in sorted(ladder, key=lambda r: (-r["_h"], -r["_t"]))]
+    taken |= {r["code"] for r in ladder}
+    watch = [r for r in watch if r["code"] not in taken]
+    avoid = [r for r in avoid if r["code"] not in taken]
+    shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]} | taken
     for wv in waves:
         for code in wv["lead_codes"]:
             if code in shown or code not in close.index:
                 continue
             v = vetoes(ctx, t, code, p, seat_day)
             amt = float(ctx["aw"]["amount"].iloc[t].get(code, np.nan))
-            watch.append(dict(分组="回避" if v else "观察", 名称=name.get(code, code), code=code, amount_raw=amt,
+            watch.append(dict(分组="高波动" if v else "观察", 名称=name.get(code, code), code=code, amount_raw=amt,
                               close=float(close[code]), 角色=f"名字扩散龙头({wv['group']})·{int(height_all.get(code, 0) or 0)}板",
                               成交额=activity_text(code, amt) if pd.notna(amt) else "-",
-                              参与建议="触发风险否决，不参与" if v else f"只观察：名字扩散不在{p['version'].rsplit('_', 1)[-1]}选股范围",
+                              参与建议=HIGH_VOL if v else f"只观察：名字扩散不在{p['version'].rsplit('_', 1)[-1]}选股范围",
                               风险提示="；".join(v + notes(ctx, t, code, seat_day))))
             shown.add(code)
     extra = [r for r in watch[watch_limit:] if r["角色"].startswith("名字扩散龙头")]
-    rows += watch[:watch_limit] + extra + avoid[:avoid_limit]
+    rows += ladder + watch[:watch_limit] + extra + avoid[:avoid_limit]
     table = pd.DataFrame(rows, columns=["分组", "名称", "code", "角色", "成交额", "参与建议", "风险提示", "amount_raw", "close"])
     lines = mainline_table(ctx, t, p)
-    group_of = table.set_index("code")["分组"].map({"主线龙头": "leader", "观察": "watch", "回避": "avoid"})
+    group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
     facts["name"] = name.reindex(facts.index)
     strong = ctx["aw"]["limit_up"].iloc[t].fillna(False).astype(bool) | \
@@ -503,7 +547,8 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     spec = crowding.spec_share(ctx["aw"])
     spec_now, spec_pct = float(spec.iloc[t]), float(spec.iloc[max(0, t - 249):t + 1].rank(pct=True).iloc[-1])
     return dict(observation=observation, target=target, strategy_version=p["version"], regime=g["mood_tier"],
-                name_links=links, radar=hot_boards, high_flyers=flyers, spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
+                name_links=links, radar=hot_boards, high_flyers=flyers,
+                temperature=temperature.reading(temperature.table(ctx["w"], ctx["aw"]), t), spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status,
@@ -527,9 +572,8 @@ def header(result: dict) -> list[str]:
             lines.append(f"题材拥挤：{'、'.join(hot)} 成交占比处于60日最高位，历史上2日内退潮概率约高出一半（提示，不是规则）")
     else:
         lines.append("主线：无（没有题材当日涨停≥3家）")
-    if result.get("spec_share") is not None:
-        lines.append(f"短线资金：近5日涨停股成交占全市场{result['spec_share']:.1%}（近250日分位{result['spec_pct']:.0%}；"
-                     "回测中对次日接力无稳定预测力，仅作背景）")
+    if result.get("temperature"):
+        lines.append(result["temperature"]["text"])
     for wv in result.get("name_waves", []):
         lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
                      f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")
@@ -548,10 +592,12 @@ def header(result: dict) -> list[str]:
             continue
         lines.append(f"玄学线索：{link['name']} 与今日强势股 {'、'.join(link['partners'])} 同{link['kind']}「{link['key']}」"
                      f"（{link['k']}只，随机期望{link['expected']}）")
-    lines.append(f"回测说明：本策略为冻结的{tag}假设，规格与前向检验见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
+    lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
     return lines
 
 
+HIGH_VOL = "高波动：最强也最危险（历史上次日续板约24-45%，大面约38-58%），只适合盘中判断"
+GROUP_CODES = {"主线龙头": "leader", "连板梯队": "ladder", "观察": "watch", "高波动": "avoid", "回避": "avoid"}
 VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示"]
 
 

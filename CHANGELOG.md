@@ -1,3 +1,13 @@
+# 2026-11-10 龙脉 V7: screening without an amount threshold, 连板梯队, 高波动, two-axis temperature
+
+- Spec and first hit-rate check: `docs/STRATEGY_LONGMAI_V7.md`. Judged by entry-free hit rates, not P&L.
+- Recall of realized 妖股 rises from 8–9% (V6) to 47–53%, with about 14 listed stocks per day. Mainline
+  candidates without the 5亿 threshold: 5-session breakout 35.7 / 36.8 / 34.8% vs baseline 25.1 / 24.1 / 20.6%.
+- `sf/temperature.py`: heat × pain reading printed as the 水温 line (cell, historical next-day
+  loss-effect rate, pressure sources). The 短线资金 background line is folded into heat.
+- List: liquidity note (< 1亿) and one-price-board note; candidate text no longer carries mechanical
+  position and exit rules; groups 主线龙头 / 连板梯队 / 观察 / 高波动.
+
 # 2026-11-10 Entry-free evaluation (`sf/evaluate.py`): screening hit rates and temperature calls
 
 Next-open P&L backtests are dropped: the person trading enters intraday (auction, 分时 pullbacks,

@@ -28,12 +28,13 @@ the evening list plus review after 18:30 (Shanghai time). `sf auto` checks the t
 time window itself, so the jobs can fire daily; logs go to `stockfish-data/logs/auto-<date>.log`.
 `bin/sf-schedule status` / `uninstall`. The Mac must be awake at those times.
 
-**Strategy under forward test: 龙脉 V1** (`docs/STRATEGY_LONGMAI_V1.md`, frozen). `sf premarket`
-and `sf longmai` default to V1; V2/V3 remain for backtest comparison (`sf longmai --version 3`). The
-list is decision support: the trades are made by a person. Crowding / turnover-share readings
-(`sf crowding`, the 短线资金 and 题材拥挤 lines of the summary) describe the short-term environment for
-review; they do not select stocks or identify leaders (no tradable threshold was found,
-`docs/CROWDING_STUDY.md`).
+**Current version: 龙脉 V7** (`docs/STRATEGY_LONGMAI_V7.md`). The system never trades: the list is a
+screening and temperature read for a person who decides entries intraday. It is judged by hit rates
+(did listed stocks break out, were the realized 妖股 listed, did the temperature call come true), not
+by next-open P&L. Groups: 主线龙头 (mainline leaders and the 空间板), 连板梯队 (all main-board 2板+),
+观察, 高波动 (strongest and most dangerous: near severe abnormal volatility). Header lines: 水温
+(heat × pain cell with the historical next-day loss-effect rate and pressure sources), 市场高标,
+题材雷达, 同概念联动 / 玄学线索. Amount is displayed, not filtered.
 
 `sf premarket --detail` shows tiers, scores, stages and seal facts. `sf status` shows data coverage.
 
