@@ -170,3 +170,10 @@ def test_seat_skill_with_no_known_outcome_is_empty_not_an_error():
     attached = seats.attach_skill(rows, skill)
     assert attached["skill_n"].isna().all()  # unknown skill, not zero
     assert seats.stock_features(attached).set_index("code").loc["sh.600001", "skilled_buyers"] == 0
+
+
+def test_completeness_compares_only_with_a_nearby_session(home):
+    store.write_session("2025-07-16", _snapshot(1000), "t", "TEST")
+    store.write_session("2024-06-03", _snapshot(900), "t", "TEST")   # far back: fewer listed stocks is normal
+    with pytest.raises(ValueError, match="partial"):
+        store.write_session("2024-06-04", _snapshot(800), "t", "TEST")  # next to 2024-06-03: still checked

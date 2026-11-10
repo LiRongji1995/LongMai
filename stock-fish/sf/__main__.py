@@ -282,6 +282,27 @@ def cmd_evaluate(args) -> int:
         print("妖股召回：", rep["recall"].to_dict(), " 样本：", rep["winners"].to_dict())
         panel.to_parquet(out / "screening_panel.parquet")
         rep["stats"].to_csv(out / "screening_stats.csv", encoding="utf-8-sig")
+    if args.part == "swing":  # 龙脉 V8 pre-registered exam (docs/STRATEGY_LONGMAI_V8_PREREG.md)
+        from . import manifest, swing
+        stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
+        print(f"龙脉 V8 波段考卷：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放 V8 与 V7（较慢）...")
+        with _quiet():
+            scored, v7, w = swing.replay(stored, log=lambda *_: None)
+        rep = swing.evaluate(scored, v7, w)
+        names = {"win10": "先涨15%", "loss10": "先跌8%", "max10": "10日最高", "min5": "5日最低", "ret10": "10日收益",
+                 "n": "样本", "per_day": "每日只数", "recall20": "波段赢家召回"}
+        print(rep["table"].rename(columns=names).to_string())
+        for seg, v in rep["verdict"].items():
+            print(f"{seg}: {v}")
+        print("判定：" + ("全部满足，V8 可进入前向记录" if rep["passed"] else "未全部满足，V7 保持不变（否定结果如实保留）"))
+        rep["table"].to_csv(out / "swing_table.csv", encoding="utf-8-sig")
+        rep["picks"].to_parquet(out / "swing_picks.parquet")
+        (out / "swing_verdict.json").write_text(json.dumps(dict(verdict=rep["verdict"], passed=rep["passed"]),
+                                                           ensure_ascii=False, indent=2))
+        (out / "manifest.json").write_text(json.dumps(manifest.build(stored),
+                                                      ensure_ascii=False, indent=2, default=str))
+        print(f"\n已保存 {out}  (耗时 {time.monotonic() - started:.0f}s)")
+        return 0
     if args.part in ("all", "temperature"):
         with _quiet():
             df = evaluate.temperature_panel()
@@ -400,7 +421,7 @@ def parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     ev = sub.add_parser("evaluate", help="全历史选股与水温命中率（不按开盘买入盈亏）")
-    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature"])
+    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing"])
     ev.set_defaults(func=cmd_evaluate)
 
     th = sub.add_parser("themes", help="刷新概念/行业板块成分（约20分钟，建议每周一次）")

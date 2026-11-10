@@ -170,19 +170,22 @@ def _normalize(frame: pd.DataFrame, day: str, fetched_at: str, origin: str) -> p
     return frame[[c for c in keep if c in frame]]
 
 
-MIN_ROWS_RATIO = 0.97      # a snapshot with fewer rows than this x its nearest stored neighbour is partial
+MIN_ROWS_RATIO = 0.97      # a snapshot with fewer rows than this x a nearby stored session is partial
+NEIGHBOUR_DAYS = 10        # calendar days; the listed-stock count drifts too much to compare further apart
 MAX_MISSING_CLOSE = 0.01   # share of traded rows allowed without a close
 
 
 def check_complete(day: str, frame: pd.DataFrame) -> None:
     """Raise when a snapshot looks partial. Sessions are immutable once written, so a partial snapshot
-    (fetched before BaoStock finished publishing) must never be stored."""
+    (fetched before BaoStock finished publishing) must never be stored. The row count is compared with the
+    nearest stored session within NEIGHBOUR_DAYS calendar days (none when backfilling far into the past)."""
     import pyarrow.parquet as pq
     if frame.empty:
         raise ValueError(f"empty market snapshot for {day}")
     stored = sorted(p.stem for p in (_paths() / "bars").glob("*.parquet") if p.stem != day)
-    earlier, later = [s for s in stored if s < day], [s for s in stored if s > day]
-    neighbour = earlier[-1] if earlier else later[0] if later else None
+    target = date.fromisoformat(day)
+    near = [s for s in stored if abs((date.fromisoformat(s) - target).days) <= NEIGHBOUR_DAYS]
+    neighbour = min(near, key=lambda s: (abs((date.fromisoformat(s) - target).days), s > day)) if near else None
     if neighbour:
         ref = pq.read_metadata(bar_path(neighbour)).num_rows
         if len(frame) < MIN_ROWS_RATIO * ref:
