@@ -22,7 +22,7 @@ from . import manifest, store
 FORMAT = "SF_BACKUP_V1"
 MANIFEST = "BACKUP_MANIFEST.json"
 # Derived caches, rebuilt on demand; temporary files from interrupted writes.
-EXCLUDE_GLOBS = ("research/seat_skill-*.parquet", "**/*.tmp", "**/.DS_Store")
+EXCLUDE_GLOBS = ("research/seat_skill-*.parquet", "intraday/features/**/*", "**/*.tmp", "**/.DS_Store")
 
 
 def sha256(path: Path) -> str:

@@ -8,6 +8,7 @@
     sf crowding / sf mood     short-term market temperature (review context, not stock selection)
     sf seats / sf themes      LHB seats; board membership refresh
     sf note CODE THEME        record why a stock is traded (from news); shown in the list
+    sf intraday [report]      1-minute bars of limit-up / touched / listed stocks; descriptive study report
     sf status                 data store coverage
     sf backup / sf restore    one portable archive of the data directory (moving to another machine)
 """
@@ -49,6 +50,69 @@ def _capture_seats(day: str) -> str:
         return seats.capture(day)
     except Exception as error:  # reported; the day stays "not captured" and `sf seats --backfill` retries
         return f"FAILED: {str(error)[:120]}"
+
+
+def _capture_intraday(days: list[str]) -> str:
+    """Capture minute bars; failures are reported (the source keeps ~5 sessions, so retry within days)."""
+    from . import intraday
+    try:
+        res = intraday.capture(days, log=lambda *_: None)
+    except Exception as error:
+        return f"FAILED: {str(error)[:120]}"
+    return "；".join(f"{d} {r['status']}" + (f"（{r['ok']}/{r['requested']}）" if "ok" in r else "") for d, r in res.items())
+
+
+def cmd_intraday(args) -> int:
+    from . import intraday, store
+    if args.action == "report":
+        return _intraday_report()
+    stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    days = stored[-5:] if args.backfill else [args.date or store.latest_complete_session(store.calendar())]
+    missing = [d for d in days if d not in stored]
+    if missing:
+        print(f"行情未入库：{missing}，请先 sf update", file=sys.stderr)
+        return 1
+    started = time.monotonic()
+    res = intraday.capture(days, workers=args.workers)
+    bad = False
+    for day, r in res.items():
+        if "requested" in r:
+            print(f"{day} {r['status']}：抓取 {r['requested']} 只，完整 {r['ok']} 只，不完整 {len(r['incomplete'])}，"
+                  f"失败 {len(r['failed'])}，当天无数据 {len(r['absent'])}")
+        else:
+            print(f"{day} {r['status']}")
+        bad = bad or r["status"].startswith("FAILED") or r["status"] == "partial"
+    print(f"耗时 {time.monotonic() - started:.0f}s；源数据只保留约 5 个交易日，失败的日子请尽快重跑")
+    return 1 if bad else 0
+
+
+def _intraday_report() -> int:
+    import json as _json
+
+    from . import intraday, manifest, store
+    with _quiet():
+        rep = intraday.report(log=lambda *_: None)
+    stamp = time.strftime("%Y%m%dT%H%M%S")
+    out = store.home() / "research" / f"intraday-report-{stamp}"
+    out.mkdir(parents=True, exist_ok=False)
+    print(f"盘中分时：{rep['sessions']} 个交易日（{rep['first']} ~ {rep['last']}），规格 docs/INTRADAY_STUDY.md")
+    if not rep["testable"]:
+        print(f"不足 {intraday.MIN_SESSIONS_FOR_TEST} 个交易日：以下只是描述，不下结论、不改规则。")
+    for key, title in (("seal", "H2 封板质量（主板，次日结果）"), ("lead", "H1 板块内封板顺序（主板）")):
+        if key in rep:
+            print(f"\n{title}\n{rep[key].to_string()}")
+            rep[key].to_csv(out / f"{key}.csv", encoding="utf-8-sig")
+    p = rep["priced"]
+    print(f"\nH3 拥挤代价（日线 {p.attrs['first']} ~ {p.attrs['last']}，主板非 ST 涨停股，描述性）")
+    print(p.rename(columns={"n": "样本", "gap_mean": "次日开盘缺口", "unbuyable": "次日一字买不到", "max3_mean": "3日最高涨幅",
+                            "gap_share_median": "缺口占3日涨幅(中位)"}).to_string())
+    p.to_csv(out / "priced_in.csv", encoding="utf-8-sig")
+    if not rep["panel"].empty:
+        rep["panel"].to_parquet(out / "panel.parquet")
+    stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
+    (out / "manifest.json").write_text(_json.dumps(manifest.build(stored), ensure_ascii=False, indent=2, default=str))
+    print(f"\n已保存 {out}")
+    return 0
 
 
 def cmd_seats(args) -> int:
@@ -134,6 +198,7 @@ def cmd_update(args) -> int:
                               log=lambda *_: None)
     status = pools.capture(result["observation"])
     status["seats"] = _capture_seats(result["observation"])
+    status["intraday"] = _capture_intraday([result["observation"]])
     print(f"观察日 {result['observation']} | 新增 {len(result['fetched'])} 天 | 失败 {result['failed'] or '无'}")
     print(f"资金池: {json.dumps(status, ensure_ascii=False)}")
     print(f"耗时 {time.monotonic() - started:.1f}s")
@@ -152,6 +217,7 @@ def cmd_premarket(args) -> int:
             return 1
         pools.capture(result["observation"], log=lambda *_: None)
         _capture_seats(result["observation"])
+        intraday_status = _capture_intraday([result["observation"]])
     with _quiet():
         result = listing.build(args.date, update_external=not args.no_update)
     path = listing.save(result)
@@ -162,6 +228,8 @@ def cmd_premarket(args) -> int:
         print(f"\n【{group}】{len(part)} 只")
         if len(part):
             print(part[listing.VIEW[1:]].to_string(index=False))
+    if not args.no_update:
+        print(f"\n盘中分时：{intraday_status}")
     print(f"\n已保存 {path}/盘前清单.csv  (耗时 {time.monotonic() - started:.1f}s)")
     return 0
 
@@ -362,6 +430,13 @@ def parser() -> argparse.ArgumentParser:
     no.add_argument("--source", help="新闻链接")
     no.add_argument("--last", type=int, default=30)
     no.set_defaults(func=cmd_note)
+
+    it = sub.add_parser("intraday", help="抓取当天涨停/触板/清单股的 1 分钟线；report 输出分时研究描述")
+    it.add_argument("action", nargs="?", default="capture", choices=["capture", "report"])
+    it.add_argument("--date", help="交易日（默认最近已收盘交易日）")
+    it.add_argument("--backfill", action="store_true", help="补抓最近 5 个已入库交易日中还没抓的")
+    it.add_argument("--workers", type=int, default=4)
+    it.set_defaults(func=cmd_intraday)
 
     bk = sub.add_parser("backup", help="把数据目录打成一个压缩包（换设备用），附校验文件")
     bk.add_argument("--out", help="输出目录（默认数据目录旁的 stockfish-backups）")

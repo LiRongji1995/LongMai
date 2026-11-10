@@ -93,12 +93,24 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 4. Old archives are the user's to delete; do not delete them.
 
 ### R4. Build the pre-market list
-1. After 18:00 Shanghai time: `bin/sf premarket` (updates data, captures pools and seats,
+1. After 18:00 Shanghai time: `bin/sf premarket` (updates data, captures pools, seats and intraday bars,
    then builds the list). `--no-update` builds from stored data only.
 2. Report the header lines, especially any `数据缺失` line, and the saved path. Never present the list as
    investment advice; the person decides every trade.
 
+### R6. Intraday minute bars (`sf intraday`)
+1. Capture runs inside `sf premarket` / `sf update`. On its own: `bin/sf intraday` (latest closed session) or
+   `bin/sf intraday --backfill` (stored sessions among the last 5 not captured yet). The source keeps about 5
+   sessions only: if a capture failed, rerun it the same evening or the next day, and tell the user which
+   days are lost if they fall out of the window.
+2. Files are written once (`intraday/raw|minute|universe|capture/`); never edit or delete them. Failed,
+   incomplete or absent stocks are listed in `intraday/capture/<day>.json`.
+3. `bin/sf intraday report` prints the descriptive tables of docs/INTRADAY_STUDY.md. Before 40 captured
+   sessions, report them as description only: no conclusions, no rule changes. Any rule built on them is a new
+   strategy version with its own forward test, and follows the pre-registration exactly (no threshold tuning).
+
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`
 (~70 min), `bin/sf themes` (~50 min, can run in parallel), `bin/sf seats --backfill 320` (~6 min), then R4.
-Pools, saved lists, hype notes, board snapshots and intraday data from before the rebuild cannot be recovered.
+Pools, saved lists, hype notes, board snapshots and intraday data from before the rebuild cannot be recovered
+(intraday: only the last ~5 sessions can be fetched with `bin/sf intraday --backfill`).
