@@ -1,3 +1,21 @@
+# 2026-11-10 龙脉 V1 (`SF_LONGMAI_V1`) — first formal strategy
+
+- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V1.md` (commit d58af71). `sf premarket` now
+  builds the 龙脉 list by default (header: sentiment, regulatory temperature, position budget, mainlines;
+  groups 主线龙头 / 观察 / 回避; columns 名称 / 角色 / 成交额(排名) / 参与建议 / 风险提示). The R2 list
+  stays available with `sf premarket --r2`. `sf longmai [--robust]` runs the portfolio backtest.
+- Noise filter completed before accepting the backtest: earnings-status, valuation, style and ownership
+  buckets (e.g. 2026中报首亏, 破增发价股, 超跌股, 风格, 基金增仓) were being picked as mainlines. The run
+  before the fix (126→127 trades, +0.09%/trade) is kept in `backtests/longmai-v1-prefix-noise-run.log`.
+- Backtest (2022-06 → 2026-11, 4 slots × 1/4, cost 0.15%): 126 trades, +0.25% per trade, hit 39.7%,
+  payoff 1.63, realized total +8.0%, max drawdown −23.4%; train / test1 / test2 per-trade
+  +0.07% / +0.21% / +0.71% (t ≈ 0). At 0.30% cost: +0.10% per trade. Essentially break-even.
+- Robustness (one step either way, not re-selected): results move a lot (turnover rank 20: +1.24%,
+  leader rank 1: −0.03%, gap ≥ −1%: −0.46%), so V1 is fragile. The gap filter and the vetoes matter
+  (no vetoes: +0.01%); the market gate lowers return but also drawdown (no gate: +0.62%, DD −30%).
+- Observed structural issue: the height leader (e.g. a 7-board small cap) and the turnover leader
+  (中军) are usually different stocks, so V1 rarely trades (~28 trades a year). Candidate for V2.
+
 # 2026-11-10 Exchange monitoring rules and regulatory temperature
 
 - `docs/REGULATION_NOTES.md`: SSE/SZSE abnormal-trading real-time monitoring rules (2023 versions, still

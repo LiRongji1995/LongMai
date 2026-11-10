@@ -179,6 +179,8 @@ def cmd_premarket(args) -> int:
             return 1
         pools.capture(result["observation"], log=lambda *_: None)
         _capture_seats(result["observation"])
+    if not args.r2:
+        return _premarket_longmai(args, started)
     with _quiet():
         result = premarket.build(args.date)
     path = premarket.save(result)
@@ -203,6 +205,54 @@ def cmd_premarket(args) -> int:
     return 0
 
 
+def _premarket_longmai(args, started) -> int:
+    from . import longmai
+    with _quiet():
+        result = longmai.premarket(args.date, update_external=not args.no_update)
+    path = longmai.save(result)
+    print("\n".join(longmai.header(result)))
+    table = result["table"]
+    for group in ("主线龙头", "观察", "回避"):
+        part = table[table["分组"] == group]
+        print(f"\n【{group}】{len(part)} 只")
+        if len(part):
+            print(part[longmai.VIEW[1:]].to_string(index=False))
+    if result["seats"] != "ok" or not result["abnormal_index_ok"]:
+        print(f"\n数据提示：席位 {result['seats']}；指数完整 {result['abnormal_index_ok']}（缺失按未知处理）")
+    print(f"\n已保存 {path}/盘前清单.csv  (耗时 {time.monotonic() - started:.1f}s)")
+    return 0
+
+
+def cmd_longmai(args) -> int:
+    from . import longmai
+    print("龙脉V1 组合回测（约5-10分钟）...")
+    with _quiet():
+        trades, ctx = longmai.backtest()
+    rep = longmai.report(trades)
+    rep30 = longmai.report(trades, extra_cost=0.0015)
+    keys = ["trades", "avg", "hit", "payoff", "held", "total_return", "max_drawdown", "vetoed", "no_slot", "no_entry"]
+    print({k: rep[k] for k in keys})
+    print(pd.DataFrame({s: [rep[f"{s}_n"], rep[f"{s}_avg"], rep[f"{s}_t"]] for s in ("train", "test1", "test2")},
+                       index=["笔数", "平均", "t"]).to_string())
+    print(f"成本0.30%：平均 {rep30['avg']}，累计 {rep30['total_return']}，最大回撤 {rep30['max_drawdown']}")
+    print("离场构成", rep["exit_mix"])
+    print("分年", rep["by_year"])
+    robust = None
+    if args.robust:
+        rows = []
+        for key, vals in longmai.ROBUST.items():
+            for v in vals:
+                with _quiet():
+                    r = longmai.report(longmai.backtest({key: v}, ctx=ctx)[0])
+                rows.append(dict(variant=f"{key}={v}", trades=r.get("trades"), avg=r.get("avg"),
+                                 total=r.get("total_return"), dd=r.get("max_drawdown"),
+                                 test1=r.get("test1_avg"), test2=r.get("test2_avg")))
+        robust = pd.DataFrame(rows).set_index("variant")
+        print(robust.to_string())
+    print(f"已保存 {longmai.save_backtest(trades, rep, robust)}")
+    return 0
+
+
 def cmd_show(args) -> int:
     from . import premarket
     run = premarket.latest_run(args.target)
@@ -216,7 +266,10 @@ def cmd_show(args) -> int:
         picks = pd.read_csv(run / "picks.csv", index_col=0)
         frame = premarket.simple(picks)
     summary = json.loads((run / "summary.json").read_text())
-    print(f"目标日 {summary['target']}  情绪 {summary['regime']}：{summary['advice']}")
+    if (run / "盘前概况.txt").exists():
+        print((run / "盘前概况.txt").read_text().strip())
+    else:
+        print(f"目标日 {summary['target']}  情绪 {summary.get('regime')}：{summary.get('advice')}")
     print(frame.to_string(index=False))
     return 0
 
@@ -383,6 +436,7 @@ def parser() -> argparse.ArgumentParser:
     pm.add_argument("--limit", type=int, default=50)
     pm.add_argument("--detail", action="store_true", help="显示详细字段")
     pm.add_argument("--no-update", action="store_true", help="不更新数据")
+    pm.add_argument("--r2", action="store_true", help="旧版R2清单（SF_R2_LEAN_V1）")
     pm.set_defaults(func=cmd_premarket)
 
     sh = sub.add_parser("show", help="查看已保存的清单")
@@ -430,6 +484,10 @@ def parser() -> argparse.ArgumentParser:
     ml.add_argument("--vary", nargs="*", help="参数对比，如 amount_rank_max=50,200,10000")
     ml.add_argument("--save", action="store_true", help="保存默认参数的逐笔交易")
     ml.set_defaults(func=cmd_mainline)
+
+    lm = sub.add_parser("longmai", help="龙脉V1组合回测（--robust 做参数稳健性检查）")
+    lm.add_argument("--robust", action="store_true")
+    lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")
     se.add_argument("--backfill", type=int, help="回填最近N个交易日的席位明细")
