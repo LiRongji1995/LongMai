@@ -26,6 +26,7 @@ entries and exits intraday (auction, 分时 pullbacks, order book). Nothing here
 | Any time | `sf crowding [--days 20]` | Short-term money temperature: market turnover vs its 20-day mean, short-term share, high-turnover share, mainlines with their turnover share (`!` = at a 60-session high). Review context only |
 | Any time | `sf seats --code 600000 [--date D]` | One stock's LHB seats; `sf seats` prints the seat leaderboard |
 | Any time | `sf status` | Data coverage |
+| After the news check | `sf note 001379 商业航天 [--date D] [--source URL]` | Records why a stock is really traded; `sf note` lists the records |
 
 Nothing is scheduled automatically; run the commands yourself.
 
@@ -43,8 +44,14 @@ Spec: [docs/STRATEGY_LONGMAI_V7.md](docs/STRATEGY_LONGMAI_V7.md). Main-board sto
 `拥挤` (turnover ≥ 2× its own 5-day mean without a sealed limit-up) is a flag, not a group. Amount is
 displayed, not filtered. Header lines: 情绪 / 监管温度 / position ceiling, 主线, 题材拥挤, 水温 (heat × pain
 cell with the historical next-day loss-effect rate and the pressure sources), 名字扩散, 市场高标,
-题材雷达, 同概念联动 / 玄学线索. Board data cannot tell why a stock rises: check news and announcements
-for the 市场高标 and the leaders.
+题材雷达, 同概念联动 / 玄学线索, 新闻题材, 待查题材.
+
+**Themes: 炒作 vs 板块.** Board data says what a stock belongs to, not why it rises, and the membership
+snapshot misses new stories (on 2026-11-10 腾达科技 traded as 商业航天 but is not a member of that board).
+So the role shows `炒作<theme>(新闻MM-DD)` when a note exists (`sf note`, from news and announcements,
+used for 10 sessions) and `板块<board>` for the most concentrated hot board it is a member of, which is
+membership only. The 待查题材 line names the 空间板, 3板+ and high-flyers with no note yet; the
+新闻题材 line groups listed stocks by their noted theme. Notes live in `meta/hype_notes.csv`.
 
 ## Judging the system: hit rates, not P&L
 

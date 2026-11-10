@@ -8,6 +8,7 @@
     sf evaluate               historical hit rates of the screening and the temperature calls
     sf crowding / sf mood     short-term market temperature (review context, not stock selection)
     sf seats / sf themes      LHB seats; board membership refresh
+    sf note CODE THEME        record why a stock is traded (from news); shown in the list
     sf status                 data store coverage
 """
 from __future__ import annotations
@@ -228,6 +229,22 @@ def cmd_evaluate(args) -> int:
     return 0
 
 
+def cmd_note(args) -> int:
+    from . import notes, pools, store
+    if not args.code:
+        frame = notes.load()
+        print(frame.tail(args.last).to_string(index=False) if len(frame) else "还没有炒作题材记录")
+        return 0
+    if not args.theme:
+        print("用法：sf note 001379 商业航天 [--source URL]", file=sys.stderr)
+        return 1
+    code = args.code if "." in args.code else pools.to_code(pd.Series([args.code])).iloc[0]
+    day = args.date or store.latest_complete_session(store.calendar())
+    notes.add(day, code, args.theme, args.source or "")
+    print(f"已记录 {day} {code} 炒作{args.theme}（{notes.MAX_AGE}个交易日内的清单会显示）")
+    return 0
+
+
 def cmd_status(args) -> int:
     from . import pools, store
     bars = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
@@ -300,6 +317,14 @@ def parser() -> argparse.ArgumentParser:
     mo = sub.add_parser("mood", help="市场情绪指标与阶段")
     mo.add_argument("--days", type=int, default=10)
     mo.set_defaults(func=cmd_mood)
+
+    no = sub.add_parser("note", help="记录个股的炒作题材（来自新闻公告）；不带参数时列出记录")
+    no.add_argument("code", nargs="?", help="如 001379")
+    no.add_argument("theme", nargs="?", help="如 商业航天")
+    no.add_argument("--date", help="新闻对应的交易日（默认最近已收盘交易日）")
+    no.add_argument("--source", help="新闻链接")
+    no.add_argument("--last", type=int, default=30)
+    no.set_defaults(func=cmd_note)
 
     st = sub.add_parser("status", help="数据覆盖情况")
     st.set_defaults(func=cmd_status)

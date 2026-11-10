@@ -1,3 +1,15 @@
+# 2026-11-10 List themes: 炒作 (news notes) before 板块 (membership)
+
+- Problem: the role said "归属建筑节能" for 腾达科技 while the market traded it as 商业航天. Its Eastmoney
+  boards do not include 商业航天, and both board-based rankings fail as attribution (z3 favours tiny
+  boards; limit-up counts favour umbrella boards, e.g. 冰山冷热 → 通用设备); co-movement over 20 sessions
+  was also tried and is dominated by market beta.
+- New `sf/notes.py` and `sf note CODE THEME`: themes from news, stored in `meta/hype_notes.csv`, shown as
+  `炒作<theme>(新闻MM-DD)` for 10 sessions; the board label is renamed `板块<board>` (membership only).
+- Header: 市场高标 shows the noted theme; new 新闻题材 line (listed stocks grouped by noted theme) and
+  待查题材 line (空间板, 3板+ and high-flyers without a note). Screening rules unchanged (still V7): the
+  2026-11-10 list differs only in the role labels and these header lines.
+
 # 2026-11-10 Slimming: V7-only `sf`, list in 2.6 s, hit-rate review
 
 Review and scores: `docs/ARCHITECTURE_REVIEW_2026-11-10.md`. The list for 2026-11-10 is identical

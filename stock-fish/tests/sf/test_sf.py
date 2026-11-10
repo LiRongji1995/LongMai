@@ -145,3 +145,18 @@ def test_saved_runs_and_review_recall(tmp_path, monkeypatch):
     rep = review.report(rows)
     assert rep["winners"] == 2 and rep["recall"] == 0.5 and rep["missed"][0]["name"] == "B"
     assert rep["stats"].loc["leader", "lu1"] == 1.0 and rep["stats"].loc["baseline", "n"] == 2
+
+
+def test_hype_notes_window_and_tag(tmp_path, monkeypatch):
+    from sf import notes
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    assert notes.active(DAYS[-1], DAYS) == {}
+    notes.add(DAYS[20], "sz.001379", "旧题材")
+    notes.add(DAYS[25], "sz.001379", "商业航天", "https://example.com")
+    notes.add(DAYS[-1], "sh.600001", "未来新闻")          # dated after the observation: not visible
+    act = notes.active(DAYS[26], DAYS)
+    assert act["sz.001379"]["theme"] == "商业航天" and "sh.600001" not in act
+    assert notes.active(DAYS[25 + notes.MAX_AGE], DAYS) == {}   # expired after MAX_AGE sessions
+    assert notes.tag("sz.001379", "建筑节能", act) == f"·炒作商业航天(新闻{DAYS[25][5:]})·板块建筑节能"
+    assert notes.tag("sz.000002", "建筑节能", act) == "·板块建筑节能"
+    assert notes.tag("sz.000002", None, act, "·题材未明") == "·题材未明"

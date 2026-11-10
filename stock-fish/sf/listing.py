@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import crowding, longmai as lm, mainline, namethemes, radar, seats, store, strategy, temperature
+from . import crowding, longmai as lm, mainline, namethemes, notes as hype, radar, seats, store, strategy, temperature
 
 
 def build(observation: str | None = None, update_external: bool = True, watch_limit: int = 10,
@@ -62,6 +62,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         return out
 
     zt = mainline.concentration(ctx["ts"], t)
+    noted = hype.active(observation, sessions)
     rows = []
     slots_left = g["slots"]
     for code, s in leaders.iterrows():
@@ -91,8 +92,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             if s["board"] == mainline.SPACE and left <= 2:
                 risk = "；".join(([risk] if risk else []) + [f"10日偏离{ctx['severe']['dev10'].iloc[t][code]:.0%}，再触发{int(left)}次3日异动即严重异动"])
         home = radar.home_board(ctx["ts"], t, code, zt)
-        if home and home != s["board"]:
-            role += f"·归属{home}"
+        role += hype.tag(code, home if home != s["board"] else None, noted)
         rows.append(dict(分组=group, 名称=name.get(code, code), code=code, amount_raw=float(s["amount"]),
                          close=float(close[code]), 角色=role + (f"·{stage}" if stage else ""),
                          成交额=activity_text(code, s["amount"]), 参与建议=plan, 风险提示=risk))
@@ -126,7 +126,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         v = lm.vetoes(ctx, t, code, p, seat_day)
         n = lm.notes(ctx, t, code, seat_day)
         home = radar.home_board(ctx["ts"], t, code, zt)
-        role = f"非主线龙头·{f['stages']}" + (f"·归属{home}" if home else "") + \
+        role = f"非主线龙头·{f['stages']}" + hype.tag(code, home, noted) + \
             (f"·名字扩散({wave_of[code]})" if code in wave_of else "")
         if code in wave_of and not bool(ctx["aw"]["limit_up"].iloc[t].get(code, False)):
             n = n + ["名字跟风(历史次日偏弱)"]
@@ -162,7 +162,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             plan = "梯队候选：历史上2板+约12-21%在5日内再涨停3次（看竞价与分时，由你决定）"
         amt = float(ctx["w"]["amount"].iloc[t].get(code, np.nan))
         ladder.append(dict(分组="连板梯队", 名称=name.get(code, code), code=code, amount_raw=amt, close=float(close[code]),
-                           角色=f"{int(h_main[code])}板" + (f"·归属{home}" if home else "·题材未明(需查新闻)"),
+                           角色=f"{int(h_main[code])}板" + hype.tag(code, home, noted, "·题材未明(需查新闻)"),
                            成交额=activity_text(code, amt), 参与建议=plan, 风险提示="；".join(risk),
                            _h=float(h_main[code]), _t=float(turn_t.get(code, 0) or 0)))
     ladder = [{k: v for k, v in r.items() if not k.startswith("_")}
@@ -212,7 +212,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         hot_own = zt.reindex(own).dropna().sort_values(ascending=False)
         flyers.append(dict(code=c, name=label(c), height=int(h_all[c]),
                            boards=[b for b in hot_own.index[:3] if hot_own[b] >= 2.0],
-                           main_board=c[3:5] not in ("30", "68"),
+                           main_board=c[3:5] not in ("30", "68"), hype=noted.get(c),
                            in_list=table.loc[table["code"] == c, "分组"].tolist()[:1]))
     code_of = {v: k for k, v in names_all.items()}
     M, cols_l = ctx["ts"]["M"], list(ctx["ts"]["cols"])
@@ -235,7 +235,21 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             link.update(concept=concept, same=same, other=other)
     spec = crowding.spec_share(ctx["aw"])
     spec_now, spec_pct = float(spec.iloc[t]), float(spec.iloc[max(0, t - 249):t + 1].rank(pct=True).iloc[-1])
+    # names to check in the news (no note yet): the 空间板, 3板+ ladder stocks and high-flyers; a mainline leader
+    # already carries its mainline as the theme
+    tall = ctx["w"]["height"].iloc[t]
+    check = [c for c in table.loc[table["分组"].isin(["主线龙头", "连板梯队"]), "code"]
+             if c not in noted and (table.loc[table["code"] == c, "角色"].iloc[0].startswith("空间板") or tall.get(c, 0) >= 3)]
+    check += [f["code"] for f in flyers if f["code"] not in noted and f["code"] not in check]
+    # listed stocks grouped by their noted themes ("A+B" / "A/B" count for both; brackets are explanations)
+    hype_groups: dict[str, list[str]] = {}
+    for c in table["code"]:
+        if c in noted:
+            for part in noted[c]["theme"].split("(")[0].replace("/", "+").split("+"):
+                if part.strip():
+                    hype_groups.setdefault(part.strip(), []).append(label(c))
     return dict(observation=observation, target=target, strategy_version=p["version"], regime=g["mood_tier"],
+                hype_notes=noted, to_check=[label(c) for c in check], hype_groups=hype_groups,
                 name_links=links, radar=hot_boards, high_flyers=flyers,
                 temperature=temperature.reading(temperature.table(ctx["w"], ctx["aw"], ind=ctx["mood"]), t), spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
@@ -269,7 +283,8 @@ def header(result: dict) -> list[str]:
     for fl in result.get("high_flyers", []):
         where = f"，所属热点：{'、'.join(fl['boards'])}" if fl["boards"] else "，所属板块都不热"
         status = f"，清单中为{fl['in_list'][0]}" if fl["in_list"] else ("，非主板不可买" if not fl["main_board"] else "，不在清单")
-        lines.append(f"市场高标：{fl['name']} {fl['height']}板{where}{status}；炒作逻辑需查新闻公告")
+        why = f"炒作{fl['hype']['theme']}（新闻{fl['hype']['date'][5:]}）" if fl.get("hype") else "炒作逻辑需查新闻公告"
+        lines.append(f"市场高标：{fl['name']} {fl['height']}板{where}{status}；{why}")
     if result.get("radar"):
         lines.append("题材雷达（3日涨停集中度）：" + "；".join(
             f"{r['board']} 今{r['lu']}/3日{r['lu3']}（{'、'.join(r['core'])}）" for r in result["radar"]))
@@ -281,6 +296,12 @@ def header(result: dict) -> list[str]:
             continue
         lines.append(f"玄学线索：{link['name']} 与今日强势股 {'、'.join(link['partners'])} 同{link['kind']}「{link['key']}」"
                      f"（{link['k']}只，随机期望{link['expected']}）")
+    groups = {k: v for k, v in result.get("hype_groups", {}).items() if len(v) >= 2}
+    if groups:
+        lines.append("新闻题材（清单内，来自 sf note）：" + "；".join(
+            f"{k} {len(v)}只（{'、'.join(v)}）" for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))))
+    if result.get("to_check"):
+        lines.append(f"待查题材（无新闻记录，板块归属只是成分）：{'、'.join(result['to_check'])}；查到后用 sf note 记录")
     lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
     return lines
 
