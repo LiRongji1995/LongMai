@@ -27,10 +27,9 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
     bars = bars[keep]
     w = store.wide(bars, ("close", "preclose", "amount", "volume", "turn"), {"_st": "isST"})
     st = w.pop("_st")
-    cols = w["close"].columns
-    wide_board = pd.Series(cols.str[3:].str.startswith(("30", "68")), index=cols)
-    ratio = np.where(wide_board.to_numpy()[None, :], 0.20, np.where(st, 0.05, 0.10))
-    up = np.floor(w["preclose"] * (1 + ratio) * 100 + 0.5) / 100
+    from .strategy import limit_ratio
+    ratio = limit_ratio(w["close"].index, w["close"].columns, st)
+    up =np.floor(w["preclose"] * (1 + ratio) * 100 + 0.5) / 100
     traded = (w["volume"] > 0) & (w["close"] > 0)
     w["limit_up"] = traded & (w["close"] >= up - 1e-9)
     w["amount"] = w["amount"].where(traded)

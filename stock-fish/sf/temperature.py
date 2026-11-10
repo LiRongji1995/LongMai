@@ -17,6 +17,7 @@ import pandas as pd
 
 from . import crowding, mood
 
+VERSION = "SF_TEMPERATURE_V1"
 HEAT = ("lu_count", "promo_rate", "max_height", "spec_share")
 PAIN = ("big_loss", "ld_count", "broken_prem", "up_ratio")      # the last two enter as 1 - percentile
 PAIN_INVERTED = ("broken_prem", "up_ratio")

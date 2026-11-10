@@ -53,6 +53,19 @@ def _round_price(value):
     return np.floor(value * 100 + 0.5) / 100
 
 
+# Price-limit rules. V2: SSE/SZSE main-board risk-warning (ST/*ST) stocks moved from 5% to 10% on
+# 2026-07-06; ChiNext/STAR stay at 20% whether ST or not.
+LIMITS_VERSION = "SF_LIMITS_V2"
+ST_TEN_PCT_FROM = "2026-07-06"
+
+
+def limit_ratio(index, columns, st) -> np.ndarray:
+    """Session x code price-limit ratio for the given (string-dated) index, codes and ST flags."""
+    wide_board = np.asarray(pd.Index(columns).str[3:].str.startswith(("30", "68")), dtype=bool)[None, :]
+    st_ratio = np.where(np.asarray(pd.Index(index).astype(str)) >= ST_TEN_PCT_FROM, 0.10, 0.05)[:, None]
+    return np.where(wide_board, 0.20, np.where(np.asarray(st, dtype=bool), st_ratio, 0.10))
+
+
 def panel(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Wide (session x code) frames for main-board stocks."""
     from .store import wide as _wide
@@ -66,7 +79,7 @@ def panel(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     step = (wide["close"] / wide["preclose"]).where(traded, 1.0)
     wide["adj"] = step.where(present, 1.0).cumprod().where(present)
     wide["traded"] = traded
-    ratio = np.where(wide["st"], 0.05, 0.10)
+    ratio = limit_ratio(wide["close"].index, wide["close"].columns, wide["st"])
     wide["up_limit"] = _round_price(wide["preclose"] * (1 + ratio))
     wide["down_limit"] = _round_price(wide["preclose"] * (1 - ratio))
     eps = 1e-9

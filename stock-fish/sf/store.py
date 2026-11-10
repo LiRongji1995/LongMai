@@ -2,7 +2,8 @@
 
 One parquet file per trading session holding the full BaoStock daily snapshot
 (unadjusted OHLC, exchange preclose, pctChg, turnover, ST and trade status).
-Sessions are immutable once written; a new trading day appends one file.
+Sessions are immutable once written, so a snapshot is checked for completeness first (`check_complete`);
+a new trading day appends one file.
 
 Point-in-time rule: a session file is only written after the session's close
 data is published (BaoStock publishes after ~17:30 Shanghai time), and the
@@ -169,9 +170,31 @@ def _normalize(frame: pd.DataFrame, day: str, fetched_at: str, origin: str) -> p
     return frame[[c for c in keep if c in frame]]
 
 
-def write_session(day: str, frame: pd.DataFrame, fetched_at: str, origin: str) -> Path:
+MIN_ROWS_RATIO = 0.97      # a snapshot with fewer rows than this x its nearest stored neighbour is partial
+MAX_MISSING_CLOSE = 0.01   # share of traded rows allowed without a close
+
+
+def check_complete(day: str, frame: pd.DataFrame) -> None:
+    """Raise when a snapshot looks partial. Sessions are immutable once written, so a partial snapshot
+    (fetched before BaoStock finished publishing) must never be stored."""
+    import pyarrow.parquet as pq
     if frame.empty:
         raise ValueError(f"empty market snapshot for {day}")
+    stored = sorted(p.stem for p in (_paths() / "bars").glob("*.parquet") if p.stem != day)
+    earlier, later = [s for s in stored if s < day], [s for s in stored if s > day]
+    neighbour = earlier[-1] if earlier else later[0] if later else None
+    if neighbour:
+        ref = pq.read_metadata(bar_path(neighbour)).num_rows
+        if len(frame) < MIN_ROWS_RATIO * ref:
+            raise ValueError(f"partial market snapshot for {day}: {len(frame)} rows vs {ref} on {neighbour}")
+    traded = frame["tradestatus"].astype(str).eq("1")
+    close = pd.to_numeric(frame["close"].replace("", None), errors="coerce")
+    if traded.any() and close[traded].isna().mean() > MAX_MISSING_CLOSE:
+        raise ValueError(f"partial market snapshot for {day}: {close[traded].isna().mean():.1%} of traded rows have no close")
+
+
+def write_session(day: str, frame: pd.DataFrame, fetched_at: str, origin: str) -> Path:
+    check_complete(day, frame)
     path = bar_path(day)
     tmp = path.with_suffix(".tmp")
     _normalize(frame, day, fetched_at, origin).to_parquet(tmp, index=False)
@@ -266,6 +289,34 @@ def load_window(sessions: list[str]) -> pd.DataFrame:
     if missing:
         raise FileNotFoundError(f"sessions not in store: {missing}; run `sf update` first")
     return pd.concat([pd.read_parquet(bar_path(s)) for s in sessions], ignore_index=True)
+
+
+def file_id(path: Path) -> str | None:
+    """First 16 hex digits of the file's sha256, or None when the file does not exist."""
+    import hashlib
+    if not path.exists():
+        return None
+    digest = hashlib.sha256()
+    with open(path, "rb") as handle:
+        for block in iter(lambda: handle.read(1 << 20), b""):
+            digest.update(block)
+    return digest.hexdigest()[:16]
+
+
+def archive(path: Path) -> str | None:
+    """Content-addressed copy of a mutable input under meta/archive/<stem>-<id><suffix> (kept once per
+    content), so outputs that name the id can be re-derived after the file is overwritten."""
+    import shutil
+    digest = file_id(path)
+    if digest is None:
+        return None
+    dest = _paths() / "meta" / "archive" / f"{path.stem}-{digest}{path.suffix}"
+    if not dest.exists():
+        dest.parent.mkdir(parents=True, exist_ok=True)
+        tmp = dest.with_name(dest.name + ".tmp")
+        shutil.copy2(path, tmp)
+        tmp.replace(dest)
+    return digest
 
 
 def stock_basic() -> pd.DataFrame:

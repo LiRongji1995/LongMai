@@ -55,10 +55,14 @@ def context(sessions: list[str], live_target: str | None = None, update_external
             log(f"  regulation update failed: {error}")
     amount = w["amount"].where(tr).sum(axis=1)
     days = list(w["close"].index)
+    # Severe abnormal volatility looks back 30 sessions; a missing benchmark day inside that window makes the
+    # facts unknown (the deviation would otherwise silently count as zero).
+    bench = idx.reindex(columns=["sh.000001", "sz.399001"]).reindex(days)
+    abnormal_unknown = bench.isna().any(axis=1).astype(float).rolling(30, min_periods=1).max().astype(bool)
     reg = regulation.daily(days + ([live_target] if live_target else []), amount)
     return dict(w=w, aw=aw, ts=ts, mood=tab, trig=trig, room=room, severe=sv, reg=reg,
                 basic=store.stock_basic(), calendar=store.calendar(), seat_features=seat_features,
-                index_ok=set(days) <= set(idx.index))
+                index_ok=not bool(abnormal_unknown.iloc[-1]), abnormal_unknown=abnormal_unknown)
 
 
 def gate(ctx: dict, t: int, target: str, p: dict) -> dict:
@@ -123,6 +127,9 @@ def crowded(ctx: dict, t: int, code: str, p: dict) -> list[str]:
 def notes(ctx: dict, t: int, code: str, seat_day: pd.DataFrame | None) -> list[str]:
     """Informational risk notes (not vetoes)."""
     out = []
+    unknown = ctx.get("abnormal_unknown")
+    if unknown is not None and bool(unknown.iloc[t]):
+        out.append("异动状态未知(近30日指数行情缺失，严重异动否决未检查)")
     left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
     if left == 1:
         out.append("再触发1次3日异动即严重异动")

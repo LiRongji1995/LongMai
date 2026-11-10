@@ -7,8 +7,8 @@ Kinds:
 - lhb:  dragon-tiger list summary rows for the session
 
 Eastmoney serves these pools only for recent sessions, so capture them every day; a missing file
-means "not captured" (unknown), never "empty pool". An empty pool is stored as an empty file with
-the `captured_empty` marker.
+means "not captured" (unknown), never "empty pool". Empty zt / lhb answers are not stored (see
+MUST_HAVE_ROWS); an empty zbgc / dtgc pool is stored as an empty file.
 """
 from __future__ import annotations
 
@@ -25,6 +25,11 @@ KINDS = {
     "zbgc": "stock_zt_pool_zbgc_em",
     "dtgc": "stock_zt_pool_dtgc_em",
 }
+
+
+# Every session has limit-ups and LHB listings, so an empty answer for these is "not published yet" and is
+# not stored (stays "not captured"). Failed-board and limit-down pools can be genuinely empty.
+MUST_HAVE_ROWS = ("zt", "lhb")
 
 
 def _dir(kind: str):
@@ -64,6 +69,10 @@ def capture(day: str, kinds=("zt", "zbgc", "dtgc", "lhb"), refresh: bool = False
             log(f"  pool {kind} {day} FAILED: {error}")
             continue
         frame = frame if frame is not None else pd.DataFrame()
+        if frame.empty and kind in MUST_HAVE_ROWS:
+            status[kind] = "FAILED: empty answer (not published yet?); not stored"
+            log(f"  pool {kind} {day}: empty answer, not stored")
+            continue
         frame = frame.astype({c: str for c in frame.columns if frame[c].dtype == object})
         if "代码" in frame:
             frame["code"] = to_code(frame["代码"])

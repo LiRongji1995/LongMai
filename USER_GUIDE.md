@@ -96,9 +96,19 @@ first. Outputs go to `stockfish-data/reviews/` and `stockfish-data/evaluations/`
 |---|---|
 | `bars/<date>.parquet` | full-market daily snapshot (BaoStock): OHLC, exchange preclose, turnover, ST, status |
 | `pools/{zt,zbgc,dtgc,lhb,seats}/<date>.parquet` | limit-up / failed-board / limit-down pools, LHB rows and seats |
-| `meta/` | calendar, stock basics, theme boards and members |
-| `lists/<target>/<run>/` | `盘前清单.csv`, `盘前概况.txt`, `picks.csv`, `leaders.csv`, `facts.parquet` (every stock with its features and list group), `summary.json` |
+| `meta/` | calendar, stock basics, theme boards and members, index returns, hype notes |
+| `meta/archive/` | every version of those mutable inputs, named by content id (`<name>-<id>`), kept for re-derivation |
+| `lists/<target>/<run>/` | `盘前清单.csv`, `盘前概况.txt`, `picks.csv`, `leaders.csv`, `facts.parquet` (every stock with its features and list group), `summary.json` (incl. `manifest`: git commit, module versions, input ids) |
 | `reviews/`, `evaluations/`, `research/` | saved outputs; never overwritten |
+
+Missing is never "nothing happened": a market snapshot with fewer than 97% of its neighbour's rows (or
+traded rows without a close) is not stored; an empty or one-exchange LHB seat answer and an empty
+limit-up / LHB pool are "not published yet" and are not stored either (rerun later). When seats or the
+benchmark index are missing, the list header shows a `数据缺失` line and the affected checks are marked
+unknown. `sf themes` keeps the previous members of a board whose request failed (`source=carried`) and
+exits non-zero when any board was carried or is missing.
+
+Price limits: main board 10% (ST/*ST 5% before 2026-07-06, 10% from then on), ChiNext/STAR 20%.
 
 Adjusted prices are reconstructed from the exchange preclose (`adj_t / adj_{t-1} = close_t / preclose_t`).
 A missing session makes affected windows unknown (NaN).

@@ -153,8 +153,6 @@ def cmd_premarket(args) -> int:
         print(f"\n【{group}】{len(part)} 只")
         if len(part):
             print(part[listing.VIEW[1:]].to_string(index=False))
-    if result["seats"] != "ok" or not result["abnormal_index_ok"]:
-        print(f"\n数据提示：席位 {result['seats']}；指数完整 {result['abnormal_index_ok']}（缺失按未知处理）")
     print(f"\n已保存 {path}/盘前清单.csv  (耗时 {time.monotonic() - started:.1f}s)")
     return 0
 
@@ -191,11 +189,13 @@ def cmd_review(args) -> int:
 
 
 def cmd_evaluate(args) -> int:
-    from . import evaluate, store
+    from . import evaluate, manifest, store
     started = time.monotonic()
     stamp = time.strftime("%Y%m%dT%H%M%S")
     out = store.home() / "evaluations" / stamp
     out.mkdir(parents=True, exist_ok=False)
+    stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    (out / "manifest.json").write_text(json.dumps(manifest.build(stored), ensure_ascii=False, indent=2, default=str))
     if args.part in ("all", "screening"):
         print("选股命中率（全历史逐日重算，约数分钟）...")
         with _quiet():
@@ -248,8 +248,11 @@ def cmd_themes(args) -> int:
     from . import themes
     started = time.monotonic()
     result = themes.refresh(with_history=not args.no_history)
-    print(f"板块 {result['boards']} 个，成分 {result['members']} 条，失败 {len(result['failures'])} 个，耗时 {time.monotonic() - started:.0f}s")
-    return 0
+    print(f"板块 {result['boards']} 个，成分 {result['members']} 条，沿用旧成分 {len(result['carried'])} 个，"
+          f"缺失 {len(result['failures'])} 个，耗时 {time.monotonic() - started:.0f}s")
+    for kind, name, error in result["failures"]:
+        print(f"  缺失 {kind}/{name}: {error}")
+    return 1 if result["failures"] or result["carried"] else 0
 
 
 # ------------------------------------------------------------------ parser

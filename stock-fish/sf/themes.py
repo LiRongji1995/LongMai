@@ -6,8 +6,11 @@ Point-in-time caveats (stated in every output that uses themes):
 - Membership is today's snapshot; historical additions/removals are not known.
 
 Files (under meta/):
-- theme_boards.parquet      board, kind (concept|industry), board_code, first_date
+- theme_boards.parquet      board, kind (concept|industry), board_code, first_date, n_members, captured_at,
+                            source (fresh | carried: request failed, previous members kept)
 - theme_members.parquet     board, kind, code
+Every refresh is also archived by content hash (store.archive), so a saved list can name the exact
+membership it used.
 """
 from __future__ import annotations
 
@@ -43,12 +46,17 @@ def _meta(name: str):
 
 
 def refresh(kinds=("industry", "concept"), with_history: bool = True, log=print) -> dict:
+    """Re-capture board lists and members. A board whose request fails keeps its previous members and
+    first date (marked `source="carried"` with the old `captured_at`); a failed board with no previous
+    capture is missing and reported. The new files replace the old ones atomically and are archived."""
     import akshare as ak
     boards, members = [], []
     listing = {"industry": ak.stock_board_industry_name_em, "concept": ak.stock_board_concept_name_em}
     cons = {"industry": ak.stock_board_industry_cons_em, "concept": ak.stock_board_concept_cons_em}
     hist = {"industry": ak.stock_board_industry_hist_em, "concept": ak.stock_board_concept_hist_em}
-    failures = []
+    prev_b, prev_m = _previous()
+    stamp = datetime.now(timezone.utc).isoformat()
+    failures, carried = [], []
     for kind in kinds:
         names = store._retry(listing[kind])
         for _, row in names.iterrows():
@@ -58,25 +66,48 @@ def refresh(kinds=("industry", "concept"), with_history: bool = True, log=print)
             try:
                 frame = store._retry(cons[kind], name, attempts=2, pause=1.0)
                 codes = pools.to_code(frame["代码"])
-                members += [(name, kind, c) for c in codes]
                 first = None
                 if with_history:
                     period = "日k" if kind == "industry" else "daily"  # the two AKShare APIs differ
                     h = store._retry(lambda n: hist[kind](symbol=n, period=period, start_date="20100101",
                                                            end_date="20991231", adjust=""), name, attempts=2, pause=1.0)
                     first = str(h["日期"].iloc[0])[:10] if len(h) else None
-                boards.append((name, kind, row.get("板块代码"), first, len(codes)))
+                members += [(name, kind, c) for c in codes]
+                boards.append((name, kind, row.get("板块代码"), first, len(codes), stamp, "fresh"))
             except Exception as error:
-                failures.append((kind, name, str(error)[:100]))
-                log(f"  theme {kind}/{name} FAILED: {error}")
+                old = prev_b[(prev_b["board"] == name) & (prev_b["kind"] == kind)] if prev_b is not None else None
+                if old is not None and len(old):
+                    o = old.iloc[0]
+                    codes = prev_m.loc[(prev_m["board"] == name) & (prev_m["kind"] == kind), "code"].tolist()
+                    members += [(name, kind, c) for c in codes]
+                    boards.append((name, kind, o.get("board_code"), o.get("first_date"), len(codes),
+                                   o.get("captured_at"), "carried"))
+                    carried.append((kind, name))
+                    log(f"  theme {kind}/{name} FAILED, previous members kept: {error}")
+                else:
+                    failures.append((kind, name, str(error)[:100]))
+                    log(f"  theme {kind}/{name} FAILED (missing): {error}")
             time.sleep(0.2)
         log(f"  {kind}: {sum(1 for b in boards if b[1] == kind)} boards")
-    stamp = datetime.now(timezone.utc).isoformat()
-    pd.DataFrame(boards, columns=["board", "kind", "board_code", "first_date", "n_members"]).assign(
-        captured_at=stamp).to_parquet(_meta("theme_boards.parquet"), index=False)
-    pd.DataFrame(members, columns=["board", "kind", "code"]).drop_duplicates().to_parquet(
-        _meta("theme_members.parquet"), index=False)
-    return dict(boards=len(boards), members=len(members), failures=failures)
+    board_frame = pd.DataFrame(boards, columns=["board", "kind", "board_code", "first_date", "n_members",
+                                                "captured_at", "source"])
+    member_frame = pd.DataFrame(members, columns=["board", "kind", "code"]).drop_duplicates()
+    for frame, name in ((board_frame, "theme_boards.parquet"), (member_frame, "theme_members.parquet")):
+        tmp = _meta(name).with_suffix(".tmp")
+        frame.to_parquet(tmp, index=False)
+        tmp.replace(_meta(name))
+        store.archive(_meta(name))
+    return dict(boards=len(boards), members=len(members), failures=failures, carried=carried)
+
+
+def _previous() -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
+    b, m = _meta("theme_boards.parquet"), _meta("theme_members.parquet")
+    if not (b.exists() and m.exists()):
+        return None, None
+    boards = pd.read_parquet(b)
+    if "captured_at" not in boards:
+        boards["captured_at"] = None
+    return boards, pd.read_parquet(m)
 
 
 def load() -> tuple[pd.DataFrame, pd.DataFrame] | None:

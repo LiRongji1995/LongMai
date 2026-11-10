@@ -7,8 +7,8 @@ served back to at least 2022.
 Point-in-time: LHB rows for session t are published after the close of t, so they may be used for
 decisions at the open of t+1 and later, never on t itself.
 
-Files: pools/seats/<date>.parquet, one row per (stock, seat, LHB reason); an empty session is stored as
-an empty file; a missing file means "not captured".
+Files: pools/seats/<date>.parquet, one row per (stock, seat, LHB reason). A session is stored only when
+both exchanges are present; a missing (or legacy empty) file means "not captured", never "no LHB".
 
 Seat types (by name, no future information):
   INSTITUTION  机构专用
@@ -107,11 +107,26 @@ def fetch(day: str) -> pd.DataFrame:
     return frame
 
 
-def capture(day: str, refresh: bool = False) -> str:
+def is_captured(day: str) -> bool:
+    """A session counts as captured only with a non-empty file. Every SSE/SZSE session has LHB listings,
+    so an empty answer means "not published yet" (or a failed request), never "no LHB"; empty files
+    written by earlier versions are therefore treated as not captured and retried."""
+    import pyarrow.parquet as pq
     target = path(day)
-    if target.exists() and not refresh:
+    return target.exists() and pq.read_metadata(target).num_rows > 0
+
+
+def capture(day: str, refresh: bool = False) -> str:
+    """Fetch and store one session's seats. Raises (and stores nothing) when the answer is empty or covers
+    only one exchange: Eastmoney publishes SSE and SZSE separately in the evening."""
+    target = path(day)
+    if is_captured(day) and not refresh:
         return "cached"
     frame = fetch(day)
+    codes = frame["code"].astype(str) if "code" in frame else pd.Series(dtype=str)
+    absent = [ex for ex in ("sh", "sz") if not codes.str.startswith(ex + ".").any()]
+    if absent:
+        raise RuntimeError(f"LHB seats for {day} incomplete (no {'/'.join(absent)} rows published yet); not stored")
     frame["captured_at"] = datetime.now(timezone.utc).isoformat()
     tmp = target.with_suffix(".tmp")
     frame.to_parquet(tmp, index=False)
@@ -120,7 +135,7 @@ def capture(day: str, refresh: bool = False) -> str:
 
 
 def backfill(days: list[str], workers: int = 4, log=print) -> dict:
-    todo = [d for d in days if not path(d).exists()]
+    todo = [d for d in days if not is_captured(d)]
     failures = {}
     start = time.time()
 
@@ -140,8 +155,8 @@ def backfill(days: list[str], workers: int = 4, log=print) -> dict:
 
 
 def load(day: str) -> pd.DataFrame | None:
-    target = path(day)
-    return pd.read_parquet(target) if target.exists() else None
+    """None means not captured (unknown), including empty files from earlier versions."""
+    return pd.read_parquet(path(day)) if is_captured(day) else None
 
 
 def load_all(days: list[str] | None = None) -> pd.DataFrame:
@@ -155,7 +170,7 @@ def load_all(days: list[str] | None = None) -> pd.DataFrame:
 
 
 def captured_days() -> list[str]:
-    return sorted(f.stem for f in _dir().glob("*.parquet"))
+    return sorted(f.stem for f in _dir().glob("*.parquet") if is_captured(f.stem))
 
 
 # ------------------------------------------------------------------ seat skill and daily features
@@ -269,7 +284,8 @@ def outcome_panel(bars: pd.DataFrame) -> dict:
     st = bars.pivot(index="date", columns="code", values="isST").sort_index() == "1"
     cols = w["close"].columns
     wide_board = cols.str[3:].str.startswith(("30", "68"))
-    ratio = np.where(wide_board[None, :], 0.20, np.where(st, 0.05, 0.10))
+    from .strategy import limit_ratio
+    ratio = limit_ratio(w["close"].index, cols, st)
     up = np.floor(w["preclose"] * (1 + ratio) * 100 + 0.5) / 100
     traded = (w["volume"] > 0) & (w["close"] > 0) & (w["preclose"] > 0)
     present = w["close"].notna()
@@ -332,6 +348,4 @@ def day_features(day: str, skill: pd.DataFrame) -> pd.DataFrame | None:
     rows = load(day)
     if rows is None:
         return None
-    if rows.empty:
-        return pd.DataFrame()
     return stock_features(attach_skill(rows, skill)).set_index("code")

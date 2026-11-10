@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import crowding, longmai as lm, mainline, namethemes, notes as hype, radar, seats, store, strategy, temperature
+from . import crowding, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store, strategy, temperature
 
 
 def build(observation: str | None = None, update_external: bool = True, watch_limit: int = 10,
@@ -26,7 +26,8 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         raise RuntimeError(f"bars for {observation} are not in the store")
     seat_day, seat_status = None, "not captured"
     try:
-        seats.capture(observation)
+        if update_external:
+            seats.capture(observation)
         seat_day = seats.day_features(observation, seats.skill_table(log=lambda *_: None))
         seat_status = "ok" if seat_day is not None else "not captured"
     except Exception as error:
@@ -254,7 +255,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 temperature=temperature.reading(temperature.table(ctx["w"], ctx["aw"], ind=ctx["mood"]), t), spec_share=round(spec_now, 4), spec_pct=round(spec_pct, 3),
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
-                params=p, seats=seat_status,
+                params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), table=table, leaders=leaders, facts=facts)
 
 
@@ -302,6 +303,14 @@ def header(result: dict) -> list[str]:
             f"{k} {len(v)}只（{'、'.join(v)}）" for k, v in sorted(groups.items(), key=lambda kv: -len(kv[1]))))
     if result.get("to_check"):
         lines.append(f"待查题材（无新闻记录，板块归属只是成分）：{'、'.join(result['to_check'])}；查到后用 sf note 记录")
+    missing = []
+    if result.get("seats", "ok") != "ok":
+        state = "未采集" if result["seats"] == "not captured" else result["seats"]
+        missing.append(f"龙虎榜席位{state}（拉萨散户否决与席位提示未检查）")
+    if not result.get("abnormal_index_ok", True):
+        missing.append("近30日指数行情不全（异动/严重异动状态未知）")
+    if missing:
+        lines.append("数据缺失：" + "；".join(missing))
     lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
     return lines
 

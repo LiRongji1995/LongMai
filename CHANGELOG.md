@@ -1,3 +1,29 @@
+# 2026-11-10 Data integrity: missing is not empty, partial snapshots, ST limits, run manifest
+
+Fixes from the architecture review (P0: the three invariants). Screening rules are unchanged (still
+`SF_LONGMAI_V7`); limit-up detection changes for ST stocks from 2026-07-06 (`SF_LIMITS_V2`).
+
+- **ST price limits by date.** Main-board ST/*ST stocks moved from 5% to 10% on 2026-07-06. The code used
+  5% throughout, so since July a +5% ST stock counted as a limit-up in the board statistics (mainline z3,
+  radar, short-term share). New `strategy.limit_ratio()` is used by the main-board panel, the all-A-share
+  panel and the seat outcome panel.
+- **Missing vs empty.** An empty or one-exchange LHB seat answer is "not published yet": it raises and
+  stores nothing (was stored as an empty, permanently "captured" day, silently disabling the Lhasa retail
+  veto). Legacy empty seat files count as not captured and are retried. Empty limit-up and LHB pools are
+  not stored. A benchmark index gap within 30 sessions marks a stock's abnormal-volatility state unknown
+  (a note on every row) instead of counting as zero deviation. The list header (saved in `盘前概况.txt`)
+  gets a `数据缺失` line for missing seats or index data. `sf premarket --no-update` no longer fetches seats.
+- **Partial snapshots.** `store.write_session` refuses a snapshot with < 97% of its nearest stored
+  neighbour's rows or > 1% traded rows without a close; session files are immutable, so a partial one
+  would have stayed forever.
+- **Theme refresh failures.** A board whose request fails keeps its previous members (`source=carried`,
+  old `captured_at`); a new board that fails is reported missing; `sf themes` exits 1 in either case.
+  Files are replaced atomically.
+- **Run manifest.** Saved lists (`summary.json` → `manifest`), reviews and evaluations record the git
+  commit (and uncommitted changes under `stock-fish/sf`), the version of every rule module, thresholds kept
+  outside `longmai.PARAMS`, the bar window, and content ids of the mutable inputs; each input version is
+  archived under `meta/archive/`, so a list can be re-derived after `sf themes` overwrites the membership.
+
 # 2026-11-10 Removed `sf auction`: the call auction is read by the person
 
 - Removed `sf/auction.py` and the `sf auction` command. Its SF_AUCTION_V1 rules came from DAILY_V1

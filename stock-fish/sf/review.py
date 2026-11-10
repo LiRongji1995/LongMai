@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import evaluate, listing, store, strategy
+from . import evaluate, listing, manifest, store, strategy
 
 METRICS = ["lu1", "max3", "out5", "bigloss1"]
 
@@ -69,6 +69,7 @@ def save(rows: pd.DataFrame, rep: dict) -> Path:
     rows.to_csv(out / "rows.csv", index=False, encoding="utf-8-sig")
     if "stats" in rep:
         rep["stats"].to_csv(out / "stats.csv", encoding="utf-8-sig")
-    (out / "report.json").write_text(json.dumps({k: v for k, v in rep.items() if k != "stats"},
-                                                ensure_ascii=False, indent=2, default=str))
+    stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    meta = {k: v for k, v in rep.items() if k != "stats"} | {"manifest": manifest.build(stored)}
+    (out / "report.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str))
     return out
