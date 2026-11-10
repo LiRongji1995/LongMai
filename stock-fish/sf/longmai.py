@@ -14,7 +14,7 @@ import pandas as pd
 
 from . import abnormal, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V2"
+VERSION = "SF_LONGMAI_V3"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -23,12 +23,15 @@ PARAMS_V1 = dict(
     budget={"高": 1.0, "中": 0.5, "低": 0.0}, reg_cut=0.5, max_slots=4,       # layer 1
 )
 # V2 (docs/STRATEGY_LONGMAI_V2.md): activity = amount + turnover ranks; no 3-session abnormal veto.
-PARAMS = dict(PARAMS_V1, version="SF_LONGMAI_V2", activity=True, veto_3day=False)
+PARAMS_V2 = dict(PARAMS_V1, version="SF_LONGMAI_V2", activity=True, veto_3day=False)
+# V3 (docs/STRATEGY_LONGMAI_V3.md): turnover identifies the leader; crowded leaders are not bought.
+PARAMS = dict(PARAMS_V2, version="SF_LONGMAI_V3", crowd_turn=30.0, crowd_surge=2.0)
+VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
-def params(overrides: dict | None = None, version: int = 2) -> dict:
-    base = PARAMS if version == 2 else PARAMS_V1
+def params(overrides: dict | None = None, version: int = 3) -> dict:
+    base = VERSIONS[version]
     p = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
     p.update(overrides or {})
     return p
@@ -114,6 +117,21 @@ def vetoes(ctx: dict, t: int, code: str, p: dict, seat_day: pd.DataFrame | None)
     return out
 
 
+def crowded(ctx: dict, t: int, code: str, p: dict) -> list[str]:
+    """V3 crowding: absolute turnover rate or a surge against the stock's own previous 5 sessions."""
+    if not p.get("crowd_turn"):
+        return []
+    turn = ctx["aw"]["turn"]
+    today = turn.iloc[t].get(code, np.nan)
+    prior = turn.iloc[max(0, t - 5):t][code].mean() if code in turn else np.nan
+    out = []
+    if pd.notna(today) and today >= p["crowd_turn"]:
+        out.append(f"换手{today:.1f}%≥{p['crowd_turn']:.0f}%")
+    if pd.notna(today) and pd.notna(prior) and prior > 0 and today >= p["crowd_surge"] * prior:
+        out.append(f"换手为前5日均值{today / prior:.1f}倍")
+    return out
+
+
 def notes(ctx: dict, t: int, code: str, seat_day: pd.DataFrame | None) -> list[str]:
     """Informational risk notes (not vetoes)."""
     out = []
@@ -144,6 +162,7 @@ def decide(ctx: dict, t: int, target: str, p: dict, seat_day: pd.DataFrame | Non
     sig["board_lu3"] = [float(ctx["ts"]["lu3"].loc[day, b]) for b in sig["board"]]
     sig["vetoes"] = [vetoes(ctx, t, c, p, seat_day) for c in sig.index]
     sig["notes"] = [notes(ctx, t, c, seat_day) for c in sig.index]
+    sig["crowded"] = [crowded(ctx, t, c, p) for c in sig.index]
     key = "activity_rank" if p.get("activity") else "amount_rank"
     sig = sig.sort_values(["board_lu3", "leader_rank", key], ascending=[False, True, True])
     return dict(gate=g, leaders=sig, pool=pool)
@@ -159,7 +178,7 @@ def _seat_day(ctx: dict, day: str) -> pd.DataFrame | None:
     return part.set_index("code") if len(part) else pd.DataFrame(columns=["retail_net_ratio"])
 
 
-def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, version: int = 2) -> tuple[pd.DataFrame, dict]:
+def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, version: int = 3) -> tuple[pd.DataFrame, dict]:
     """Portfolio replay with slot limits. Returns (trades, ctx) so robustness runs can reuse ctx."""
     p = params(overrides, version)
     if ctx is None:
@@ -190,6 +209,9 @@ def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, 
             if s["vetoes"]:
                 rows.append(dict(base, status="VETO", reason="；".join(s["vetoes"])))
                 continue
+            if s.get("crowded"):
+                rows.append(dict(base, status="CROWDED", reason="；".join(s["crowded"])))
+                continue
             if free <= 0:
                 rows.append(dict(base, status="NO_SLOT"))
                 continue
@@ -216,6 +238,7 @@ def report(trades: pd.DataFrame, slot_weight: float = 0.25, extra_cost: float = 
     out = dict(trades=len(closed), vetoed=int((trades["status"] == "VETO").sum()),
                no_slot=int((trades["status"] == "NO_SLOT").sum()),
                no_entry=int((trades["status"] == "NO_ENTRY").sum()),
+               crowded=int((trades["status"] == "CROWDED").sum()),
                avg=round(closed["ret"].mean(), 4), hit=round((closed["ret"] > 0).mean(), 3),
                payoff=round(closed.loc[closed.ret > 0, "ret"].mean() / -closed.loc[closed.ret <= 0, "ret"].mean(), 2)
                if (closed.ret <= 0).any() and (closed.ret > 0).any() else np.nan,
@@ -237,9 +260,10 @@ ROBUST = {
     "churn_mult": (1.5, 2.5), "fade_ratio": (0.25, 0.5), "stop_loss": (0.05, 0.10), "max_hold": (5, 15),
     "severe_margin": (0.2, 0.4), "gap_min": (-0.01, 0.01),
 }
+ROBUST_V3 = {"crowd_turn": (25.0, 35.0), "crowd_surge": (1.5, 2.5)}
 
 
-def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = 2) -> Path:
+def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = 3) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     p = params(version=version)
     out = store.home() / "backtests" / f"{p['version']}-{stamp}"
@@ -301,8 +325,13 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             f"{s['board']}·龙{int(s['leader_rank'])}·趋势"
         risk = "；".join(s["vetoes"] + s["notes"])
         stop = round(float(close[code]) * (1 - p["stop_loss"]), 2)
+        crowd = s.get("crowded") or []
+        if crowd:
+            risk = "；".join(["拥挤：" + "，".join(crowd)] + ([risk] if risk else []))
         if s["vetoes"]:
             group, plan = "回避", "主线龙头但触发风险否决，不参与"
+        elif crowd:
+            group, plan = "主线龙头", "拥挤不买：换手过高，等换手回落、分歧转一致再看"
         elif g["slots"] == 0:
             group, plan = "主线龙头", f"{g['mood_tier']}档情绪不开新仓，只观察"
         else:
@@ -390,7 +419,7 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
 def header(result: dict) -> list[str]:
     g = result["gate"]
     pos = {4: "满仓(4只×1/4)", 2: "半仓(2只×1/4)", 1: "1/4仓(1只)", 0: "空仓：不开新仓"}.get(g["slots"], f"{g['slots']}只×1/4")
-    tag = "V2" if result.get("strategy_version", "").endswith("V2") else "V1"
+    tag = result.get("strategy_version", "SF_LONGMAI_V1").rsplit("_", 1)[-1]
     lines = [f"龙脉{tag} 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}",
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
              f"（深市周处置 {g['szse_cases']} 起）   建议仓位：{pos}"]

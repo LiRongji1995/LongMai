@@ -36,7 +36,7 @@ def test_vetoes():
     p = longmai.params()
     code = "sh.600001"
     assert longmai.vetoes(_ctx(), 1, code, p, None) == []
-    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # V2: no 3-day veto
+    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # V2/V3: no 3-day veto
     assert longmai.vetoes(_ctx(trig=True), 1, code, longmai.params(version=1), None) == ["今日触发3日异动"]
     assert "严重异动后第3日" in longmai.vetoes(_ctx(since=3.0), 1, code, p, None)
     assert any("距严重异动" in v for v in longmai.vetoes(_ctx(left=0.2), 1, code, p, None))
@@ -52,3 +52,14 @@ def test_name_links_post_list():
     links = namethemes.links(["sh.600001"], names, strong, names.index)
     assert links and links[0]["kind"] == "词" and links[0]["key"] == "东方"
     assert set(links[0]["partners"]) == {"大东方", "东方创业"}
+
+
+def test_v3_crowding_rules():
+    code = "sh.600001"
+    days = [f"2026-01-{d:02d}" for d in range(5, 12)]
+    ctx = {"aw": {"turn": pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 31.0]}, index=days)}}
+    p = longmai.params()
+    assert longmai.crowded(ctx, 4, code, p) == []
+    assert longmai.crowded(ctx, 5, code, p) == ["换手为前5日均值2.4倍"]
+    assert longmai.crowded(ctx, 6, code, p)[0].startswith("换手31.0%")
+    assert longmai.crowded(ctx, 6, code, longmai.params(version=2)) == []

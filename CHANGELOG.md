@@ -1,3 +1,15 @@
+# 2026-11-10 龙脉 V3 (`SF_LONGMAI_V3`) — turnover identifies, crowding blocks entry (negative backtest)
+
+- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V3.md` (commit 30f1060). Leaders as in V2;
+  crowded (turnover ≥ 30% or ≥ 2× the previous 5-session average) leaders are shown but not bought.
+- Backtest: 164 trades (551 crowded signals skipped), −1.13% per trade, train / test1 / test2
+  −1.13% / −2.44% / +0.18%. Better than V2 (−1.61%), far below V1 (+0.25%). All robustness neighbours
+  negative (best: crowd surge 1.5×, −0.55%).
+- Why: activity ranking admits smaller, higher-turnover stocks even below the crowding line. Median
+  turnover of traded leaders: V1 10.2% (amount rank median 15), V3 20.2% (amount rank median 52).
+  Leaders identified by traded amount, i.e. where large money concentrates, did better than leaders
+  identified by turnover.
+
 # 2026-11-10 龙脉 V2 (`SF_LONGMAI_V2`) — activity and no 3-day veto (negative backtest)
 
 - Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V2.md` (commit bd09827). Activity = mean of the

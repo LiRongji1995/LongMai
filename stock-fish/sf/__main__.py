@@ -230,7 +230,7 @@ def cmd_longmai(args) -> int:
         trades, ctx = longmai.backtest(version=args.version)
     rep = longmai.report(trades)
     rep30 = longmai.report(trades, extra_cost=0.0015)
-    keys = ["trades", "avg", "hit", "payoff", "held", "total_return", "max_drawdown", "vetoed", "no_slot", "no_entry"]
+    keys = ["trades", "avg", "hit", "payoff", "held", "total_return", "max_drawdown", "vetoed", "crowded", "no_slot", "no_entry"]
     print({k: rep[k] for k in keys})
     print(pd.DataFrame({s: [rep[f"{s}_n"], rep[f"{s}_avg"], rep[f"{s}_t"]] for s in ("train", "test1", "test2")},
                        index=["笔数", "平均", "t"]).to_string())
@@ -240,7 +240,8 @@ def cmd_longmai(args) -> int:
     robust = None
     if args.robust:
         rows = []
-        for key, vals in longmai.ROBUST.items():
+        grid = {**longmai.ROBUST, **(longmai.ROBUST_V3 if args.version == 3 else {})}
+        for key, vals in grid.items():
             for v in vals:
                 with _quiet():
                     r = longmai.report(longmai.backtest({key: v}, ctx=ctx, version=args.version)[0])
@@ -487,7 +488,7 @@ def parser() -> argparse.ArgumentParser:
 
     lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
-    lm.add_argument("--version", type=int, default=2, choices=[1, 2])
+    lm.add_argument("--version", type=int, default=3, choices=[1, 2, 3])
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")
