@@ -91,6 +91,10 @@ class BaoStock:
                 self.bs.login()
             return self._rows(self.bs.query_daily_history_k_AStock(date=day))
 
+    def index_daily(self, code: str, start: str, end: str) -> pd.DataFrame:
+        return self._rows(self.bs.query_history_k_data_plus(
+            code, "date,code,close,preclose,pctChg", start_date=start, end_date=end, frequency="d"))
+
     def stock_basic(self) -> pd.DataFrame:
         return self._rows(self.bs.query_stock_basic(code=""))
 

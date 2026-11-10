@@ -6,6 +6,8 @@
     sf auction                09:25 re-rank of the latest list with call-auction data
     sf review                 forward review of all saved lists (T+1-open entry, costs)
     sf backtest               historical replay; --grid / --walk-forward for parameter checks
+    sf seats                  LHB seat detail: backfill, seat leaderboard, one stock's seats
+    sf mood                   market sentiment indicators and phase
     sf status                 data store coverage
 """
 from __future__ import annotations
@@ -40,6 +42,65 @@ def _pct(frame: pd.DataFrame, cols=("hit_rate", "avg", "median", "unbuyable_rate
 
 # ------------------------------------------------------------------ commands
 
+def _capture_seats(day: str) -> str:
+    from . import seats
+    try:
+        return seats.capture(day)
+    except Exception as error:  # reported; the day stays "not captured" and `sf seats --backfill` retries
+        return f"FAILED: {str(error)[:120]}"
+
+
+def cmd_seats(args) -> int:
+    from . import seats, store
+    if args.backfill:
+        days = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))[-args.backfill:]
+        result = seats.backfill(days, workers=args.workers)
+        print(f"请求 {result['requested']} 天，新抓 {result['fetched']} 天，失败 {len(result['failures'])} 天")
+        return 1 if result["failures"] else 0
+    if args.code:
+        day = args.date or seats.captured_days()[-1]
+        rows = seats.load(day)
+        if rows is None:
+            print(f"{day} 未采集席位明细", file=sys.stderr)
+            return 1
+        code = args.code if "." in args.code else seats.to_code(pd.Series([args.code])).iloc[0]
+        r = seats.stock_seat_rows(rows[rows["code"] == code])
+        if r.empty:
+            print(f"{day} {code} 未上榜")
+            return 0
+        print(f"{day} {code} 上榜原因: {' / '.join(r['reason'].unique())}")
+        view = r.sort_values("net", ascending=False)[["seat", "seat_type", "buy", "sell", "net"]]
+        for c in ("buy", "sell", "net"):
+            view[c] = (view[c] / 1e4).round(0)
+        print(view.rename(columns={"seat": "席位", "seat_type": "类型", "buy": "买入(万)", "sell": "卖出(万)",
+                                   "net": "净额(万)"}).to_string(index=False))
+        return 0
+    print("计算席位能力（只用已知结果，约1分钟）...")
+    data, skill = seats.dataset(log=lambda *_: None)
+    asof = args.date or data["date"].max()
+    top = seats.top_seats(skill, seats.load_all(), asof, n=args.top, min_events=args.min_events)
+    top = top.assign(skill_avg=top["skill_avg"].map("{:.2%}".format), skill_hit=top["skill_hit"].map("{:.0%}".format))
+    print(f"截至 {asof} 的席位榜（被其净买入的股票：次日开盘买、再次日开盘卖的平均收益，已知结果）")
+    print(top.rename(columns={"seat": "席位", "skill_n": "次数", "skill_avg": "平均", "skill_hit": "胜率"}).to_string(index=False))
+    return 0
+
+
+def cmd_mood(args) -> int:
+    from . import mood, store, strategy
+    days = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    w = strategy.panel(store.load_window(days[-(args.days + 260):]))
+    tab = mood.table(w).tail(args.days)
+    cols = ["lu_count", "ld_count", "broken_rate", "promo_rate", "big_loss", "prem_lu", "up_ratio", "level", "tier", "advice"]
+    view = tab[cols].copy()
+    for c in ("broken_rate", "promo_rate", "prem_lu", "up_ratio", "level"):
+        view[c] = view[c].map(lambda v: f"{v:.0%}" if c != "prem_lu" else f"{v:.2%}")
+    print(view.rename(columns={"lu_count": "涨停", "ld_count": "跌停", "broken_rate": "炸板率", "promo_rate": "晋级率",
+                               "big_loss": "大面", "prem_lu": "接力溢价", "up_ratio": "上涨占比",
+                               "level": "情绪分位", "tier": "档位", "advice": "建议"}).to_string())
+    print(f"{mood.VERSION}: 档位只作风控（低档少亏），不产生超额收益；详见 USER_GUIDE")
+    return 0
+
+
 def cmd_update(args) -> int:
     from . import pools, store
     started = time.monotonic()
@@ -47,6 +108,7 @@ def cmd_update(args) -> int:
         result = store.update(sessions_needed=args.sessions, observation=args.date, workers=args.workers,
                               log=lambda *_: None)
     status = pools.capture(result["observation"])
+    status["seats"] = _capture_seats(result["observation"])
     print(f"观察日 {result['observation']} | 新增 {len(result['fetched'])} 天 | 失败 {result['failed'] or '无'}")
     print(f"资金池: {json.dumps(status, ensure_ascii=False)}")
     print(f"耗时 {time.monotonic() - started:.1f}s")
@@ -64,11 +126,13 @@ def cmd_premarket(args) -> int:
             print(f"行情缺失，无法生成清单: {result['failed']}", file=sys.stderr)
             return 1
         pools.capture(result["observation"], log=lambda *_: None)
+        _capture_seats(result["observation"])
     with _quiet():
         result = premarket.build(args.date)
     path = premarket.save(result)
     picks = result["picks"].head(args.limit)
-    print(f"盘前清单  {result['observation']} → {result['target']}   情绪 {result['regime']}：{result['advice']}")
+    m = result["risk"]["mood"]
+    print(f"盘前清单  {result['observation']} → {result['target']}   情绪{m['tier']}档（分位 {m['level']}）：{m['advice']}")
     if args.detail:
         s = result["sentiment"]
         print(f"涨停{s['limit_up']} 跌停{s['limit_down']} 炸板率{s['broken_rate']} 最高{s['max_height']}板 "
@@ -181,7 +245,7 @@ def cmd_status(args) -> int:
     bars = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
     print(f"数据目录 {store.home()}")
     print(f"行情 {len(bars)} 个交易日：{bars[0] if bars else '-'} ~ {bars[-1] if bars else '-'}")
-    for kind in (*pools.KINDS, "lhb"):
+    for kind in (*pools.KINDS, "lhb", "seats"):
         files = sorted(p.stem for p in (store.home() / "pools" / kind).glob("*.parquet")) \
             if (store.home() / "pools" / kind).exists() else []
         print(f"资金池 {kind}: {len(files)} 天 {files[-1] if files else ''}")
@@ -312,6 +376,19 @@ def parser() -> argparse.ArgumentParser:
     ml.add_argument("--vary", nargs="*", help="参数对比，如 amount_rank_max=50,200,10000")
     ml.add_argument("--save", action="store_true", help="保存默认参数的逐笔交易")
     ml.set_defaults(func=cmd_mainline)
+
+    se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")
+    se.add_argument("--backfill", type=int, help="回填最近N个交易日的席位明细")
+    se.add_argument("--workers", type=int, default=4)
+    se.add_argument("--code", help="查看某只股票某天的席位，如 600000")
+    se.add_argument("--date")
+    se.add_argument("--top", type=int, default=20)
+    se.add_argument("--min-events", type=int, default=30)
+    se.set_defaults(func=cmd_seats)
+
+    mo = sub.add_parser("mood", help="市场情绪指标与阶段")
+    mo.add_argument("--days", type=int, default=10)
+    mo.set_defaults(func=cmd_mood)
 
     st = sub.add_parser("status", help="数据覆盖情况")
     st.set_defaults(func=cmd_status)

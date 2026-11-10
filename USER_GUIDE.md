@@ -19,8 +19,33 @@ The wrapper uses the Python environment `../stockfish-env` next to the checkout 
 | Any time | `sf show [TARGET]` | Prints a saved list |
 | Weekly | `sf review` | Forward review of every saved list (see below) |
 | Weekly | `sf themes` | Refreshes concept/industry board membership (~20 min) |
+| Any time | `sf mood` | Market sentiment indicators, percentile level and tier (低/中/高) with advice |
+| Any time | `sf seats --code 600000 [--date D]` | One stock's LHB seats for a session; `sf seats` prints the seat leaderboard |
 
 `sf premarket --detail` shows tiers, scores, stages and seal facts. `sf status` shows data coverage.
+
+The advice column ends with a risk context: the sentiment tier, abnormal-volatility status
+("today triggered the 3-day rule", "a rise above X% tomorrow triggers it", "10-day deviation near the
+severe level") and the LHB seat structure (Lhasa retail net buying, skilled hot-money buyers,
+institution net buying, net selling). These are risk filters backed by out-of-sample evidence that
+they rank days/stocks consistently; none of them makes buying profitable on its own.
+
+## Sentiment, seats and abnormal volatility
+
+- **Sentiment (`SF_MOOD_V1`)**: 12 daily indicators from bars (limit-ups/downs, failed-board rate,
+  relay premium, promotion rate, "big loss" count, breadth, turnover ratio, ...), each turned into its
+  percentile over the last 250 sessions. The composite uses the 5 indicators selected on the training
+  segment only: limit-downs (−), promotion rate (−), big losses (−), failed-board premium (+), breadth (+).
+  A high promotion rate predicts a worse next day: crowding. Tiers are terciles of the composite.
+- **LHB seats**: full seat detail since 2022 (`pools/seats/`), two requests per session. Seat types:
+  institution, northbound, Lhasa retail hubs, other branches. A seat's skill is the average
+  next-open → following-open return of stocks it net-bought, using only outcomes already known on the
+  day (two-session lag).
+- **Abnormal volatility (`SF_ABNORMAL_V1`)**: 3-session cumulative deviation against the exchange
+  benchmark, restarting after each trigger. Checked against the actual LHB listing reasons
+  (2022-03 → 2023-11): precision 81%, recall 74%. The thresholds are configurable; the stricter
+  real-time monitoring rules (abnormal-trading warnings, account restrictions, key monitoring of
+  severely volatile stocks) are being researched and are not modelled yet.
 
 ## Review: did the lists work?
 
@@ -91,7 +116,9 @@ so no adjustment-factor download is needed. A missing session makes affected win
 | R2 short-horizon strength (pre-market list core) | `SF_R2_LEAN_V1` | Frozen thresholds from `config/short_horizon_strength_r1.yaml`/`_r2.yaml`. Historical replay (2025-11 → 2026-11): **negative expectancy** under T+1-open entry; use as a watchlist, not a buy list |
 | Tier + score layer | `SF_TIER_SCORE_V1` | Heuristic; replay shows no monotonic edge |
 | Auction re-rank | `SF_AUCTION_V1` | DAILY_V1 auction thresholds; not yet validated |
-| Mainline leader + crowded exit | `SF_MAINLINE_LEADER_V1` | Under validation with `sf mainline` |
+| Mainline leader + crowded exit | `SF_MAINLINE_LEADER_V1` | Research only: relative turnover rank helps monotonically, no variant positive in both test segments |
+| Sentiment switch | `SF_MOOD_V1` | Risk filter: separates better/worse days out of sample; all tiers negative for relay |
+| Abnormal-volatility status | `SF_ABNORMAL_V1` | Risk note; just-triggered stocks did worse next day |
 
 Nothing here is investment advice. Engineering tests passing does not show investment value.
 

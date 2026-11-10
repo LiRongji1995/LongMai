@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import pools, ranking, store, strategy
+from . import pools, ranking, risk, store, strategy
 
 HISTORY_SESSIONS = 30
 
@@ -71,19 +71,24 @@ def build(observation: str | None = None, weights: dict | None = None) -> dict:
     picks = facts[facts["r2_selected"]].sort_values(["tier", "score"], ascending=[True, False]).copy()
     picks["rank"] = range(1, len(picks) + 1)
     picks["plan"] = picks.apply(ranking.plan, axis=1)
+    ctx = risk.context(observation, picks.index)
+    notes = ctx.pop("notes")
+    picks["risk"] = notes.reindex(picks.index).fillna("")
+    mood_note = f"情绪{ctx['mood']['tier']}档：{ctx['mood']['advice']}"
+    picks["plan"] = picks["plan"] + "｜" + mood_note + picks["risk"].map(lambda x: f"；{x}" if x else "")
     facts["rank"] = picks["rank"].reindex(facts.index)
     return dict(
         observation=observation, target=target, generated_at=datetime.now(timezone.utc).isoformat(),
         strategy_version=strategy.STRATEGY_VERSION, ranking_version=ranking.RANKING_VERSION,
         params=p, weights=weights or ranking.WEIGHTS, regime=state, advice=advice, sentiment=mood,
-        coverage=coverage, counts=dict(eligible=int(facts["eligible"].sum()), r1=int(facts["r1_match"].sum()),
+        coverage=coverage, risk=ctx, counts=dict(eligible=int(facts["eligible"].sum()), r1=int(facts["r1_match"].sum()),
                                        r2=int(len(picks)), near_miss=int((facts["near_miss"] != "").sum())),
         picks=picks, facts=facts)
 
 
 PICK_COLUMNS = ["rank", "tier", "score", "name", "close", "ret1", "board_height", "stages", "industry",
                 "theme_heat", "first_seal", "breaks", "seal_amount", "float_cap", "amount", "turn", "A", "rs1",
-                "ret5", "ret10", "clv", "lhb_times", "lhb_net", "plan"]
+                "ret5", "ret10", "clv", "lhb_times", "lhb_net", "risk", "plan"]
 
 
 def simple(picks: pd.DataFrame) -> pd.DataFrame:

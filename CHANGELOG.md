@@ -1,3 +1,24 @@
+# 2026-11-10 LHB seats, sentiment switch, abnormal-volatility status
+
+- `sf seats`: full LHB seat detail since 2022-03 (1,127 sessions, Eastmoney datacenter, two requests
+  per session), seat types (institution / northbound / Lhasa retail / other branch) and point-in-time
+  seat skill (outcomes used only after they are known). Captured daily by `sf update`/`sf premarket`.
+- `sf mood` (`SF_MOOD_V1`): 12 bar-based sentiment indicators as 250-session percentiles; the composite
+  uses 5 indicators selected on the training segment only. A high promotion rate predicts a worse
+  next day (crowding).
+- `SF_ABNORMAL_V1`: 3-session deviation against the exchange benchmark with reset after a trigger;
+  matches actual LHB listing reasons with precision 81% / recall 74%.
+- The pre-market advice now ends with a risk context (sentiment tier, abnormal-volatility status, LHB
+  seat structure). The list stays 3 columns.
+- Out-of-sample findings (per day, entry at next open, sell at the following open, 0.15% cost):
+  - Buying LHB stocks is negative in every segment (all: −0.92% / −0.68% / −0.67%). Seat information
+    ranks consistently but never turns positive: institutions ≥2 −0.46% / −0.25% / −0.46%; Lhasa retail
+    net buying −1.17% / −0.98% / −1.54% (worst); skilled hot-money net buying −0.89% / −0.58% / −0.30%.
+  - Sentiment top tercile vs bottom tercile for the relay basket: −0.22% vs −0.85% (test1),
+    −0.16% vs −1.01% (test2): a risk filter, not alpha.
+  - Stocks that triggered the 3-day rule today did worse the next day in every segment.
+  - None of the three filters makes the mainline-leader strategy positive in both test segments.
+
 # 2026-11-10 Lean `sf` CLI; legacy pipeline frozen
 
 - New `stock-fish/sf/` package and `bin/sf` wrapper replace the daily use of `codex_daily_v2.py`, which is
