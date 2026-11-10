@@ -19,7 +19,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import pools, premarket, store
+from . import listing, pools, store
 
 AUCTION_VERSION = "SF_AUCTION_V1"
 TH = dict(gap_weak=-0.03, amount_weak=0.005, amount_confirmed=0.02, high_gap=0.08,
@@ -89,7 +89,7 @@ def rerank(run: Path, quotes: pd.DataFrame) -> pd.DataFrame:
 
 
 def run(target: str | None = None, quotes: pd.DataFrame | None = None) -> dict:
-    run_dir = premarket.latest_run(target)
+    run_dir = listing.latest_run(target)
     if run_dir is None:
         raise FileNotFoundError("no saved pre-market list; run `sf premarket` first")
     status = window_status()

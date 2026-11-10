@@ -6,7 +6,7 @@ Screening (per observation session t, outcomes from t's close onward, adjusted p
   max3      highest high over t+1..t+3 relative to t's close
   out5      "走出来": >= 2 limit-ups within t+1..t+5, or max high within t+1..t+5 >= +20%
   bigloss1  "大面" on t+1: low <= -7% or close <= -5% versus t's close
-Groups: candidate (rule leaders that are not vetoed / crowded), ladder (V7: other main-board 2板+),
+Groups: candidate (rule leaders that are not vetoed / crowded), ladder (other main-board 2板+),
 crowded, vetoed, and the baseline of
 all main-board limit-ups that day. Recall: of the stocks that were limit-up on t and then made >= 3
 limit-ups within t+1..t+5 (the realized 妖股), the share that were listed (any group) on t.
@@ -39,8 +39,12 @@ def stock_outcomes(w: dict) -> dict[str, pd.DataFrame]:
     high_adj = w["high"] * adj / w["close"]
     low_adj = w["low"] * adj / w["close"]
     lu = w["limit_up"].fillna(False).astype(bool)
-    fwd_high = lambda k: pd.concat([high_adj.shift(-i) for i in range(1, k + 1)]).groupby(level=0).max() \
-        .reindex(close_adj.index)
+    n = len(close_adj.index)
+
+    def fwd_high(k):  # NaN until all k later sessions are in the store (pending, not a miss)
+        m = pd.concat([high_adj.shift(-i) for i in range(1, k + 1)]).groupby(level=0).max().reindex(close_adj.index)
+        return m.where(pd.Series(np.arange(n) + k < n, index=close_adj.index), axis=0)
+
     max3 = fwd_high(3) / close_adj - 1
     max5 = fwd_high(5) / close_adj - 1
     lu5 = sum(lu.shift(-i, fill_value=False).astype(int) for i in range(1, 6))
@@ -66,20 +70,19 @@ def screening_panel(log=print) -> pd.DataFrame:
             continue
         day = index[t]
         pool = strategy.eligible(w, ctx["basic"], ctx["calendar"], t, sp)
-        d = longmai.decide(ctx, t, index[t + 1], p, longmai._seat_day(ctx, day), pool)
+        d = longmai.decide(ctx, t, index[t + 1], p, longmai.seat_day(ctx, day), pool)
         listed = set()
         for code, s in d["leaders"].iterrows():
             group = "vetoed" if s["vetoes"] else "crowded" if s.get("crowded") else "candidate"
             rows.append(dict(obs=day, code=code, group=group, board=s["board"], height=s["height"]))
             listed.add(code)
-        if p.get("version", "") >= "SF_LONGMAI_V7":  # 连板梯队: main-board 2板+ not already listed
-            h = w["height"].iloc[t]
-            for code in h[(h >= 2) & pool.reindex(h.index).fillna(False)].index:
-                if code not in listed:
-                    v = longmai.vetoes(ctx, t, code, p, longmai._seat_day(ctx, day))
-                    group = "vetoed" if v else "crowded" if longmai.crowded(ctx, t, code, p) else "ladder"
-                    rows.append(dict(obs=day, code=code, group=group, board=None, height=float(h[code])))
-                    listed.add(code)
+        h = w["height"].iloc[t]  # 连板梯队: main-board 2板+ not already listed
+        for code in h[(h >= 2) & pool.reindex(h.index).fillna(False)].index:
+            if code not in listed:
+                v = longmai.vetoes(ctx, t, code, p, longmai.seat_day(ctx, day))
+                group = "vetoed" if v else "crowded" if longmai.crowded(ctx, t, code, p) else "ladder"
+                rows.append(dict(obs=day, code=code, group=group, board=None, height=float(h[code])))
+                listed.add(code)
         lu_t = w["limit_up"].iloc[t].fillna(False).astype(bool) & pool.reindex(w["close"].columns).fillna(False)
         for code in lu_t.index[lu_t.to_numpy()]:
             rows.append(dict(obs=day, code=code, group="baseline", board=None,

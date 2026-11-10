@@ -1,3 +1,21 @@
+# 2026-11-10 Slimming: V7-only `sf`, list in 2.6 s, hit-rate review
+
+Review and scores: `docs/ARCHITECTURE_REVIEW_2026-11-10.md`. The list for 2026-11-10 is identical
+before and after (golden text snapshot).
+
+- Removed `premarket.py` (R2 list), `risk.py`, `ranking.py`, `backtest.py`, `research.py`, `outcomes.py`,
+  `sf auto` and `bin/sf-schedule`, the commands `backtest`, `research`, `mainline`, `longmai`,
+  `premarket --r2`, and the V1–V6 specs (all at tag `legacy-r2`; links to them below refer to that tag).
+- `longmai.py` is V7 screening only with one flat `PARAMS`; list assembly, header and saving moved to
+  `listing.py`; `mainline.py` keeps only the V7 mainline and leader rules.
+- Speed: `store.wide()` builds the session × code frames in one numpy scatter, and the temperature reuses
+  the mood indicators: list build 14.7 s → 2.6 s.
+- `sf review` now reports entry-free hit rates (lu1, max3, out5, bigloss1) by list group against all
+  main-board limit-ups, plus 妖股 recall; new `sf evaluate [screening|temperature]`.
+- Fix: `max3` / `out5` at the end of the history used partial windows and counted recent lists as misses;
+  they are now pending until all later sessions are stored (test2 recall 46.9% → 46.7%).
+- Deleted the 630 MB R2 research dataset; data directory 1.0 GB → 377 MB.
+
 # 2026-11-10 龙脉 V7: screening without an amount threshold, 连板梯队, 高波动, two-axis temperature
 
 - Spec and first hit-rate check: `docs/STRATEGY_LONGMAI_V7.md`. Judged by entry-free hit rates, not P&L.

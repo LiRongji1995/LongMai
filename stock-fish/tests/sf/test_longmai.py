@@ -1,4 +1,4 @@
-"""Offline tests for 龙脉 V1 gate and vetoes (synthetic frames)."""
+"""Offline tests for 龙脉 V7 screening, the list helpers and the temperature (synthetic frames)."""
 from __future__ import annotations
 
 import numpy as np
@@ -33,11 +33,10 @@ def test_gate_budget_and_regulation_cut():
 
 
 def test_vetoes():
-    p = longmai.params(version=3)
+    p = longmai.params()
     code = "sh.600001"
     assert longmai.vetoes(_ctx(), 1, code, p, None) == []
-    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # V2/V3: no 3-day veto
-    assert longmai.vetoes(_ctx(trig=True), 1, code, longmai.params(version=1), None) == ["今日触发3日异动"]
+    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # no 3-session abnormal veto
     assert "严重异动后第3日" in longmai.vetoes(_ctx(since=3.0), 1, code, p, None)
     assert any("距严重异动" in v for v in longmai.vetoes(_ctx(left=0.2), 1, code, p, None))
     seat = pd.DataFrame({"retail_net_ratio": [0.05]}, index=[code])
@@ -52,17 +51,6 @@ def test_name_links_post_list():
     links = namethemes.links(["sh.600001"], names, strong, names.index)
     assert links and links[0]["kind"] == "词" and links[0]["key"] == "东方"
     assert set(links[0]["partners"]) == {"大东方", "东方创业"}
-
-
-def test_v3_crowding_rules():
-    code = "sh.600001"
-    days = [f"2026-01-{d:02d}" for d in range(5, 12)]
-    ctx = {"aw": {"turn": pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 31.0]}, index=days)}}
-    p = longmai.params(version=3)
-    assert longmai.crowded(ctx, 4, code, p) == []
-    assert longmai.crowded(ctx, 5, code, p) == ["换手为前5日均值2.4倍"]
-    assert longmai.crowded(ctx, 6, code, p)[0].startswith("换手31.0%")
-    assert longmai.crowded(ctx, 6, code, longmai.params(version=2)) == []
 
 
 def test_crowding_spec_share_and_theme_heat():
@@ -81,35 +69,7 @@ def test_crowding_spec_share_and_theme_heat():
     assert np.isnan(crowding.theme_heat(dict(share=share), 5, "X")[1])
 
 
-def test_v1_has_no_crowding_block():
-    assert longmai.crowded({}, 0, "x", longmai.params(version=1)) == []  # V1 has no crowding block
-
-
-def test_v4_leaders_by_turnover_with_amount_threshold():
-    import numpy as np
-    from sf import mainline
-    days = ["2026-01-05", "2026-01-06", "2026-01-07"]
-    codes = ["sh.600001", "sh.600002", "sh.600003"]   # all limit-up, height 1, same board
-    frame = lambda vals: pd.DataFrame([vals] * 3, index=days, columns=codes)
-    amount = pd.DataFrame([[2e8, 9e8, 6e8], [2e8, 9e8, 6e8], [9e8, 3e8, 6e8]], index=days, columns=codes)
-    # 600001: today 9亿; 600002: today 3亿 but 3-day mean 7亿; 600003: 6亿
-    turn = frame([5.0, 20.0, 10.0])
-    w = dict(close=frame([11.0] * 3), preclose=frame([10.0] * 3), high=frame([11.0] * 3), low=frame([10.0] * 3),
-             amount=amount, limit_up=frame([True] * 3), height=frame([1] * 3))
-    aw = dict(amount=amount, turn=turn)
-    lu = pd.DataFrame({"B": [3.0] * 3}, index=days)
-    ts = dict(lu=lu, lu3=lu * 3, share=lu * 0 + 0.1, M=np.ones((1, 3), dtype=np.float32), names=["B"], cols=codes)
-    pool = pd.Series(True, index=codes)
-    p = longmai.params(version=4)
-    sig = mainline.signals(w, aw, ts, pool, 2, p)
-    assert list(sig.sort_values("leader_rank").index) == ["sh.600002", "sh.600003"]  # turnover order, 3-day amount counts
-    p_hi = longmai.params({"amount_min": 8e8}, version=4)
-    sig = mainline.signals(w, aw, ts, pool, 2, p_hi)
-    assert list(sig.index) == []  # 600001 passes 8亿 but is leader rank 3 by turnover
-    assert not longmai.params(version=4)["veto_3day"]
-
-
-def test_v5_relative_crowding_and_threshold_first():
+def test_relative_crowding_and_leaders_by_height_then_turnover():
     import numpy as np
     from sf import mainline
     code = "sh.600001"
@@ -117,27 +77,24 @@ def test_v5_relative_crowding_and_threshold_first():
     turn = pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 40.0]}, index=days)
     sealed = pd.DataFrame({code: [False] * 5 + [False, True]}, index=days)
     ctx = {"aw": {"turn": turn, "limit_up": sealed}}
-    p = longmai.params(version=5)
+    p = longmai.params()
+    assert longmai.crowded(ctx, 4, code, p) == []
     assert longmai.crowded(ctx, 5, code, p)[0].startswith("放量分歧")   # 2.4x, not sealed
     assert longmai.crowded(ctx, 6, code, p) == []                         # 40% but sealed: full hand-over
-    # threshold first: the small top-height stock is dropped before ranking, so rank 3 moves up
     d3 = ["2026-01-05", "2026-01-06", "2026-01-07"]
     codes = ["sh.600001", "sh.600002", "sh.600003"]
     frame = lambda vals: pd.DataFrame([vals] * 3, index=d3, columns=codes)
-    amount = frame([2e8, 9e8, 6e8])
+    amount = frame([2e7, 9e8, 6e8])   # no amount threshold: the small stock still leads by height
     w = dict(close=frame([11.0] * 3), preclose=frame([10.0] * 3), high=frame([11.0] * 3), low=frame([10.0] * 3),
              amount=amount, limit_up=frame([True] * 3), height=frame([3, 1, 1]))
-    aw = dict(amount=amount, turn=frame([5.0, 20.0, 10.0]))
+    aw = dict(amount=amount, turn=frame([5.0, 10.0, 20.0]))
     lu = pd.DataFrame({"B": [3.0] * 3}, index=d3)
-    ts = dict(lu=lu, lu3=lu * 3, share=lu * 0 + 0.1, M=np.ones((1, 3), dtype=np.float32), names=["B"], cols=codes)
-    pool = pd.Series(True, index=codes)
-    v4 = mainline.signals(w, aw, ts, pool, 2, longmai.params(version=4))
-    v5 = mainline.signals(w, aw, ts, pool, 2, dict(p, mainline_mode=None))
-    assert list(v4.index) == ["sh.600002"]                      # V4: 600001 ranks 1 but fails the threshold
-    assert sorted(v5.index) == ["sh.600002", "sh.600003"]       # V5: filtered first, two leaders remain
+    ts = dict(lu=lu, lu3=lu * 3, n=lu * 0 + 30, n3=lu * 0 + 90, rate3=pd.Series(0.02, index=d3),
+              limit_up=frame([True] * 3), M=np.ones((1, 3), dtype=np.float32), names=["B"], cols=codes)
+    sig = mainline.signals(w, aw, ts, pd.Series(True, index=codes), 2, p)
+    assert sig["leader_rank"].to_dict() == {"sh.600001": 1, "sh.600003": 2}
 
-
-def test_v5_concentration_mainlines_dedupe():
+def test_concentration_mainlines_dedupe():
     import numpy as np
     from sf import mainline
     days = ["2026-01-05", "2026-01-06", "2026-01-07"]
@@ -154,8 +111,7 @@ def test_v5_concentration_mainlines_dedupe():
     members = pd.DataFrame([(names[b], codes[c]) for b in range(3) for c in range(40) if M[b, c]], columns=["board", "code"])
     aw = dict(close=amount, amount=amount, limit_up=limit_up)
     ts = mainline.theme_stats(aw, boards, members)
-    p = dict(longmai.params(), min_theme_limit_ups=3)
-    assert mainline.mainlines(ts, 2, p) == ["NARROW"]
+    assert mainline.mainlines(ts, 2, longmai.params()) == ["NARROW"]
 
 
 def test_radar_home_board_and_high_flyers():
@@ -177,7 +133,7 @@ def test_radar_home_board_and_high_flyers():
     assert radar.high_flyers(aw, ts, 2) == [codes[0]]          # tallest level when nothing reaches 4 boards
 
 
-def test_v6_three_session_mainlines_and_space_board():
+def test_three_session_mainlines_and_space_board():
     import numpy as np
     from sf import mainline
     days = ["2026-01-05", "2026-01-06", "2026-01-07"]
@@ -190,9 +146,9 @@ def test_v6_three_session_mainlines_and_space_board():
     members = pd.DataFrame([("BIG", c) for c in codes] + [("ICE", c) for c in codes[:8]], columns=["board", "code"])
     boards = pd.DataFrame({"board": ["BIG", "ICE"], "first_date": ["2000-01-01"] * 2})
     ts = mainline.theme_stats(dict(close=amount, amount=amount, limit_up=limit_up), boards, members)
-    p6 = longmai.params(version=6)
-    assert mainline.mainlines(ts, 2, p6) == ["ICE"]
-    assert mainline.mainlines(ts, 2, longmai.params(version=5)) == []     # V5 needs 3 limit-ups today
+    p6 = longmai.params()
+    assert mainline.mainlines(ts, 2, p6) == ["ICE"]                       # 8 over 3 sessions, 1 today
+    assert mainline.mainlines(ts, 2, dict(p6, min_theme_lu3=9)) == []
     # 空间板: tallest eligible main-board stock, outside any mainline
     d3, cs = days, ["sh.600001", "sh.600002"]
     frame = lambda vals: pd.DataFrame([vals] * 3, index=d3, columns=cs)
@@ -217,7 +173,8 @@ def test_evaluate_nodes():
 def test_v7_default_and_temperature_cells():
     from sf import temperature
     p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V7" == longmai.VERSION and p["amount_min"] == 0
+    assert p["version"] == "SF_LONGMAI_V7" == longmai.VERSION and "amount_min" not in p
+    assert longmai.params({"top_k": 5})["top_k"] == 5 and longmai.PARAMS["top_k"] == 3
     days = [f"d{i:03d}" for i in range(80)]
     tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",
                         **{k + "_o": 0.5 for k in temperature.HEAT + temperature.PAIN}}, index=days)

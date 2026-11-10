@@ -1,9 +1,10 @@
-"""Forward review of saved pre-market lists.
+"""Forward review of saved pre-market lists with the entry-free hit rates of `evaluate.py`.
 
-For every saved list (latest run per target session), label every eligible stock with the outcomes
-the list would actually have produced (entry at the target-session open), then aggregate by cohort
-(selected / near-miss / other), tier, stage, regime and score quintile. Pending outcomes (future
-sessions not yet in the store) are counted separately, never as zero.
+For the latest run per target session, every stock in the saved fact table gets its outcomes from the
+observation close (lu1, max3, out5, bigloss1; see evaluate.stock_outcomes), grouped by its list group
+(leader / ladder / watch / avoid) against the baseline of all main-board limit-ups that day. Recall: of
+the realized 妖股 (limit-up on the observation day, then >= 3 limit-ups within 5 sessions), the share
+that were on the list. Outcomes not yet in the store are counted as pending, never as misses.
 """
 from __future__ import annotations
 
@@ -11,81 +12,63 @@ import json
 from datetime import datetime, timezone
 from pathlib import Path
 
-import numpy as np
 import pandas as pd
 
-from . import outcomes, premarket, store, strategy
+from . import evaluate, listing, store, strategy
+
+METRICS = ["lu1", "max3", "out5", "bigloss1"]
 
 
 def collect(since: str | None = None) -> pd.DataFrame:
-    runs = premarket.all_runs()
-    if since:
-        runs = [r for r in runs if (r.parent.name if r.parent.name != "lists" else r.name) >= since]
+    runs = [r for r in listing.all_runs() if since is None or r.parent.name >= since]
     if not runs:
         return pd.DataFrame()
     stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
     w = strategy.panel(store.load_window(stored))
+    out = evaluate.stock_outcomes(w)
     frames = []
     for run in runs:
         summary = json.loads((run / "summary.json").read_text())
+        obs = summary["observation"]
         facts = pd.read_parquet(run / "facts.parquet")
-        facts = facts[facts["eligible"]] if "eligible" in facts else facts
-        selected = facts.get("r2_selected", pd.Series(False, index=facts.index)).fillna(False).astype(bool)
-        near = facts.get("near_miss", pd.Series("", index=facts.index)).fillna("")
-        labels = outcomes.label(w, summary["target"], facts.index)
-        if "lm_group" in facts:  # 龙脉 lists: leader / ladder / watch / avoid groups
-            cohort = facts["lm_group"].map({"leader": "selected", "ladder": "ladder", "watch": "watch", "avoid": "avoid"}).fillna("other")
-        else:
-            cohort = np.where(selected, "selected", np.where(near != "", "near_miss", "other"))
-        frame = pd.DataFrame({
-            "cohort": cohort,
-            "tier": facts.get("tier"), "score": facts.get("score"), "rank": facts.get("rank"),
-            "stages": facts.get("stages"), "near_miss": near, "name": facts.get("name"),
-            "board_height": facts.get("board_height"), "theme_heat": facts.get("theme_heat"),
-        }, index=facts.index).join(labels)
-        frame["obs"], frame["target"] = summary["observation"], summary["target"]
-        frame["regime"] = summary.get("regime")
-        frame["strategy_version"] = summary.get("strategy_version", "SF_R2_LEAN_V0")
+        if obs not in w["close"].index:
+            continue
+        group = facts["lm_group"] if "lm_group" in facts else pd.Series(index=facts.index, dtype=object)
+        lu_t = w["limit_up"].loc[obs].reindex(facts.index).fillna(False).astype(bool)
+        frame = pd.DataFrame({"group": group, "baseline": lu_t & facts.get("eligible", True),
+                              "name": facts.get("name")}, index=facts.index)
+        frame = frame[frame["group"].notna() | frame["baseline"]]
+        for k in METRICS + ["lu5"]:
+            frame[k] = out[k].loc[obs].reindex(frame.index)
+        frame["obs"], frame["target"] = obs, summary["target"]
+        frame["strategy_version"] = summary.get("strategy_version")
         frames.append(frame.rename_axis("code").reset_index())
-    return pd.concat(frames, ignore_index=True)
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
 
 
-def report(rows: pd.DataFrame, ret: str = outcomes.PRIMARY, cost: float = outcomes.DEFAULT_COST) -> dict:
-    mature = rows[rows["mature"] | rows[ret].notna()]
-    pending = rows[~rows.index.isin(mature.index)]
-    sel = mature[mature["cohort"] == "selected"].copy()
-    if len(sel) >= 5 and sel["score"].notna().any():
-        sel["score_q"] = pd.qcut(sel["score"].rank(method="first"), 5, labels=["Q1低", "Q2", "Q3", "Q4", "Q5高"])
-    else:
-        sel["score_q"] = "NA"
-    per_day = []
-    for target, part in sel.groupby("target"):
-        s = outcomes.stats(part, ret, cost)
-        per_day.append(dict(target=target, regime=part["regime"].iloc[0], **s))
-    detail = sel.sort_values(["target", "rank"])[["target", "rank", "code", "name", "tier", "score", "gap",
-                                                    "unbuyable", "r_oc", "r_n1o", "r_n1c", "r_n2c", "mfe2",
-                                                    "mae2", "limit_up_T", "broken_T"]]
-    curve = outcomes.equity(sel, ret, cost)
-    return dict(
-        pending_targets=sorted(pending["target"].unique().tolist()),
-        cohorts=outcomes.grouped(mature, "cohort", ret, cost),
-        tier=outcomes.grouped(sel, "tier", ret, cost),
-        stage=outcomes.grouped(sel, "stages", ret, cost),
-        regime=outcomes.grouped(sel, "regime", ret, cost),
-        score_q=outcomes.grouped(sel, "score_q", ret, cost),
-        per_day=pd.DataFrame(per_day).set_index("target") if per_day else pd.DataFrame(),
-        detail=detail, equity=curve, equity_summary=outcomes.summary_line(curve),
-    )
+def report(rows: pd.DataFrame) -> dict:
+    if rows.empty:
+        return dict(lists=0)
+    mature = rows[rows["out5"].notna()]
+    parts = {g: rows[rows["group"] == g] for g in ("leader", "ladder", "watch", "avoid")}
+    parts["baseline"] = rows[rows["baseline"]]
+    stats = pd.DataFrame({g: {**part[METRICS].mean().round(3).to_dict(), "n": len(part),
+                               "pending_out5": int(part["out5"].isna().sum())} for g, part in parts.items()}).T
+    base = mature[mature["baseline"]]
+    winners = base[base["lu5"] >= 3]
+    listed = winners["group"].notna()
+    return dict(lists=int(rows["obs"].nunique()), first=rows["obs"].min(), last=rows["obs"].max(),
+                stats=stats, recall=round(float(listed.mean()), 3) if len(winners) else None,
+                winners=len(winners), missed=winners.loc[~listed, ["obs", "code", "name"]].to_dict("records"))
 
 
-def save(result: dict, meta: dict) -> Path:
+def save(rows: pd.DataFrame, rep: dict) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = store.home() / "reviews" / stamp
     out.mkdir(parents=True, exist_ok=False)
-    for key, table in result.items():
-        if isinstance(table, pd.DataFrame) and not table.empty:
-            table.to_csv(out / f"{key}.csv", encoding="utf-8-sig")
-    (out / "meta.json").write_text(json.dumps(
-        {**meta, "pending_targets": result["pending_targets"], "equity_summary": result["equity_summary"]},
-        ensure_ascii=False, indent=2, default=str))
+    rows.to_csv(out / "rows.csv", index=False, encoding="utf-8-sig")
+    if "stats" in rep:
+        rep["stats"].to_csv(out / "stats.csv", encoding="utf-8-sig")
+    (out / "report.json").write_text(json.dumps({k: v for k, v in rep.items() if k != "stats"},
+                                                ensure_ascii=False, indent=2, default=str))
     return out

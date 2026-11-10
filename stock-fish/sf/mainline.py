@@ -1,53 +1,22 @@
-"""MAINLINE_LEADER: trade leaders of the market's main themes, exit when trading gets crowded.
+"""Mainlines (主线) and their leaders for 龙脉 V7 (docs/STRATEGY_LONGMAI_V7.md).
 
-Definitions (all computed from data visible at the signal-day close; entry at next open):
-
-Mainline themes (day t)
-  For every board that already existed on day t (index history start <= t):
-    lu      = members closing at limit-up (all A shares, board-specific limit ratio)
-    lu3     = lu summed over the last 3 sessions (persistence)
-    share   = members' turnover / whole-market turnover
-  Mainline = top K boards by (lu3, lu, share) with lu >= min_theme_limit_ups.
-
-Leader (day t), main-board eligible stocks only
-  - member of a mainline board
-  - relative turnover: market turnover rank <= amount_rank_max (all A shares), i.e. money concentrates here
-  - strong today: closed at limit-up, or ret1 >= 5% with CLV >= 0.7
-  - within its mainline board, rank <= leader_rank_max by (board height desc, turnover desc)
-
-Entry (target session open, auction-time filter)
-  skip if the open is at limit-up (no fill) or the open gap <= -3% (weak auction)
-
-Exit (decided at each close from the entry day on; executed at the next open)
-  BROKEN       touched limit-up but closed below (炸板)
-  CHURN        turnover >= churn_mult x prior-5-day average and ret1 <= 2% (放量滞涨, crowded)
-  TREND        close below MA(trend_ma); trend_ma=0 disables
-  THEME_FADE   the leader's best mainline board has lu < fade_ratio x its signal-day lu (退潮/分化)
-  STOP         close <= entry x (1 - stop_loss)
-  TIME         held max_hold sessions
+Mainline themes (day t), from all SSE/SZSE A shares with board-specific limit ratios:
+  z3 = binomial z of a board's 3-session limit-ups against the market's 3-session limit-up rate;
+  eligible boards have >= min_theme_lu3 limit-ups in 3 sessions, >= 1 today and >= 5 traded members;
+  boards are taken by z3, skipping one whose 3-session limit-up set overlaps the taken ones by
+  >= overlap_max, until top_k boards.
+Leaders, main-board eligible stocks only: strong today (limit-up, or +5% with CLV >= 0.7), member of a
+mainline, rank <= leader_rank_max inside it by (board height, turnover rate). 空间板: the tallest
+strong main-board stock(s) with >= space_min_height boards, whatever their theme.
 Point-in-time caveat: board membership is today's snapshot (see themes.py).
 """
 from __future__ import annotations
 
-from copy import deepcopy
-
 import numpy as np
 import pandas as pd
 
-from . import outcomes, store, strategy, themes
+from . import store
 
-VERSION = "SF_MAINLINE_LEADER_V1"
-DEFAULTS = dict(top_k=3, min_theme_limit_ups=3, amount_rank_max=100, leader_rank_max=2,
-                gap_min=-0.03, churn_mult=2.0, fade_ratio=0.34, stop_loss=0.07, max_hold=10, trend_ma=5)
-
-
-def params(overrides=None):
-    p = deepcopy(DEFAULTS)
-    p.update(overrides or {})
-    return p
-
-
-# ------------------------------------------------------------------ panels
 
 def a_share_panel(bars: pd.DataFrame) -> dict:
     """All SSE/SZSE A shares (incl. ChiNext/STAR) with board-specific limit ratios, for theme stats."""
@@ -67,14 +36,6 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
     w["amount"] = w["amount"].where(traded)
     w["turn"] = w["turn"].where(traded)
     return w
-
-
-def activity_rank(aw: dict, t: int) -> tuple[pd.Series, pd.Series]:
-    """Whole-market activity: mean of the percentile ranks of traded amount and turnover rate.
-    Returns (score in 0..1, rank with 1 = most active)."""
-    amount, turn = aw["amount"].iloc[t], aw["turn"].iloc[t]
-    score = (amount.rank(pct=True) + turn.rank(pct=True)) / 2
-    return score, score.rank(ascending=False, method="min")
 
 
 def theme_stats(aw: dict, boards: pd.DataFrame, members: pd.DataFrame) -> dict:
@@ -116,204 +77,61 @@ SPACE = "空间板"
 
 def mainlines(ts: dict, t: int, p: dict) -> list[str]:
     day = ts["lu"].index[t]
-    if p.get("mainline_mode") in ("concentration", "concentration3"):
-        frame = pd.DataFrame({"lu": ts["lu"].loc[day], "lu3": ts["lu3"].loc[day], "n": ts["n"].loc[day],
-                              "z": concentration(ts, t)}).dropna()
-        if p["mainline_mode"] == "concentration3":  # V6: eligibility over 3 sessions, dedupe on 3-session sets
-            frame = frame[(frame["lu3"] >= p["min_theme_lu3"]) & (frame["lu"] >= 1) & (frame["n"] >= 5)]
-            lu_today = ts["limit_up"].iloc[max(0, t - 2):t + 1].fillna(False).astype(bool).any() \
-                .reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
-        else:
-            frame = frame[(frame["lu"] >= p["min_theme_limit_ups"]) & (frame["n"] >= 5)]
-            lu_today = ts["limit_up"].iloc[t].reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
-        frame = frame.sort_values("z", ascending=False)
-        taken, covered = [], np.zeros(len(ts["cols"]), dtype=bool)
-        for board in frame.index:
-            members = (ts["M"][ts["names"].index(board)] > 0) & lu_today
-            if members.sum() == 0 or (members & covered).sum() >= p["overlap_max"] * members.sum():
-                continue
-            taken.append(board)
-            covered |= members
-            if len(taken) >= p["top_k"]:
-                break
-        return taken
-    frame = pd.DataFrame({"lu": ts["lu"].loc[day], "lu3": ts["lu3"].loc[day], "share": ts["share"].loc[day]}).dropna()
-    frame = frame[frame["lu"] >= p["min_theme_limit_ups"]]
-    return frame.sort_values(["lu3", "lu", "share"], ascending=False).head(p["top_k"]).index.tolist()
+    frame = pd.DataFrame({"lu": ts["lu"].loc[day], "lu3": ts["lu3"].loc[day], "n": ts["n"].loc[day],
+                          "z": concentration(ts, t)}).dropna()
+    frame = frame[(frame["lu3"] >= p["min_theme_lu3"]) & (frame["lu"] >= 1) & (frame["n"] >= 5)]
+    lu3_set = ts["limit_up"].iloc[max(0, t - 2):t + 1].fillna(False).astype(bool).any() \
+        .reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
+    taken, covered = [], np.zeros(len(ts["cols"]), dtype=bool)
+    for board in frame.sort_values("z", ascending=False).index:
+        members = (ts["M"][ts["names"].index(board)] > 0) & lu3_set
+        if members.sum() == 0 or (members & covered).sum() >= p["overlap_max"] * members.sum():
+            continue
+        taken.append(board)
+        covered |= members
+        if len(taken) >= p["top_k"]:
+            break
+    return taken
 
-
-# ------------------------------------------------------------------ signals
 
 def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd.DataFrame:
+    """Leader candidates (one row per code): mainline leaders plus the 空间板 class."""
     lines = mainlines(ts, t, p)
-    if not lines and not p.get("space_board"):
-        return pd.DataFrame()
-    day = w["close"].index[t]
-    amount_rank = aw["amount"].loc[day].rank(ascending=False)
-    use_turn = p.get("leader_key") == "turn"  # V4: turnover rate identifies, fixed amount threshold
-    use_activity = p.get("activity", False) and not use_turn
-    act_score, act_rank = activity_rank(aw, t) if use_activity else (None, None)
     turn_today = aw["turn"].iloc[t]
     turn_rank = turn_today.rank(ascending=False, method="min")
-    if use_turn:
-        amt_now = w["amount"].iloc[t]
-        amt3 = w["amount"].iloc[max(0, t - 2):t + 1].mean()
-        amount_ok = (amt_now >= p["amount_min"]) | (amt3 >= p["amount_min"])
     raw = {c: w[c].iloc[t] for c in ("close", "preclose", "high", "low", "amount")}
     ret1 = raw["close"] / raw["preclose"] - 1
     rng = raw["high"] - raw["low"]
     clv = ((raw["close"] - raw["low"]) / rng).where(rng > 0, 1.0)
-    limit_up = w["limit_up"].iloc[t].fillna(False).astype(bool)
-    strong = limit_up | ((ret1 >= 0.05) & (clv >= 0.7))
+    strong = w["limit_up"].iloc[t].fillna(False).astype(bool) | ((ret1 >= 0.05) & (clv >= 0.7))
     height = w["height"].iloc[t]
-    cols = list(ts["cols"])
+    ok_all = pool.reindex(height.index).fillna(False) & strong.reindex(height.index).fillna(False)
+    day = w["close"].index[t]
+
+    def row(code, board, board_lu, rank):
+        return dict(code=code, board=board, board_lu=board_lu, leader_rank=rank, height=int(height[code]),
+                    amount=float(raw["amount"][code]), turn=float(turn_today.get(code, np.nan)),
+                    turn_rank=float(turn_rank.get(code, np.nan)), ret1=float(ret1.get(code, np.nan)))
+
     rows = []
+    cols = list(ts["cols"])
     for board in lines:
-        member_codes = [cols[j] for j in np.flatnonzero(ts["M"][ts["names"].index(board)])]
-        index = pd.Index(member_codes).intersection(w["close"].columns)
+        index = pd.Index([cols[j] for j in np.flatnonzero(ts["M"][ts["names"].index(board)])]) \
+            .intersection(w["close"].columns)
+        index = index[ok_all.reindex(index).fillna(False).to_numpy(dtype=bool)]
         if not len(index):
             continue
-        cand = pd.DataFrame({"height": height.reindex(index), "amount": raw["amount"].reindex(index)})
-        cand["act"] = act_score.reindex(index) if use_activity else \
-            turn_today.reindex(index) if use_turn else cand["amount"]
-        # Rank only today's strong, eligible members: weak members can't be the leader.
-        cand = cand[pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)]
-        if p.get("threshold_first"):
-            cand = cand[amount_ok.reindex(cand.index).fillna(False)]
-        if cand.empty:
-            continue
-        cand["leader_rank"] = cand.sort_values(["height", "act"], ascending=False).assign(
-            r=range(1, len(cand) + 1))["r"]
-        if use_turn:
-            ok = amount_ok.reindex(cand.index).fillna(False) & (cand["leader_rank"] <= p["leader_rank_max"])
-        else:
-            gate_rank = act_rank if use_activity else amount_rank
-            ok = (gate_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
-        for code in cand.index[ok]:
-            rows.append(dict(code=code, board=board, board_lu=float(ts["lu"].loc[day, board]),
-                             leader_rank=int(cand.loc[code, "leader_rank"]), height=int(cand.loc[code, "height"]),
-                             amount=float(cand.loc[code, "amount"]), amount_rank=float(amount_rank.get(code, np.nan)),
-                             activity_rank=float(act_rank.get(code, np.nan)) if use_activity else np.nan,
-                             turn=float(turn_today.get(code, np.nan)),
-                             turn_rank=float(turn_rank.get(code, np.nan)),
-                             ret1=float(ret1.get(code, np.nan))))
-    if p.get("space_board"):  # V6: the market's tallest main-board stock, whatever its theme
-        ok_all = pool.reindex(height.index).fillna(False) & strong.reindex(height.index).fillna(False)
-        if use_turn:
-            ok_all &= amount_ok.reindex(height.index).fillna(False)
-        h = height[ok_all].dropna()
-        if len(h) and h.max() >= p["space_min_height"]:
-            top = h[h == h.max()].index
-            top = turn_today.reindex(top).sort_values(ascending=False).index[:2]
-            for code in top:
-                rows.append(dict(code=code, board=SPACE, board_lu=0.0, leader_rank=1, height=int(h[code]),
-                                 amount=float(raw["amount"][code]), amount_rank=float(amount_rank.get(code, np.nan)),
-                                 activity_rank=np.nan, turn=float(turn_today.get(code, np.nan)),
-                                 turn_rank=float(turn_rank.get(code, np.nan)), ret1=float(ret1.get(code, np.nan))))
+        cand = pd.DataFrame({"height": height.reindex(index), "act": turn_today.reindex(index)})
+        rank = cand.sort_values(["height", "act"], ascending=False).assign(r=range(1, len(cand) + 1))["r"]
+        for code in rank.index[rank <= p["leader_rank_max"]]:
+            rows.append(row(code, board, float(ts["lu"].loc[day, board]), int(rank[code])))
+    h = height[ok_all].dropna()
+    if len(h) and h.max() >= p["space_min_height"]:
+        top = turn_today.reindex(h[h == h.max()].index).sort_values(ascending=False).index[:2]
+        rows += [row(code, SPACE, 0.0, 1) for code in top]
     if not rows:
         return pd.DataFrame()
     frame = pd.DataFrame(rows)
     frame["space"] = frame["board"] == SPACE
     frame = frame.sort_values(["space", "board_lu", "leader_rank"], ascending=[False, False, True]).drop(columns="space")
     return frame.drop_duplicates("code").set_index("code")
-
-
-# ------------------------------------------------------------------ trade simulation
-
-def simulate(w: dict, ts: dict, t: int, code: str, board: str, board_lu: float, p: dict,
-             cost: float = outcomes.DEFAULT_COST) -> dict | None:
-    index = w["close"].index
-    e = t + 1  # entry session
-    if e >= len(index):
-        return None
-    o, pc = w["open"].iloc[e].get(code), w["preclose"].iloc[e].get(code)
-    if pd.isna(o) or pd.isna(pc) or not bool(w["traded"].iloc[e].get(code, False)):
-        return dict(status="NO_ENTRY", reason="SUSPENDED")
-    if bool(w["open_at_limit"].iloc[e].get(code, False)):
-        return dict(status="NO_ENTRY", reason="OPEN_AT_LIMIT")
-    gap = o / pc - 1
-    if gap <= p["gap_min"]:
-        return dict(status="NO_ENTRY", reason="WEAK_AUCTION", gap=gap)
-    adj, close = w["adj"][code], w["close"][code]
-    entry_adj = o * adj.iloc[e] / close.iloc[e]
-    turn = w["turn"][code]
-    for k in range(e, min(e + p["max_hold"], len(index))):
-        c_adj = adj.iloc[k]
-        reason = None
-        if bool(w["touched_up"].iloc[k].get(code, False)) and not bool(w["limit_up"].iloc[k].get(code, False)):
-            reason = "BROKEN"
-        elif turn.iloc[k] >= p["churn_mult"] * turn.iloc[max(0, k - 5):k].mean() and \
-                close.iloc[k] / w["preclose"][code].iloc[k] - 1 <= 0.02:
-            reason = "CHURN"
-        elif p["trend_ma"] and c_adj < adj.iloc[max(0, k - p["trend_ma"] + 1):k + 1].mean():
-            reason = "TREND"
-        elif ts["lu"].iloc[k].get(board, 0) < p["fade_ratio"] * board_lu:
-            reason = "THEME_FADE"
-        elif c_adj <= entry_adj * (1 - p["stop_loss"]):
-            reason = "STOP"
-        elif k == e + p["max_hold"] - 1:
-            reason = "TIME"
-        if reason:
-            if k + 1 >= len(index):
-                return dict(status="OPEN", gap=gap, held=k - e + 1)
-            x = w["open"][code].iloc[k + 1]
-            exit_adj = x * adj.iloc[k + 1] / close.iloc[k + 1]
-            return dict(status="CLOSED", gap=gap, held=k - e + 1, exit_reason=reason,
-                        ret=exit_adj / entry_adj - 1 - cost, exit_date=index[k + 1])
-    return dict(status="OPEN", gap=gap)
-
-
-def backtest(p: dict | None = None, start: str | None = None, end: str | None = None, log=print,
-             cache: dict | None = None) -> pd.DataFrame:
-    """One row per signal (incl. skipped entries) with trade outcome."""
-    p = params(p)
-    cache = cache if cache is not None else {}
-    if "w" not in cache:
-        loaded = themes.load()
-        if loaded is None:
-            raise FileNotFoundError("theme data missing; run `sf themes` first")
-        stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
-        bars = store.load_window(stored)
-        cache["w"] = strategy.panel(bars)
-        aw = a_share_panel(bars)
-        cache["ts"] = theme_stats(aw, *loaded)
-        cache["aw"] = aw
-        cache["basic"] = store.stock_basic()
-        cache["calendar"] = store.calendar()
-        cache["pools"] = {}
-    w, aw, ts = cache["w"], cache["aw"], cache["ts"]
-    rows = []
-    sp = strategy.params()
-    for t in range(strategy.MIN_HISTORY, len(w["close"].index) - 1):
-        day = w["close"].index[t]
-        if (start and day < start) or (end and day > end):
-            continue
-        if t not in cache["pools"]:
-            cache["pools"][t] = strategy.eligible(w, cache["basic"], cache["calendar"], t, sp)
-        sig = signals(w, aw, ts, cache["pools"][t], t, p)
-        for code, s in sig.iterrows():
-            trade = simulate(w, ts, t, code, s["board"], s["board_lu"], p) or {}
-            rows.append(dict(obs=day, code=code, **s.to_dict(), **trade))
-    return pd.DataFrame(rows)
-
-
-def summarize(trades: pd.DataFrame, split=(0.6, 0.8)) -> dict:
-    closed = trades[trades.get("status") == "CLOSED"] if not trades.empty else trades
-    if closed.empty:
-        return dict(trades=0)
-    days = sorted(trades["obs"].unique())
-    c1, c2 = days[int(len(days) * split[0])], days[int(len(days) * split[1])]
-    seg = np.select([closed["obs"] < c1, closed["obs"] < c2], ["train", "test1"], "test2")
-    daily = closed["ret"].groupby([seg, closed["obs"]]).mean()
-    out = dict(signals=len(trades), trades=len(closed),
-               no_entry=trades["status"].eq("NO_ENTRY").mean().round(3),
-               avg=round(closed["ret"].mean(), 4), hit=round((closed["ret"] > 0).mean(), 3),
-               payoff=round(closed.loc[closed.ret > 0, "ret"].mean() / -closed.loc[closed.ret <= 0, "ret"].mean(), 2),
-               held=round(closed["held"].mean(), 1))
-    for name in ("train", "test1", "test2"):
-        x = daily[name] if name in daily.index.get_level_values(0) else pd.Series(dtype=float)
-        out[f"{name}_days"] = len(x)
-        out[f"{name}_avg"] = round(x.mean(), 4) if len(x) else np.nan
-        out[f"{name}_t"] = round(x.mean() / x.std(ddof=1) * np.sqrt(len(x)), 2) if len(x) > 2 else np.nan
-    out["exit_mix"] = closed["exit_reason"].value_counts(normalize=True).round(2).to_dict()
-    return out

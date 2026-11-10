@@ -280,8 +280,8 @@ def wide(bars: pd.DataFrame, numeric: tuple[str, ...], flags: dict[str, str] | N
     """Session x code frames from long bars in one pass (numpy scatter instead of repeated pivots).
     numeric: float columns; flags: {name: column} turned into `column == "1"` booleans.
     Missing (date, code) cells are NaN / False, exactly like DataFrame.pivot."""
-    dates, di = np.unique(bars["date"].to_numpy(dtype=str), return_inverse=True)
-    codes, ci = np.unique(bars["code"].to_numpy(dtype=str), return_inverse=True)
+    di, dates = pd.factorize(bars["date"], sort=True)
+    ci, codes = pd.factorize(bars["code"], sort=True)
     index, columns = pd.Index(dates, name="date"), pd.Index(codes, name="code")
     out = {}
     for col in numeric:

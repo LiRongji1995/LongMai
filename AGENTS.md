@@ -8,7 +8,7 @@ security platform work.
 ## Entry points
 
 - **Primary:** the lean CLI `sf` (`stock-fish/sf/`, wrapper `bin/sf`). See [USER_GUIDE](USER_GUIDE.md).
-- **Legacy:** the R2/qlib pipeline and strategy versions V1–V6 code were removed from `main` on
+- **Legacy:** the R2/qlib pipeline, the next-open backtests and the V1–V6 specs and code were removed from `main` on
   2026-11-10; they are preserved at git tag `legacy-r2`.
 
 ## Three invariants (non-negotiable)

@@ -5,7 +5,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from sf import mainline, outcomes, research, strategy
+from sf import evaluate, listing, review, store, strategy
 
 DAYS = [f"2026-01-{d:02d}" for d in range(1, 31)] + [f"2026-02-{d:02d}" for d in range(1, 11)]
 
@@ -102,67 +102,46 @@ def test_low_turnover_fails_r2_participation():
     assert bool(f.loc["sh.600001", "r1_match"]) and not bool(f.loc["sh.600001", "r2_selected"])
 
 
-# ------------------------------------------------------------------ outcomes
+# ------------------------------------------------------------------ wide panels
 
-def test_outcomes_entry_at_open_and_pending():
+def test_wide_matches_pivot_including_missing_cells():
+    bars = make_bars({"sh.600001": flat(), "sz.000001": flat(price=5.0)})
+    bars = bars.drop(bars.index[(bars.code == "sz.000001") & (bars.date == DAYS[3])])
+    bars.loc[bars.index[0], "isST"] = "1"
+    w = store.wide(bars, ("close", "amount"), {"st": "isST"})
+    ref = bars.pivot(index="date", columns="code", values="close").sort_index()
+    pd.testing.assert_frame_equal(w["close"], ref, check_names=False)
+    assert np.isnan(w["close"].loc[DAYS[3], "sz.000001"]) and not w["st"].loc[DAYS[3], "sz.000001"]
+    assert w["st"].iloc[0, 0] and w["st"].to_numpy().sum() == 1
+
+
+# ------------------------------------------------------------------ entry-free outcomes
+
+def test_stock_outcomes_from_close_and_pending():
     closes = flat()
-    bars = make_bars({"sh.600001": closes, "sh.600002": closes})
-    target = DAYS[-3]
-    bars.loc[(bars.code == "sh.600001") & (bars.date == target), "open"] = 10.2
-    bars.loc[(bars.code == "sh.600001") & (bars.date == DAYS[-2]), ["open", "close", "high"]] = [10.71, 10.5, 10.71]
-    bars.loc[(bars.code == "sh.600001") & (bars.date == DAYS[-1]), "preclose"] = 10.5
-    bars.loc[(bars.code == "sh.600002") & (bars.date == target), ["open", "high"]] = 11.0  # opens at limit
+    closes[-5:] = [11.0, 12.1, 13.31, 12.0, 11.0]   # three limit-ups after DAYS[-6], then down
+    bars = make_bars({"sh.600001": closes, "sh.600002": flat()})
     w = strategy.panel(bars)
-    lab = outcomes.label(w, target, ["sh.600001", "sh.600002"])
-    assert lab.loc["sh.600001", "r_n1o"] == pytest.approx(10.71 / 10.2 - 1)
-    assert not lab.loc["sh.600001", "unbuyable"] and lab.loc["sh.600002", "unbuyable"]
-    pending = outcomes.label(w, DAYS[-1], ["sh.600001"])
-    assert np.isnan(pending.loc["sh.600001", "r_n1o"]) and not pending.loc["sh.600001", "mature"]
+    out = evaluate.stock_outcomes(w)
+    t = DAYS[-6]
+    assert out["lu1"].loc[t, "sh.600001"] == 1.0 and out["lu5"].loc[t, "sh.600001"] == 3
+    assert out["max3"].loc[t, "sh.600001"] == pytest.approx(0.331)
+    assert out["out5"].loc[t, "sh.600001"] == 1.0 and out["out5"].loc[t, "sh.600002"] == 0.0
+    assert out["bigloss1"].loc[DAYS[-3], "sh.600001"] == 1.0          # 13.31 -> 12.0 is -9.8%
+    assert np.isnan(out["out5"].loc[DAYS[-2], "sh.600001"])           # outcomes not yet known: pending
 
 
-def test_stats_exclude_unbuyable_and_apply_cost():
-    frame = pd.DataFrame({"unbuyable": [False, False, True], "r_n1o": [0.02, -0.01, 0.10],
-                          "limit_up_T": [False] * 3, "broken_T": [False] * 3, "mae2": [0.0] * 3})
-    s = outcomes.stats(frame, cost=0.0)
-    assert s["buyable"] == 2 and s["avg"] == pytest.approx(0.005) and s["hit_rate"] == pytest.approx(0.5)
-
-
-# ------------------------------------------------------------------ research
-
-def test_research_day_level_statistics():
-    rows = []
-    for i, day in enumerate(DAYS):
-        for j in range(5):  # five correlated stocks per day count as one day
-            rows.append(dict(obs=day, code=f"c{j}", flag=True, unbuyable=False, r_n1c=0.01 + 0.001 * (i % 3)))
-    data = pd.DataFrame(rows)
-    out = research.evaluate(data, "flag", ret="r_n1c", cost=0.0)
-    assert out["train_days"] + out["test1_days"] + out["test2_days"] == len(DAYS)
-    assert out["train_avg"] > 0.0
-
-
-# ------------------------------------------------------------------ mainline
-
-def test_mainline_trade_exits_on_trend_break():
-    n = len(DAYS)
-    leader = flat()
-    leader[-8:] = [11.0, 12.1, 13.31, 14.64, 14.0, 13.0, 12.0, 11.5]
-    bars = make_bars({"sh.600001": leader, "sh.600002": flat()})
-    entry_day = DAYS[n - 5]
-    bars.loc[(bars.code == "sh.600001") & (bars.date == entry_day), ["open", "low"]] = 13.6
-    w = strategy.panel(bars)
-    ts = {"lu": pd.DataFrame({"T": [5.0] * n}, index=DAYS)}
-    t = n - 6  # signal on the 3rd limit-up day, entry next open
-    trade = mainline.simulate(w, ts, t, "sh.600001", "T", 5.0, mainline.params(), cost=0.0)
-    assert trade["status"] == "CLOSED"
-    assert trade["exit_reason"] in ("TREND", "STOP")
-    assert trade["ret"] < 0.10
-
-
-def test_mainline_skips_open_at_limit():
-    leader = flat()
-    leader[-3:] = [11.0, 12.1, 13.31]
-    bars = make_bars({"sh.600001": leader})
-    w = strategy.panel(bars)
-    ts = {"lu": pd.DataFrame({"T": [5.0] * len(DAYS)}, index=DAYS)}
-    trade = mainline.simulate(w, ts, len(DAYS) - 3, "sh.600001", "T", 5.0, mainline.params())
-    assert trade == {"status": "NO_ENTRY", "reason": "OPEN_AT_LIMIT"}
+def test_saved_runs_and_review_recall(tmp_path, monkeypatch):
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    assert listing.latest_run() is None and listing.all_runs() == []
+    run = tmp_path / "lists" / "2026-02-10" / "20260209T120000Z"
+    run.mkdir(parents=True)
+    (run.parent / "LATEST").write_text(run.name)
+    assert listing.latest_run() == run and listing.all_runs() == []   # no fact table yet
+    rows = pd.DataFrame({"code": ["a", "b", "c"], "group": ["leader", None, "ladder"],
+                         "baseline": [True, True, False], "name": ["A", "B", "C"],
+                         "lu1": [1.0, 0.0, 0.0], "max3": [0.3, 0.0, 0.1], "out5": [1.0, 1.0, 0.0],
+                         "bigloss1": [0.0, 0.0, 1.0], "lu5": [3, 4, 0], "obs": "2026-02-09"})
+    rep = review.report(rows)
+    assert rep["winners"] == 2 and rep["recall"] == 0.5 and rep["missed"][0]["name"] == "B"
+    assert rep["stats"].loc["leader", "lu1"] == 1.0 and rep["stats"].loc["baseline", "n"] == 2

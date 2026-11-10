@@ -32,8 +32,9 @@ LABELS = {"lu_count": "涨停家数", "promo_rate": "晋级率", "max_height": "
           "big_loss": "大面家数", "ld_count": "跌停家数", "broken_prem": "炸板股次日表现弱", "up_ratio": "上涨家数少"}
 
 
-def table(w: dict, aw: dict, window: int = 250) -> pd.DataFrame:
-    ind = mood.indicators(w)
+def table(w: dict, aw: dict, window: int = 250, ind: pd.DataFrame | None = None) -> pd.DataFrame:
+    """`ind`: precomputed `mood.indicators(w)` (or `mood.table(w)`, which contains them) to skip the recompute."""
+    ind = (mood.indicators(w) if ind is None else ind)[[k for k in HEAT + PAIN if k != "spec_share"]].copy()
     ind["spec_share"] = crowding.spec_share(aw).reindex(ind.index)
     pct = ind.rolling(window, min_periods=60).rank(pct=True)
     oriented = pct.copy()
