@@ -1,3 +1,13 @@
+# 2026-11-10 龙脉 V5 backtest (rule proxy) — negative over the full history, positive in test2
+
+- 840 trades (190 crowded, 248 vetoed), −0.60% per trade after 0.15% cost, hit 37.9%, payoff 1.40;
+  train / test1 / test2 −1.23% (t −2.6) / −0.48% (t −0.7) / +1.10% (t 1.0). By year 2022 −1.6%,
+  2023 −2.0%, 2024 +0.2%, 2025 −0.6%, 2026 +1.2%. Run: `backtests/SF_LONGMAI_V5-20261110T131844Z`.
+- Robustness: every neighbour negative over the full history (best: top_k 4 −0.19%, max_hold 5
+  −0.18%); test2 positive for 23 of 25 neighbours. Not re-selected.
+- Exits: theme fade 46%, failed limit-up 26%, churn 22%. Relative crowding blocks far fewer leaders
+  than V4's absolute line (190 vs 1402).
+
 # 2026-11-10 龙脉 V5 code; theme radar, high-flyers, attribution; human-only wording
 
 - The system never trades: the list shows candidates ("候选（由你决定）") and a rule position cap; the
