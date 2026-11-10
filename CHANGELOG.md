@@ -1,3 +1,28 @@
+# 2026-11-10 Entry-free evaluation (`sf/evaluate.py`): screening hit rates and temperature calls
+
+Next-open P&L backtests are dropped: the person trading enters intraday (auction, 分时 pullbacks,
+order book), so the system is judged on whether its picks broke out and its temperature calls came
+true. Segments as before (cuts 2025-02-06 / 2025-12-17).
+
+- Screening (V6 rules replayed daily; baseline = all main-board limit-ups that day):
+  - candidates: 5-session breakout (≥ 2 limit-ups or +20% high) 27.7 / 32.3 / 30.9% vs baseline 25.1 / 24.1
+    / 20.6%; next-day 大面 30 / 28 / 27% vs 16 / 15 / 16% (higher beta both ways);
+  - crowded flag works: next-day limit-up 8 / 8 / 3%, breakout 10 / 15 / 6%;
+  - vetoed (near severe abnormal) are the strongest and the most dangerous: next-day limit-up 45 / 35 / 24%,
+    大面 45 / 58 / 38%;
+  - recall: only 8–9% of realized 妖股 (≥ 3 limit-ups in the next 5 sessions) were listed the day before.
+    75% of them were outside the top-3 mainlines, 52% outside the theme radar, 52% were first boards.
+    Height is the strongest marker (winner rate 首板 4.9%, 2板 12.2%, 3板 18.0%, 4板+ 20.6%); all 2板+
+    stocks (~12 per day) hold 48% of the winners. The 5亿 amount threshold removes winners: among 2板+,
+    below-threshold winner rate 20 / 20 / 17% vs above 12 / 11 / 7.5%.
+- Temperature: the SF_MOOD_V1 phase nodes mostly fail against real outcomes (next-day profit / loss effect
+  = limit-up premium and 大面 count versus their trailing 250-day medians). Only 退潮 is consistently
+  (modestly) right. New two-axis reading: heat (limit-ups, promotion rate, max height, short-term share)
+  and pain (大面, limit-downs, weak failed-board premium, low up ratio). Next-day loss-effect rate by cell
+  (train / test1 / test2): 热痛 54 / 50 / 57%, 热顺 38 / 41 / 46%, 冷痛 24 / 41 / 51%, 冷顺 17 / 17 / 27%
+  (base 33 / 37 / 48%). Combined stress top quintile 55 / 40 / 66% vs bottom 16 / 17 / 33%.
+  Indicator signs were chosen on train; the test segments were inspected before.
+
 # 2026-11-10 龙脉 V6 backtest (rule proxy) — negative; the 空间板 class is the cause
 
 - Spec `docs/STRATEGY_LONGMAI_V6.md` (commit d13642e), code 75adb86. 738 trades, −1.54% per trade;

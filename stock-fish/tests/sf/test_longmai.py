@@ -206,3 +206,10 @@ def test_v6_three_session_mainlines_and_space_board():
     sig = mainline.signals(w, aw, ts2, pd.Series(True, index=cs), 2, p6)
     assert list(sig.index) == ["sh.600001"] and sig.loc["sh.600001", "board"] == mainline.SPACE
     assert mainline.signals(w, aw, ts2, pd.Series(True, index=cs), 2, dict(p6, space_min_height=7)).empty
+
+
+def test_evaluate_nodes():
+    from sf import evaluate
+    level = pd.Series([0.1, 0.3, 0.3, 0.6, 0.6, 0.9, None])
+    direction = pd.Series([0.1, -0.1, 0.1, 0.1, -0.1, 0.0, 0.1])
+    assert evaluate.nodes(level, direction).tolist() == ["冰点", "退潮", "升温", "升温", "分歧", "高潮", ""]
