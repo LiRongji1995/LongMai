@@ -132,7 +132,9 @@ def cmd_premarket(args) -> int:
     path = premarket.save(result)
     picks = result["picks"].head(args.limit)
     m = result["risk"]["mood"]
-    print(f"盘前清单  {result['observation']} → {result['target']}   情绪{m['tier']}档（分位 {m['level']}）：{m['advice']}")
+    g = result["risk"].get("regulation", {})
+    print(f"盘前清单  {result['observation']} → {result['target']}   情绪{m['tier']}档（分位 {m['level']}）：{m['advice']}"
+          f"   监管温度{g.get('tier', '?')}（深市周处置 {g.get('szse_cases', '-')} 起）")
     if args.detail:
         s = result["sentiment"]
         print(f"涨停{s['limit_up']} 跌停{s['limit_down']} 炸板率{s['broken_rate']} 最高{s['max_height']}板 "

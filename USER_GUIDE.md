@@ -43,9 +43,14 @@ they rank days/stocks consistently; none of them makes buying profitable on its 
   day (two-session lag).
 - **Abnormal volatility (`SF_ABNORMAL_V1`)**: 3-session cumulative deviation against the exchange
   benchmark, restarting after each trigger. Checked against the actual LHB listing reasons
-  (2022-03 → 2023-11): precision 81%, recall 74%. The thresholds are configurable; the stricter
-  real-time monitoring rules (abnormal-trading warnings, account restrictions, key monitoring of
-  severely volatile stocks) are being researched and are not modelled yet.
+  (2022-03 → 2023-11): precision 81%, recall 74%. Severe abnormal volatility (main board: 4 triggers
+  in 10 sessions, or 10-day +100%, or 30-day +200%) is flagged with the distance to the trigger and the
+  10-session window after it, when the exchanges may halve the monitoring thresholds.
+- **Regulatory temperature**: SZSE weekly abnormal-trading cases per unit of market turnover, as a
+  percentile of the last 52 reports; updated automatically by `sf premarket`. Rules, thresholds and
+  enforcement history: [docs/REGULATION_NOTES.md](docs/REGULATION_NOTES.md). Order-level rules (resting
+  limit-up orders, 3-minute price pushes, the 1-minute 10M yuan rule after severe volatility) need
+  order-book data and are not modelled.
 
 ## Review: did the lists work?
 

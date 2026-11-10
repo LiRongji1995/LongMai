@@ -9,3 +9,4 @@ baostock==0.9.3
 pandas==3.1.1
 numpy==2.5.4
 pyarrow==26.0.1
+pypdf==7.0.0

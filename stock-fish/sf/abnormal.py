@@ -105,3 +105,29 @@ def trigger3(dev: pd.DataFrame, threshold: float = 0.20) -> tuple[pd.DataFrame, 
         room[t] = threshold - (a2 + a1)
     mk = lambda x: pd.DataFrame(x, index=dev.index, columns=dev.columns)
     return mk(cum), mk(trig), mk(room)
+
+
+SEVERE = dict(main=dict(events=4, dev10=1.00, dev30=2.00), wide=dict(events=3, dev10=1.00, dev30=2.00))
+
+
+def severe(dev: pd.DataFrame, trig: pd.DataFrame, window: int = 10) -> dict:
+    """Severe abnormal volatility (严重异常波动), upward side.
+
+    Main board: 4 three-day triggers within 10 sessions, or 10-session cumulative deviation >= +100%,
+    or 30-session >= +200%; ChiNext/STAR: 3 triggers (same deviation thresholds). Rules from the SSE/SZSE
+    trading rules (see stockfish-data/research/regulation_notes.md, section 2).
+
+    Returns frames: events10 (triggers in the last 10 sessions), dev10, dev30, flag, days_since
+    (sessions since the last flag; NaN if none), events_left / dev10_left (distance to the trigger).
+    """
+    d = dev.fillna(0.0)
+    wide_board = dev.columns.str[3:].str.startswith(("30", "68"))
+    need = pd.Series(np.where(wide_board, SEVERE["wide"]["events"], SEVERE["main"]["events"]), index=dev.columns)
+    events10 = trig.astype(int).rolling(window, min_periods=1).sum()
+    dev10 = d.rolling(10, min_periods=1).sum()
+    dev30 = d.rolling(30, min_periods=1).sum()
+    flag = events10.ge(need, axis=1) | (dev10 >= SEVERE["main"]["dev10"] - 1e-9) | (dev30 >= SEVERE["main"]["dev30"] - 1e-9)
+    pos = pd.DataFrame(np.arange(len(dev))[:, None].repeat(dev.shape[1], 1), index=dev.index, columns=dev.columns)
+    last = pos.where(flag).ffill()
+    return dict(events10=events10, dev10=dev10, dev30=dev30, flag=flag, days_since=pos - last,
+                events_left=(-events10).add(need, axis=1), dev10_left=SEVERE["main"]["dev10"] - dev10)

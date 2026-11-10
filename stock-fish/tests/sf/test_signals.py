@@ -117,3 +117,24 @@ def test_one_listing_per_stock_day_and_institutions_kept():
     three = rows.assign(trade_id="3d", reason="连续三个交易日内，涨幅偏离值累计达到20%的证券")
     kept = seats.stock_seat_rows(pd.concat([rows, three], ignore_index=True))
     assert len(kept) == 2 and set(kept["trade_id"]) == {"day"}
+
+
+def test_severe_flag_by_events_and_deviation():
+    # main board: four 3-day triggers within 10 sessions -> severe
+    trig = pd.DataFrame({"sh.600001": [True, False, False, True, False, False, True, False, False, True]},
+                        index=DAYS[:10])
+    dev = pd.DataFrame({"sh.600001": [0.0] * 10}, index=DAYS[:10])
+    sv = abnormal.severe(dev, trig)
+    assert sv["flag"]["sh.600001"].tolist() == [False] * 9 + [True]
+    assert sv["events_left"]["sh.600001"].iloc[8] == 1
+    big = pd.DataFrame({"sz.000001": [0.1] * 10}, index=DAYS[:10])
+    sv2 = abnormal.severe(big, big * 0 > 1)
+    assert bool(sv2["flag"]["sz.000001"].iloc[-1]) and sv2["days_since"]["sz.000001"].iloc[-1] == 0
+
+
+def test_parse_szse_weekly_text():
+    from sf import regulation
+    text = "一、市场交易监管动态 本周共对 87 起证券异常交易行为采取了自律监管措施，对 3 起上市公司重大事项进行核查，" \
+           "上报证监会 2 起。二、会员监管动态"
+    row = regulation.parse_szse(text)
+    assert row["abnormal_trading_measures"] == 87 and row["company_matters_checked"] == 3 and row["csrc_clues"] == 2

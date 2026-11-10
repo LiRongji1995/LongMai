@@ -1,3 +1,20 @@
+# 2026-11-10 Exchange monitoring rules and regulatory temperature
+
+- `docs/REGULATION_NOTES.md`: SSE/SZSE abnormal-trading real-time monitoring rules (2023 versions, still
+  current), severe-abnormal-volatility definitions, measures ladder, weekly supervision reports and dated
+  enforcement episodes, with source grades ([P] primary, [S] secondary, [?] unverified).
+- `abnormal.severe`: severe abnormal volatility (4 three-day triggers in 10 sessions on the main board,
+  3 on ChiNext/STAR; 10-day +100%; 30-day +200%), distance to the trigger and days since the last one.
+- `sf/regulation.py`: regulatory temperature = SZSE weekly abnormal-trading cases per unit of market
+  turnover, percentile over the last 52 reports, usable from the first session after publication; the
+  weekly report is fetched and parsed automatically (`pypdf`).
+- Out-of-sample (per day, next-open entry, sell at the following open):
+  - Limit-ups with high vs low regulatory temperature: −1.20% / −1.15% / −1.23% vs
+    −0.92% / −0.52% / −0.75% (train / test1 / test2).
+  - Limit-ups within 30% of the 10-day severe trigger: −2.72% / −1.99% / −1.50% (all limit-ups:
+    −1.11% / −0.75% / −0.71%).
+  - Both are added to the risk notes; neither makes a buy rule positive.
+
 # 2026-11-10 LHB seats, sentiment switch, abnormal-volatility status
 
 - `sf seats`: full LHB seat detail since 2022-03 (1,127 sessions, Eastmoney datacenter, two requests

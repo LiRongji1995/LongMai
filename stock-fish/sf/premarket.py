@@ -71,10 +71,12 @@ def build(observation: str | None = None, weights: dict | None = None) -> dict:
     picks = facts[facts["r2_selected"]].sort_values(["tier", "score"], ascending=[True, False]).copy()
     picks["rank"] = range(1, len(picks) + 1)
     picks["plan"] = picks.apply(ranking.plan, axis=1)
-    ctx = risk.context(observation, picks.index)
+    ctx = risk.context(observation, picks.index, target=target)
     notes = ctx.pop("notes")
     picks["risk"] = notes.reindex(picks.index).fillna("")
     mood_note = f"情绪{ctx['mood']['tier']}档：{ctx['mood']['advice']}"
+    if ctx["regulation"]["tier"] == "高":
+        mood_note += "；监管温度高(接力历史更差)"
     picks["plan"] = picks["plan"] + "｜" + mood_note + picks["risk"].map(lambda x: f"；{x}" if x else "")
     facts["rank"] = picks["rank"].reindex(facts.index)
     return dict(
