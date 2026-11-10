@@ -10,8 +10,7 @@ Comparable (adjusted) prices are reconstructed by chaining the exchange `preclos
 adj_t / adj_{t-1} = close_t / preclose_t, which is exact across ex-rights events without
 adjustment-factor downloads. Same-day facts (CLV, limit events) use RAW OHLC and RAW preclose.
 
-Default thresholds equal the frozen config/short_horizon_strength_r1.yaml and _r2.yaml
-(unvalidated initial hypotheses).
+Default thresholds are the original R1/R2 hypotheses (unvalidated); the stage tags are descriptive only.
 """
 from __future__ import annotations
 
@@ -56,13 +55,12 @@ def _round_price(value):
 
 def panel(bars: pd.DataFrame) -> dict[str, pd.DataFrame]:
     """Wide (session x code) frames for main-board stocks."""
+    from .store import wide as _wide
     bars = bars[is_main_board(bars["code"])]
-    wide = {c: bars.pivot(index="date", columns="code", values=c).sort_index()
-            for c in ("open", "high", "low", "close", "preclose", "amount", "turn", "volume")}
-    wide["st"] = (bars.pivot(index="date", columns="code", values="isST").sort_index() == "1")
+    wide = _wide(bars, ("open", "high", "low", "close", "preclose", "amount", "turn", "volume"),
+                 {"st": "isST", "_status": "tradestatus"})
     present = wide["close"].notna()
-    status = bars.pivot(index="date", columns="code", values="tradestatus").sort_index()
-    traded = (status == "1") & (wide["volume"] > 0) & (wide["close"] > 0) & (wide["preclose"] > 0)
+    traded = wide.pop("_status") & (wide["volume"] > 0) & (wide["close"] > 0) & (wide["preclose"] > 0)
     # Suspended-but-present rows carry no price change. Absent rows (not listed yet / missing) are
     # masked to NaN so any window touching them is unknown, without poisoning later sessions.
     step = (wide["close"] / wide["preclose"]).where(traded, 1.0)

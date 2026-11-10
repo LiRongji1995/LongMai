@@ -56,9 +56,8 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
     keep = (code.str.startswith("sh.") & num.str.startswith(("60", "68"))) | \
            (code.str.startswith("sz.") & num.str.startswith(("00", "30")))
     bars = bars[keep]
-    w = {c: bars.pivot(index="date", columns="code", values=c).sort_index()
-         for c in ("close", "preclose", "amount", "volume", "turn")}
-    st = bars.pivot(index="date", columns="code", values="isST").sort_index() == "1"
+    w = store.wide(bars, ("close", "preclose", "amount", "volume", "turn"), {"_st": "isST"})
+    st = w.pop("_st")
     cols = w["close"].columns
     wide_board = pd.Series(cols.str[3:].str.startswith(("30", "68")), index=cols)
     ratio = np.where(wide_board.to_numpy()[None, :], 0.20, np.where(st, 0.05, 0.10))
@@ -66,7 +65,7 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
     traded = (w["volume"] > 0) & (w["close"] > 0)
     w["limit_up"] = traded & (w["close"] >= up - 1e-9)
     w["amount"] = w["amount"].where(traded)
-    w["turn"] = w["turn"].apply(pd.to_numeric, errors="coerce").where(traded)
+    w["turn"] = w["turn"].where(traded)
     return w
 
 

@@ -17,6 +17,7 @@ import time
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 
+import numpy as np
 import pandas as pd
 
 SH = timezone(timedelta(hours=8))
@@ -273,3 +274,22 @@ def stock_basic() -> pd.DataFrame:
         with BaoStock() as bao:
             _retry(bao.stock_basic).to_parquet(path, index=False)
     return pd.read_parquet(path)
+
+
+def wide(bars: pd.DataFrame, numeric: tuple[str, ...], flags: dict[str, str] | None = None) -> dict[str, pd.DataFrame]:
+    """Session x code frames from long bars in one pass (numpy scatter instead of repeated pivots).
+    numeric: float columns; flags: {name: column} turned into `column == "1"` booleans.
+    Missing (date, code) cells are NaN / False, exactly like DataFrame.pivot."""
+    dates, di = np.unique(bars["date"].to_numpy(dtype=str), return_inverse=True)
+    codes, ci = np.unique(bars["code"].to_numpy(dtype=str), return_inverse=True)
+    index, columns = pd.Index(dates, name="date"), pd.Index(codes, name="code")
+    out = {}
+    for col in numeric:
+        arr = np.full((len(dates), len(codes)), np.nan)
+        arr[di, ci] = pd.to_numeric(bars[col], errors="coerce").to_numpy(dtype=float)
+        out[col] = pd.DataFrame(arr, index=index, columns=columns)
+    for name, col in (flags or {}).items():
+        arr = np.zeros((len(dates), len(codes)), dtype=bool)
+        arr[di, ci] = (bars[col].astype(str) == "1").to_numpy()
+        out[name] = pd.DataFrame(arr, index=index, columns=columns)
+    return out
