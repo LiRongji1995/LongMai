@@ -337,9 +337,10 @@ def dataset(min_events: int = 10, log=print) -> tuple[pd.DataFrame, pd.DataFrame
 
 
 def skill_table(log=print) -> pd.DataFrame:
-    """Point-in-time seat skill, cached per last captured seat session."""
-    last = captured_days()[-1]
-    path = store.home() / "research" / f"seat_skill-{last}.parquet"
+    """Point-in-time seat skill, cached per (last captured seat session, number of captured sessions), so a
+    backfill of earlier sessions invalidates the cache."""
+    days = captured_days()
+    path = store.home() / "research" / f"seat_skill-{days[-1]}-n{len(days)}.parquet"
     if path.exists():
         return pd.read_parquet(path)
     path.parent.mkdir(parents=True, exist_ok=True)

@@ -43,8 +43,8 @@ def components() -> dict:
 def build(sessions: list[str]) -> dict:
     home = store.home()
     inputs = {rel: store.archive(home / rel) for rel in ARCHIVED}
-    skill = sorted((home / "research").glob("seat_skill-*.parquet"))
-    inputs["seat_skill"] = None if not skill else f"{skill[-1].name}:{store.file_id(skill[-1])}"
+    skill = sorted((home / "research").glob("seat_skill-*.parquet"), key=lambda f: f.stat().st_mtime)
+    inputs["seat_skill"] = None if not skill else f"{skill[-1].name}:{store.file_id(skill[-1])}"  # latest written
     return dict(code=code_version(), **components(), inputs=inputs,
                 bars=dict(first=sessions[0] if sessions else None, last=sessions[-1] if sessions else None,
                           sessions=len(sessions)))
