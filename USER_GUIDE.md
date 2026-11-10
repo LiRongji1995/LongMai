@@ -1,14 +1,14 @@
-# 使用说明 — `sf` 命令行
+# 龙脉使用说明 — `sf` 命令行
 
-`sf` 是日常使用的工具。可以在任何目录通过包装脚本运行：
+`sf` 是龙脉的日常工具。可以在任何目录通过包装脚本运行：
 
 ```sh
-stockfish-qlib-quant-system/bin/sf <命令>
+<仓库目录>/bin/sf <命令>
 ```
 
 包装脚本使用仓库旁边的 Python 环境 `../stockfish-env`（可用 `SF_PYTHON` 覆盖）。数据放在
 `../stockfish-data`（可用 `SF_HOME` 覆盖）。建议加一个别名，例如
-`alias sf=/path/to/stockfish-qlib-quant-system/bin/sf`。
+`alias sf=/path/to/<仓库目录>/bin/sf`。
 
 系统从不交易。清单只是选股和温度参考，买卖时机由人在盘中决定（竞价、分时回踩、盘口）。
 本工具的任何内容都不构成投资建议。

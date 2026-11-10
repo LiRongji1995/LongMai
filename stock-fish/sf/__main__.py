@@ -1,4 +1,4 @@
-"""`sf` — personal short-term screening CLI (龙脉 V7). The system never trades.
+"""`sf` — LongMai (龙脉) personal short-term screening CLI (龙脉 V7). The system never trades.
 
     sf update                 append missing sessions + capture today's limit/LHB pools
     sf premarket              build the pre-market list for the next session
@@ -258,7 +258,7 @@ def cmd_themes(args) -> int:
 # ------------------------------------------------------------------ parser
 
 def parser() -> argparse.ArgumentParser:
-    root = argparse.ArgumentParser(prog="sf", description="StockFish 个人短线研究工具")
+    root = argparse.ArgumentParser(prog="sf", description="龙脉 个人短线研究工具")
     sub = root.add_subparsers(dest="command", required=True)
 
     up = sub.add_parser("update", help="补齐行情并采集当日涨停/炸板/跌停池与龙虎榜")
