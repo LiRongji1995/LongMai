@@ -48,6 +48,6 @@ bounded, logged retry.
   docstrings, this file and commit messages stay in English.
 - Python 3.12. Runtime deps in `stock-fish/requirements.txt`; keep them minimal.
 - Tests for `sf` live in `stock-fish/tests/sf/` and must run offline with synthetic data.
-- Publish target: `LiRongji1995/stockfish-qlib-quant-system`, branch `main`. Commit only the files of the
+- Publish target: `LiRongji1995/longmai` (renamed from `stockfish-qlib-quant-system` on 2026-11-10), branch `main`. Commit only the files of the
   task; no force push or history rewrite. Verify the remote SHA after pushing. Commit messages in English.
 - Keep existing licenses and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).

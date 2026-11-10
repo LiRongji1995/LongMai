@@ -1,6 +1,7 @@
 # 2026-11-10 项目改名为龙脉
 
 - 显示名由 StockFish 改为龙脉（LongMai），与核心选股策略同名：README、使用说明标题和 `sf --help` 描述。
+- GitHub 仓库改名为 `LiRongji1995/longmai`（旧地址自动跳转）。
 - 命令 `sf`、`stock-fish/` 代码目录、`SF_HOME` 以及 `../stockfish-data`、`../stockfish-env` 路径不变，已有数据和别名照常可用。
 
 # 2026-11-10 数据完整性：缺失不等于空、不完整快照、ST 涨跌幅、运行记录
