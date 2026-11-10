@@ -22,6 +22,11 @@ The wrapper uses the Python environment `../stockfish-env` next to the checkout 
 | Any time | `sf mood` | Market sentiment indicators, percentile level and tier (低/中/高) with advice |
 | Any time | `sf seats --code 600000 [--date D]` | One stock's LHB seats for a session; `sf seats` prints the seat leaderboard |
 
+**Unattended mode.** `bin/sf-schedule install` adds two macOS launchd jobs: the 09:26 auction re-rank and
+the evening list plus review after 18:30 (Shanghai time). `sf auto` checks the trading calendar and the
+time window itself, so the jobs can fire daily; logs go to `stockfish-data/logs/auto-<date>.log`.
+`bin/sf-schedule status` / `uninstall`. The Mac must be awake at those times.
+
 `sf premarket --detail` shows tiers, scores, stages and seal facts. `sf status` shows data coverage.
 
 The advice column ends with a risk context: the sentiment tier, abnormal-volatility status

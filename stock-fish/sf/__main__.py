@@ -85,6 +85,58 @@ def cmd_seats(args) -> int:
     return 0
 
 
+def cmd_auto(args) -> int:
+    """Unattended runs for launchd: only acts on trading days inside the right Shanghai time window."""
+    import subprocess
+    from datetime import time as dtime
+    from . import premarket, store
+    now = store.now_sh()
+    today = now.strftime("%Y-%m-%d")
+    log_dir = store.home() / "logs"
+    log_dir.mkdir(parents=True, exist_ok=True)
+    log = log_dir / f"auto-{today}.log"
+
+    def note(text):
+        with log.open("a") as f:
+            f.write(f"{now.strftime('%H:%M:%S')} [{args.job}] {text}\n")
+        print(text)
+
+    try:
+        sessions = store.calendar()
+        if today > sessions[-1]:
+            sessions = store.calendar(refresh=True)
+    except Exception as error:
+        note(f"calendar unavailable, skipped: {error}")
+        return 1
+    if today not in sessions:
+        note("not a trading day, skipped")
+        return 0
+    if args.job == "auction":
+        if not dtime(9, 25) <= now.time() <= dtime(9, 30):
+            note(f"outside 09:25-09:30 ({now.strftime('%H:%M')}), skipped")
+            return 0
+        if premarket.latest_run(today) is None:
+            note(f"no pre-market list for {today}, skipped")
+            return 1
+        job = [sys.executable, "-m", "sf", "auction", "--target", today]
+    else:
+        if now.time() < dtime(18, 0):
+            note(f"before 18:00 ({now.strftime('%H:%M')}), skipped")
+            return 0
+        target = store.next_session(sessions, today)
+        if premarket.latest_run(target) is not None and not args.force:
+            note(f"list for {target} already exists, skipped")
+            return 0
+        job = [sys.executable, "-m", "sf", "premarket"]
+    result = subprocess.run(job, capture_output=True, text=True)
+    output = "\n".join(line for line in (result.stdout + result.stderr).splitlines() if "login" not in line)
+    note(f"exit {result.returncode}\n{output}")
+    if args.job == "evening" and result.returncode == 0:
+        review = subprocess.run([sys.executable, "-m", "sf", "review"], capture_output=True, text=True)
+        note(f"review exit {review.returncode}\n{review.stdout[-3000:]}{review.stderr[-1000:]}")
+    return result.returncode
+
+
 def cmd_mood(args) -> int:
     from . import mood, store, strategy
     days = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
@@ -387,6 +439,11 @@ def parser() -> argparse.ArgumentParser:
     se.add_argument("--top", type=int, default=20)
     se.add_argument("--min-events", type=int, default=30)
     se.set_defaults(func=cmd_seats)
+
+    ao = sub.add_parser("auto", help="定时任务入口：交易日自动跑竞价或晚间清单（供launchd调用）")
+    ao.add_argument("job", choices=["auction", "evening"])
+    ao.add_argument("--force", action="store_true")
+    ao.set_defaults(func=cmd_auto)
 
     mo = sub.add_parser("mood", help="市场情绪指标与阶段")
     mo.add_argument("--days", type=int, default=10)

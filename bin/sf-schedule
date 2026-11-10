@@ -1,0 +1,60 @@
+#!/bin/sh
+# Install / remove macOS launchd jobs that run `sf auto` unattended.
+#   bin/sf-schedule install     auction re-rank at 09:26 and evening list after 18:30 (Shanghai time)
+#   bin/sf-schedule uninstall
+#   bin/sf-schedule status
+# Jobs fire every day at two/three local times (covers GMT and BST); `sf auto` itself checks the
+# trading calendar and the Shanghai time window and skips otherwise. Logs: <data>/logs/.
+# The Mac must be awake at those times (System Settings > Battery > Options, or `pmset`).
+set -eu
+HERE="$(cd "$(dirname "$0")/.." && pwd)"
+DATA="${SF_HOME:-$(cd "$HERE/.." && pwd)/stockfish-data}"
+LA="$HOME/Library/LaunchAgents"
+DOMAIN="gui/$(id -u)"
+
+plist() { # label job "H:M ..."
+  label=$1; job=$2; shift 2
+  ints=""
+  for hm in "$@"; do
+    ints="$ints<dict><key>Hour</key><integer>${hm%:*}</integer><key>Minute</key><integer>${hm#*:}</integer></dict>"
+  done
+  cat > "$LA/$label.plist" <<EOF
+<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0"><dict>
+<key>Label</key><string>$label</string>
+<key>ProgramArguments</key><array><string>/bin/sh</string><string>$HERE/bin/sf</string><string>auto</string><string>$job</string></array>
+<key>StartCalendarInterval</key><array>$ints</array>
+<key>StandardOutPath</key><string>$DATA/logs/launchd-$job.log</string>
+<key>StandardErrorPath</key><string>$DATA/logs/launchd-$job.log</string>
+<key>EnvironmentVariables</key><dict><key>TQDM_DISABLE</key><string>1</string></dict>
+</dict></plist>
+EOF
+  plutil -lint "$LA/$label.plist" >/dev/null
+  launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+  launchctl bootstrap "$DOMAIN" "$LA/$label.plist"
+  echo "installed $label"
+}
+
+case "${1:-status}" in
+  install)
+    mkdir -p "$LA" "$DATA/logs"
+    # Shanghai 09:26 = 01:26 GMT / 02:26 BST; 18:35 = 10:35 GMT / 11:35 BST (+13:05 retry)
+    plist com.stockfish.auction auction 1:26 2:26
+    plist com.stockfish.evening evening 10:35 11:35 13:05
+    ;;
+  uninstall)
+    for label in com.stockfish.auction com.stockfish.evening; do
+      launchctl bootout "$DOMAIN/$label" 2>/dev/null || true
+      rm -f "$LA/$label.plist"
+      echo "removed $label"
+    done
+    ;;
+  status)
+    for label in com.stockfish.auction com.stockfish.evening; do
+      if launchctl print "$DOMAIN/$label" >/dev/null 2>&1; then echo "$label: loaded"; else echo "$label: not installed"; fi
+    done
+    ls -t "$DATA/logs"/auto-*.log 2>/dev/null | head -1 | xargs -I{} sh -c 'echo "latest log: {}"; tail -5 "{}"'
+    ;;
+  *) echo "usage: $0 install|uninstall|status" >&2; exit 2 ;;
+esac

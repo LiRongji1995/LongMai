@@ -62,7 +62,7 @@ def context(observation: str, codes, target: str | None = None, log=print) -> di
                 parts.append("今日触发3日异动(次日统计偏弱)")
             elif room.iloc[-1].get(code, 1) <= limit.get(code, 0.1):
                 r = room.iloc[-1][code]
-                parts.append(f"明日相对大盘涨超{r:.0%}即触发异动" if r > 0 else f"明日相对大盘跌幅不超{-r:.0%}即触发异动")
+                parts.append(f"明日相对大盘涨超{r:.1%}即触发异动" if r > 0 else f"明日相对大盘跌幅不超{-r:.1%}即触发异动")
             if bool(flag.get(code, False)):
                 parts.append("今日达严重异动标准(可能停牌核查)")
             else:
