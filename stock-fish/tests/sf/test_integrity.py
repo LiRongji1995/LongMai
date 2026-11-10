@@ -161,3 +161,12 @@ def test_manifest_archives_mutable_inputs(home):
     assert len(ids) == 2
     archived = sorted(p.name for p in (home / "meta" / "archive").iterdir())
     assert archived == sorted(f"hype_notes-{i}.csv" for i in ids)
+
+
+def test_seat_skill_with_no_known_outcome_is_empty_not_an_error():
+    rows = _seat_frame(["sz.000001", "sh.600001"])
+    skill = seats.seat_skill(rows, pd.Series(dtype=float), ["2026-11-10"])
+    assert skill.empty and list(skill.columns) == ["date", "seat_code", "skill_n", "skill_avg", "skill_hit"]
+    attached = seats.attach_skill(rows, skill)
+    assert attached["skill_n"].isna().all()  # unknown skill, not zero
+    assert seats.stock_features(attached).set_index("code").loc["sh.600001", "skilled_buyers"] == 0

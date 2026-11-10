@@ -204,8 +204,12 @@ def seat_skill(rows: pd.DataFrame, outcome: pd.Series, sessions: list[str], min_
     ev = rows[rows["net"] > 0][["date", "code", "seat_code"]].copy()
     ev["r"] = outcome.reindex(pd.MultiIndex.from_frame(ev[["date", "code"]])).to_numpy()
     ev = ev.dropna(subset=["r"])
+    if ev.empty:  # no outcome known yet (e.g. a fresh store): every seat's skill is unknown, not zero
+        return pd.DataFrame({"date": pd.Series(dtype=object), "seat_code": pd.Series(dtype=object),
+                             "skill_n": pd.Series(dtype=float), "skill_avg": pd.Series(dtype=float),
+                             "skill_hit": pd.Series(dtype=float)})
     pos = {d: i for i, d in enumerate(sessions)}
-    ev["i"] = ev["date"].map(pos)
+    ev["i"] = ev["date"].map(pos).astype(int)
     daily = ev.groupby(["seat_code", "i"]).agg(s=("r", "sum"), n=("r", "size"), w=("r", lambda x: (x > 0).sum()))
     daily = daily.reset_index().sort_values(["seat_code", "i"])
     g = daily.groupby("seat_code")
@@ -221,8 +225,9 @@ def seat_skill(rows: pd.DataFrame, outcome: pd.Series, sessions: list[str], min_
 def attach_skill(rows: pd.DataFrame, skill: pd.DataFrame) -> pd.DataFrame:
     """As-of join: each seat row gets the latest skill known on its date."""
     rows = stock_seat_rows(rows).sort_values("date")
-    skill = skill.sort_values("date")
-    rows["_d"], skill = pd.to_datetime(rows["date"]), skill.assign(_d=pd.to_datetime(skill["date"]))
+    skill = skill.sort_values("date").astype({"seat_code": rows["seat_code"].dtype})
+    day = lambda s: pd.to_datetime(s).astype("datetime64[ns]")  # noqa: E731 (same resolution on both sides)
+    rows["_d"], skill = day(rows["date"]), skill.assign(_d=day(skill["date"]))
     merged = pd.merge_asof(rows.sort_values("_d"), skill.drop(columns="date").sort_values("_d"),
                            on="_d", by="seat_code", direction="backward")
     return merged.drop(columns="_d")
