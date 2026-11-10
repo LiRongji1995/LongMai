@@ -117,8 +117,7 @@ def test_v5_relative_crowding_and_threshold_first():
     turn = pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 40.0]}, index=days)
     sealed = pd.DataFrame({code: [False] * 5 + [False, True]}, index=days)
     ctx = {"aw": {"turn": turn, "limit_up": sealed}}
-    p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V5" == longmai.VERSION
+    p = longmai.params(version=5)
     assert longmai.crowded(ctx, 5, code, p)[0].startswith("放量分歧")   # 2.4x, not sealed
     assert longmai.crowded(ctx, 6, code, p) == []                         # 40% but sealed: full hand-over
     # threshold first: the small top-height stock is dropped before ranking, so rank 3 moves up
@@ -176,3 +175,34 @@ def test_radar_home_board_and_high_flyers():
     assert radar.home_board(ts, 2, codes[0]) == "ICE"          # the concentrated board, not the umbrella
     assert [r["board"] for r in radar.radar(ts, 2, min_lu3=3)] == ["ICE"]   # BIG covers the same wave
     assert radar.high_flyers(aw, ts, 2) == [codes[0]]          # tallest level when nothing reaches 4 boards
+
+
+def test_v6_three_session_mainlines_and_space_board():
+    import numpy as np
+    from sf import mainline
+    days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    codes = [f"sh.6000{i:02d}" for i in range(40)]
+    limit_up = pd.DataFrame(False, index=days, columns=codes)
+    limit_up.iloc[0, 0:4] = True
+    limit_up.iloc[1, 0:3] = True
+    limit_up.iloc[2, 0] = True          # ICE: 8 limit-ups over 3 sessions, only 1 today (a split day)
+    amount = pd.DataFrame(1e8, index=days, columns=codes)
+    members = pd.DataFrame([("BIG", c) for c in codes] + [("ICE", c) for c in codes[:8]], columns=["board", "code"])
+    boards = pd.DataFrame({"board": ["BIG", "ICE"], "first_date": ["2000-01-01"] * 2})
+    ts = mainline.theme_stats(dict(close=amount, amount=amount, limit_up=limit_up), boards, members)
+    p6 = longmai.params()
+    assert p6["version"] == "SF_LONGMAI_V6" == longmai.VERSION
+    assert mainline.mainlines(ts, 2, p6) == ["ICE"]
+    assert mainline.mainlines(ts, 2, longmai.params(version=5)) == []     # V5 needs 3 limit-ups today
+    # 空间板: tallest eligible main-board stock, outside any mainline
+    d3, cs = days, ["sh.600001", "sh.600002"]
+    frame = lambda vals: pd.DataFrame([vals] * 3, index=d3, columns=cs)
+    w = dict(close=frame([11.0, 11.0]), preclose=frame([10.0, 10.0]), high=frame([11.0, 11.0]), low=frame([10.0, 10.0]),
+             amount=frame([9e8, 9e8]), limit_up=frame([True, True]), height=frame([6, 1]))
+    aw = dict(amount=frame([9e8, 9e8]), turn=frame([30.0, 10.0]))
+    lu = pd.DataFrame({"X": [0.0] * 3}, index=d3)
+    ts2 = dict(lu=lu, lu3=lu, share=lu, n=lu + 10, n3=lu + 30, rate3=pd.Series(0.02, index=d3),
+               limit_up=frame([True, True]), M=np.zeros((1, 2), dtype=np.float32), names=["X"], cols=cs)
+    sig = mainline.signals(w, aw, ts2, pd.Series(True, index=cs), 2, p6)
+    assert list(sig.index) == ["sh.600001"] and sig.loc["sh.600001", "board"] == mainline.SPACE
+    assert mainline.signals(w, aw, ts2, pd.Series(True, index=cs), 2, dict(p6, space_min_height=7)).empty

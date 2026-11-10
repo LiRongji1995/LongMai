@@ -112,12 +112,22 @@ def concentration(ts: dict, t: int) -> pd.Series:
     return (k - n * r) / np.sqrt(n * r * (1 - r)).replace(0, np.nan)
 
 
+SPACE = "空间板"
+
+
 def mainlines(ts: dict, t: int, p: dict) -> list[str]:
     day = ts["lu"].index[t]
-    if p.get("mainline_mode") == "concentration":
-        frame = pd.DataFrame({"lu": ts["lu"].loc[day], "n": ts["n"].loc[day], "z": concentration(ts, t)}).dropna()
-        frame = frame[(frame["lu"] >= p["min_theme_limit_ups"]) & (frame["n"] >= 5)].sort_values("z", ascending=False)
-        lu_today = ts["limit_up"].iloc[t].reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
+    if p.get("mainline_mode") in ("concentration", "concentration3"):
+        frame = pd.DataFrame({"lu": ts["lu"].loc[day], "lu3": ts["lu3"].loc[day], "n": ts["n"].loc[day],
+                              "z": concentration(ts, t)}).dropna()
+        if p["mainline_mode"] == "concentration3":  # V6: eligibility over 3 sessions, dedupe on 3-session sets
+            frame = frame[(frame["lu3"] >= p["min_theme_lu3"]) & (frame["lu"] >= 1) & (frame["n"] >= 5)]
+            lu_today = ts["limit_up"].iloc[max(0, t - 2):t + 1].fillna(False).astype(bool).any() \
+                .reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
+        else:
+            frame = frame[(frame["lu"] >= p["min_theme_limit_ups"]) & (frame["n"] >= 5)]
+            lu_today = ts["limit_up"].iloc[t].reindex(ts["cols"]).fillna(False).to_numpy(dtype=bool)
+        frame = frame.sort_values("z", ascending=False)
         taken, covered = [], np.zeros(len(ts["cols"]), dtype=bool)
         for board in frame.index:
             members = (ts["M"][ts["names"].index(board)] > 0) & lu_today
@@ -137,7 +147,7 @@ def mainlines(ts: dict, t: int, p: dict) -> list[str]:
 
 def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd.DataFrame:
     lines = mainlines(ts, t, p)
-    if not lines:
+    if not lines and not p.get("space_board"):
         return pd.DataFrame()
     day = w["close"].index[t]
     amount_rank = aw["amount"].loc[day].rank(ascending=False)
@@ -188,9 +198,24 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
                              turn=float(turn_today.get(code, np.nan)),
                              turn_rank=float(turn_rank.get(code, np.nan)),
                              ret1=float(ret1.get(code, np.nan))))
+    if p.get("space_board"):  # V6: the market's tallest main-board stock, whatever its theme
+        ok_all = pool.reindex(height.index).fillna(False) & strong.reindex(height.index).fillna(False)
+        if use_turn:
+            ok_all &= amount_ok.reindex(height.index).fillna(False)
+        h = height[ok_all].dropna()
+        if len(h) and h.max() >= p["space_min_height"]:
+            top = h[h == h.max()].index
+            top = turn_today.reindex(top).sort_values(ascending=False).index[:2]
+            for code in top:
+                rows.append(dict(code=code, board=SPACE, board_lu=0.0, leader_rank=1, height=int(h[code]),
+                                 amount=float(raw["amount"][code]), amount_rank=float(amount_rank.get(code, np.nan)),
+                                 activity_rank=np.nan, turn=float(turn_today.get(code, np.nan)),
+                                 turn_rank=float(turn_rank.get(code, np.nan)), ret1=float(ret1.get(code, np.nan))))
     if not rows:
         return pd.DataFrame()
-    frame = pd.DataFrame(rows).sort_values(["board_lu", "leader_rank"], ascending=[False, True])
+    frame = pd.DataFrame(rows)
+    frame["space"] = frame["board"] == SPACE
+    frame = frame.sort_values(["space", "board_lu", "leader_rank"], ascending=[False, False, True]).drop(columns="space")
     return frame.drop_duplicates("code").set_index("code")
 
 

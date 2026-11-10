@@ -266,9 +266,11 @@ def cmd_longmai(args) -> int:
     robust = None
     if args.robust:
         rows = []
-        grid = {**longmai.ROBUST, **({3: longmai.ROBUST_V3, 4: longmai.ROBUST_V4, 5: longmai.ROBUST_V5}.get(args.version, {}))}
+        grid = {**longmai.ROBUST, **({3: longmai.ROBUST_V3, 4: longmai.ROBUST_V4, 5: longmai.ROBUST_V5, 6: longmai.ROBUST_V6}.get(args.version, {}))}
         if args.version >= 4:
-            grid.pop("amount_rank_max")  # V4 has no amount ranking
+            grid.pop("amount_rank_max")  # V4+ has no amount ranking
+        if args.version >= 6:
+            grid.pop("min_theme_limit_ups")  # V6 eligibility is min_theme_lu3
         for key, vals in grid.items():
             for v in vals:
                 with _quiet():
@@ -516,7 +518,7 @@ def parser() -> argparse.ArgumentParser:
 
     lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
-    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3, 4, 5], help="默认为前向检验版本V5")
+    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3, 4, 5, 6], help="默认为前向检验版本V6")
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")

@@ -14,9 +14,9 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, radar, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-# V5 is the version under forward test (user decision 2026-11-10); V1-V4 stay for backtest comparison only.
-FORWARD_VERSION = 5
-VERSION = "SF_LONGMAI_V5"
+# V6 is the version under forward test (user decision 2026-11-10); V1-V5 stay for backtest comparison only.
+FORWARD_VERSION = 6
+VERSION = "SF_LONGMAI_V6"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -36,7 +36,10 @@ PARAMS_V4 = dict(PARAMS_V1, version="SF_LONGMAI_V4", veto_3day=False, leader_key
 # ranking, relative crowding (turnover surge without a sealed limit-up).
 PARAMS_V5 = dict(PARAMS_V4, version="SF_LONGMAI_V5", mainline_mode="concentration", overlap_max=0.6,
                  threshold_first=True, crowd_mode="relative", crowd_turn=0)
-VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4, 5: PARAMS_V5}
+# V6 (docs/STRATEGY_LONGMAI_V6.md): mainline eligibility over 3 sessions; 空间板 candidate class.
+PARAMS_V6 = dict(PARAMS_V5, version="SF_LONGMAI_V6", mainline_mode="concentration3", min_theme_lu3=5,
+                 space_board=True, space_min_height=4)
+VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4, 5: PARAMS_V5, 6: PARAMS_V6}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
@@ -179,7 +182,7 @@ def decide(ctx: dict, t: int, target: str, p: dict, seat_day: pd.DataFrame | Non
     if sig.empty:
         return dict(gate=g, leaders=sig, pool=pool)
     day = w["close"].index[t]
-    sig["board_lu3"] = [float(ctx["ts"]["lu3"].loc[day, b]) for b in sig["board"]]
+    sig["board_lu3"] = [np.inf if b == mainline.SPACE else float(ctx["ts"]["lu3"].loc[day, b]) for b in sig["board"]]
     sig["vetoes"] = [vetoes(ctx, t, c, p, seat_day) for c in sig.index]
     sig["notes"] = [notes(ctx, t, c, seat_day) for c in sig.index]
     sig["crowded"] = [crowded(ctx, t, c, p) for c in sig.index]
@@ -282,6 +285,8 @@ ROBUST = {
     "severe_margin": (0.2, 0.4), "gap_min": (-0.01, 0.01),
 }
 ROBUST_V3 = {"crowd_turn": (25.0, 35.0), "crowd_surge": (1.5, 2.5)}
+ROBUST_V6 = {"min_theme_lu3": (4, 6), "space_min_height": (3, 5), "overlap_max": (0.5, 0.7),
+             "crowd_surge": (1.5, 2.5), "amount_min": (3e8, 8e8)}
 ROBUST_V5 = {"overlap_max": (0.5, 0.7), "crowd_surge": (1.5, 2.5), "amount_min": (3e8, 8e8)}
 ROBUST_V4 = {"amount_min": (3e8, 8e8), "crowd_turn": (25.0, 35.0, 0), "crowd_surge": (1.5, 2.5)}
 
@@ -354,7 +359,8 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     slots_left = g["slots"]
     for code, s in leaders.iterrows():
         stage = facts.loc[code, "stages"] if code in facts.index else ""
-        role = f"{s['board']}·龙{int(s['leader_rank'])}·{int(s['height'])}板" if s["height"] >= 1 else \
+        role = f"空间板(市场最高板)·{int(s['height'])}板" if s["board"] == mainline.SPACE else \
+            f"{s['board']}·龙{int(s['leader_rank'])}·{int(s['height'])}板" if s["height"] >= 1 else \
             f"{s['board']}·龙{int(s['leader_rank'])}·趋势"
         risk = "；".join(s["vetoes"] + s["notes"])
         stop = round(float(close[code]) * (1 - p["stop_loss"]), 2)
@@ -371,8 +377,12 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             group = "主线龙头"
             tag = "候选（由你决定）" if slots_left > 0 else "候选·超出规则仓位上限"
             slots_left -= 1 if slots_left > 0 else 0
+            fade = "" if s["board"] == mainline.SPACE else "题材退潮/"
             plan = (f"{tag}：规则条件为竞价高开，低开/平开放弃；单只1/4仓；规则离场信号：炸板/放量滞涨/"
-                    f"题材退潮/跌破{stop}/满{p['max_hold']}日")
+                    f"{fade}跌破{stop}/满{p['max_hold']}日")
+            left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
+            if s["board"] == mainline.SPACE and left <= 2:
+                risk = "；".join(([risk] if risk else []) + [f"10日偏离{ctx['severe']['dev10'].iloc[t][code]:.0%}，再触发{int(left)}次3日异动即严重异动"])
         home = radar.home_board(ctx["ts"], t, code, zt)
         if home and home != s["board"]:
             role += f"·归属{home}"
