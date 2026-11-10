@@ -381,6 +381,8 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             plan = (f"{tag}：规则条件为竞价高开，低开/平开放弃；单只1/4仓；规则离场信号：炸板/放量滞涨/"
                     f"{fade}跌破{stop}/满{p['max_hold']}日")
             left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
+            if s["board"] == mainline.SPACE:  # information only (V6 backtest, CHANGELOG 2026-11-10)
+                risk = "；".join(([risk] if risk else []) + ["回测提示：空间板次日高开买入历史上三段均亏(每笔约-2%~-6%)"])
             if s["board"] == mainline.SPACE and left <= 2:
                 risk = "；".join(([risk] if risk else []) + [f"10日偏离{ctx['severe']['dev10'].iloc[t][code]:.0%}，再触发{int(left)}次3日异动即严重异动"])
         home = radar.home_board(ctx["ts"], t, code, zt)
