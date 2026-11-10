@@ -1,13 +1,9 @@
-# Local research runtime, Python 3.12. No web server, LLM or model platform.
-pydantic==2.13.5
-PyYAML==6.0.3
-requests==2.34.2
-psutil==7.2.2
-akshare==1.18.94
-baostock==0.9.3
-# Lean `sf` CLI: columnar store and vectorized computation
+# Lean `sf` CLI, Python 3.12. Local, single user; no web server, broker or model platform.
 pandas==3.1.1
 numpy==2.5.4
 pyarrow==26.0.1
+requests==2.34.2
+akshare==1.18.94
+baostock==0.9.3
 pypdf==7.0.0
 pypinyin==0.55.0

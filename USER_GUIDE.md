@@ -141,8 +141,7 @@ so no adjustment-factor download is needed. A missing session makes affected win
 
 Nothing here is investment advice. Engineering tests passing does not show investment value.
 
-## Legacy pipeline (frozen)
+## Legacy
 
-`stock-fish/scripts/codex_daily_v2.py` and `stockfish_core/` are frozen since 2026-11-10. Their
-historical documents (`CURRENT_STATUS.md`, `CURRENT_STRATEGY.md`, `DEPLOYMENT.md`) describe that
-pipeline. To read old saved results, see those documents; use `--registry-root ../stockfish-legacy/registry`.
+The R2/qlib pipeline (`codex_daily_v2.py`, `stockfish_core/`) and the strategy code of V1–V6 were removed
+from `main` on 2026-11-10 and are preserved at git tag `legacy-r2` (`git checkout legacy-r2`).

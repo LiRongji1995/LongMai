@@ -1,16 +1,15 @@
 # Agent Rules — Personal Short-Term Stock Research
 
-This is a single-user, local tool for A-share (SSE/SZSE main board) short-term research: data update,
-pre-market candidate lists, auction re-ranking, post-trade review and backtests. It never connects to a
-broker and never places orders. It is not a commercial product: no web/API, multi-user, permission or
+This is a single-user, local tool for A-share (SSE/SZSE main board) short-term screening: data update,
+pre-market candidate lists with a market-temperature read, auction re-ranking and hit-rate review. It
+never connects to a broker and never places orders; a person decides every trade intraday. It is not a commercial product: no web/API, multi-user, permission or
 security platform work.
 
 ## Entry points
 
 - **Primary:** the lean CLI `sf` (`stock-fish/sf/`, wrapper `bin/sf`). See [USER_GUIDE](USER_GUIDE.md).
-- **Frozen legacy:** `stock-fish/scripts/codex_daily_v2.py` and the code it uses are frozen as of
-  2026-11-10. Keep them readable for historical results; do not extend or optimize them. Remove them
-  only once `sf` fully replaces their read paths.
+- **Legacy:** the R2/qlib pipeline and strategy versions V1–V6 code were removed from `main` on
+  2026-11-10; they are preserved at git tag `legacy-r2`.
 
 ## Three invariants (non-negotiable)
 
@@ -31,14 +30,15 @@ bounded, logged retry.
 
 - Strategy rules and parameters live in versioned code/config under `stock-fish/sf/`. A change to rules
   or thresholds bumps the strategy version recorded in saved outputs.
-- Validate changes with `sf backtest` (walk-forward, costs included) before relying on them. Parameters
-  are unvalidated until a backtest says otherwise; say so in outputs.
+- Validate changes with entry-free hit rates (`sf evaluate`: did listed stocks break out, were the
+  realized 妖股 listed, did the temperature calls come true), train segment first, then the tests and
+  the forward record. Next-open P&L backtests are not used: entries are chosen intraday by a person.
 - Engineering test results, real-data checks and investment conclusions are reported separately.
 
 ## Data and files
 
 - All generated data lives outside the repo, next to the checkout: `../stockfish-data/` (override with
-  `SF_HOME`). The legacy runtime lives in `../stockfish-legacy/`. Paths come from arguments, environment
+  `SF_HOME`). Paths come from arguments, environment
   or script location — never hard-code a personal path.
 - Never commit data, lists, credentials or environments.
 

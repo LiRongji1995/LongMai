@@ -1,25 +1,24 @@
-# StockFish — Personal A-Share Short-Term Research
+# StockFish — Personal A-Share Short-Term Screening
 
-Local, single-user tool for SSE/SZSE main-board short-term research: daily data, a pre-market list,
-a 09:25 auction re-rank, forward review and honest out-of-sample backtests. It never connects to a
-broker or places orders.
+Local, single-user tool for SSE/SZSE main-board short-term trading support: daily data, a pre-market
+list (mainline leaders, 连板梯队, 观察, 高波动) with a market-temperature read, a 09:25 auction re-rank
+and hit-rate review. It never connects to a broker or places orders: a person decides every trade.
 
 ```sh
-bin/sf premarket     # after 18:00: list for the next session (name, turnover, advice)
+bin/sf premarket     # after 18:00: list and temperature for the next session
 bin/sf auction       # 09:25-09:30: re-rank with call-auction data
-bin/sf review        # how did saved lists actually do (T+1-open entry, costs)
-bin/sf research      # test a rule out of sample, per day
+bin/sf crowding      # short-term money temperature, last N sessions
+bin/sf evaluate      # entry-free hit rates of the screening and the temperature calls
 bin/sf --help
 ```
 
-- [User guide](USER_GUIDE.md) — commands, outputs, data store, strategy status.
-- [Agent rules](AGENTS.md) — three invariants: point-in-time, explicit missing data, reproducible results.
-- [Project review 2026-11-09](docs/REVIEW_2026-11-09_ARCHITECT_AND_TRADER.md) — why the lean CLI replaced the legacy pipeline.
+- [User guide](USER_GUIDE.md) — commands, outputs, data store.
+- [Agent rules](AGENTS.md) — point-in-time, explicit missing data, reproducible results.
+- [Current screening spec (V7)](docs/STRATEGY_LONGMAI_V7.md) and [architecture review](docs/ARCHITECTURE_REVIEW_2026-11-10.md).
 - [Changelog](CHANGELOG.md)
 
 Setup: Python 3.12, `python3.12 -m venv ../stockfish-env && ../stockfish-env/bin/pip install -r stock-fish/requirements.txt`.
 Tests: `cd stock-fish && ../../stockfish-env/bin/python -m pytest tests/sf`.
 
-The legacy pipeline (`stock-fish/scripts/codex_daily_v2.py`) is frozen; its documents
-(`CURRENT_STATUS.md`, `CURRENT_STRATEGY.md`, `DEPLOYMENT.md`, `ENGINEERING_BASELINE.md`) are kept for
-reading historical results. Licenses: [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
+The legacy R2/qlib pipeline and the V1–V6 strategy code are preserved at git tag `legacy-r2`.
+Licenses: [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).

@@ -1,4 +1,4 @@
-name: Local research checks
+name: sf tests
 
 on:
   pull_request:
@@ -12,7 +12,7 @@ permissions:
 jobs:
   sf:
     runs-on: ubuntu-24.04
-    timeout-minutes: 15
+    timeout-minutes: 10
     steps:
       - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
         with:
@@ -29,29 +29,3 @@ jobs:
         env:
           SF_HOME: ${{ runner.temp }}/sf-home
         run: python -m pytest -q -p no:cacheprovider tests/sf
-
-  research:
-    runs-on: macos-15-intel
-    # One complete suite; below the former daily allocation of 3 x 45 minutes.
-    timeout-minutes: 120
-    steps:
-      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4
-        with:
-          persist-credentials: false
-      - uses: actions/setup-python@a26af69be951a213d495a4c3e4e4022e16d87065 # v5
-        with:
-          python-version: '3.12'
-          architecture: x64
-      - name: Install isolated research dependencies
-        run: |
-          python -m venv "$RUNNER_TEMP/TEST_FIXTURE_runtime"
-          "$RUNNER_TEMP/TEST_FIXTURE_runtime/bin/python" -m pip install -r stock-fish/requirements-dev.txt
-          "$RUNNER_TEMP/TEST_FIXTURE_runtime/bin/python" -m pip check
-      - name: Run retained offline correctness tests
-        run: |
-          "$RUNNER_TEMP/TEST_FIXTURE_runtime/bin/python" -I -B stock-fish/scripts/run_isolated_tests.py -q --basetemp "$RUNNER_TEMP/TEST_FIXTURE_tests" --junitxml "$RUNNER_TEMP/research-tests.xml" tests
-      - uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4
-        if: always()
-        with:
-          name: research-tests
-          path: ${{ runner.temp }}/research-tests.xml
