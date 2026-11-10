@@ -1,3 +1,13 @@
+# 2026-11-10 Removed `sf auction`: the call auction is read by the person
+
+- Removed `sf/auction.py` and the `sf auction` command. Its SF_AUCTION_V1 rules came from DAILY_V1
+  unvalidated and assumed an open-price entry: 一字/≥8% gaps were "观察" (no fill) and gaps ≤ -3%
+  were "放弃". On 浙文影业 (11-03, 11-05, 11-06 一字) and 冰山冷热 (10-14 一字, 10-16 -4.2% open →
+  limit-up, 11-10 一字) it would have rejected the strongest days. After V7 it also read the list group
+  as `tier`, so the A/B gap bands never applied.
+- The tool stays at pre-market screening and market temperature; auction and intraday entry decisions
+  are the person's. The pre-market list is unchanged.
+
 # 2026-11-10 List themes: 炒作 (news notes) before 板块 (membership)
 
 - Problem: the role said "归属建筑节能" for 腾达科技 while the market traded it as 商业航天. Its Eastmoney

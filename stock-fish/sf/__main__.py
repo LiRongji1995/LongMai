@@ -3,7 +3,6 @@
     sf update                 append missing sessions + capture today's limit/LHB pools
     sf premarket              build the pre-market list for the next session
     sf show [TARGET]          print a saved list
-    sf auction                09:25 re-rank of the latest list with call-auction data
     sf review                 hit rates of the saved lists (entry-free, see sf/evaluate.py)
     sf evaluate               historical hit rates of the screening and the temperature calls
     sf crowding / sf mood     short-term market temperature (review context, not stock selection)
@@ -172,18 +171,6 @@ def cmd_show(args) -> int:
     return 0
 
 
-def cmd_auction(args) -> int:
-    from . import auction
-    result = auction.run(args.target)
-    if result["window"] == "TOO_EARLY":
-        print("注意：现在早于09:25，竞价尚未撮合，价格仅为参考。")
-    elif result["window"] == "AFTER_OPEN":
-        print("注意：已过09:30，成交额包含连续竞价，竞价额比例偏大。")
-    print(result["simple"].to_string(index=False))
-    print(f"\n已保存到 {result['run']}")
-    return 0
-
-
 def cmd_review(args) -> int:
     from . import review
     with _quiet():
@@ -285,10 +272,6 @@ def parser() -> argparse.ArgumentParser:
     sh = sub.add_parser("show", help="查看已保存的清单")
     sh.add_argument("target", nargs="?", help="目标交易日（默认最新）")
     sh.set_defaults(func=cmd_show)
-
-    au = sub.add_parser("auction", help="09:25竞价后重排最新清单")
-    au.add_argument("--target", help="目标交易日（默认最新清单）")
-    au.set_defaults(func=cmd_auction)
 
     rv = sub.add_parser("review", help="已保存清单的命中率复盘")
     rv.add_argument("--since", help="只看此目标日之后")

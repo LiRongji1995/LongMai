@@ -1,12 +1,11 @@
 # StockFish — Personal A-Share Short-Term Screening
 
 Local, single-user tool for SSE/SZSE main-board short-term trading support: daily data, a pre-market
-list (mainline leaders, 连板梯队, 观察, 高波动) with a market-temperature read, a 09:25 auction re-rank
-and hit-rate review. It never connects to a broker or places orders: a person decides every trade.
+list (mainline leaders, 连板梯队, 观察, 高波动) with a market-temperature read
+and hit-rate review. The 09:25 call auction is read by the person, not the tool. It never connects to a broker or places orders: a person decides every trade.
 
 ```sh
 bin/sf premarket     # after 18:00: list and temperature for the next session
-bin/sf auction       # 09:25-09:30: re-rank with call-auction data
 bin/sf crowding      # short-term money temperature, last N sessions
 bin/sf evaluate      # entry-free hit rates of the screening and the temperature calls
 bin/sf --help

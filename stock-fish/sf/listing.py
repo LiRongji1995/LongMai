@@ -1,6 +1,6 @@
 """The pre-market list (盘前清单) for 龙脉 V7: groups 主线龙头 / 连板梯队 / 观察 / 高波动, a header with
 mood, regulation, mainlines, the two-axis temperature, name waves, market high-flyers and the theme
-radar, and the saved run directory read by `sf show`, `sf auction` and `sf review`.
+radar, and the saved run directory read by `sf show` and `sf review`.
 Candidates and risk notes only: the person decides every trade.
 """
 from __future__ import annotations
@@ -318,7 +318,7 @@ def save(result: dict) -> Path:
     table = result["table"]
     table[VIEW].to_csv(out / "盘前清单.csv", index=False, encoding="utf-8-sig")
     (out / "盘前概况.txt").write_text("\n".join(header(result)) + "\n", encoding="utf-8")
-    # picks.csv keeps the columns `sf auction` reads (rank, tier, name, industry, amount, close)
+    # picks.csv: compact per-run table (rank, list group as tier, name, role as industry, amount, close)
     picks = table.set_index("code").assign(rank=range(1, len(table) + 1), tier=table["分组"].to_numpy(),
                                            name=table["名称"].to_numpy(), industry=table["角色"].to_numpy(),
                                            amount=table["amount_raw"].to_numpy())

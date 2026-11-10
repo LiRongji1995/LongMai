@@ -1,7 +1,7 @@
 # Agent Rules — Personal Short-Term Stock Research
 
 This is a single-user, local tool for A-share (SSE/SZSE main board) short-term screening: data update,
-pre-market candidate lists with a market-temperature read, auction re-ranking and hit-rate review. It
+pre-market candidate lists with a market-temperature read and hit-rate review (the call auction is read by the person). It
 never connects to a broker and never places orders; a person decides every trade intraday. It is not a commercial product: no web/API, multi-user, permission or
 security platform work.
 
@@ -14,8 +14,7 @@ security platform work.
 ## Three invariants (non-negotiable)
 
 1. **Point-in-time correctness.** A decision for session T may only use data visible before the
-   decision time (e.g. T-1 close data for the pre-market list, 09:25 auction data for the auction
-   re-rank). Outcome labels (future returns) must never feed back into features or selection.
+   decision time (e.g. T-1 close data for the pre-market list). Outcome labels (future returns) must never feed back into features or selection.
 2. **Missing data is explicit.** Missing or failed data is reported as missing (`NaN`/`UNKNOWN`), never
    imputed as zero, never treated as "no event", never silently dropped from counts.
 3. **Reproducible results.** Every saved list stores its inputs' identity (observation date, strategy

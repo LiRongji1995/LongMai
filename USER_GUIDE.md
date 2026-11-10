@@ -18,7 +18,7 @@ entries and exits intraday (auction, 分时 pullbacks, order book). Nothing here
 | When (Shanghai) | Command | What you get |
 |---|---|---|
 | After 18:00 | `sf premarket` | Updates data, captures the day's limit-up/failed/limit-down pools and LHB, writes the list for the next session (`lists/<target>/<run>/盘前清单.csv` + `盘前概况.txt`) |
-| 09:25–09:30 | `sf auction` | Re-ranks the latest list with call-auction data: 参与 / 观察 / 放弃 with the reason |
+| 09:25–09:30 | — | You read the call auction yourself; the tool gives no auction verdicts |
 | Any time | `sf show [TARGET]` | Prints a saved list |
 | Weekly | `sf review [--since D]` | Hit rates of every saved list (below) |
 | Weekly | `sf themes` | Refreshes concept/industry board membership (~20 min) |
@@ -97,7 +97,7 @@ first. Outputs go to `stockfish-data/reviews/` and `stockfish-data/evaluations/`
 | `bars/<date>.parquet` | full-market daily snapshot (BaoStock): OHLC, exchange preclose, turnover, ST, status |
 | `pools/{zt,zbgc,dtgc,lhb,seats}/<date>.parquet` | limit-up / failed-board / limit-down pools, LHB rows and seats |
 | `meta/` | calendar, stock basics, theme boards and members |
-| `lists/<target>/<run>/` | `盘前清单.csv`, `盘前概况.txt`, `picks.csv`, `leaders.csv`, `facts.parquet` (every stock with its features and list group), `summary.json`, auction files |
+| `lists/<target>/<run>/` | `盘前清单.csv`, `盘前概况.txt`, `picks.csv`, `leaders.csv`, `facts.parquet` (every stock with its features and list group), `summary.json` |
 | `reviews/`, `evaluations/`, `research/` | saved outputs; never overwritten |
 
 Adjusted prices are reconstructed from the exchange preclose (`adj_t / adj_{t-1} = close_t / preclose_t`).

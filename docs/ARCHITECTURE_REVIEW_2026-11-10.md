@@ -105,4 +105,9 @@ incremental panel cache (append one session per day instead of rebuilding 320); 
    person confirms it. Unattended full automation stays at ≤ 3 / 10 unless steps 1–2 show a stable
    edge out of sample.
 
+**Decision 2026-11-10 (after this review):** auction-level judgment stays with the person. `sf auction`
+was removed, and step 2's auction alerts are not planned. Checked on 浙文影业 and 冰山冷热, the
+inherited SF_AUCTION_V1 rules would have marked every 一字 day "观察" and the 冰山冷热 10-16 low open
+(-4.2%, closed limit-up) "放弃".
+
 Nothing here is investment advice. Engineering checks passing does not show investment value.
