@@ -33,7 +33,7 @@ def test_gate_budget_and_regulation_cut():
 
 
 def test_vetoes():
-    p = longmai.params()
+    p = longmai.params(version=3)
     code = "sh.600001"
     assert longmai.vetoes(_ctx(), 1, code, p, None) == []
     assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # V2/V3: no 3-day veto
@@ -58,7 +58,7 @@ def test_v3_crowding_rules():
     code = "sh.600001"
     days = [f"2026-01-{d:02d}" for d in range(5, 12)]
     ctx = {"aw": {"turn": pd.DataFrame({code: [5.0, 5.0, 5.0, 5.0, 5.0, 12.0, 31.0]}, index=days)}}
-    p = longmai.params()
+    p = longmai.params(version=3)
     assert longmai.crowded(ctx, 4, code, p) == []
     assert longmai.crowded(ctx, 5, code, p) == ["换手为前5日均值2.4倍"]
     assert longmai.crowded(ctx, 6, code, p)[0].startswith("换手31.0%")
@@ -79,3 +79,8 @@ def test_crowding_spec_share_and_theme_heat():
     sh, pct = crowding.theme_heat(dict(share=share), 29, "X")
     assert abs(sh - 0.3) < 1e-9 and pct == 1.0 >= crowding.HOT_PCT
     assert np.isnan(crowding.theme_heat(dict(share=share), 5, "X")[1])
+
+
+def test_forward_version_is_v1():
+    assert longmai.params()["version"] == "SF_LONGMAI_V1" == longmai.VERSION
+    assert longmai.crowded({}, 0, "x", longmai.params()) == []  # V1 has no crowding block

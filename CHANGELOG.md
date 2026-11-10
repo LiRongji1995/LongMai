@@ -1,3 +1,12 @@
+# 2026-11-10 Forward test: 龙脉 V1; `sf crowding`
+
+- V1 is the version under forward test (`longmai.FORWARD_VERSION = 1`); `sf premarket` and
+  `sf longmai` default to it. V2/V3 stay available for comparison. V1 is unchanged, including its
+  3-session abnormal veto, because the forward test needs the frozen spec.
+- `sf crowding [--days N]`: daily short-term money temperature for review (market turnover vs
+  20-day mean, short-term share and its 250-day percentile, high-turnover share, mainline shares
+  with a 60-session-high flag). Context only; it does not select stocks or identify leaders.
+
 # 2026-11-10 Crowding study (拥挤度) — no market-level threshold
 
 - `sf/crowding.py`: market short-term share (`spec_share`, `hot_turn_share`, changes, amount vs

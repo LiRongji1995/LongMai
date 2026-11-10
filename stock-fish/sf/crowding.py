@@ -72,3 +72,28 @@ def theme(ts: dict) -> dict[str, pd.DataFrame]:
     share = ts["share"]
     return dict(share=share, share_pct60=share.rolling(60, min_periods=20).rank(pct=True),
                 share_chg5=share - share.shift(5))
+
+
+def environment(aw: dict, ts: dict, days: int = 20, p: dict | None = None) -> pd.DataFrame:
+    """Short-term money temperature for the last `days` sessions, for review and context only
+    (the study found no trading threshold). One row per session."""
+    p = mainline.params(p)
+    spec = spec_share(aw)
+    spec_pct = spec.rolling(250, min_periods=60).rank(pct=True)
+    amount = aw["amount"]
+    total = amount.sum(axis=1)
+    hot = amount.where(aw["turn"] >= 15).sum(axis=1) / total
+    ratio20 = total / total.rolling(20, min_periods=10).mean().shift(1)
+    rows = []
+    n = len(amount.index)
+    for t in range(max(0, n - days), n):
+        lines = mainline.mainlines(ts, t, p)
+        themes = []
+        for b in lines:
+            share, pct = theme_heat(ts, t, b)
+            flag = "!" if pd.notna(pct) and pct >= HOT_PCT else ""
+            themes.append(f"{b} {share:.1%}{flag}")
+        rows.append(dict(date=amount.index[t], market_amount=total.iloc[t], amount_ratio20=ratio20.iloc[t],
+                         spec_share=spec.iloc[t], spec_pct250=spec_pct.iloc[t], hot_turn_share=hot.iloc[t],
+                         mainlines="；".join(themes)))
+    return pd.DataFrame(rows).set_index("date")

@@ -20,12 +20,20 @@ The wrapper uses the Python environment `../stockfish-env` next to the checkout 
 | Weekly | `sf review` | Forward review of every saved list (see below) |
 | Weekly | `sf themes` | Refreshes concept/industry board membership (~20 min) |
 | Any time | `sf mood` | Market sentiment indicators, percentile level and tier (低/中/高) with advice |
+| Any time | `sf crowding [--days 20]` | Short-term money temperature: market turnover vs its 20-day mean, short-term share (stocks with a limit-up in 5 sessions), high-turnover share, mainlines with their turnover share (`!` = at a 60-session high). For review and context only |
 | Any time | `sf seats --code 600000 [--date D]` | One stock's LHB seats for a session; `sf seats` prints the seat leaderboard |
 
 **Unattended mode.** `bin/sf-schedule install` adds two macOS launchd jobs: the 09:26 auction re-rank and
 the evening list plus review after 18:30 (Shanghai time). `sf auto` checks the trading calendar and the
 time window itself, so the jobs can fire daily; logs go to `stockfish-data/logs/auto-<date>.log`.
 `bin/sf-schedule status` / `uninstall`. The Mac must be awake at those times.
+
+**Strategy under forward test: 龙脉 V1** (`docs/STRATEGY_LONGMAI_V1.md`, frozen). `sf premarket`
+and `sf longmai` default to V1; V2/V3 remain for backtest comparison (`sf longmai --version 3`). The
+list is decision support: the trades are made by a person. Crowding / turnover-share readings
+(`sf crowding`, the 短线资金 and 题材拥挤 lines of the summary) describe the short-term environment for
+review; they do not select stocks or identify leaders (no tradable threshold was found,
+`docs/CROWDING_STUDY.md`).
 
 `sf premarket --detail` shows tiers, scores, stages and seal facts. `sf status` shows data coverage.
 

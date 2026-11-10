@@ -153,6 +153,30 @@ def cmd_mood(args) -> int:
     return 0
 
 
+def cmd_crowding(args) -> int:
+    from . import crowding, mainline, store, themes
+    loaded = themes.load()
+    if loaded is None:
+        print("缺少题材数据，请先运行 sf themes", file=sys.stderr)
+        return 1
+    days = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    with _quiet():
+        aw = mainline.a_share_panel(store.load_window(days[-(args.days + 260):]))
+        ts = mainline.theme_stats(aw, *loaded)
+    tab = crowding.environment(aw, ts, args.days)
+    view = pd.DataFrame({
+        "全市场成交(亿)": (tab["market_amount"] / 1e8).map(lambda v: f"{v:,.0f}"),
+        "较20日均": tab["amount_ratio20"].map(lambda v: f"{v:.2f}"),
+        "短线占比": tab["spec_share"].map(lambda v: f"{v:.1%}"),
+        "250日分位": tab["spec_pct250"].map(lambda v: "-" if pd.isna(v) else f"{v:.0%}"),
+        "高换手占比": tab["hot_turn_share"].map(lambda v: f"{v:.1%}"),
+        "主线(成交占比)": tab["mainlines"]}, index=tab.index)
+    print(view.to_string())
+    print("短线占比=近5日涨停过的股票成交额/全市场；高换手=换手≥15%；!=该主线成交占比处于60日最高位（历史上2日内退潮概率约1.5倍）。")
+    print("只用于复盘和判断短线水温，不用于选股或定龙头；回测未发现市场级拥挤阈值（docs/CROWDING_STUDY.md）。")
+    return 0
+
+
 def cmd_update(args) -> int:
     from . import pools, store
     started = time.monotonic()
@@ -225,6 +249,8 @@ def _premarket_longmai(args, started) -> int:
 
 def cmd_longmai(args) -> int:
     from . import longmai
+    if args.version is None:
+        args.version = longmai.FORWARD_VERSION
     print(f"龙脉V{args.version} 组合回测（约5-10分钟）...")
     with _quiet():
         trades, ctx = longmai.backtest(version=args.version)
@@ -488,7 +514,7 @@ def parser() -> argparse.ArgumentParser:
 
     lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
-    lm.add_argument("--version", type=int, default=3, choices=[1, 2, 3])
+    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3], help="默认为前向检验版本V1")
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")
@@ -505,6 +531,9 @@ def parser() -> argparse.ArgumentParser:
     ao.add_argument("--force", action="store_true")
     ao.set_defaults(func=cmd_auto)
 
+    cr = sub.add_parser("crowding", help="短线资金水温（复盘用，不选股）")
+    cr.add_argument("--days", type=int, default=20)
+    cr.set_defaults(func=cmd_crowding)
     mo = sub.add_parser("mood", help="市场情绪指标与阶段")
     mo.add_argument("--days", type=int, default=10)
     mo.set_defaults(func=cmd_mood)

@@ -14,7 +14,9 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V3"
+# V1 is the version under forward test (chosen 2026-11-10); V2/V3 stay for backtest comparison only.
+FORWARD_VERSION = 1
+VERSION = "SF_LONGMAI_V1"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -30,7 +32,7 @@ VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
-def params(overrides: dict | None = None, version: int = 3) -> dict:
+def params(overrides: dict | None = None, version: int = FORWARD_VERSION) -> dict:
     base = VERSIONS[version]
     p = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
     p.update(overrides or {})
@@ -180,7 +182,7 @@ def _seat_day(ctx: dict, day: str) -> pd.DataFrame | None:
     return part.set_index("code") if len(part) else pd.DataFrame(columns=["retail_net_ratio"])
 
 
-def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, version: int = 3) -> tuple[pd.DataFrame, dict]:
+def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, version: int = FORWARD_VERSION) -> tuple[pd.DataFrame, dict]:
     """Portfolio replay with slot limits. Returns (trades, ctx) so robustness runs can reuse ctx."""
     p = params(overrides, version)
     if ctx is None:
@@ -265,7 +267,7 @@ ROBUST = {
 ROBUST_V3 = {"crowd_turn": (25.0, 35.0), "crowd_surge": (1.5, 2.5)}
 
 
-def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = 3) -> Path:
+def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = FORWARD_VERSION) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     p = params(version=version)
     out = store.home() / "backtests" / f"{p['version']}-{stamp}"
