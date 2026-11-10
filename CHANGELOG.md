@@ -1,3 +1,18 @@
+# 2026-11-10 龙脉 V2 (`SF_LONGMAI_V2`) — activity and no 3-day veto (negative backtest)
+
+- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V2.md` (commit bd09827). Activity = mean of the
+  whole-market percentile ranks of traded amount and turnover rate; leader condition activity rank ≤ 30;
+  the 3-session abnormal-volatility veto is removed. V1 stays reproducible (`sf longmai --version 1`).
+- Backtest (same period and slots): 307 trades, −1.61% per trade, hit 37.5%, train / test1 / test2
+  −1.20% / −3.56% (t=−3.3) / −0.55%. Every robustness neighbour is negative. Decomposition: V2 with
+  activity switched off (amount only, no 3-day veto) is +0.03% per trade, so the turnover component
+  causes most of the loss and dropping the 3-day veto costs about 0.2% per trade versus V1 (+0.25%).
+  Reading: very high turnover on the signal day marks crowding — the condition the thesis exits on.
+- Post-list name links (`namethemes.links`): each listed stock is checked against today's strong stocks
+  for a shared word, character, homophone or 3-digit code suffix (binomial tail < 0.1%, strict because of
+  multiple comparisons). Shown as 玄学线索 for human judgement; no effect on the decision.
+- List columns: 成交额 now shows amount, turnover rate and activity rank.
+
 # 2026-11-10 Name contagion (名字/谐音扩散)
 
 - `sf/namethemes.py` (`SF_NAME_CONTAGION_V1`): groups built from every stock name — same character,

@@ -36,8 +36,19 @@ def test_vetoes():
     p = longmai.params()
     code = "sh.600001"
     assert longmai.vetoes(_ctx(), 1, code, p, None) == []
-    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == ["今日触发3日异动"]
+    assert longmai.vetoes(_ctx(trig=True), 1, code, p, None) == []  # V2: no 3-day veto
+    assert longmai.vetoes(_ctx(trig=True), 1, code, longmai.params(version=1), None) == ["今日触发3日异动"]
     assert "严重异动后第3日" in longmai.vetoes(_ctx(since=3.0), 1, code, p, None)
     assert any("距严重异动" in v for v in longmai.vetoes(_ctx(left=0.2), 1, code, p, None))
     seat = pd.DataFrame({"retail_net_ratio": [0.05]}, index=[code])
     assert longmai.vetoes(_ctx(), 1, code, p, seat) == ["拉萨散户席位大额净买"]
+
+
+def test_name_links_post_list():
+    from sf import namethemes
+    names = pd.Series({"sh.600001": "东方海洋", "sh.600002": "大东方", "sh.600003": "东方创业",
+                       **{f"sz.{i:06d}": f"公司{chr(0x4e00 + 500 + i)}{chr(0x4e00 + 900 + i)}" for i in range(1, 200)}})
+    strong = pd.Index(["sh.600001", "sh.600002", "sh.600003", "sz.000005"])
+    links = namethemes.links(["sh.600001"], names, strong, names.index)
+    assert links and links[0]["kind"] == "词" and links[0]["key"] == "东方"
+    assert set(links[0]["partners"]) == {"大东方", "东方创业"}

@@ -14,18 +14,22 @@ import pandas as pd
 
 from . import abnormal, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V1"
-PARAMS = dict(
+VERSION = "SF_LONGMAI_V2"
+PARAMS_V1 = dict(
+    version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
     gap_min=0.0, churn_mult=2.0, fade_ratio=0.34, stop_loss=0.07, max_hold=10, trend_ma=0,  # layer 5
     severe_margin=0.30, post_severe_days=10, retail_ratio=0.02,             # layer 4
     budget={"高": 1.0, "中": 0.5, "低": 0.0}, reg_cut=0.5, max_slots=4,       # layer 1
 )
+# V2 (docs/STRATEGY_LONGMAI_V2.md): activity = amount + turnover ranks; no 3-session abnormal veto.
+PARAMS = dict(PARAMS_V1, version="SF_LONGMAI_V2", activity=True, veto_3day=False)
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
-def params(overrides: dict | None = None) -> dict:
-    p = {k: (dict(v) if isinstance(v, dict) else v) for k, v in PARAMS.items()}
+def params(overrides: dict | None = None, version: int = 2) -> dict:
+    base = PARAMS if version == 2 else PARAMS_V1
+    p = {k: (dict(v) if isinstance(v, dict) else v) for k, v in base.items()}
     p.update(overrides or {})
     return p
 
@@ -97,7 +101,7 @@ def mainline_table(ctx: dict, t: int, p: dict, lookback: int = 10) -> pd.DataFra
 def vetoes(ctx: dict, t: int, code: str, p: dict, seat_day: pd.DataFrame | None) -> list[str]:
     out = []
     sv = ctx["severe"]
-    if bool(ctx["trig"].iloc[t].get(code, False)):
+    if p.get("veto_3day", True) and bool(ctx["trig"].iloc[t].get(code, False)):
         out.append("今日触发3日异动")
     if bool(sv["flag"].iloc[t].get(code, False)):
         out.append("今日达严重异动标准")
@@ -113,10 +117,6 @@ def vetoes(ctx: dict, t: int, code: str, p: dict, seat_day: pd.DataFrame | None)
 def notes(ctx: dict, t: int, code: str, seat_day: pd.DataFrame | None) -> list[str]:
     """Informational risk notes (not vetoes)."""
     out = []
-    room = ctx["room"].iloc[t].get(code, np.nan)
-    limit = (ctx["w"]["up_limit"] / ctx["w"]["preclose"] - 1).iloc[t].get(code, 0.1)
-    if not bool(ctx["trig"].iloc[t].get(code, False)) and pd.notna(room) and room <= limit:
-        out.append(f"明日相对大盘涨超{room:.1%}即触发异动" if room > 0 else f"明日相对大盘跌幅不超{-room:.1%}即触发异动")
     left = ctx["severe"]["events_left"].iloc[t].get(code, 9)
     if left == 1:
         out.append("再触发1次3日异动即严重异动")
@@ -144,7 +144,8 @@ def decide(ctx: dict, t: int, target: str, p: dict, seat_day: pd.DataFrame | Non
     sig["board_lu3"] = [float(ctx["ts"]["lu3"].loc[day, b]) for b in sig["board"]]
     sig["vetoes"] = [vetoes(ctx, t, c, p, seat_day) for c in sig.index]
     sig["notes"] = [notes(ctx, t, c, seat_day) for c in sig.index]
-    sig = sig.sort_values(["board_lu3", "leader_rank", "amount_rank"], ascending=[False, True, True])
+    key = "activity_rank" if p.get("activity") else "amount_rank"
+    sig = sig.sort_values(["board_lu3", "leader_rank", key], ascending=[False, True, True])
     return dict(gate=g, leaders=sig, pool=pool)
 
 
@@ -158,9 +159,9 @@ def _seat_day(ctx: dict, day: str) -> pd.DataFrame | None:
     return part.set_index("code") if len(part) else pd.DataFrame(columns=["retail_net_ratio"])
 
 
-def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print) -> tuple[pd.DataFrame, dict]:
+def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, version: int = 2) -> tuple[pd.DataFrame, dict]:
     """Portfolio replay with slot limits. Returns (trades, ctx) so robustness runs can reuse ctx."""
-    p = params(overrides)
+    p = params(overrides, version)
     if ctx is None:
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
         feats, _ = seats.dataset(log=lambda *_: None)
@@ -183,7 +184,8 @@ def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print) 
         free = d["gate"]["slots"] - len(open_until)
         for code, s in d["leaders"].iterrows():
             base = dict(obs=day, target=target, code=code, board=s["board"], leader_rank=s["leader_rank"],
-                        amount_rank=s["amount_rank"], height=s["height"], mood_tier=d["gate"]["mood_tier"],
+                        amount_rank=s["amount_rank"], activity_rank=s.get("activity_rank"), turn=s.get("turn"),
+                        height=s["height"], mood_tier=d["gate"]["mood_tier"],
                         reg_tier=d["gate"]["reg_tier"], slots=d["gate"]["slots"])
             if s["vetoes"]:
                 rows.append(dict(base, status="VETO", reason="；".join(s["vetoes"])))
@@ -237,16 +239,17 @@ ROBUST = {
 }
 
 
-def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None) -> Path:
+def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = 2) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
-    out = store.home() / "backtests" / f"{VERSION}-{stamp}"
+    p = params(version=version)
+    out = store.home() / "backtests" / f"{p['version']}-{stamp}"
     out.mkdir(parents=True, exist_ok=False)
     trades.to_csv(out / "trades.csv", index=False, encoding="utf-8-sig")
     rep = dict(rep)
     eq = rep.pop("equity", None)
     if eq is not None:
         eq.rename("equity").to_csv(out / "equity.csv")
-    (out / "report.json").write_text(json.dumps(dict(version=VERSION, params=params(), report=rep),
+    (out / "report.json").write_text(json.dumps(dict(version=p["version"], params=p, report=rep),
                                                 ensure_ascii=False, indent=2, default=str))
     if robust is not None:
         robust.to_csv(out / "robustness.csv", encoding="utf-8-sig")
@@ -281,7 +284,14 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     basic = ctx["basic"].drop_duplicates("code").set_index("code")
     name = basic["code_name"]
     amount_rank = ctx["aw"]["amount"].iloc[t].rank(ascending=False)
+    _, act_rank = mainline.activity_rank(ctx["aw"], t)
+    turn_all = ctx["aw"]["turn"].iloc[t]
     close = ctx["w"]["close"].iloc[t]
+
+    def activity_text(code, amount):
+        r, tv = act_rank.get(code, np.nan), turn_all.get(code, np.nan)
+        return (f"{amount / 1e8:.1f}亿·换手{tv:.1f}%" if pd.notna(tv) else f"{amount / 1e8:.1f}亿") + \
+            (f"·活跃第{int(r)}" if pd.notna(r) else "")
 
     rows = []
     slots_left = g["slots"]
@@ -303,7 +313,7 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
                     f"跌破{stop}/满{p['max_hold']}日，次日开盘卖")
         rows.append(dict(分组=group, 名称=name.get(code, code), code=code, amount_raw=float(s["amount"]),
                          close=float(close[code]), 角色=role + (f"·{stage}" if stage else ""),
-                         成交额=f"{s['amount'] / 1e8:.1f}亿(第{int(s['amount_rank'])})", 参与建议=plan, 风险提示=risk))
+                         成交额=activity_text(code, s["amount"]), 参与建议=plan, 风险提示=risk))
     # name contagion (informational in V1; not part of the frozen decision)
     names_all = name.reindex(ctx["aw"]["close"].columns).dropna()
     hot = namethemes.scan(ctx["aw"]["limit_up"], ctx["aw"]["amount"].notna(), namethemes.groups(names_all), t)
@@ -327,23 +337,23 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             row["角色"] += f"·名字扩散({wave_of[row['code']]})"
     taken = set(leaders.index)
     r2 = facts[facts["r2_selected"].fillna(False).astype(bool) & ~facts.index.isin(taken)].copy()
-    r2["amount_rank"] = amount_rank.reindex(r2.index)
-    r2 = r2.sort_values("amount_rank")
+    r2["act_rank"] = act_rank.reindex(r2.index)
+    r2 = r2.sort_values("act_rank")
     watch, avoid = [], []
     for code, f in r2.iterrows():
         v = vetoes(ctx, t, code, p, seat_day)
         n = notes(ctx, t, code, seat_day)
-        rank = f["amount_rank"]
+        rank = f["act_rank"]
         role = f"非主线龙头·{f['stages']}" + (f"·名字扩散({wave_of[code]})" if code in wave_of else "")
         if code in wave_of and not bool(ctx["aw"]["limit_up"].iloc[t].get(code, False)):
             n = n + ["名字跟风(历史次日偏弱)"]
         row = dict(名称=name.get(code, code), code=code, amount_raw=float(f["amount"]), close=float(close[code]), 角色=role,
-                   成交额=f"{f['amount'] / 1e8:.1f}亿(第{int(rank)})" if pd.notna(rank) else f"{f['amount'] / 1e8:.1f}亿",
+                   成交额=activity_text(code, f["amount"]),
                    风险提示="；".join(v + n))
         if v:
             avoid.append(dict(row, 分组="回避", 参与建议="强势形态但触发风险否决，不参与"))
         else:
-            why = "成交额排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
+            why = "活跃度(成交额+换手)排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
             watch.append(dict(row, 分组="观察", 参与建议=f"只观察：{why}"))
     shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]}
     for wv in waves:
@@ -351,11 +361,10 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             if code in shown or code not in close.index:
                 continue
             v = vetoes(ctx, t, code, p, seat_day)
-            rank = amount_rank.get(code, np.nan)
             amt = float(ctx["aw"]["amount"].iloc[t].get(code, np.nan))
             watch.append(dict(分组="回避" if v else "观察", 名称=name.get(code, code), code=code, amount_raw=amt,
                               close=float(close[code]), 角色=f"名字扩散龙头({wv['group']})·{int(height_all.get(code, 0) or 0)}板",
-                              成交额=f"{amt / 1e8:.1f}亿(第{int(rank)})" if pd.notna(rank) else "-",
+                              成交额=activity_text(code, amt) if pd.notna(amt) else "-",
                               参与建议="触发风险否决，不参与" if v else "只观察：名字扩散不在V1选股范围",
                               风险提示="；".join(v + notes(ctx, t, code, seat_day))))
             shown.add(code)
@@ -366,7 +375,12 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     group_of = table.set_index("code")["分组"].map({"主线龙头": "leader", "观察": "watch", "回避": "avoid"})
     facts["lm_group"] = group_of.reindex(facts.index)
     facts["name"] = name.reindex(facts.index)
-    return dict(observation=observation, target=target, strategy_version=VERSION, regime=g["mood_tier"],
+    strong = ctx["aw"]["limit_up"].iloc[t].fillna(False).astype(bool) | \
+        ((ctx["aw"]["close"].iloc[t] / ctx["aw"]["preclose"].iloc[t] - 1) >= 0.05)
+    traded = ctx["aw"]["amount"].iloc[t].notna()
+    links = namethemes.links(table["code"].tolist(), names_all, strong[strong & traded].index, traded[traded].index)
+    return dict(observation=observation, target=target, strategy_version=p["version"], regime=g["mood_tier"],
+                name_links=links,
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status,
@@ -376,7 +390,8 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
 def header(result: dict) -> list[str]:
     g = result["gate"]
     pos = {4: "满仓(4只×1/4)", 2: "半仓(2只×1/4)", 1: "1/4仓(1只)", 0: "空仓：不开新仓"}.get(g["slots"], f"{g['slots']}只×1/4")
-    lines = [f"龙脉V1 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}",
+    tag = "V2" if result.get("strategy_version", "").endswith("V2") else "V1"
+    lines = [f"龙脉{tag} 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}",
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
              f"（深市周处置 {g['szse_cases']} 起）   建议仓位：{pos}"]
     if result["mainlines"]:
@@ -387,7 +402,10 @@ def header(result: dict) -> list[str]:
     for wv in result.get("name_waves", []):
         lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
                      f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")
-    lines.append("回测说明：本策略为冻结的V1假设，历史回测与前向检验见 docs/STRATEGY_LONGMAI_V1.md；非投资建议。")
+    for link in result.get("name_links", []):
+        lines.append(f"玄学线索：{link['name']} 与今日强势股 {'、'.join(link['partners'])} 同{link['kind']}「{link['key']}」"
+                     f"（{link['k']}只，随机期望{link['expected']}）")
+    lines.append(f"回测说明：本策略为冻结的{tag}假设，规格与前向检验见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
     return lines
 
 

@@ -57,7 +57,7 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
            (code.str.startswith("sz.") & num.str.startswith(("00", "30")))
     bars = bars[keep]
     w = {c: bars.pivot(index="date", columns="code", values=c).sort_index()
-         for c in ("close", "preclose", "amount", "volume")}
+         for c in ("close", "preclose", "amount", "volume", "turn")}
     st = bars.pivot(index="date", columns="code", values="isST").sort_index() == "1"
     cols = w["close"].columns
     wide_board = pd.Series(cols.str[3:].str.startswith(("30", "68")), index=cols)
@@ -66,7 +66,16 @@ def a_share_panel(bars: pd.DataFrame) -> dict:
     traded = (w["volume"] > 0) & (w["close"] > 0)
     w["limit_up"] = traded & (w["close"] >= up - 1e-9)
     w["amount"] = w["amount"].where(traded)
+    w["turn"] = w["turn"].apply(pd.to_numeric, errors="coerce").where(traded)
     return w
+
+
+def activity_rank(aw: dict, t: int) -> tuple[pd.Series, pd.Series]:
+    """Whole-market activity: mean of the percentile ranks of traded amount and turnover rate.
+    Returns (score in 0..1, rank with 1 = most active)."""
+    amount, turn = aw["amount"].iloc[t], aw["turn"].iloc[t]
+    score = (amount.rank(pct=True) + turn.rank(pct=True)) / 2
+    return score, score.rank(ascending=False, method="min")
 
 
 def theme_stats(aw: dict, boards: pd.DataFrame, members: pd.DataFrame) -> dict:
@@ -105,6 +114,8 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
         return pd.DataFrame()
     day = w["close"].index[t]
     amount_rank = aw["amount"].loc[day].rank(ascending=False)
+    use_activity = p.get("activity", False)
+    act_score, act_rank = activity_rank(aw, t) if use_activity else (None, None)
     raw = {c: w[c].iloc[t] for c in ("close", "preclose", "high", "low", "amount")}
     ret1 = raw["close"] / raw["preclose"] - 1
     rng = raw["high"] - raw["low"]
@@ -120,17 +131,21 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
         if not len(index):
             continue
         cand = pd.DataFrame({"height": height.reindex(index), "amount": raw["amount"].reindex(index)})
+        cand["act"] = act_score.reindex(index) if use_activity else cand["amount"]
         # Rank only today's strong, eligible members: weak members can't be the leader.
         cand = cand[pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)]
         if cand.empty:
             continue
-        cand["leader_rank"] = cand.sort_values(["height", "amount"], ascending=False).assign(
+        cand["leader_rank"] = cand.sort_values(["height", "act"], ascending=False).assign(
             r=range(1, len(cand) + 1))["r"]
-        ok = (amount_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
+        gate_rank = act_rank if use_activity else amount_rank
+        ok = (gate_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
         for code in cand.index[ok]:
             rows.append(dict(code=code, board=board, board_lu=float(ts["lu"].loc[day, board]),
                              leader_rank=int(cand.loc[code, "leader_rank"]), height=int(cand.loc[code, "height"]),
                              amount=float(cand.loc[code, "amount"]), amount_rank=float(amount_rank.get(code, np.nan)),
+                             activity_rank=float(act_rank.get(code, np.nan)) if use_activity else np.nan,
+                             turn=float(aw["turn"].iloc[t].get(code, np.nan)),
                              ret1=float(ret1.get(code, np.nan))))
     if not rows:
         return pd.DataFrame()

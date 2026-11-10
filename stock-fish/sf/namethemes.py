@@ -141,3 +141,56 @@ def scan_all(limit_up: pd.DataFrame, traded: pd.DataFrame, grp: dict[str, list[s
         if pv < alpha:
             rows.append((limit_up.index[d], labels[g], int(N[d, g]), int(K[d, g]), pv))
     return pd.DataFrame(rows, columns=["date", "group", "members", "limit_ups", "p_value"])
+
+
+def links(list_codes: list[str], names: pd.Series, strong: pd.Index, universe: pd.Index,
+          alpha: float = 1e-3, max_links: int = 8) -> list[dict]:
+    """Post-list check: for each listed stock, today's strong stocks (limit-up or +5%) sharing a word,
+    character, homophone or 3-digit code suffix with it, kept when the overlap is improbable
+    (binomial tail < alpha with the share of strong stocks in the universe as the rate). alpha is strict
+    because each list checks ~15 keys for ~10-20 stocks (multiple comparisons)."""
+    universe = pd.Index(universe).intersection(names.index)
+    strong = pd.Index(strong).intersection(universe)
+    if not len(universe) or not len(strong):
+        return []
+    rate = len(strong) / len(universe)
+    cleaned = {c: clean(names[c]) for c in universe}
+
+    def keys(code):
+        text = cleaned.get(code, "")
+        out = {("词", text[i:i + 2]) for i in range(len(text) - 1) if not (set(text[i:i + 2]) & STOP_CHARS)}
+        for ch in text:
+            if ch not in STOP_CHARS:
+                out.add(("字", ch))
+                out.add(("音", _pinyin(ch)))
+        out.add(("代码尾号", code[-3:]))
+        return out
+
+    index: dict[tuple, set] = {}
+    for c in universe:
+        for k in keys(c):
+            index.setdefault(k, set()).add(c)
+    found, seen = [], set()
+    for code in list_codes:
+        if code not in cleaned:
+            continue
+        best = []
+        for k in keys(code):
+            members = index.get(k, set())
+            partners = sorted((members & set(strong)) - {code})
+            n, kk = len(members), len(partners) + (1 if code in strong else 0)
+            if len(partners) < (1 if k[0] in ("词", "代码尾号") else 2):
+                continue
+            pv = binom_tail(kk, n, rate)
+            if pv < alpha:
+                best.append((pv, k, partners, n))
+        order = {"词": 0, "字": 1, "音": 2, "代码尾号": 3}  # most specific first on ties
+        for pv, (kind, key), partners, n in sorted(best, key=lambda x: (x[0], order[x[1][0]]))[:1]:
+            sig = (kind, key)
+            if sig in seen:
+                continue
+            seen.add(sig)
+            found.append(dict(code=code, name=names[code], kind=kind, key=key, k=len(partners) + 1,
+                              expected=round(n * rate, 1), p_value=pv,
+                              partners=[names.get(c, c) for c in partners[:6]]))
+    return sorted(found, key=lambda x: x["p_value"])[:max_links]

@@ -225,9 +225,9 @@ def _premarket_longmai(args, started) -> int:
 
 def cmd_longmai(args) -> int:
     from . import longmai
-    print("龙脉V1 组合回测（约5-10分钟）...")
+    print(f"龙脉V{args.version} 组合回测（约5-10分钟）...")
     with _quiet():
-        trades, ctx = longmai.backtest()
+        trades, ctx = longmai.backtest(version=args.version)
     rep = longmai.report(trades)
     rep30 = longmai.report(trades, extra_cost=0.0015)
     keys = ["trades", "avg", "hit", "payoff", "held", "total_return", "max_drawdown", "vetoed", "no_slot", "no_entry"]
@@ -243,13 +243,13 @@ def cmd_longmai(args) -> int:
         for key, vals in longmai.ROBUST.items():
             for v in vals:
                 with _quiet():
-                    r = longmai.report(longmai.backtest({key: v}, ctx=ctx)[0])
+                    r = longmai.report(longmai.backtest({key: v}, ctx=ctx, version=args.version)[0])
                 rows.append(dict(variant=f"{key}={v}", trades=r.get("trades"), avg=r.get("avg"),
                                  total=r.get("total_return"), dd=r.get("max_drawdown"),
                                  test1=r.get("test1_avg"), test2=r.get("test2_avg")))
         robust = pd.DataFrame(rows).set_index("variant")
         print(robust.to_string())
-    print(f"已保存 {longmai.save_backtest(trades, rep, robust)}")
+    print(f"已保存 {longmai.save_backtest(trades, rep, robust, version=args.version)}")
     return 0
 
 
@@ -485,8 +485,9 @@ def parser() -> argparse.ArgumentParser:
     ml.add_argument("--save", action="store_true", help="保存默认参数的逐笔交易")
     ml.set_defaults(func=cmd_mainline)
 
-    lm = sub.add_parser("longmai", help="龙脉V1组合回测（--robust 做参数稳健性检查）")
+    lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
+    lm.add_argument("--version", type=int, default=2, choices=[1, 2])
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")
