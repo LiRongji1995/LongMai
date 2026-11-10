@@ -266,7 +266,9 @@ def cmd_longmai(args) -> int:
     robust = None
     if args.robust:
         rows = []
-        grid = {**longmai.ROBUST, **(longmai.ROBUST_V3 if args.version == 3 else {})}
+        grid = {**longmai.ROBUST, **({3: longmai.ROBUST_V3, 4: longmai.ROBUST_V4}.get(args.version, {}))}
+        if args.version == 4:
+            grid.pop("amount_rank_max")  # V4 has no amount ranking
         for key, vals in grid.items():
             for v in vals:
                 with _quiet():
@@ -514,7 +516,7 @@ def parser() -> argparse.ArgumentParser:
 
     lm = sub.add_parser("longmai", help="龙脉组合回测（--robust 做参数稳健性检查）")
     lm.add_argument("--robust", action="store_true")
-    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3], help="默认为前向检验版本V1")
+    lm.add_argument("--version", type=int, default=None, choices=[1, 2, 3, 4], help="默认为前向检验版本V4")
     lm.set_defaults(func=cmd_longmai)
 
     se = sub.add_parser("seats", help="龙虎榜席位：回填、席位榜、个股席位")

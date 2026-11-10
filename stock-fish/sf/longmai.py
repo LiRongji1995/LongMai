@@ -14,9 +14,9 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
-# V1 is the version under forward test (chosen 2026-11-10); V2/V3 stay for backtest comparison only.
-FORWARD_VERSION = 1
-VERSION = "SF_LONGMAI_V1"
+# V4 is the version under forward test (user decision 2026-11-10); V1-V3 stay for backtest comparison only.
+FORWARD_VERSION = 4
+VERSION = "SF_LONGMAI_V4"
 PARAMS_V1 = dict(
     version="SF_LONGMAI_V1", activity=False, veto_3day=True,
     top_k=3, min_theme_limit_ups=3, amount_rank_max=30, leader_rank_max=2,   # layers 2-3
@@ -28,7 +28,11 @@ PARAMS_V1 = dict(
 PARAMS_V2 = dict(PARAMS_V1, version="SF_LONGMAI_V2", activity=True, veto_3day=False)
 # V3 (docs/STRATEGY_LONGMAI_V3.md): turnover identifies the leader; crowded leaders are not bought.
 PARAMS = dict(PARAMS_V2, version="SF_LONGMAI_V3", crowd_turn=30.0, crowd_surge=2.0)
-VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS}
+# V4 (docs/STRATEGY_LONGMAI_V4.md): leaders by height then turnover rate; amount only as a fixed
+# threshold (today or 3-session mean >= 5亿); no 3-day veto; V3 crowding block kept.
+PARAMS_V4 = dict(PARAMS_V1, version="SF_LONGMAI_V4", veto_3day=False, leader_key="turn", amount_min=5e8,
+                 crowd_turn=30.0, crowd_surge=2.0)
+VERSIONS = {1: PARAMS_V1, 2: PARAMS_V2, 3: PARAMS, 4: PARAMS_V4}
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 
@@ -167,7 +171,7 @@ def decide(ctx: dict, t: int, target: str, p: dict, seat_day: pd.DataFrame | Non
     sig["vetoes"] = [vetoes(ctx, t, c, p, seat_day) for c in sig.index]
     sig["notes"] = [notes(ctx, t, c, seat_day) for c in sig.index]
     sig["crowded"] = [crowded(ctx, t, c, p) for c in sig.index]
-    key = "activity_rank" if p.get("activity") else "amount_rank"
+    key = "turn_rank" if p.get("leader_key") == "turn" else "activity_rank" if p.get("activity") else "amount_rank"
     sig = sig.sort_values(["board_lu3", "leader_rank", key], ascending=[False, True, True])
     return dict(gate=g, leaders=sig, pool=pool)
 
@@ -208,6 +212,7 @@ def backtest(overrides: dict | None = None, ctx: dict | None = None, log=print, 
         for code, s in d["leaders"].iterrows():
             base = dict(obs=day, target=target, code=code, board=s["board"], leader_rank=s["leader_rank"],
                         amount_rank=s["amount_rank"], activity_rank=s.get("activity_rank"), turn=s.get("turn"),
+                        turn_rank=s.get("turn_rank"), amount=s.get("amount"),
                         height=s["height"], mood_tier=d["gate"]["mood_tier"],
                         reg_tier=d["gate"]["reg_tier"], slots=d["gate"]["slots"])
             if s["vetoes"]:
@@ -265,6 +270,7 @@ ROBUST = {
     "severe_margin": (0.2, 0.4), "gap_min": (-0.01, 0.01),
 }
 ROBUST_V3 = {"crowd_turn": (25.0, 35.0), "crowd_surge": (1.5, 2.5)}
+ROBUST_V4 = {"amount_min": (3e8, 8e8), "crowd_turn": (25.0, 35.0, 0), "crowd_surge": (1.5, 2.5)}
 
 
 def save_backtest(trades: pd.DataFrame, rep: dict, robust: pd.DataFrame | None = None, version: int = FORWARD_VERSION) -> Path:
@@ -316,10 +322,19 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     turn_all = ctx["aw"]["turn"].iloc[t]
     close = ctx["w"]["close"].iloc[t]
 
+    by_turn = p.get("leader_key") == "turn"
+    turn_rank_all = turn_all.rank(ascending=False, method="min")
+    amt3_all = ctx["w"]["amount"].iloc[max(0, t - 2):t + 1].mean()
+
     def activity_text(code, amount):
-        r, tv = act_rank.get(code, np.nan), turn_all.get(code, np.nan)
+        r = (turn_rank_all if by_turn else act_rank).get(code, np.nan)
+        tv = turn_all.get(code, np.nan)
         return (f"{amount / 1e8:.1f}亿·换手{tv:.1f}%" if pd.notna(tv) else f"{amount / 1e8:.1f}亿") + \
-            (f"·活跃第{int(r)}" if pd.notna(r) else "")
+            (f"·{'换手' if by_turn else '活跃'}第{int(r)}" if pd.notna(r) else "")
+
+    def below_amount(code):
+        a, a3 = ctx["w"]["amount"].iloc[t].get(code, np.nan), amt3_all.get(code, np.nan)
+        return not ((pd.notna(a) and a >= p["amount_min"]) or (pd.notna(a3) and a3 >= p["amount_min"]))
 
     rows = []
     slots_left = g["slots"]
@@ -370,7 +385,7 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             row["角色"] += f"·名字扩散({wave_of[row['code']]})"
     taken = set(leaders.index)
     r2 = facts[facts["r2_selected"].fillna(False).astype(bool) & ~facts.index.isin(taken)].copy()
-    r2["act_rank"] = act_rank.reindex(r2.index)
+    r2["act_rank"] = (turn_rank_all if by_turn else act_rank).reindex(r2.index)
     r2 = r2.sort_values("act_rank")
     watch, avoid = [], []
     for code, f in r2.iterrows():
@@ -386,7 +401,10 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         if v:
             avoid.append(dict(row, 分组="回避", 参与建议="强势形态但触发风险否决，不参与"))
         else:
-            why = "活跃度(成交额+换手)排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
+            if by_turn:
+                why = f"成交额未达{p['amount_min'] / 1e8:.0f}亿门槛(当日或近3日均)" if below_amount(code) else "不在当前前3主线或非题材内前2"
+            else:
+                why = "活跃度(成交额+换手)排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
             watch.append(dict(row, 分组="观察", 参与建议=f"只观察：{why}"))
     shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]}
     for wv in waves:
@@ -398,7 +416,7 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
             watch.append(dict(分组="回避" if v else "观察", 名称=name.get(code, code), code=code, amount_raw=amt,
                               close=float(close[code]), 角色=f"名字扩散龙头({wv['group']})·{int(height_all.get(code, 0) or 0)}板",
                               成交额=activity_text(code, amt) if pd.notna(amt) else "-",
-                              参与建议="触发风险否决，不参与" if v else "只观察：名字扩散不在V1选股范围",
+                              参与建议="触发风险否决，不参与" if v else f"只观察：名字扩散不在{p['version'].rsplit('_', 1)[-1]}选股范围",
                               风险提示="；".join(v + notes(ctx, t, code, seat_day))))
             shown.add(code)
     extra = [r for r in watch[watch_limit:] if r["角色"].startswith("名字扩散龙头")]

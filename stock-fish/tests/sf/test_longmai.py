@@ -81,6 +81,29 @@ def test_crowding_spec_share_and_theme_heat():
     assert np.isnan(crowding.theme_heat(dict(share=share), 5, "X")[1])
 
 
-def test_forward_version_is_v1():
-    assert longmai.params()["version"] == "SF_LONGMAI_V1" == longmai.VERSION
-    assert longmai.crowded({}, 0, "x", longmai.params()) == []  # V1 has no crowding block
+def test_v1_has_no_crowding_block():
+    assert longmai.crowded({}, 0, "x", longmai.params(version=1)) == []  # V1 has no crowding block
+
+
+def test_v4_leaders_by_turnover_with_amount_threshold():
+    import numpy as np
+    from sf import mainline
+    days = ["2026-01-05", "2026-01-06", "2026-01-07"]
+    codes = ["sh.600001", "sh.600002", "sh.600003"]   # all limit-up, height 1, same board
+    frame = lambda vals: pd.DataFrame([vals] * 3, index=days, columns=codes)
+    amount = pd.DataFrame([[2e8, 9e8, 6e8], [2e8, 9e8, 6e8], [9e8, 3e8, 6e8]], index=days, columns=codes)
+    # 600001: today 9亿; 600002: today 3亿 but 3-day mean 7亿; 600003: 6亿
+    turn = frame([5.0, 20.0, 10.0])
+    w = dict(close=frame([11.0] * 3), preclose=frame([10.0] * 3), high=frame([11.0] * 3), low=frame([10.0] * 3),
+             amount=amount, limit_up=frame([True] * 3), height=frame([1] * 3))
+    aw = dict(amount=amount, turn=turn)
+    lu = pd.DataFrame({"B": [3.0] * 3}, index=days)
+    ts = dict(lu=lu, lu3=lu * 3, share=lu * 0 + 0.1, M=np.ones((1, 3), dtype=np.float32), names=["B"], cols=codes)
+    pool = pd.Series(True, index=codes)
+    p = longmai.params(version=4)
+    sig = mainline.signals(w, aw, ts, pool, 2, p)
+    assert list(sig.sort_values("leader_rank").index) == ["sh.600002", "sh.600003"]  # turnover order, 3-day amount counts
+    p_hi = longmai.params({"amount_min": 8e8}, version=4)
+    sig = mainline.signals(w, aw, ts, pool, 2, p_hi)
+    assert list(sig.index) == []  # 600001 passes 8亿 but is leader rank 3 by turnover
+    assert longmai.params()["version"] == "SF_LONGMAI_V4" and not longmai.params()["veto_3day"]

@@ -114,8 +114,15 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
         return pd.DataFrame()
     day = w["close"].index[t]
     amount_rank = aw["amount"].loc[day].rank(ascending=False)
-    use_activity = p.get("activity", False)
+    use_turn = p.get("leader_key") == "turn"  # V4: turnover rate identifies, fixed amount threshold
+    use_activity = p.get("activity", False) and not use_turn
     act_score, act_rank = activity_rank(aw, t) if use_activity else (None, None)
+    turn_today = aw["turn"].iloc[t]
+    turn_rank = turn_today.rank(ascending=False, method="min")
+    if use_turn:
+        amt_now = w["amount"].iloc[t]
+        amt3 = w["amount"].iloc[max(0, t - 2):t + 1].mean()
+        amount_ok = (amt_now >= p["amount_min"]) | (amt3 >= p["amount_min"])
     raw = {c: w[c].iloc[t] for c in ("close", "preclose", "high", "low", "amount")}
     ret1 = raw["close"] / raw["preclose"] - 1
     rng = raw["high"] - raw["low"]
@@ -131,21 +138,26 @@ def signals(w: dict, aw: dict, ts: dict, pool: pd.Series, t: int, p: dict) -> pd
         if not len(index):
             continue
         cand = pd.DataFrame({"height": height.reindex(index), "amount": raw["amount"].reindex(index)})
-        cand["act"] = act_score.reindex(index) if use_activity else cand["amount"]
+        cand["act"] = act_score.reindex(index) if use_activity else \
+            turn_today.reindex(index) if use_turn else cand["amount"]
         # Rank only today's strong, eligible members: weak members can't be the leader.
         cand = cand[pool.reindex(cand.index).fillna(False) & strong.reindex(cand.index).fillna(False)]
         if cand.empty:
             continue
         cand["leader_rank"] = cand.sort_values(["height", "act"], ascending=False).assign(
             r=range(1, len(cand) + 1))["r"]
-        gate_rank = act_rank if use_activity else amount_rank
-        ok = (gate_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
+        if use_turn:
+            ok = amount_ok.reindex(cand.index).fillna(False) & (cand["leader_rank"] <= p["leader_rank_max"])
+        else:
+            gate_rank = act_rank if use_activity else amount_rank
+            ok = (gate_rank.reindex(cand.index) <= p["amount_rank_max"]) & (cand["leader_rank"] <= p["leader_rank_max"])
         for code in cand.index[ok]:
             rows.append(dict(code=code, board=board, board_lu=float(ts["lu"].loc[day, board]),
                              leader_rank=int(cand.loc[code, "leader_rank"]), height=int(cand.loc[code, "height"]),
                              amount=float(cand.loc[code, "amount"]), amount_rank=float(amount_rank.get(code, np.nan)),
                              activity_rank=float(act_rank.get(code, np.nan)) if use_activity else np.nan,
-                             turn=float(aw["turn"].iloc[t].get(code, np.nan)),
+                             turn=float(turn_today.get(code, np.nan)),
+                             turn_rank=float(turn_rank.get(code, np.nan)),
                              ret1=float(ret1.get(code, np.nan))))
     if not rows:
         return pd.DataFrame()

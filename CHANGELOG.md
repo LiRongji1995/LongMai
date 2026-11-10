@@ -1,3 +1,17 @@
+# 2026-11-10 龙脉 V4 (`SF_LONGMAI_V4`) — forward-test version; negative full-history backtest
+
+- Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V4.md` (commit f5c1df3). V1 retired.
+  Leaders by board height then turnover rate; amount only as a fixed threshold (today or 3-session
+  mean ≥ 5亿); no 3-session abnormal veto; V3 crowding block kept. `sf premarket` / `sf longmai`
+  default to V4.
+- Backtest: 424 trades (1402 crowded skipped), −0.80% per trade, hit 38.4%, payoff 1.35;
+  train / test1 / test2 −2.34% (t −3.0) / +1.38% (t 1.0) / +0.68% (t 0.4). By year 2022–2024
+  negative (−2.0 / −2.5 / −1.4%), 2025–2026 positive (+0.4 / +0.8%), when market turnover roughly
+  doubled. Robustness: every neighbour negative over the full history; removing the crowding block
+  is the worst (−1.82%), so the block helps; 8亿 threshold −0.53%, 3亿 −1.39%.
+- The full-history equity figures are additive per-slot sums and exceed −100%; per-trade averages
+  are the meaningful statistic here.
+
 # 2026-11-10 Forward test: 龙脉 V1; `sf crowding`
 
 - V1 is the version under forward test (`longmai.FORWARD_VERSION = 1`); `sf premarket` and
