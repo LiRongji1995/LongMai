@@ -138,3 +138,27 @@ def test_parse_szse_weekly_text():
            "上报证监会 2 起。二、会员监管动态"
     row = regulation.parse_szse(text)
     assert row["abnormal_trading_measures"] == 87 and row["company_matters_checked"] == 3 and row["csrc_clues"] == 2
+
+
+# ------------------------------------------------------------------ name contagion
+
+def test_name_groups_chars_homophones_words_and_stoplist():
+    from sf import namethemes
+    names = pd.Series({"a": "东方海洋", "b": "三羊马", "c": "阳光照明", "d": "大东方", "e": "*ST东方", "f": "华阳科技"})
+    g = namethemes.groups(names, min_members=2)
+    assert set(g["词·东方"]) == {"a", "d", "e"}
+    yang = [k for k in g if k.startswith("音·yang")]
+    assert yang and {"a", "b", "c", "f"} <= set(g[yang[0]])
+    assert "字·科" not in g and "字·技" not in g  # industry characters are excluded
+
+
+def test_name_scan_flags_abnormal_concentration():
+    from sf import namethemes
+    codes = [f"c{i}" for i in range(200)]
+    lu = pd.DataFrame([[i < 6 for i in range(200)]], columns=codes, index=["d"])
+    tr = pd.DataFrame([[True] * 200], columns=codes, index=["d"])
+    grp = {"词·东方": codes[:5] + codes[100:105], "字·华": codes[50:150]}
+    hot = namethemes.scan(lu, tr, grp, 0)
+    assert hot["group"].tolist() == ["词·东方"]
+    assert namethemes.binom_tail(0, 10, 0.1) == 1.0
+    assert namethemes.binom_tail(10, 10, 0.5) == pytest.approx(0.5 ** 10)

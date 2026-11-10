@@ -1,3 +1,16 @@
+# 2026-11-10 Name contagion (名字/谐音扩散)
+
+- `sf/namethemes.py` (`SF_NAME_CONTAGION_V1`): groups built from every stock name — same character,
+  same two-character word (e.g. 东方), same toneless pinyin (e.g. yang: 羊阳洋扬杨) — with industry,
+  legal-form, commodity and delisting words excluded. A group is hot when its limit-ups are improbable
+  under the market limit-up rate (binomial tail < 1e-4, at least 3 limit-ups). No seed keywords: all
+  ~800 groups are scanned daily. Detected without prompting: the 羊/洋/阳 wave (2026-10-21 → 11-03), the
+  东方 wave (11-06 → 11-09), 华 on 2026-09-21.
+- Out of sample (next-open entry, next-open exit): limit-ups inside a hot name group do no better than
+  all limit-ups (−0.22% / +0.29% / −0.44% excess); members not yet limit-up do worse the next day
+  (test1 −0.52% t=−1.7, test2 −0.94% t=−2.1). Informational + risk note only; candidate mainline source
+  for V2. The 龙脉 list shows up to three distinct waves with their leaders and tags followers.
+
 # 2026-11-10 龙脉 V1 (`SF_LONGMAI_V1`) — first formal strategy
 
 - Spec frozen before the backtest: `docs/STRATEGY_LONGMAI_V1.md` (commit d58af71). `sf premarket` now

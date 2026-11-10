@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import abnormal, mainline, mood, outcomes, regulation, seats, store, strategy, themes
+from . import abnormal, mainline, mood, namethemes, outcomes, regulation, seats, store, strategy, themes
 
 VERSION = "SF_LONGMAI_V1"
 PARAMS = dict(
@@ -304,6 +304,27 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         rows.append(dict(分组=group, 名称=name.get(code, code), code=code, amount_raw=float(s["amount"]),
                          close=float(close[code]), 角色=role + (f"·{stage}" if stage else ""),
                          成交额=f"{s['amount'] / 1e8:.1f}亿(第{int(s['amount_rank'])})", 参与建议=plan, 风险提示=risk))
+    # name contagion (informational in V1; not part of the frozen decision)
+    names_all = name.reindex(ctx["aw"]["close"].columns).dropna()
+    hot = namethemes.scan(ctx["aw"]["limit_up"], ctx["aw"]["amount"].notna(), namethemes.groups(names_all), t)
+    height_all = ctx["w"]["height"].iloc[t]
+    waves, wave_of = [], {}
+    covered: set[str] = set()
+    for r in hot.itertuples():
+        if len(waves) >= 3:
+            break
+        if covered and len(set(r.codes) & covered) >= 0.7 * len(r.codes):
+            continue  # same wave seen through another character / homophone / word group
+        covered |= set(r.codes)
+        members = namethemes.groups(names_all)[r.group]
+        lead = sorted(r.codes, key=lambda c: (-float(height_all.get(c, 0) or 0), -float(ctx["aw"]["amount"].iloc[t].get(c, 0) or 0)))
+        waves.append(dict(group=r.group, limit_ups=r.limit_ups, expected=r.expected, members=r.members,
+                          leaders=[name.get(c, c) for c in lead[:3]], lead_codes=lead[:2]))
+        for c in members:
+            wave_of.setdefault(c, r.group)
+    for row in rows:
+        if row["code"] in wave_of:
+            row["角色"] += f"·名字扩散({wave_of[row['code']]})"
     taken = set(leaders.index)
     r2 = facts[facts["r2_selected"].fillna(False).astype(bool) & ~facts.index.isin(taken)].copy()
     r2["amount_rank"] = amount_rank.reindex(r2.index)
@@ -313,7 +334,9 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         v = vetoes(ctx, t, code, p, seat_day)
         n = notes(ctx, t, code, seat_day)
         rank = f["amount_rank"]
-        role = f"非主线龙头·{f['stages']}"
+        role = f"非主线龙头·{f['stages']}" + (f"·名字扩散({wave_of[code]})" if code in wave_of else "")
+        if code in wave_of and not bool(ctx["aw"]["limit_up"].iloc[t].get(code, False)):
+            n = n + ["名字跟风(历史次日偏弱)"]
         row = dict(名称=name.get(code, code), code=code, amount_raw=float(f["amount"]), close=float(close[code]), 角色=role,
                    成交额=f"{f['amount'] / 1e8:.1f}亿(第{int(rank)})" if pd.notna(rank) else f"{f['amount'] / 1e8:.1f}亿",
                    风险提示="；".join(v + n))
@@ -322,7 +345,22 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
         else:
             why = "成交额排名不足前30" if pd.isna(rank) or rank > p["amount_rank_max"] else "不在当前前3主线"
             watch.append(dict(row, 分组="观察", 参与建议=f"只观察：{why}"))
-    rows += watch[:watch_limit] + avoid[:avoid_limit]
+    shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]}
+    for wv in waves:
+        for code in wv["lead_codes"]:
+            if code in shown or code not in close.index:
+                continue
+            v = vetoes(ctx, t, code, p, seat_day)
+            rank = amount_rank.get(code, np.nan)
+            amt = float(ctx["aw"]["amount"].iloc[t].get(code, np.nan))
+            watch.append(dict(分组="回避" if v else "观察", 名称=name.get(code, code), code=code, amount_raw=amt,
+                              close=float(close[code]), 角色=f"名字扩散龙头({wv['group']})·{int(height_all.get(code, 0) or 0)}板",
+                              成交额=f"{amt / 1e8:.1f}亿(第{int(rank)})" if pd.notna(rank) else "-",
+                              参与建议="触发风险否决，不参与" if v else "只观察：名字扩散不在V1选股范围",
+                              风险提示="；".join(v + notes(ctx, t, code, seat_day))))
+            shown.add(code)
+    extra = [r for r in watch[watch_limit:] if r["角色"].startswith("名字扩散龙头")]
+    rows += watch[:watch_limit] + extra + avoid[:avoid_limit]
     table = pd.DataFrame(rows, columns=["分组", "名称", "code", "角色", "成交额", "参与建议", "风险提示", "amount_raw", "close"])
     lines = mainline_table(ctx, t, p)
     group_of = table.set_index("code")["分组"].map({"主线龙头": "leader", "观察": "watch", "回避": "avoid"})
@@ -330,7 +368,8 @@ def premarket(observation: str | None = None, update_external: bool = True, watc
     facts["name"] = name.reindex(facts.index)
     return dict(observation=observation, target=target, strategy_version=VERSION, regime=g["mood_tier"],
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
-                mainlines=lines.to_dict("records"), params=p, seats=seat_status,
+                mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
+                params=p, seats=seat_status,
                 abnormal_index_ok=bool(ctx["index_ok"]), table=table, leaders=leaders, facts=facts)
 
 
@@ -345,6 +384,9 @@ def header(result: dict) -> list[str]:
                                        for m in result["mainlines"]))
     else:
         lines.append("主线：无（没有题材当日涨停≥3家）")
+    for wv in result.get("name_waves", []):
+        lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
+                     f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")
     lines.append("回测说明：本策略为冻结的V1假设，历史回测与前向检验见 docs/STRATEGY_LONGMAI_V1.md；非投资建议。")
     return lines
 
