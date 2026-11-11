@@ -19,17 +19,20 @@ from copy import deepcopy
 import numpy as np
 import pandas as pd
 
-STRATEGY_VERSION = "SF_R2_LEAN_V1"
+STRATEGY_VERSION = "SF_R2_LEAN_V2"  # V2 (龙脉 V9): S2 limit-up start, C1 turnover-surge exclusion
 STAGES = ("STRONG_START", "STRONG_CONTINUATION", "FIRST_PULLBACK")
 
 DEFAULT_PARAMS = dict(
-    STRONG_START=dict(ret1_min=0.06, rs1_min=0.02, amount_min=1e8, a_min=1.5, clv_min=0.7, prev_ret5_max=0.12),
+    STRONG_START=dict(ret1_min=0.06, rs1_min=0.02, amount_min=1e8, a_min=1.5, clv_min=0.7, prev_ret5_max=0.12,
+                      limit_up_start=True),
     STRONG_CONTINUATION=dict(amount_min=5e7, ret5_min=0.15, ret10_min=0.25, ret1_min=0.05, ret3_min=0.0,
-                             clv_min=0.7),
+                             clv_min=0.7, turn_surge_max=2.0),
     FIRST_PULLBACK=dict(amount_min=2e8, ret1_min=-0.08, ret1_max=0.0, ret5_min=0.20, ret3_min=0.05),
     R2=dict(turnover_min_pct=5.0, turnover_window=5),
     universe=dict(min_listing_sessions=60, benchmark_min_coverage=0.6),
 )
+# 龙脉 V7 stage rules (SF_R2_LEAN_V1), kept for replays that must reproduce V7
+V7_OVERRIDES = {"STRONG_START": {"limit_up_start": False}, "STRONG_CONTINUATION": {"turn_surge_max": None}}
 MIN_HISTORY = 25  # sessions needed before t (MA20 five sessions ago)
 
 
@@ -163,6 +166,7 @@ def features(w: dict, t: int, pool: pd.Series, p: dict | None = None) -> pd.Data
         "ma5": ma(5), "ma10": ma(10), "ma20": ma(20), "ma20_prev": ma(20, t - 5),
         "three_up": (daily_ret.iloc[1:4] > 0).all(),
         "max_turn": w["turn"].iloc[t - win + 1:t + 1].max(),
+        "turn_prev5": w["turn"].where(w["traded"].fillna(False).astype(bool)).iloc[t - 5:t].mean(skipna=False),
         "limit_up": w["limit_up"].iloc[t], "touched_up": w["touched_up"].iloc[t],
         "one_price": w["one_price_up"].iloc[t], "limit_down": w["limit_down"].iloc[t],
         "board_height": w["height"].iloc[t],
@@ -185,13 +189,15 @@ def _gates(f: pd.DataFrame, p: dict) -> dict[str, dict[str, pd.Series]]:
             "breakout": f["close_adj"] > f["prior5_high"],
             "ma5_10": (f["close_adj"] > f["ma5"]) & (f["close_adj"] > f["ma10"]),
             "prev_ret5": f["prev_ret5"] <= s["prev_ret5_max"], "clv": clv_ok(s["clv_min"]),
-        },
+        } | ({"limit_up_start": f["limit_up"].fillna(False).astype(bool) & ~f["one_price"].fillna(False).astype(bool)}
+             if s.get("limit_up_start") else {}),
         "STRONG_CONTINUATION": {
             "amount": f["amount"] >= c["amount_min"],
             "momentum": (f["ret5"] >= c["ret5_min"]) | (f["ret10"] >= c["ret10_min"]),
             "ret1": f["ret1"] >= c["ret1_min"], "ret3": f["ret3"] >= c["ret3_min"], "rs5": f["rs5"] > 0,
             "clv": clv_ok(c["clv_min"]), "trend20": trend20,
-        },
+        } | ({"no_turn_surge": ~(f["turn"] >= c["turn_surge_max"] * f["turn_prev5"])}  # unknown turnover: kept
+             if c.get("turn_surge_max") else {}),
         "FIRST_PULLBACK": {
             "amount": f["amount"] >= b["amount_min"],
             "ret1": (f["ret1"] >= b["ret1_min"]) & (f["ret1"] < b["ret1_max"]),

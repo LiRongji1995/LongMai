@@ -1,6 +1,7 @@
 """龙脉 V9 (`SF_LONGMAI_V9`): pre-registered split of the three V7 stage patterns by ten fixed daily-bar flags.
 Pre-registration: docs/STRATEGY_LONGMAI_V9_PREREG.md (written and confirmed before this code ran on any data).
-V7 stays the live list; this module only replays history and applies the written verdict rule.
+The exam replays the V7 stage rules (`strategy.V7_OVERRIDES`). Its verdict was negative; the user adopted V9
+as the live list anyway on 2026-11-11 (docs/STRATEGY_LONGMAI_V9.md).
 
 Per observation session t (from the 61st stored session, the last one is not replayed):
 - rows: every R2-selected stock (V7 eligibility + a stage match + turnover gate, not limit-down) with its stage
@@ -101,7 +102,7 @@ def replay(sessions: list[str], start: int = 60, log=print) -> pd.DataFrame:
     """One row per (observation session, R2-selected stock) with stage matches, V7 group, flags and outcomes."""
     ctx = longmai.context(sessions, log=log)
     w = ctx["w"]
-    sp, lp = strategy.params(), longmai.params()
+    sp, lp = strategy.params(strategy.V7_OVERRIDES), longmai.params()  # the exam split the V7 stages
     index = list(w["close"].index)
     rows = []
     for t in range(start, len(index) - 1):

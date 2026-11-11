@@ -1,4 +1,4 @@
-"""The pre-market list (盘前清单) for 龙脉 V7: groups 主线龙头 / 连板梯队 / 观察 / 高波动, a header with
+"""The pre-market list (盘前清单) for 龙脉 V9: groups 主线龙头 / 连板梯队 / 观察 / 高波动, a header with
 mood, regulation, mainlines, the two-axis temperature, name waves, market high-flyers and the theme
 radar, and the saved run directory read by `sf show` and `sf review`.
 Candidates and risk notes only: the person decides every trade.

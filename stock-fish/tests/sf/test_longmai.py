@@ -173,7 +173,7 @@ def test_evaluate_nodes():
 def test_v7_default_and_temperature_cells():
     from sf import temperature
     p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V7" == longmai.VERSION and "amount_min" not in p
+    assert p["version"] == "SF_LONGMAI_V9" == longmai.VERSION and "amount_min" not in p
     assert longmai.params({"top_k": 5})["top_k"] == 5 and longmai.PARAMS["top_k"] == 3
     days = [f"d{i:03d}" for i in range(80)]
     tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",

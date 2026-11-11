@@ -32,9 +32,9 @@
 
 没有任何自动定时任务，命令都由你自己运行。
 
-## 清单（龙脉 V7）
+## 清单（龙脉 V9）
 
-规格见 [docs/STRATEGY_LONGMAI_V7.md](docs/STRATEGY_LONGMAI_V7.md)。只包含主板股票。
+规格见 [docs/STRATEGY_LONGMAI_V9.md](docs/STRATEGY_LONGMAI_V9.md)（在 [V7](docs/STRATEGY_LONGMAI_V7.md) 基础上只改了两条形态规则：强势启动必须是非一字的涨停，强势延续去掉换手突增 2 倍以上的股票，只影响观察组）。V9 没有通过它的预注册判定（观察组次日大面略多于 V7），是你看过结果后决定采用的。只包含主板股票。
 
 | 分组 | 内容 |
 |---|---|

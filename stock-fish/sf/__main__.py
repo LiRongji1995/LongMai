@@ -1,4 +1,4 @@
-"""`sf` — LongMai (龙脉) personal short-term screening CLI (龙脉 V7). The system never trades.
+"""`sf` — LongMai (龙脉) personal short-term screening CLI (龙脉 V9). The system never trades.
 
     sf update                 append missing sessions + capture today's limit/LHB pools
     sf premarket              build the pre-market list for the next session

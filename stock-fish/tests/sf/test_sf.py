@@ -77,7 +77,7 @@ def test_board_height_counts_consecutive_limit_ups():
 def test_strong_start_gate_diagnostics():
     peers = {f"sh.6000{i:02d}": flat() for i in range(10, 30)}
     start = flat()
-    start[-1] = 10.8  # +8%
+    start[-1] = 11.0  # limit-up start that traded (low 10.0): V9 requires it
     bars = make_bars({"sh.600001": start, **peers})
     bars.loc[(bars.code == "sh.600001") & (bars.date == DAYS[-1]), ["low", "amount"]] = [10.0, 5e8]
     w = strategy.panel(bars)
@@ -87,14 +87,14 @@ def test_strong_start_gate_diagnostics():
     assert bool(row["STRONG_START"]) and row["STRONG_START_failed"] == 0
     assert bool(row["r2_selected"])  # turnover 6% >= 5%
     # raise the ret1 threshold -> exactly one failed gate -> near miss
-    p = strategy.params({"STRONG_START": {"ret1_min": 0.09}})
+    p = strategy.params({"STRONG_START": {"ret1_min": 0.11}})
     g = strategy.evaluate(strategy.features(w, len(DAYS) - 1, pool, p), p).loc["sh.600001"]
     assert not g["STRONG_START"] and g["near_miss"] == "STRONG_START:ret1"
 
 
 def test_low_turnover_fails_r2_participation():
     start = flat()
-    start[-1] = 10.8
+    start[-1] = 11.0
     bars = make_bars({"sh.600001": start, **{f"sh.6000{i:02d}": flat() for i in range(10, 30)}}, turn=1.0)
     bars.loc[(bars.code == "sh.600001") & (bars.date == DAYS[-1]), ["low", "amount"]] = [10.0, 5e8]
     w = strategy.panel(bars)

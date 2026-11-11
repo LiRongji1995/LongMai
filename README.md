@@ -14,7 +14,7 @@ bin/sf --help
 
 - [使用说明](USER_GUIDE.md)：命令、输出、数据目录。
 - [Agent 规则](AGENTS.md)：时点正确、缺失显式、结果可复现。
-- [当前选股规格（V7）](docs/STRATEGY_LONGMAI_V7.md)和[架构评审](docs/ARCHITECTURE_REVIEW_2026-11-10.md)。
+- [当前选股规格（V9，在 V7 基础上）](docs/STRATEGY_LONGMAI_V9.md)、[V7 规格](docs/STRATEGY_LONGMAI_V7.md)和[架构评审](docs/ARCHITECTURE_REVIEW_2026-11-10.md)。
 - [更新日志](CHANGELOG.md)
 
 安装：Python 3.12，`python3.12 -m venv ../stockfish-env && ../stockfish-env/bin/pip install -r stock-fish/requirements.txt`。

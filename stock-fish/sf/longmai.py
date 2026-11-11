@@ -1,6 +1,6 @@
-"""龙脉 V7 (`SF_LONGMAI_V7`) screening: market gate, mainline leaders, risk vetoes and crowding flags.
+"""龙脉 V9 (`SF_LONGMAI_V9`; V7 rules + the V9 stage changes) screening: market gate, mainline leaders, risk vetoes and crowding flags.
 
-Specification: docs/STRATEGY_LONGMAI_V7.md. The same `context()` + `decide()` path serves the live
+Specification: docs/STRATEGY_LONGMAI_V9.md (on top of docs/STRATEGY_LONGMAI_V7.md). The same `context()` + `decide()` path serves the live
 list (`listing.py`) and the entry-free evaluation (`evaluate.py`). Versions V1-V6 are at tag `legacy-r2`.
 The system never trades; a person decides every entry and exit intraday.
 """
@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, regulation, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V7"
+VERSION = "SF_LONGMAI_V9"  # V9 = V7 + stage changes in strategy SF_R2_LEAN_V2
 PARAMS = dict(
     version=VERSION,
     top_k=3, min_theme_lu3=5, overlap_max=0.6,          # mainlines (concentration over 3 sessions)

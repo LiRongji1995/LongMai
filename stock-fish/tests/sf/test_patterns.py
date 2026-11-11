@@ -104,3 +104,19 @@ def test_report_needs_a_flag_and_no_worse_observe_group():
     assert rep["adopted"] == ["P1"] and rep["passed"]
     assert rep["compare"].loc[("V9", "test1"), "out5"] > rep["compare"].loc[("V7", "test1"), "out5"]
     assert rep["verdicts"]["C1"]["reason"] == "样本不足"
+
+
+def test_v9_stage_gates_and_v7_reproduction():
+    flat = [10.0] * 70
+    jump = [10.0] * 69 + [11.0]
+    codes = {"sh.600001": jump, "sh.600002": jump, **{f"sh.60001{i}": flat for i in range(6)}}
+    amounts = {c: [1e8] * 69 + [3e8] for c in ("sh.600001", "sh.600002")}
+    w = strategy.panel(_bars(codes, amounts, lows={("sh.600001", 69): 10.2}))  # 600002 is a one-price limit-up
+    t = len(DAYS) - 1
+    pool = pd.Series(True, index=w["close"].columns)
+    f = strategy.features(w, t, pool)
+    v9 = strategy.evaluate(f, strategy.params())
+    v7 = strategy.evaluate(f, strategy.params(strategy.V7_OVERRIDES))
+    assert v7.loc["sh.600001", "STRONG_START"] and v7.loc["sh.600002", "STRONG_START"]
+    assert v9.loc["sh.600001", "STRONG_START"] and not v9.loc["sh.600002", "STRONG_START"]
+    assert v9.loc["sh.600002", "near_miss"] == "STRONG_START:limit_up_start"
