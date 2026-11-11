@@ -11,7 +11,9 @@ Layers under intraday/ (see docs/INTRADAY_STUDY.md for definitions):
                                 source sends 0.00), high, low, close, volume (shares), amount (yuan), avg (source VWAP)
 - universe/<day>.parquet        which stocks were captured for the day and why (known after that close)
 - capture/<day>.json            requested / ok / failed / incomplete codes, raw file, fetched_at, format
-- features/<FEATURES>/<day>.parquet   derived, recomputable (excluded from backups)
+- supplement/{minute,universe,capture}/<day>/<UTC stamp>.*   list stocks fetched after the evening capture
+                                (the list is built after it; they belong to the pre-registered universe as list_obs)
+- features/<FEATURES>/<day>[+s<n>].parquet   derived, recomputable (excluded from backups); +s<n> = with n supplements
 Session files are written once and never modified. Missing stocks are listed in the capture log, never
 dropped silently; a stock with fewer than 241 bars on a traded day is "incomplete".
 """
@@ -140,6 +142,29 @@ def capture(days: list[str], workers: int = 4, log=print) -> dict[str, dict]:
         return result
     universes = {d: universe(d) for d in todo}
     codes = sorted(set().union(*(set(u["code"]) for u in universes.values())))
+    stamp, raw_path, frames, errors = _fetch_all(codes, workers, log)
+    for day in todo:
+        u = universes[day]
+        parts, entry = _split(day, u["code"], frames, errors, raw_path.name, stamp)
+        if not parts:
+            entry["status"] = "FAILED: no bars (outside the source's 5-session window?)"
+            (_dir("capture") / f"{day}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
+            result[day] = entry
+            continue
+        for frame, path in ((pd.concat(parts, ignore_index=True), minute_path(day)),
+                            (u, _dir("universe") / f"{day}.parquet")):
+            tmp = path.with_name(path.name + ".tmp")
+            frame.to_parquet(tmp, index=False)
+            tmp.replace(path)
+        entry["status"] = "ok" if not (entry["failed"] or entry["incomplete"] or entry["absent"]) else "partial"
+        (_dir("capture") / f"{day}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
+        result[day] = entry
+    return result
+
+
+def _fetch_all(codes: list[str], workers: int, log) -> tuple[str, object, dict, dict]:
+    """Fetch every code once; each body goes to a new raw file as received. Returns (stamp, raw path,
+    parsed frames per code, errors per code)."""
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     raw_path = _dir("raw") / f"{stamp}.jsonl.gz"
     bodies, errors = {}, {}
@@ -162,40 +187,77 @@ def capture(days: list[str], workers: int = 4, log=print) -> dict[str, dict]:
                 bodies[code] = body
             if i % 100 == 0:
                 log(f"  intraday {i}/{len(codes)} ({time.monotonic() - started:.0f}s)")
-    frames = {code: parse(code, body) for code, body in bodies.items()}
-    for day in todo:
-        u = universes[day]
-        parts, ok, incomplete, absent = [], [], [], []
-        for code in u["code"]:
-            if code in errors:
-                continue
-            part = frames[code][frames[code]["date"] == day]
-            if part.empty:
-                absent.append(code)  # no bars for this day in the response (outside the 5-session window)
-                continue
-            parts.append(part)
-            (ok if len(part) == BARS_PER_DAY else incomplete).append(code)
-        failed = sorted(set(u["code"]) & set(errors))
-        entry = dict(format=FORMAT, date=day, raw=raw_path.name, captured_at=stamp, requested=len(u),
-                     ok=len(ok), incomplete=incomplete, failed={c: errors[c] for c in failed}, absent=absent)
-        if not parts:
-            entry["status"] = "FAILED: no bars (outside the source's 5-session window?)"
-            (_dir("capture") / f"{day}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
-            result[day] = entry
+    return stamp, raw_path, {code: parse(code, body) for code, body in bodies.items()}, errors
+
+
+def _split(day: str, codes, frames: dict, errors: dict, raw_name: str, stamp: str) -> tuple[list, dict]:
+    """The bars of `day` for `codes`, and the capture log entry (ok / incomplete / failed / absent)."""
+    parts, ok, incomplete, absent = [], [], [], []
+    for code in codes:
+        if code in errors:
             continue
-        for frame, path in ((pd.concat(parts, ignore_index=True), minute_path(day)),
-                            (u, _dir("universe") / f"{day}.parquet")):
-            tmp = path.with_name(path.name + ".tmp")
-            frame.to_parquet(tmp, index=False)
-            tmp.replace(path)
-        entry["status"] = "ok" if not (failed or incomplete or absent) else "partial"
-        (_dir("capture") / f"{day}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
-        result[day] = entry
-    return result
+        part = frames[code][frames[code]["date"] == day]
+        if part.empty:
+            absent.append(code)  # no bars for this day in the response (outside the 5-session window)
+            continue
+        parts.append(part)
+        (ok if len(part) == BARS_PER_DAY else incomplete).append(code)
+    failed = sorted(set(codes) & set(errors))
+    entry = dict(format=FORMAT, date=day, raw=raw_name, captured_at=stamp, requested=len(list(codes)),
+                 ok=len(ok), incomplete=incomplete, failed={c: errors[c] for c in failed}, absent=absent)
+    return parts, entry
+
+
+def _supp_dir(kind: str, day: str):
+    return _dir(f"supplement/{kind}/{day}")
+
+
+def _supp_files(kind: str, day: str, pattern: str) -> list:
+    path = store.home() / "intraday" / "supplement" / kind / day
+    return sorted(path.glob(pattern)) if path.exists() else []
+
+
+def supplements(day: str) -> list:
+    return _supp_files("minute", day, "*.parquet")
+
+
+def supplement(day: str, codes: list[str], workers: int = 4, log=print) -> dict:
+    """Fetch the listed stocks that `day`'s evening capture did not include (the list built on `day` exists
+    only after that capture; its stocks are in the pre-registered universe as list_obs). Written once as new
+    files under supplement/; the session's main files are never edited."""
+    if not captured(day):
+        return dict(status="not captured")
+    now = store.now_sh()
+    if day == str(now.date()) and (now.hour, now.minute) < READY_HOUR_MINUTE:
+        return dict(status="FAILED: session not closed yet")
+    need = sorted(set(codes) - set(load(day)["code"]))  # earlier failures are retried as a new request
+    if not need:
+        return dict(status="ok", requested=0, ok=0)
+    stamp, raw_path, frames, errors = _fetch_all(need, workers, log)
+    parts, entry = _split(day, need, frames, errors, raw_path.name, stamp)
+    entry["kind"] = "supplement"
+    if parts:
+        pd.concat(parts, ignore_index=True).to_parquet(_supp_dir("minute", day) / f"{stamp}.parquet", index=False)
+        pd.DataFrame({"code": [p["code"].iloc[0] for p in parts], "reasons": "list_obs", "date": day}).to_parquet(
+            _supp_dir("universe", day) / f"{stamp}.parquet", index=False)
+    entry["status"] = "ok" if not (errors or entry["incomplete"] or entry["absent"]) else "partial"
+    (_supp_dir("capture", day) / f"{stamp}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
+    return entry
+
+
+def capture_logs(day: str) -> list[dict]:
+    """The main capture log of `day` followed by its supplement logs (oldest first)."""
+    main = _dir("capture") / f"{day}.json"
+    logs = [json.loads(main.read_text())] if main.exists() else []
+    return logs + [json.loads(p.read_text()) for p in _supp_files("capture", day, "*.json")]
 
 
 def load(day: str) -> pd.DataFrame | None:
-    return pd.read_parquet(minute_path(day)) if captured(day) else None
+    """`day`'s bars: the main file plus any supplements (a code appears in one file only)."""
+    if not captured(day):
+        return None
+    frames = [pd.read_parquet(minute_path(day))] + [pd.read_parquet(p) for p in supplements(day)]
+    return pd.concat(frames, ignore_index=True).drop_duplicates(["code", "minute"], keep="first")
 
 
 # ------------------------------------------------------------------ features
@@ -263,7 +325,8 @@ def seal_type(f: pd.DataFrame) -> pd.Series:
 
 
 def feature_path(day: str):
-    return _dir(f"features/{FEATURES}") / f"{day}.parquet"
+    n = len(supplements(day))
+    return _dir(f"features/{FEATURES}") / (f"{day}+s{n}.parquet" if n else f"{day}.parquet")
 
 
 def stored_features(day: str) -> pd.DataFrame:
@@ -352,3 +415,82 @@ def priced_in(w: dict, out: dict) -> pd.DataFrame:
                       "max3_mean": g["max3"].mean(), "gap_share_median": g["gap_share"].median()}).round(3)
     t.attrs.update(first=str(w["close"].index[0]), last=str(w["close"].index[-1]))
     return t
+
+
+# ------------------------------------------------------------------ list notes (description only)
+
+NOTES_VERSION = "SF_INTRADAY_NOTES_V1"  # wording of the per-stock note; not part of any selection rule
+
+
+def clock(m) -> str:
+    """Minute index -> Beijing time (0 = 09:30, 120 = 11:30, 121 = 13:01, 240 = 15:00)."""
+    m = int(m)
+    base, off = (9 * 60 + 30, m) if m <= 120 else (13 * 60, m - 120)
+    return f"{(base + off) // 60:02d}:{(base + off) % 60:02d}"
+
+
+def describe(r: pd.Series, lead: pd.Series | None = None) -> str:
+    """One line of facts from a features row; NaN facts are left out, never shown as zero."""
+    parts = []
+    st = r.get("seal_type", "")
+    if st == "一字":
+        parts.append("一字封死")
+    elif st in ("秒板", "早盘封", "午后封"):
+        parts.append(f"{st}{clock(r['first_seal_min'])}")
+    elif st == "回封":
+        parts.append(f"{clock(r['first_seal_min'])}首封·开板{int(r['reopen_count'])}次·{clock(r['last_seal_min'])}回封")
+    elif st == "炸板":
+        parts.append(f"炸板（{clock(r['first_touch_min'])}触板，收盘未封）")
+    if st and st not in ("一字", "炸板") and pd.notna(r.get("sealed_share")):
+        parts.append(f"封住{r['sealed_share']:.0%}时间")
+    if lead is not None and pd.notna(lead.get("lead_rank")):
+        tie = "并列" if int(lead.get("ties", 1) or 1) > 1 else ""
+        parts.append(f"{lead['board']}{tie}第{int(lead['lead_rank'])}个封板（共{int(lead['n'])}家）")
+    if st != "一字":
+        if pd.notna(r.get("close_vs_vwap")):
+            parts.append(f"收盘较均价{r['close_vs_vwap']:+.1%}")
+        if pd.notna(r.get("above_vwap_share")):
+            parts.append(f"均价线上方{r['above_vwap_share']:.0%}时间")
+        if pd.notna(r.get("fade_from_high")) and r["fade_from_high"] >= 0.02:
+            parts.append(f"冲高回落{r['fade_from_high']:.1%}")
+        if pd.notna(r.get("open30_vol_share")) and pd.notna(r.get("tail30_vol_share")):
+            parts.append(f"成交 早30分{r['open30_vol_share']:.0%}/尾30分{r['tail30_vol_share']:.0%}")
+    if not bool(r.get("complete", True)):
+        parts.append(f"分时不全（{int(r['bars'])}/{BARS_PER_DAY}根）")
+    return "；".join(parts)
+
+
+def list_notes(day: str, codes: list[str], feats: pd.DataFrame | None = None,
+               members: pd.DataFrame | None = None) -> tuple[dict[str, str], dict, pd.DataFrame]:
+    """Per-stock intraday description of `day` for listed `codes` (known after that close, so usable by the list
+    for the next session). Description only: it never changes a group or an order. Returns notes, a status
+    dict (captured, sessions, noted, missing) and the feature rows used (saved with the list)."""
+    sessions = len(list(_dir("minute").glob("*.parquet")))
+    status = dict(day=day, captured=captured(day), sessions=sessions, version=NOTES_VERSION, features=FEATURES)
+    if not status["captured"]:
+        return {c: "分时未采集" for c in codes}, dict(status, noted=0, missing=len(codes)), pd.DataFrame()
+    f = stored_features(day) if feats is None else feats
+    if members is None:
+        from . import themes
+        loaded = themes.load()
+        members = loaded[1] if loaded is not None else None
+    ranks = pd.DataFrame(columns=["board", "n", "lead_rank"])
+    if members is not None and not f.empty:
+        from .strategy import is_main_board
+        main = f[is_main_board(pd.Series(f.index, index=f.index))]
+        ranks = lead_ranks(main, members)
+        ranks["ties"] = ranks.groupby(["board", "lead_rank"])["lead_rank"].transform("size")
+    why = {}
+    for entry in capture_logs(day):  # later logs win: a supplement can fetch what the evening capture missed
+        for c in entry.get("failed", {}):
+            why[c] = "抓取失败"
+        for c in entry.get("absent", []):
+            why[c] = "源无当日数据"
+    notes = {}
+    for c in codes:
+        if c in f.index:
+            notes[c] = describe(f.loc[c], ranks.loc[c] if c in ranks.index else None) or "无涨停相关事实"
+        else:
+            notes[c] = f"分时缺失（{why.get(c, '未在抓取名单')}）"
+    missing = sum(c not in f.index for c in codes)
+    return notes, dict(status, noted=len(codes) - missing, missing=missing), f.reindex([c for c in codes if c in f.index])

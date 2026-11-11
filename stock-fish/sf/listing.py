@@ -12,7 +12,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import crowding, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store, strategy, temperature
+from . import (crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store,
+               strategy, temperature)
 
 
 def build(observation: str | None = None, update_external: bool = True, watch_limit: int = 10,
@@ -187,6 +188,20 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     extra = [r for r in watch[watch_limit:] if r["角色"].startswith("名字扩散龙头")]
     rows += ladder + watch[:watch_limit] + extra + avoid[:avoid_limit]
     table = pd.DataFrame(rows, columns=["分组", "名称", "code", "角色", "成交额", "参与建议", "风险提示", "amount_raw", "close"])
+    # observation-day intraday facts per listed stock: description only, added after every group and order is fixed
+    supp = None
+    if update_external:
+        try:
+            supp = intraday.supplement(observation, table["code"].tolist(), log=lambda *_: None)
+        except Exception as error:  # reported; the stocks show as missing
+            supp = dict(status=f"FAILED: {str(error)[:100]}")
+    try:
+        inotes, istatus, ifacts = intraday.list_notes(observation, table["code"].tolist())
+    except Exception as error:  # reported in the header as missing, never silently blank
+        inotes, ifacts = {c: "分时说明出错" for c in table["code"]}, pd.DataFrame()
+        istatus = dict(day=observation, captured=None, error=str(error)[:100], noted=0, missing=len(table))
+    istatus["supplement"] = supp
+    table["昨日分时"] = table["code"].map(inotes)
     lines = lm.mainline_table(ctx, t, p)
     group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
@@ -256,7 +271,8 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status, manifest=manifest.build(window),
-                abnormal_index_ok=bool(ctx["index_ok"]), table=table, leaders=leaders, facts=facts)
+                abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts,
+                table=table, leaders=leaders, facts=facts)
 
 
 def header(result: dict) -> list[str]:
@@ -309,6 +325,17 @@ def header(result: dict) -> list[str]:
         missing.append(f"龙虎榜席位{state}（拉萨散户否决与席位提示未检查）")
     if not result.get("abnormal_index_ok", True):
         missing.append("近30日指数行情不全（异动/严重异动状态未知）")
+    it = result.get("intraday")
+    if it is not None:
+        if it.get("error"):
+            missing.append(f"昨日分时说明出错（{it['error']}）")
+        elif not it.get("captured"):
+            missing.append(f"{it['day']} 盘中分时未采集（清单无分时说明）")
+        elif it.get("missing"):
+            missing.append(f"{it['missing']} 只清单股无 {it['day']} 分时（见“昨日分时”列）")
+    if it is not None and it.get("captured"):
+        lines.append(f"昨日分时：{it['day']} 的盘中事实，只作描述，不影响分组与排序；已采集 {it.get('sessions', '?')} 个交易日，"
+                     f"不足 {intraday.MIN_SESSIONS_FOR_TEST} 日前不下结论（docs/INTRADAY_STUDY.md）")
     if missing:
         lines.append("数据缺失：" + "；".join(missing))
     lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
@@ -317,7 +344,7 @@ def header(result: dict) -> list[str]:
 
 HIGH_VOL = "高波动：最强也最危险（历史上次日续板约24-45%，大面约38-58%），只适合盘中判断"
 GROUP_CODES = {"主线龙头": "leader", "连板梯队": "ladder", "观察": "watch", "高波动": "avoid", "回避": "avoid"}
-VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示"]
+VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示", "昨日分时"]
 
 
 def save(result: dict) -> Path:
@@ -337,7 +364,10 @@ def save(result: dict) -> Path:
         leaders.assign(vetoes=leaders["vetoes"].map("；".join), notes=leaders["notes"].map("；".join)).to_csv(
             out / "leaders.csv", encoding="utf-8-sig")
     result["facts"].to_parquet(out / "facts.parquet")
-    meta = {k: v for k, v in result.items() if k not in ("table", "leaders", "facts")}
+    ifacts = result.get("intraday_facts")
+    if ifacts is not None and not ifacts.empty:
+        ifacts.to_parquet(out / "intraday.parquet")  # the observation-day intraday facts behind 昨日分时
+    meta = {k: v for k, v in result.items() if k not in ("table", "leaders", "facts", "intraday_facts")}
     (out / "summary.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str))
     (out.parent / "LATEST").write_text(run_id)
     return out

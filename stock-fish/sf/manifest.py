@@ -30,11 +30,12 @@ def code_version() -> dict:
 
 
 def components() -> dict:
-    from . import abnormal, crowding, longmai, mood, namethemes, notes, strategy, temperature
+    from . import abnormal, crowding, intraday, longmai, mood, namethemes, notes, strategy, temperature
     return dict(
         versions=dict(longmai=longmai.VERSION, strategy=strategy.STRATEGY_VERSION, limits=strategy.LIMITS_VERSION,
                       mood=mood.VERSION, temperature=temperature.VERSION, abnormal=abnormal.VERSION,
-                      names=namethemes.VERSION),
+                      names=namethemes.VERSION, intraday_features=intraday.FEATURES,
+                      intraday_notes=intraday.NOTES_VERSION),
         params=dict(mood_signs=mood.SIGNS, heat_mid=temperature.HEAT_MID, pain_mid=temperature.PAIN_MID,
                     crowding_hot_pct=crowding.HOT_PCT, note_max_age=notes.MAX_AGE,
                     st_ten_pct_from=strategy.ST_TEN_PCT_FROM, severe=abnormal.SEVERE))

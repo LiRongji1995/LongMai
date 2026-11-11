@@ -97,14 +97,18 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    then builds the list). `--no-update` builds from stored data only.
 2. Report the header lines, especially any `数据缺失` line, and the saved path. Never present the list as
    investment advice; the person decides every trade.
+3. The `昨日分时` column describes the observation day's intraday facts (description only; it never changes a group
+   or order). Listed stocks the evening capture missed are fetched once while the list is built (not with
+   `--no-update`). Before 40 captured sessions, never read it as a forecast for the next session.
 
 ### R6. Intraday minute bars (`sf intraday`)
 1. Capture runs inside `sf premarket` / `sf update`. On its own: `bin/sf intraday` (latest closed session) or
    `bin/sf intraday --backfill` (stored sessions among the last 5 not captured yet). The source keeps about 5
    sessions only: if a capture failed, rerun it the same evening or the next day, and tell the user which
    days are lost if they fall out of the window.
-2. Files are written once (`intraday/raw|minute|universe|capture/`); never edit or delete them. Failed,
-   incomplete or absent stocks are listed in `intraday/capture/<day>.json`.
+2. Files are written once (`intraday/raw|minute|universe|capture/`, and `intraday/supplement/` for listed stocks
+   fetched after the evening capture); never edit or delete them. Failed, incomplete or absent stocks are listed
+   in `intraday/capture/<day>.json` and the supplement capture logs.
 3. `bin/sf intraday report` prints the descriptive tables of docs/INTRADAY_STUDY.md. Before 40 captured
    sessions, report them as description only: no conclusions, no rule changes. Any rule built on them is a new
    strategy version with its own forward test, and follows the pre-registration exactly (no threshold tuning).
