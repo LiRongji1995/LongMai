@@ -249,7 +249,9 @@ def cmd_show(args) -> int:
 def cmd_review(args) -> int:
     from . import review
     with _quiet():
-        rows = review.collect(args.since)
+        loaded = review._load()
+        rows = review.collect(args.since, loaded)
+        forward = review.forward_rows(loaded=loaded)
     if rows.empty:
         print("没有可复盘的清单")
         return 1
@@ -261,7 +263,22 @@ def cmd_review(args) -> int:
         print(f"\n妖股召回（观察日涨停、5日内再涨停≥3次）：{rep['recall']:.0%}（{rep['winners']}只）")
         for m in rep["missed"]:
             print(f"  漏掉 {m['obs']} {m['name'] or m['code']}")
-    print(f"已保存 {review.save(rows, rep)}")
+    fwd = review.forward_report(forward)
+    if fwd.get("days") is not None and not forward.empty:
+        print(f"\nV9 前向记录：观察组按 V9 与 V7 形态规则各算一遍（目标日 {review.FORWARD_FROM} 起 {fwd['lists']} 份清单，"
+              f"不受只显示前 10 只的限制）")
+        print(fwd["table"].to_string())
+        if fwd["days"]:
+            print(f"已有结果 {fwd['days']} 天：走出来 V9−V7 {fwd['d_out5'] * 100:+.1f} 个百分点，"
+                  f"大面 {fwd['d_bigloss1'] * 100:+.1f} 个百分点")
+        print(fwd["status"])
+    path = review.save(rows, rep)
+    if not forward.empty:
+        forward.to_csv(path / "forward_v9_v7.csv", index=False, encoding="utf-8-sig")
+        (path / "forward_v9_v7.json").write_text(json.dumps(
+            {k: v for k, v in fwd.items() if k != "table"} | {"table": fwd["table"].to_dict()},
+            ensure_ascii=False, indent=2, default=str))
+    print(f"已保存 {path}")
     return 0
 
 

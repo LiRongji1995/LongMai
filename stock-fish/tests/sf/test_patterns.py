@@ -120,3 +120,40 @@ def test_v9_stage_gates_and_v7_reproduction():
     assert v7.loc["sh.600001", "STRONG_START"] and v7.loc["sh.600002", "STRONG_START"]
     assert v9.loc["sh.600001", "STRONG_START"] and not v9.loc["sh.600002", "STRONG_START"]
     assert v9.loc["sh.600002", "near_miss"] == "STRONG_START:limit_up_start"
+
+
+def test_tradeoff_rule_boundaries():
+    from sf import review
+    assert review.acceptable(0.03, 0.015) and review.acceptable(0.02, 0.0)
+    assert not review.acceptable(0.03, 0.016)       # more than half of the gain
+    assert not review.acceptable(0.06, 0.025)       # never more than +2 points
+    assert not review.acceptable(0.019, -0.05)      # breakout gain below +2 points
+
+
+def test_forward_review_recomputes_v7_and_v9_from_saved_facts(tmp_path, monkeypatch):
+    import json
+    from sf import review, store
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    flat, jump = [10.0] * 70, [10.0] * 69 + [11.0]
+    codes = {"sh.600001": jump, "sh.600002": jump, "sh.600003": jump, **{f"sh.60001{i}": flat for i in range(6)}}
+    amounts = {c: [1e8] * 69 + [3e8] for c in ("sh.600001", "sh.600002", "sh.600003")}
+    bars = _bars(codes, amounts, lows={("sh.600001", 69): 10.2, ("sh.600003", 69): 10.2})
+    for day, part in bars.groupby("date"):
+        store.bar_path(day).parent.mkdir(parents=True, exist_ok=True)
+        part.to_parquet(store.bar_path(day), index=False)
+    w = strategy.panel(bars)
+    t = len(DAYS) - 1
+    facts = strategy.features(w, t, pd.Series(True, index=w["close"].columns)).drop(columns=["turn_prev5"])
+    run = tmp_path / "lists" / "2026-11-12" / "20261111T100000Z"  # a V7-era fact table without turn_prev5
+    run.mkdir(parents=True)
+    facts.to_parquet(run / "facts.parquet")
+    pd.DataFrame({"code": ["sh.600003"]}).to_csv(run / "leaders.csv", index=False)
+    (run / "summary.json").write_text(json.dumps({"observation": DAYS[t], "target": "2026-11-12"}))
+    rows = review.forward_rows()
+    r = rows.set_index("code")
+    assert bool(r.loc["sh.600001", "in_v7"]) and bool(r.loc["sh.600001", "in_v9"])
+    assert bool(r.loc["sh.600002", "in_v7"]) and not bool(r.loc["sh.600002", "in_v9"])  # one-price start
+    assert "sh.600003" not in r.index  # a mainline leader is not in the observation group
+    rep = review.forward_report(rows)
+    assert rep["days"] == 0 and rep["status"].startswith("前向样本 0 个交易日")
+    assert rep["table"].loc["V7", "n"] == 2 and rep["table"].loc["V9", "n"] == 1

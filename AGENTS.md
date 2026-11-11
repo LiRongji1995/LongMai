@@ -33,6 +33,10 @@ bounded, logged retry.
   realized 妖股 listed, did the temperature calls come true), train segment first, then the tests and
   the forward record. Next-open P&L backtests are not used: entries are chosen intraday by a person.
 - Engineering test results, real-data checks and investment conclusions are reported separately.
+- **Hit rate vs big loss (user decision, 2026-11-11, for versions after V9).** When a pre-registration compares a
+  new rule with the current one, the default acceptance is: `out5` (breakout) at least +2 percentage points, and
+  `bigloss1` (next-day big loss) up by no more than half of the `out5` gain and never more than +2 points. Write
+  this rule into each new pre-registration before any result; it does not re-judge V9 retroactively.
 
 ## Data and files
 
