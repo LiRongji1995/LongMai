@@ -66,6 +66,7 @@
 sf review                 # 已保存清单：各分组命中率与当日全部主板涨停对比，妖股召回率
 sf evaluate               # 全历史重放：选股命中率和温度判断
 sf evaluate temperature   # 只算温度（几秒）
+sf evaluate patterns      # V9 形态细分检验：10 个预注册标记、判定和观察组重放（约 10 分钟，见 docs/STRATEGY_LONGMAI_V9_PREREG.md）
 ```
 
 结果从观察日收盘价起算，不设买入价：

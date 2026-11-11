@@ -282,6 +282,26 @@ def cmd_evaluate(args) -> int:
         print("妖股召回：", rep["recall"].to_dict(), " 样本：", rep["winners"].to_dict())
         panel.to_parquet(out / "screening_panel.parquet")
         rep["stats"].to_csv(out / "screening_stats.csv", encoding="utf-8-sig")
+    if args.part == "patterns":  # 龙脉 V9 pre-registered pattern split (docs/STRATEGY_LONGMAI_V9_PREREG.md)
+        from . import patterns
+        print(f"龙脉 V9 形态细分：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放（较慢）...")
+        with _quiet():
+            panel, rep = patterns.run(log=lambda *_: None)
+        cols = ["n_yes", "n_no", "unknown", "out5_yes", "out5_no", "d_out5", "bigloss1_yes", "bigloss1_no", "d_bigloss1"]
+        print(rep["stats"][cols].round(3).to_string())
+        print("\n判定（预注册规则）：")
+        for f, v in rep["verdicts"].items():
+            print(f"  {f}（{patterns.FLAGS[f][0]}）：{'采用' if v['adopted'] else '不采用'}，{v['reason']}")
+        print("稳健性邻域（只报告）：" + "；".join(f"{n} {'通过' if v['adopted'] else '不通过'}" for n, v in rep["neighbours"].items()))
+        print("\n观察组重放（V7 对 V9）：")
+        print(rep["compare"].round(3).to_string())
+        print("结论：" + ("V9 可进入前向记录" if rep["passed"] else "V9 不进入前向记录，V7 保持不变（否定结果如实保留）"))
+        panel.to_parquet(out / "patterns_panel.parquet")
+        rep["stats"].to_csv(out / "patterns_stats.csv", encoding="utf-8-sig")
+        rep["compare"].to_csv(out / "patterns_compare.csv", encoding="utf-8-sig")
+        (out / "patterns_verdict.json").write_text(json.dumps(dict(
+            verdicts=rep["verdicts"], neighbours=rep["neighbours"], adopted=rep["adopted"], passed=rep["passed"],
+            first=rep["first"], last=rep["last"], rows=rep["rows"]), ensure_ascii=False, indent=2))
     if args.part == "swing":  # 龙脉 V8 pre-registered exam (docs/STRATEGY_LONGMAI_V8_PREREG.md)
         from . import manifest, swing
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
@@ -421,7 +441,7 @@ def parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     ev = sub.add_parser("evaluate", help="全历史选股与水温命中率（不按开盘买入盈亏）")
-    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing"])
+    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns"])
     ev.set_defaults(func=cmd_evaluate)
 
     th = sub.add_parser("themes", help="刷新概念/行业板块成分（约20分钟，建议每周一次）")
