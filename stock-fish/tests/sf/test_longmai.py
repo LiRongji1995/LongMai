@@ -173,7 +173,7 @@ def test_evaluate_nodes():
 def test_v7_default_and_temperature_cells():
     from sf import temperature
     p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V12" == longmai.VERSION and "amount_min" not in p
+    assert p["version"] == "SF_LONGMAI_V13" == longmai.VERSION and "amount_min" not in p
     assert longmai.params({"top_k": 5})["top_k"] == 5 and longmai.PARAMS["top_k"] == 3
     days = [f"d{i:03d}" for i in range(80)]
     tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",
@@ -209,3 +209,15 @@ def test_v12_liquidity_floor_follows_market_and_exempts_one_price():
     assert abs(longmai.liquidity_floor(doubled, len(days) - 1)["threshold"] - 2 * out["threshold"]) < 1
     short = longmai.liquidity_floor(ctx, 10)               # < 20 sessions of market data: floor unknown, no filter
     assert pd.isna(short["threshold"]) and short["ok"].all()
+
+
+def test_v13_volume_surge_note():
+    days = pd.Index([f"2026-01-{i + 1:02d}" for i in range(8)])
+    amt = pd.DataFrame({"fj": [4.2e8, 3.4e8, 5.0e8, 6.4e8, 5.0e8, 4.0e8, 4.8e8, 16.9e8],
+                        "calm": [5e8] * 7 + [9e8], "new": [np.nan] * 6 + [1e8, 9e8]}, index=days)
+    ctx = dict(aw=dict(amount=amt))
+    note = longmai.volume_surge(ctx, 7, "fj")
+    assert len(note) == 1 and note[0].startswith("放量：成交额16.9亿，为前5日均值") and "3.4倍" in note[0]
+    assert longmai.volume_surge(ctx, 7, "calm") == []                     # 1.8x: below the ratio
+    assert longmai.volume_surge(ctx, 7, "new") == ["前5日成交额缺失，放量未检查"]
+    assert longmai.volume_surge(ctx, 7, "absent") == ["前5日成交额缺失，放量未检查"]

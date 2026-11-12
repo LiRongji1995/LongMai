@@ -203,6 +203,10 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             shown.add(code)
     extra = [r for r in watch[watch_limit:] if r["角色"].startswith("名字扩散龙头")]
     rows += ladder + watch[:watch_limit] + extra + avoid[:avoid_limit]
+    for r in rows:  # V13: volume-surge note on every listed stock (a note only; groups and order are fixed above)
+        surge = lm.volume_surge(ctx, t, r["code"])
+        if surge:
+            r["风险提示"] = "；".join(surge + ([r["风险提示"]] if r.get("风险提示") else []))
     table = pd.DataFrame(rows, columns=["分组", "名称", "code", "角色", "成交额", "参与建议", "风险提示", "amount_raw", "close"])
     # observation-day intraday facts per listed stock: description only, added after every group and order is fixed
     supp = None

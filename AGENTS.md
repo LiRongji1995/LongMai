@@ -50,6 +50,9 @@ bounded, logged retry.
   least 6/10000 of the whole-market 20-session average daily amount (~1e9 in 2026-11) on the observation day or on 2 of
   the last 5 sessions (a one-price limit-up day counts as meeting it). Imposed by the user without a backtest; judge it on the forward record only.
   Dropped stocks are listed in the header and `summary.json`. Spec: `docs/STRATEGY_LONGMAI_V12.md`.
+- **Volume-surge note (user decision, 2026-11-12, `SF_LONGMAI_V13`).** Every listed stock (all groups, sealed or not) whose
+  observation-day amount is >= 3x the mean of its previous 5 sessions gets a `放量：…` risk note (with < 3 known prior
+  days: `前5日成交额缺失，放量未检查`). A note only: no group, order or slot changes. Spec: `docs/STRATEGY_LONGMAI_V13.md`.
 - Descriptive layers (历史同类, 题材线索, 位置, 高标结局, page) never change a group or an order. Changing a rule
   threshold that a note uses (e.g. the 1e8 "流动性差" note) is a rule change and needs a pre-registration.
 

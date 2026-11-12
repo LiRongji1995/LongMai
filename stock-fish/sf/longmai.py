@@ -1,4 +1,4 @@
-"""龙脉 V12 (`SF_LONGMAI_V12`; V9 + the liquidity floor in `liquidity_floor`, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
+"""龙脉 V13 (`SF_LONGMAI_V13`; V9 + the V12 liquidity floor + the V13 volume-surge note, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
 
 Specification: docs/STRATEGY_LONGMAI_V9.md (on top of docs/STRATEGY_LONGMAI_V7.md). The same `context()` + `decide()` path serves the live
 list (`listing.py`) and the entry-free evaluation (`evaluate.py`). Versions V1-V6 are at tag `legacy-r2`.
@@ -11,7 +11,8 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, regulation, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V12"  # V12 = V9 + the user's liquidity floor (user decision 2026-11-12, no backtest)
+VERSION = "SF_LONGMAI_V13"  # V13 = V12 + the volume-surge risk note on every listed stock (user decision 2026-11-12)
+# V12 = V9 + the user's liquidity floor (user decision 2026-11-12, no backtest)
 PARAMS = dict(
     version=VERSION,
     top_k=3, min_theme_lu3=5, overlap_max=0.6,          # mainlines (concentration over 3 sessions)
@@ -44,6 +45,27 @@ def liquidity_floor(ctx: dict, t: int) -> dict:
     thr = float(floor.iloc[t])
     ok = (good.iloc[-1] | (days >= LIQ_MIN_DAYS)) if pd.notna(thr) else pd.Series(True, index=cols)
     return dict(ok=ok, threshold=thr, days=days)
+
+
+# V13 volume-surge note (user decision 2026-11-12, after 福建水泥 traded 16.9e8 against ~4-6e8 on the days before
+# with no warning): every listed stock, any group, sealed or not, gets a risk note when its observation-day amount is
+# at least SURGE_RATIO times the mean of its previous SURGE_DAYS sessions. A note only: never changes a group or order.
+SURGE_RATIO, SURGE_DAYS, SURGE_MIN_PRIOR = 3.0, 5, 3
+
+
+def volume_surge(ctx: dict, t: int, code: str) -> list[str]:
+    """The V13 risk note for one stock (empty when below the ratio; explicit when the prior amounts are unknown)."""
+    amt = ctx["aw"]["amount"]
+    if code not in amt.columns:
+        return ["前5日成交额缺失，放量未检查"]
+    today = amt.iloc[t].get(code, np.nan)
+    prior = amt.iloc[max(0, t - SURGE_DAYS):t][code].dropna()
+    if pd.isna(today) or len(prior) < SURGE_MIN_PRIOR or prior.mean() <= 0:
+        return ["前5日成交额缺失，放量未检查"]
+    ratio = float(today) / float(prior.mean())
+    if ratio >= SURGE_RATIO:
+        return [f"放量：成交额{today / 1e8:.1f}亿，为前{len(prior)}日均值{prior.mean() / 1e8:.1f}亿的{ratio:.1f}倍"]
+    return []
 
 
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
