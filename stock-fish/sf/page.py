@@ -208,12 +208,15 @@ def render(run: Path) -> str:
     focus = table[table["参与建议"].str.startswith("候选（由你决定）")]
     risky = table[(table["分组"] == "高波动") | table["角色"].str.startswith("空间板")]
 
-    nav = "".join(f'<a href="#{k}">{v}</a>' for k, v in (("dash", "总览"), ("threads", "题材线索"), ("focus", "候选"),
-                                                        ("auction", "竞价"), ("groups", "完整清单"), ("review", "复盘")))
+    nav = "".join(f'<a href="#{k}"><i></i>{v}</a>' for k, v in (
+        ("dash", "总览"), ("threads", "题材线索"), ("focus", "候选"), ("auction", "竞价"), ("groups", "完整清单"),
+        ("review", "复盘"), ("daily", "当日复盘报告")))
     hop = (f'<div class="hop"><a href="../index.html" title="页面目录">← 目录</a>'
            f'<a href="../go/prev-{_e(target)}.html" title="前一个有页面的交易日">‹ 前一天</a>'
            f'<a href="../go/next-{_e(target)}.html" title="后一个有页面的交易日">后一天 ›</a></div>')
-    parts = [f'<div class="top"><div class="brand"><span class="dot"></span>龙脉</div>{hop}<nav>{nav}</nav></div>',
+    parts = [f'<div class="top"><div class="brand"><span class="dot"></span>龙脉</div>{hop}</div>'
+             f'<aside class="side" aria-label="本页目录"><div class="side-t">本页目录</div>{nav}</aside>'
+             f'<button class="side-btn" aria-label="本页目录">目录</button>',
              f'<header class="hero"><div class="date">{_e(target)}</div><div class="meta">盘前清单 · 观察日 {_e(obs)} · '
              f'版本 {_e(run.name)} · {_e(summary.get("strategy_version", ""))}</div>'
              + (f'<div class="tag">{_e(tp.get("name"))}</div>' if tp.get("name") else "") + '</header>']
@@ -227,7 +230,7 @@ def render(run: Path) -> str:
     dots = "".join(f'<i class="{"on" if i < slots else ""}"></i>' for i in range(4))
     trend = {"升": "↑", "降": "↓"}.get(tp.get("trend"), "")
     parts.append(
-        '<section id="dash" class="dash">'
+        '<div id="dash" class="sec-h"><h2>总览</h2></div><section class="dash">'
         + ring(g.get("mood_level"), "情绪分位", f"{g.get('mood_tier', '?')}档", "t-mood")
         + ring(tp.get("heat"), "热度", f"较前3日{tp.get('trend', '?')}{trend}", "t-heat")
         + ring(tp.get("pain"), "亏钱效应", tp.get("cell", ""), "t-pain")
@@ -547,7 +550,7 @@ def daily_report_html(summary: dict, table: pd.DataFrame) -> str:
         look.append("炒作逻辑待查（没有新闻记录）：" + "、".join(_e(n) for n in summary["to_check"]))
     look.append(f"{_e(target)} 09:26 定时抓竞价快照，竞价否定标签只针对主线龙头和连板梯队")
     out.append("<h3>六、明日关注</h3><ul>" + "".join(f"<li>{y}</li>" for y in look) + "</ul>")
-    return ('<details class="legend fullrep daily"><summary>当日复盘报告（点开查看）</summary>' + "".join(out)
+    return ('<details id="daily" class="legend fullrep daily"><summary>当日复盘报告（点开查看）</summary>' + "".join(out)
             + '<p class="note">以上是数据描述和历史统计，不是买卖建议；每笔交易由你自己决定。</p></details>')
 
 
@@ -641,7 +644,7 @@ def _weekday(day: str) -> str:
 
 
 INDEX_CSS = """
-main{max-width:860px}
+main{max-width:860px;padding-bottom:40px}body{padding-right:0!important}
 .ix-hero{padding:36px 0 22px}.ix-kicker{color:var(--cyan);font-size:12px;font-weight:700;letter-spacing:.2em}
 .ix-title{font-size:clamp(30px,6vw,44px);font-weight:800;letter-spacing:-.01em;margin:6px 0 8px}
 .ix-sub{color:var(--dim);max-width:560px}
@@ -783,23 +786,40 @@ body:before{background:radial-gradient(1200px 600px at 10% -10%,rgba(56,225,255,
 radial-gradient(900px 500px at 100% 0%,rgba(167,139,250,.14),transparent 60%),linear-gradient(var(--bg),var(--bg2))}
 body:after{opacity:.35;background-image:linear-gradient(var(--line) 1px,transparent 1px),linear-gradient(90deg,var(--line) 1px,transparent 1px);
 background-size:44px 44px;-webkit-mask-image:linear-gradient(to bottom,#000,transparent 70%);mask-image:linear-gradient(to bottom,#000,transparent 70%)}
-main{position:relative;max-width:1240px;margin:0 auto;padding:0 16px 40px}
+main{position:relative;max-width:1240px;margin:0 auto;padding:0 16px 60vh}
 .top{position:sticky;top:0;z-index:5;display:flex;align-items:center;justify-content:space-between;gap:12px;padding:12px 0;
 background:linear-gradient(rgba(7,9,15,.97) 70%,rgba(7,9,15,0))}
 .brand{font-weight:800;letter-spacing:.08em;display:flex;align-items:center;gap:8px;white-space:nowrap}
 
 .dot{width:9px;height:9px;border-radius:50%;background:var(--cyan);box-shadow:0 0 12px var(--cyan)}
-nav{display:flex;gap:4px;overflow-x:auto}nav a{color:var(--dim);text-decoration:none;padding:4px 10px;border-radius:999px;white-space:nowrap;font-size:13px}
-nav a:hover{color:var(--fg);background:var(--panel)}
+.side{position:fixed;right:22px;top:50%;transform:translateY(-50%);z-index:6;display:flex;flex-direction:column;gap:2px;
+padding:14px 10px;border-radius:18px;background:rgba(12,18,32,.62);border:1px solid rgba(120,160,255,.2);
+box-shadow:0 12px 32px -16px rgba(0,0,0,.6)}
+.side-t{font-size:12px;color:var(--dim);letter-spacing:.12em;padding:0 12px 8px}
+.side a{display:flex;align-items:center;gap:10px;color:#aab6cc;text-decoration:none;font-size:15px;padding:8px 14px 8px 10px;
+border-radius:10px;white-space:nowrap;transition:background .15s,color .15s}
+.side a i{width:6px;height:6px;border-radius:50%;background:rgba(170,182,204,.35);flex:none;transition:background .15s,box-shadow .15s}
+.side a:hover{color:var(--fg);background:rgba(255,255,255,.05)}
+.side a.on{color:var(--fg);background:rgba(56,225,255,.10)}.side a.on i{background:var(--cyan);box-shadow:0 0 8px var(--cyan)}
+.side-btn{display:none}
+@media (min-width:1101px){body{padding-right:210px}}
+@media (max-width:1100px){.side{display:none;top:auto;bottom:72px;transform:none}.side.open{display:flex;background:rgba(12,18,32,.97)}
+.side-btn{display:block;position:fixed;right:16px;bottom:20px;z-index:7;border:1px solid rgba(120,160,255,.3);border-radius:999px;
+padding:9px 16px;font:inherit;font-size:14px;color:var(--fg);background:rgba(12,18,32,.75);cursor:pointer}}
+section[id],.sec-h,details[id]{scroll-margin-top:78px}
+.sec-h{margin:22px 0 0}.sec-h h2{margin:0}
 .hop{display:flex;gap:6px;margin-right:auto;margin-left:10px}.hop a{color:var(--cyan);text-decoration:none;font-size:13px;
 padding:3px 10px;border-radius:999px;border:1px solid var(--line);white-space:nowrap}.hop a:hover{border-color:var(--cyan);background:var(--panel)}
 .hero{padding:18px 0 6px;display:flex;flex-wrap:wrap;align-items:baseline;gap:6px 18px}
 .date{font-size:clamp(34px,7vw,60px);font-weight:800;letter-spacing:-.02em;line-height:1;
 background:linear-gradient(90deg,#fff,var(--cyan) 55%,var(--violet));-webkit-background-clip:text;background-clip:text;color:transparent}
 .meta{color:var(--dim)}.tag{padding:2px 12px;border-radius:999px;border:1px solid var(--violet);color:var(--violet);font-weight:600}
-section{background:var(--panel);border-radius:16px;padding:16px 18px;margin:14px 0;box-shadow:var(--glow);
-content-visibility:auto;contain-intrinsic-size:auto 480px}
-h2{font-size:17px;margin:0 0 12px;display:flex;align-items:center;gap:8px;flex-wrap:wrap}h3{font-size:14px;margin:16px 0 8px;color:var(--dim)}
+section{background:var(--panel);border-radius:16px;padding:18px 20px;margin:22px 0;box-shadow:var(--glow)}
+.sec-h+section{margin-top:12px}
+h2{font-size:19px;margin:0 0 14px;padding-bottom:10px;border-bottom:1px solid var(--line);display:flex;align-items:center;
+gap:10px;flex-wrap:wrap}
+h2:before{content:"";width:4px;height:18px;border-radius:2px;background:linear-gradient(var(--cyan),var(--violet));flex:none}
+.sec-h h2{border-bottom:0;padding-bottom:0}h3{font-size:14px;margin:16px 0 8px;color:var(--dim)}
 small{color:var(--dim);font-weight:400;font-size:12px}.dim{color:var(--dim)}
 .alert{background:linear-gradient(135deg,rgba(255,93,108,.18),rgba(251,191,36,.08));box-shadow:0 0 0 1px rgba(255,93,108,.45)}
 .pulse{width:10px;height:10px;border-radius:50%;background:var(--red);box-shadow:0 0 8px var(--red);animation:pl 1.6s infinite}
@@ -863,7 +883,7 @@ background:#0d1424;color:var(--fg)}.tdlg::backdrop{background:rgba(3,6,12,.72)}
 .bar span{display:block;height:100%;border-radius:2px;background:var(--amber)}
 .lus{line-height:1.9}.lus i{font-style:normal;font-size:11px;color:var(--amber);margin-left:2px}.in{color:var(--cyan);font-weight:700}
 .foot{color:var(--dim);font-size:12px}pre{white-space:pre-wrap}summary{cursor:pointer}
-@media (max-width:600px){.gauge svg{width:80px;height:80px}.gv{top:38px;font-size:20px}nav{display:none}}
+@media (max-width:600px){.gauge svg{width:80px;height:80px}.gv{top:38px;font-size:20px}}
 </style></head><body><main>
 {{body}}
 </main>
@@ -875,5 +895,17 @@ document.querySelectorAll('.thread[data-d]').forEach(function(c){function o(){va
 if(d&&d.showModal)d.showModal();}c.addEventListener('click',o);c.addEventListener('keydown',function(e){if(e.key==='Enter')o();});});
 document.querySelectorAll('dialog').forEach(function(d){d.addEventListener('click',function(e){if(e.target===d)d.close();});
 d.querySelector('.x').addEventListener('click',function(){d.close();});});
+(function(){var side=document.querySelector('.side');if(!side)return;
+var links=[].slice.call(side.querySelectorAll('a'));
+var targets=links.map(function(a){return document.getElementById(a.getAttribute('href').slice(1));});
+var lock=null;function mark(k){links.forEach(function(a,i){a.classList.toggle('on',i===k);});}
+links.forEach(function(a,i){a.addEventListener('click',function(e){var t=targets[i];if(!t)return;e.preventDefault();
+if(t.tagName==='DETAILS')t.open=true;var top=t.getBoundingClientRect().top+window.pageYOffset-76;
+window.scrollTo({top:Math.max(0,top),behavior:'smooth'});history.replaceState(null,'','#'+t.id);
+mark(i);clearTimeout(lock);lock=setTimeout(function(){lock=null;},900);side.classList.remove('open');});});
+var btn=document.querySelector('.side-btn');if(btn)btn.addEventListener('click',function(){side.classList.toggle('open');});
+var ticking=false;function spy(){ticking=false;if(lock)return;var cur=0;
+targets.forEach(function(t,i){if(t&&t.getBoundingClientRect().top<=120)cur=i;});mark(cur);}
+addEventListener('scroll',function(){if(!ticking){ticking=true;requestAnimationFrame(spy);}},{passive:true});spy();})();
 </script></body></html>
 """

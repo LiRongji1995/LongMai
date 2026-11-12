@@ -415,7 +415,7 @@ def test_daily_report_summarises_the_day_and_what_to_watch():
     table = pd.DataFrame([dict(分组="主线龙头", 名称="大东方", 角色="空间板·5板", 成交额="22.9亿·换手38%",
                                风险提示="放量：成交额22.9亿，为前5日均值6.8亿的3.3倍；10日偏离66%，再触发2次3日异动即严重异动")])
     html_ = page.daily_report_html(summary, table)
-    assert html_.startswith('<details class="legend fullrep daily"><summary>当日复盘报告（点开查看）')
+    assert html_.startswith('<details id="daily" class="legend fullrep daily"><summary>当日复盘报告（点开查看）')
     for part in ("一、市场概况", "主板（不含 ST）涨停 60 家（较前日-16）", "两市成交 1.93 万亿（较前日-4%）", "晋级率", "（极低）",
                  "大面", "二、情绪与水温", "三、连板梯队与高标", "5板 2 家", "大东方 5板",
                  "四、主线与题材", "涨停最多但不在主线：机器人概念", "只剩峰值（46 家）的 4%", "五、龙头", "22.9亿",
