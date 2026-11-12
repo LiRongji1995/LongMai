@@ -334,7 +334,7 @@ def render(run: Path) -> str:
     rev = _latest(store.home() / "reviews")
     rv = ""
     if rev is not None and (rev / "rows.csv").exists():
-        rv += review_html(pd.read_csv(rev / "rows.csv"), rev.name)
+        rv += review_html(pd.read_csv(rev / "rows.csv"), rev.name) + review_report_html(rev)
     elif rev is not None and (rev / "stats.csv").exists():
         st = pd.read_csv(rev / "stats.csv").rename(columns={"Unnamed: 0": "组"})
         rv += f'<h3>最近一次复盘 <small>{_e(rev.name)}</small></h3>' + _table(st.round(3), list(st.columns))
@@ -404,6 +404,74 @@ def review_html(rows: pd.DataFrame, name: str) -> str:
             f'<tbody>{"".join(body)}</tbody></table></div>'
             f'<details class="legend"><summary>每一列是什么意思</summary><ul>{legend}</ul>'
             f'<p class="note">样本还很少（几天、几十只次），只能看个方向，不能下结论。只是描述，不是买卖建议。</p></details>')
+
+
+def _pct(x) -> str:
+    return "待定" if x is None or (isinstance(x, float) and pd.isna(x)) else f"{float(x) * 100:.0f}%"
+
+
+ROLE_ZH = {"leader": "主线龙头", "ladder": "连板梯队", "observe": "观察", "watch": "观察", "avoid": "高波动",
+           "high_vol": "高波动"}
+CLASS_ZH = {"deny": "竞价否定", "confirm": "高开确认", "neutral": "中性", "description": "只描述", "limit_open": "涨停开"}
+
+
+def _mini(head: list[str], rows: list[list[str]]) -> str:
+    return ('<div class="scroll"><table class="rev"><thead><tr>' + "".join(f"<th>{_e(h)}</th>" for h in head)
+            + "</tr></thead><tbody>" + "".join("<tr>" + "".join(f"<td>{c}</td>" for c in r) + "</tr>" for r in rows)
+            + "</tbody></table></div>")
+
+
+def review_report_html(rev: Path) -> str:
+    """The rest of the saved review (what `sf review` prints), folded below the table: coverage and 妖股 recall, the
+    V9-vs-V7 forward record, base-rate calibration and the auction-label forward record. From saved files only."""
+    from . import review as rv
+    parts = []
+    try:
+        rep = json.loads((rev / "report.json").read_text())
+        rec = (f"妖股召回（观察日涨停、之后 5 日再涨停 ≥3 次的股票，有多少在清单里）：{_pct(rep.get('recall'))}，"
+               f"共 {rep.get('winners', 0)} 只" if rep.get("recall") is not None
+               else "妖股召回：还没有走完 5 个交易日的样本，待定")
+        missed = "、".join(_e(m.get("name") or m.get("code")) for m in rep.get("missed") or [])
+        parts.append(f'<p class="note">本次复盘覆盖 {rep.get("lists")} 份清单（观察日 {_e(rep.get("first"))} 至 '
+                     f'{_e(rep.get("last"))}）。{rec}' + (f"；漏掉 {missed}" if missed else "") + "。</p>")
+    except (OSError, ValueError):
+        pass
+    try:
+        fwd = json.loads((rev / "forward_v9_v7.json").read_text())
+        tab = fwd.get("table") or {}
+        rows = [[_e(zh(v)), _pct(tab.get("lu1", {}).get(v)), _pct(tab.get("bigloss1", {}).get(v)),
+                 _pct(tab.get("out5", {}).get(v)), _e(int(tab.get("n", {}).get(v) or 0)), _e(tab.get("per_day", {}).get(v))]
+                for v in ("V7", "V9") if v in (tab.get("n") or {})]
+        if rows:
+            parts.append("<h3>第9版与第7版的前向对比 <small>观察组按两版形态规则各算一遍</small></h3>"
+                         + _mini(["版本", "次日涨停", "次日大面", "5 日走出来", "样本", "每天几只"], rows)
+                         + f'<p class="note">{_e(fwd.get("status", ""))}</p>')
+    except (OSError, ValueError):
+        pass
+    try:
+        crep = rv.calibration_report(pd.read_csv(rev / "baserate_calibration.csv"))
+        if not crep.empty:
+            rows = [[_e(ROLE_ZH.get(role, zh(role)))] + [f'{_pct(r.get(f"历史_{k}"))} → {_pct(r.get(f"实际_{k}"))}'
+                                                        f'<small> {int(r.get(f"n_{k}") or 0)}只</small>'
+                                                        for k in ("lu1", "out5", "bigloss1")]
+                    for role, r in crep.iterrows()]
+            parts.append("<h3>历史同类对照 <small>清单当时给的历史比例 → 实际发生，只算已有结果的股票</small></h3>"
+                         + _mini(["角色", "次日涨停", "5 日走出来", "次日大面"], rows))
+    except (OSError, ValueError, KeyError):
+        pass
+    try:
+        arep = rv.auction_forward_report(pd.read_csv(rev / "auction_forward.csv"))
+        if not arep.empty:
+            rows = [[_e(ROLE_ZH.get(role, zh(role))), _e(CLASS_ZH.get(cls, zh(cls))), _e(int(r["n"])), _e(int(r["days"])),
+                     _pct(r["a_lu"]), _pct(r["a_bigloss"]), _pct(r["a_out5"])] for (role, cls), r in arep.iterrows()]
+            parts.append("<h3>竞价标签前向记录 <small>按预注册分界点重新标注</small></h3>"
+                         + _mini(["分组", "竞价标签", "样本", "天数", "当日涨停", "开盘后大面", "开盘起 5 日走出来"], rows))
+    except (OSError, ValueError, KeyError):
+        pass
+    if not parts:
+        return ""
+    return ('<details class="legend fullrep"><summary>完整复盘报告（点开查看）</summary>' + "".join(parts)
+            + '<p class="note">样本少时只看方向；“待定”表示还没到能判断的日子，不算失败。</p></details>')
 
 
 def write(run: Path) -> Path:
@@ -645,6 +713,7 @@ th{background:#111a2c;color:var(--dim);font-weight:600;white-space:nowrap;text-a
 td{border-top:1px solid var(--line);padding:8px;vertical-align:top;min-width:6em}td:first-child{white-space:nowrap;min-width:0}
 tbody tr:hover{background:rgba(56,225,255,.06)}
 .rev td{white-space:nowrap}.rev td small{color:var(--dim);font-size:11px}.rev tr.base td{color:var(--dim);border-top:1px dashed var(--line)}
+.fullrep summary{color:var(--cyan);font-weight:700}.fullrep h3{margin-top:14px}
 .good{color:var(--green)}.bad{color:var(--red)}.legend{margin-top:10px}.legend ul{margin:6px 0}
 .wave{border-color:rgba(167,139,250,.45)}.wave b{color:var(--violet)}
 .thread.name{border-color:rgba(167,139,250,.5);background:linear-gradient(160deg,rgba(167,139,250,.10),rgba(255,255,255,.02))}

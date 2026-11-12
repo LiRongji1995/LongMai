@@ -376,3 +376,22 @@ def test_page_text_is_chinese_only():
     assert "强势延续" in text and "谐音「洋阳」" in text and "分时补抓命令" in text and "说明文档" in text and "观察" in text
     assert "*ST正平" in text and "TOPCon电池" in text      # stock and board names are kept as they are
     assert not any(w in text for w in ("SF_", "STRONG", "yang", "sf ", "docs/", "watch"))
+
+
+def test_full_review_report_is_folded_below_the_table(tmp_path):
+    rev = tmp_path / "R1"
+    rev.mkdir()
+    (rev / "report.json").write_text(json.dumps(dict(lists=2, first="2026-11-10", last="2026-11-11", recall=None,
+                                                     winners=0, missed=[])))
+    (rev / "forward_v9_v7.json").write_text(json.dumps(dict(status="前向样本 0 个交易日", table=dict(
+        lu1=dict(V7=0.07, V9=0.09), bigloss1=dict(V7=0.27, V9=0.24), out5=dict(V7=None, V9=None),
+        n=dict(V7=62, V9=51), per_day=dict(V7=31.0, V9=25.5)))))
+    pd.DataFrame([dict(obs="2026-11-11", code="a", role="leader", cell="x", p_lu1=0.4, p_out5=0.4, p_bigloss1=0.3,
+                       lu1=1.0, out5=None, bigloss1=0.0)]).to_csv(rev / "baserate_calibration.csv", index=False)
+    pd.DataFrame([dict(code="a", role="ladder", **{"class": "deny"}, day="2026-11-12", a_lu=0.0, a_bigloss=1.0,
+                       a_out5=None)]).to_csv(rev / "auction_forward.csv", index=False)
+    html_ = page.review_report_html(rev)
+    assert html_.startswith('<details class="legend fullrep"><summary>完整复盘报告（点开查看）')
+    assert "妖股召回：还没有走完" in html_ and "第9版" in html_ and "第7版" in html_ and "9%" in html_
+    assert "主线龙头" in html_ and "40% → 100%" in html_ and "竞价否定" in html_ and "连板梯队" in html_
+    assert "V9" not in html_ and "leader" not in html_
