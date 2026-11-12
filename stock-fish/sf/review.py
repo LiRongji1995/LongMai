@@ -157,3 +157,86 @@ def forward_report(rows: pd.DataFrame) -> dict:
         status = "V9 相对 V7 不满足取舍规则：考虑回到 V7 的形态规则（版本变更）"
     return dict(days=days, lists=int(rows["obs"].nunique()), table=table, d_out5=d_out5, d_bigloss1=d_loss,
                 status=status)
+
+
+# ------------------------------------------------------------------ forward checks of the descriptive layers
+
+def baserate_calibration(since: str | None = None, loaded: tuple[dict, dict] | None = None) -> pd.DataFrame:
+    """Per saved list that used a 历史同类 table: the table's rates for each listed stock next to what happened.
+    One row per (list, stock); outcomes not yet stored stay NaN (pending)."""
+    from . import baserates
+    runs = [r for r in listing.all_runs() if since is None or r.parent.name >= since]
+    w, out = loaded or _load()
+    frames = []
+    role_of = {"leader": "leader", "avoid": "leader", "ladder": "ladder", "watch": "observe"}
+    for run in runs:
+        summary = json.loads((run / "summary.json").read_text())
+        rid = (summary.get("baserates") or {}).get("run")
+        obs = summary["observation"]
+        path = store.home() / "research" / "baserates" / str(rid) / "table.parquet"
+        if not rid or not path.exists() or obs not in w["close"].index:
+            continue
+        tab = pd.read_parquet(path)
+        facts = pd.read_parquet(run / "facts.parquet")
+        facts = facts[facts["lm_group"].isin(list(role_of))]
+        for code, f in facts.iterrows():
+            r = baserates.lookup(tab, role_of[f["lm_group"]], f.get("board_height"), f.get("one_price"))
+            if r is None:
+                continue
+            frames.append(dict(obs=obs, code=code, role=role_of[f["lm_group"]], cell=baserates._cell_name(r),
+                               p_lu1=r["lu1"], p_out5=r["out5"], p_bigloss1=r["bigloss1"],
+                               lu1=out["lu1"][code].get(obs) if code in out["lu1"] else float("nan"),
+                               out5=out["out5"][code].get(obs) if code in out["out5"] else float("nan"),
+                               bigloss1=out["bigloss1"][code].get(obs) if code in out["bigloss1"] else float("nan")))
+    return pd.DataFrame(frames)
+
+
+def calibration_report(rows: pd.DataFrame) -> pd.DataFrame:
+    """Per role: predicted (table) vs realized rates over the stocks whose outcome is known."""
+    if rows.empty:
+        return pd.DataFrame()
+    out = {}
+    for role, g in rows.groupby("role"):
+        rec = {}
+        for k in ("lu1", "out5", "bigloss1"):
+            known = g[g[k].notna()]
+            rec[f"n_{k}"] = len(known)
+            rec[f"历史_{k}"] = round(float(known[f"p_{k}"].mean()), 3) if len(known) else None
+            rec[f"实际_{k}"] = round(float(known[k].mean()), 3) if len(known) else None
+        out[role] = rec
+    return pd.DataFrame(out).T
+
+
+def auction_forward(loaded: tuple[dict, dict] | None = None) -> pd.DataFrame:
+    """Every saved auction day (first snapshot per day), relabelled with the pre-registered cuts of the adopted roles,
+    with the open-anchored outcomes of that day (NaN = pending)."""
+    from . import auction
+    root = store.home() / "auction"
+    if not root.exists():
+        return pd.DataFrame()
+    w, _ = loaded or _load()
+    outcomes = auction.auction_outcomes(w)
+    frames = []
+    for day_dir in sorted(p for p in root.iterdir() if p.is_dir()):
+        snaps = sorted(p for p in day_dir.iterdir() if (p / "snapshot.parquet").exists())
+        if not snaps or day_dir.name not in w["close"].index:
+            continue
+        s = pd.read_parquet(snaps[0] / "snapshot.parquet")
+        s = s[s["role"].isin(list(auction.ADOPTED))]
+        for role, a in auction.ADOPTED.items():
+            m = s["role"] == role
+            if m.any():
+                s.loc[m, "class"] = auction.classify(s.loc[m, "gap"], s.loc[m, "open_limit"], *a["cuts"]).to_numpy()
+        for k in ("a_lu", "a_out5", "a_bigloss"):
+            s[k] = [outcomes[k][c].get(day_dir.name) if c in outcomes[k] else float("nan") for c in s.index]
+        frames.append(s.assign(day=day_dir.name).rename_axis("code").reset_index())
+    return pd.concat(frames, ignore_index=True) if frames else pd.DataFrame()
+
+
+def auction_forward_report(rows: pd.DataFrame) -> pd.DataFrame:
+    if rows.empty or "class" not in rows:
+        return pd.DataFrame()
+    g = rows.groupby(["role", "class"])
+    rep = g.agg(n=("code", "size"), days=("day", "nunique"), a_lu=("a_lu", "mean"), a_bigloss=("a_bigloss", "mean"),
+                a_out5=("a_out5", "mean"), pending_out5=("a_out5", lambda x: int(x.isna().sum())))
+    return rep.round(3)

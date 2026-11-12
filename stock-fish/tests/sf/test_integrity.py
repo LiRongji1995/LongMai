@@ -89,7 +89,7 @@ def test_header_names_missing_inputs():
     result = dict(gate=dict(slots=0, mood_tier="中", mood_level=0.5, reg_tier="中", szse_cases=1),
                   observation="2026-11-10", target="2026-11-11", strategy_version=longmai.VERSION, mainlines=[],
                   seats="not captured", abnormal_index_ok=False)
-    line = next(x for x in listing.header(result) if x.startswith("数据缺失"))
+    line = next(x for x in listing.header(result) if x.startswith("【数据缺失】"))
     assert "龙虎榜席位未采集" in line and "指数行情不全" in line
 
 

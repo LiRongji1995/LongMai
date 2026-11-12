@@ -12,8 +12,8 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import (baserates, crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store,
-               strategy, temperature)
+from . import (baserates, context, crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar,
+               seats, store, strategy, temperature, threads)
 
 
 def build(observation: str | None = None, update_external: bool = True, watch_limit: int = 10,
@@ -215,7 +215,21 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         table["历史同类"] = [baserates.describe(baserates.lookup(btab, r, h, o)) if isinstance(r, str) else ""
                          for r, h, o in zip(role, hgt, one)]
         bstatus = dict(run=bmeta["run"], cutoff=bmeta["cutoff"], version=bmeta["version"])
+    # long-term position and relative amount (description only, after every group and order is fixed)
+    vs_ma, vs_hi = context.position(ctx["w"], t)
+    share = context.amount_share(ctx["aw"], t)
+    table["位置"] = [context.position_text(vs_ma.get(c), vs_hi.get(c)) for c in table["code"]]
+    table["成交额"] = [txt + context.share_text(share.get(c)) for txt, c in zip(table["成交额"], table["code"])]
+    facts["vs_ma250"], facts["vs_high250"] = vs_ma.reindex(facts.index), vs_hi.reindex(facts.index)
+    facts["amount_share"] = share.reindex(facts.index)
     lines = lm.mainline_table(ctx, t, p)
+    thread_list = threads.build(ctx["ts"], t, p)
+    for th in thread_list:  # the thread's strongest listed stock and its position, for the header
+        listed = [c for c in table["code"] if c in set(th["codes"])]
+        th["listed"] = [name.get(c, c) for c in listed[:3]]
+        th["lead_position"] = context.position_text(vs_ma.get(listed[0]), vs_hi.get(listed[0])) if listed else None
+        th.pop("codes")
+    fates = context.high_fate(ctx["aw"], t, name)
     group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
     facts["name"] = name.reindex(facts.index)
@@ -285,6 +299,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
+                threads=thread_list, high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
 
 
@@ -307,6 +322,11 @@ def header(result: dict) -> list[str]:
         lines.append("主线：无（没有题材当日涨停≥3家）")
     if result.get("temperature"):
         lines.append(result["temperature"]["text"])
+    for th in result.get("threads", []):
+        lead = f"；清单内 {'、'.join(th['listed'])}（{th['listed'][0]} {th['lead_position']}）" if th.get("listed") else ""
+        lines.append("题材线索：" + threads.describe(th) + lead)
+    if result.get("high_fate"):
+        lines.append("高标结局（前一交易日的高标在观察日）：" + "；".join(f"{f['name']} {f['height']}板→{f['fate']}" for f in result["high_fate"]))
     for wv in result.get("name_waves", []):
         lines.append(f"名字扩散：{wv['group']} 今日涨停{wv['limit_ups']}家（随机期望{wv['expected']}家，"
                      f"组内{wv['members']}只），龙头 {'、'.join(wv['leaders'])}")
@@ -356,14 +376,14 @@ def header(result: dict) -> list[str]:
         lines.append(f"历史同类：同角色·同板数·是否一字的历史结果（统计表 {br['run']}，截至 {br['cutoff']}），只作描述，"
                      "不影响分组与排序；“未涨停开时”指次日没有涨停开、能买进的那部分")
     if missing:
-        lines.append("数据缺失：" + "；".join(missing))
+        lines.insert(1, "【数据缺失】" + "；".join(missing))
     lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
     return lines
 
 
 HIGH_VOL = "高波动：最强也最危险（历史上次日续板约24-45%，大面约38-58%），只适合盘中判断"
 GROUP_CODES = {"主线龙头": "leader", "连板梯队": "ladder", "观察": "watch", "高波动": "avoid", "回避": "avoid"}
-VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示", "昨日分时", "历史同类"]
+VIEW = ["分组", "名称", "角色", "成交额", "位置", "参与建议", "风险提示", "昨日分时", "历史同类"]
 
 
 def save(result: dict) -> Path:

@@ -147,7 +147,9 @@ def capture(days: list[str], workers: int = 4, log=print) -> dict[str, dict]:
         u = universes[day]
         parts, entry = _split(day, u["code"], frames, errors, raw_path.name, stamp)
         if not parts:
-            entry["status"] = "FAILED: no bars (outside the source's 5-session window?)"
+            entry["status"] = ("FAILED: every request failed (connection dropped by the source or network); retry later"
+                               if entry["requested"] and len(entry["failed"]) == entry["requested"]
+                               else "FAILED: no bars (outside the source's 5-session window?)")
             (_dir("capture") / f"{day}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
             result[day] = entry
             continue

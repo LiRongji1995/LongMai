@@ -38,6 +38,12 @@ bounded, logged retry.
   new rule with the current one, the default acceptance is: `out5` (breakout) at least +2 percentage points, and
   `bigloss1` (next-day big loss) up by no more than half of the `out5` gain and never more than +2 points. Write
   this rule into each new pre-registration before any result; it does not re-judge V9 retroactively.
+- **Stored history is used up (user decision, 2026-11-13).** The test segments (from 2025-02-06) have been seen by
+  V1-V11 and are no longer clean. New rule ideas go to `docs/HYPOTHESES.md` with the date they were raised and are
+  tested on data after that date (forward record); do not pick thresholds on the stored history again. Pre-registrations
+  already written (e.g. `docs/STOPLOSS_V1_PREREG.md`) run as written, with the caveat stated.
+- Descriptive layers (历史同类, 题材线索, 位置, 高标结局, page) never change a group or an order. Changing a rule
+  threshold that a note uses (e.g. the 1e8 "流动性差" note) is a rule change and needs a pre-registration.
 
 ## Data and files
 
@@ -105,7 +111,11 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 3. The `昨日分时` column describes the observation day's intraday facts (description only; it never changes a group
    or order). Listed stocks the evening capture missed are fetched once while the list is built (not with
    `--no-update`). Before 40 captured sessions, never read it as a forecast for the next session.
-4. The `历史同类` column gives the historical outcomes of the stock's cell (role x board height x one-price) from
+4. The header also shows 题材线索 (theme threads: mainline boards linked across days by their limit-up stocks, with
+   age, today's vs peak limit-ups), the `位置` column (vs MA250 and the one-year high), the amount as a share of
+   the whole market, and 高标结局 (yesterday's tallest boards on the observation day). All description only;
+   `【数据缺失】` is now the second header line.
+5. The `历史同类` column gives the historical outcomes of the stock's cell (role x board height x one-price) from
    the latest `sf baserates` table with cutoff <= observation date (description only). If the header reports the
    table missing, run `bin/sf baserates` (~5 min) and rebuild with `--no-update`; refresh it weekly.
 
@@ -136,6 +146,28 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    the pre-registration and the sha256 of the prereg file and `sf/auction.py` are recorded; write the result into the
    prereg file's result section whatever it is. Auction amount / unmatched volume rules need >= 40 captured sessions
    and their own pre-registration (a new version).
+
+### R8. Scheduled capture (`sf schedule`)
+1. `bin/sf schedule install` writes launchd user agents (`~/Library/LaunchAgents/com.longmai.sf.<job>.plist`) for:
+   auction 09:26, premarket 18:40 (+ page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
+   Saturday. Install only when the user asks; `bin/sf schedule uninstall` removes them.
+2. `bin/sf schedule status` shows each job's last run. Logs: `schedule/logs/`; latest status: `schedule/status/`.
+   A failed job posts a local macOS notification and appears at the top of the local page.
+3. When the minute-bar source drops connections, retry at another time only. Never switch to undocumented hosts,
+   spoof headers or otherwise work around the source's limits.
+
+### R9. Judgment diary and trade log (`sf judge`, `sf trade`)
+1. Record the user's own calls with `bin/sf judge add "<their words>" --kind ... --subject ... [--days N] [--not]`
+   only when they state a call and agree to record it; never invent judgments. Kinds: stock_lu, stock_bigloss,
+   stock_out5, theme_fade (Eastmoney board name), free.
+2. `bin/sf judge score` scores them from stored bars (writes `journal/scores/<stamp>.csv`). Records are write-once.
+3. Trades are entered by the user (or by you from the user's explicit message): `bin/sf trade add <date> <code>
+   buy|sell <price> <qty> --reason ...`. `bin/sf trade report` pairs FIFO and groups by the list of the buy day.
+   Never connect to a broker; never present results as advice.
+
+### R10. Local page (`sf page`)
+1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from saved files only (written by premarket
+   and auction automatically). Report its path. The page is description; data gaps are listed first.
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`

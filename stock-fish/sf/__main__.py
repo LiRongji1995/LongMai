@@ -62,6 +62,152 @@ def _capture_intraday(days: list[str]) -> str:
     return "；".join(f"{d} {r['status']}" + (f"（{r['ok']}/{r['requested']}）" if "ok" in r else "") for d, r in res.items())
 
 
+def _page_for(target: str | None = None):
+    """Write the local page for the latest list (best effort: a failure is reported, never fatal)."""
+    from . import listing, page
+    try:
+        run = listing.latest_run(target)
+        return page.write(run) if run is not None else None
+    except Exception as error:
+        print(f"本地页面生成失败：{error}", file=sys.stderr)
+        return None
+
+
+def cmd_page(args) -> int:
+    import subprocess
+
+    from . import listing, page
+    run = listing.latest_run(args.target)
+    if run is None:
+        print("没有已保存的清单", file=sys.stderr)
+        return 1
+    path = page.write(run)
+    print(f"已生成本地页面：{path}")
+    if args.open and sys.platform == "darwin":
+        subprocess.run(["open", str(path)], check=False)
+    return 0
+
+
+def cmd_judge(args) -> int:
+    from . import journal
+    if args.action == "add":
+        if not args.text:
+            print("用法：sf judge add \"判断原文\" [--kind ... --subject ... --days N --not]", file=sys.stderr)
+            return 1
+        try:
+            rec = journal.add_judgment(args.text, args.kind, args.subject, args.days, expect=not args.negate)
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        what = journal.KINDS[rec["kind"]]
+        print(f"已记录（基于 {rec['observation']} 收盘{'，盘中记录' if rec['intraday'] else ''}）：{rec['text']}"
+              + (f"；检验：{rec['subject']} {rec['days']} 日内{'不' if not rec['expect'] else ''}{what}" if rec["kind"] != "free" else ""))
+        return 0
+    j = journal.judgments()
+    if j.empty:
+        print("还没有判断记录")
+        return 0
+    if args.action == "list":
+        print(j[["observation", "kind", "subject", "days", "expect", "text"]].to_string(index=False))
+        return 0
+    return _judge_score(j)
+
+
+def _judge_score(j) -> int:
+    from datetime import datetime, timezone
+
+    from . import evaluate, journal, mainline, store, strategy, themes
+    stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
+    first = min(j["observation"])
+    window = [d for d in stored if d >= first][:400] or stored[-5:]
+    window = stored[max(0, stored.index(window[0]) - 5):]
+    with _quiet():
+        bars = store.load_window(window)
+        w = strategy.panel(bars)
+        ts = None
+        loaded = themes.load()
+        if loaded is not None and (j["kind"] == "theme_fade").any():
+            ts = mainline.theme_stats(mainline.a_share_panel(bars), *loaded)
+    s = journal.score(j, w, evaluate.stock_outcomes(w), ts)
+    print(s[["observation", "kind", "subject", "days", "expect", "text", "result"]].to_string(index=False))
+    summ = journal.judgment_summary(s)
+    if not summ.empty:
+        print("\n命中率（已有结果的判断）：")
+        print(summ.to_string())
+    out = store.home() / "journal" / "scores"
+    out.mkdir(parents=True, exist_ok=True)
+    path = out / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".csv")
+    s.to_csv(path, index=False, encoding="utf-8-sig")
+    print(f"已保存 {path}")
+    return 0
+
+
+def cmd_trade(args) -> int:
+    from . import journal, store
+    if args.action == "add":
+        if None in (args.date, args.code, args.side, args.price, args.qty):
+            print("用法：sf trade add 日期 代码 buy|sell 价格 数量 [--reason 理由]", file=sys.stderr)
+            return 1
+        try:
+            rec = journal.add_trade(args.date, args.code, args.side, args.price, args.qty, args.reason or "")
+        except ValueError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        print(f"已记录：{rec['date']} {rec['name']} {'买入' if rec['side'] == 'buy' else '卖出'} {rec['qty']}股 @ {rec['price']}")
+        return 0
+    tr = journal.trades()
+    if tr.empty:
+        print("还没有交易记录")
+        return 0
+
+    def bars_for(day, code):
+        path = store.bar_path(day)
+        if not path.exists():
+            return None
+        b = pd.read_parquet(path, columns=["code", "high", "low"])
+        b = b[b["code"] == code]
+        return None if b.empty else dict(high=float(b["high"].iloc[0]), low=float(b["low"].iloc[0]))
+    rep = journal.trade_report(tr, bars_for)
+    for wmsg in rep["warnings"]:
+        print("注意：" + wmsg)
+    if not rep["closed"].empty:
+        c = rep["closed"].assign(收益=(rep["closed"]["ret"] * 100).round(2).astype(str) + "%")
+        print("已平仓（先进先出）：")
+        print(c[["buy_date", "sell_date", "name", "qty", "buy_price", "sell_price", "收益", "group", "reason"]].to_string(index=False))
+        print("\n按买入当天清单分组：")
+        print(rep["by_group"].to_string())
+    if not rep["open"].empty:
+        print("\n未平仓：")
+        print(rep["open"].to_string(index=False))
+    return 0
+
+
+def cmd_schedule(args) -> int:
+    from . import schedule
+    if args.action == "run":
+        return schedule.run(args.job)
+    if args.action == "install":
+        paths = schedule.install(args.jobs or None)
+        print("已安装定时任务（launchd，本机）：\n" + "\n".join(f"  {p}" for p in paths))
+        print(f"时间按北京时间设定，已换算成本机时间（本机比北京慢 {schedule.local_offset():g} 小时），例如竞价 09:26 = 本机 "
+              + "{:02d}:{:02d}".format(*schedule.local_slot(1, 9, 26)[1:]) + "。夏令时切换后需要重新安装。")
+        print("电脑需要开机、联网且不在睡眠；错过的任务在唤醒后补跑一次（竞价只在北京时间 09:20-11:30 内补跑）。")
+        return 0
+    if args.action == "uninstall":
+        removed = schedule.uninstall(args.jobs or None)
+        print("已移除：" + ("、".join(p.name for p in removed) if removed else "无"))
+        return 0
+    for s in schedule.status():
+        last = s["last"]
+        tail = "从未运行" if not last else (f"上次 {last['started_at'][:16].replace('T', ' ')}，"
+                                            + (f"跳过（{last['skipped']}）" if last.get("skipped") else f"退出码 {last['exit']}"))
+        print(f"{s['job']:<10} {'已安装' if s['installed'] else '未安装'}  {s['days']} 北京 {s['times']}（本机 {s['local']}）  {tail}")
+    warn = schedule.offset_changed()
+    if warn:
+        print("注意：" + warn)
+    return 0
+
+
 def cmd_baserates(args) -> int:
     """历史同类统计表 (sf/baserates.py): replays the V9 list, writes research/baserates/<stamp>/."""
     from . import baserates
@@ -93,6 +239,9 @@ def cmd_auction(args) -> int:
     with pd.option_context("display.unicode.east_asian_width", True, "display.width", 200):
         print(auction.table(snap).to_string(index=False))
     print(f"已保存：{out}")
+    page_path = _page_for(snap["target"])
+    if page_path:
+        print(f"本地页面：{page_path}")
     return 0
 
 
@@ -265,6 +414,9 @@ def cmd_premarket(args) -> int:
     if not args.no_update:
         print(f"\n盘中分时：{intraday_status}")
     print(f"\n已保存 {path}/盘前清单.csv  (耗时 {time.monotonic() - started:.1f}s)")
+    page_path = _page_for(result["target"])
+    if page_path:
+        print(f"本地页面：{page_path}")
     return 0
 
 
@@ -306,7 +458,36 @@ def cmd_review(args) -> int:
             print(f"已有结果 {fwd['days']} 天：走出来 V9−V7 {fwd['d_out5'] * 100:+.1f} 个百分点，"
                   f"大面 {fwd['d_bigloss1'] * 100:+.1f} 个百分点")
         print(fwd["status"])
+    with _quiet():
+        calib = review.baserate_calibration(args.since, loaded)
+        auc = review.auction_forward(loaded)
+    crep = review.calibration_report(calib)
+    if not crep.empty:
+        print("\n历史同类对照（清单当时给出的历史比例 vs 实际发生，只统计已有结果的股票）：")
+        print(crep.to_string())
+    arep = review.auction_forward_report(auc)
+    if not arep.empty:
+        print("\n竞价标签前向记录（按预注册分界点重新标注；a_lu=当日涨停，a_bigloss=开盘后大面，a_out5=开盘起5日走出来）：")
+        print(arep.to_string())
+    from . import journal
+    j = journal.judgments()
+    if not j.empty:
+        js = journal.score(j, loaded[0], loaded[1], None)
+        summ = journal.judgment_summary(js)
+        print(f"\n判断日记：{len(j)} 条，已判 {int(js['right'].notna().sum())} 条（题材类用 sf judge score 判）")
+        if not summ.empty:
+            print(summ.to_string())
+    tr = journal.trades()
+    if not tr.empty:
+        trep = journal.trade_report(tr)
+        if not trep["by_group"].empty:
+            print("\n交易记录（按买入当天清单分组，先进先出）：")
+            print(trep["by_group"].to_string())
     path = review.save(rows, rep)
+    if not calib.empty:
+        calib.to_csv(path / "baserate_calibration.csv", index=False, encoding="utf-8-sig")
+    if not auc.empty:
+        auc.to_csv(path / "auction_forward.csv", index=False, encoding="utf-8-sig")
     if not forward.empty:
         forward.to_csv(path / "forward_v9_v7.csv", index=False, encoding="utf-8-sig")
         (path / "forward_v9_v7.json").write_text(json.dumps(
@@ -424,6 +605,21 @@ def cmd_evaluate(args) -> int:
             q1_passed=rep["q1_passed"], q2_passed=rep["q2_passed"], deltas=rep["deltas"], neighbours=rep["neighbours"],
             first=rep["first"], last=rep["last"], boards=rep["boards"], leaders=rep["leaders"]),
             ensure_ascii=False, indent=2, default=float))
+    if args.part == "stoploss":  # reference stop line exam (docs/STOPLOSS_V1_PREREG.md)
+        from . import auction, stoploss
+        print(f"参考止损线检验：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放 V9 清单（较慢）...")
+        with _quiet():
+            res = stoploss.run(log=lambda *_: None)
+        for width, r in res.items():
+            print(f"\n止损宽度 {width:.0%}" + ("（预注册主规则）" if width == stoploss.STOP else "（邻域，只报告）"))
+            print(r["stats"].round(4).to_string())
+            for role, v in r["verdicts"].items():
+                print(f"  {auction.ROLE_NAMES[role]}：{v['call']}")
+            r["table"].to_parquet(out / f"stoploss_{int(width * 100)}.parquet")
+            r["stats"].to_csv(out / f"stoploss_{int(width * 100)}_stats.csv", encoding="utf-8-sig")
+        (out / "stoploss_verdict.json").write_text(json.dumps(
+            {f"{w:.2f}": r["verdicts"] for w, r in res.items()} | {"version": stoploss.VERSION},
+            ensure_ascii=False, indent=2))
     if args.part == "swing":  # 龙脉 V8 pre-registered exam (docs/STRATEGY_LONGMAI_V8_PREREG.md)
         from . import manifest, swing
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
@@ -563,7 +759,7 @@ def parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     ev = sub.add_parser("evaluate", help="全历史选股与水温命中率（不按开盘买入盈亏）")
-    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns", "auction", "quality", "lateline"])
+    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns", "auction", "quality", "lateline", "stoploss"])
     ev.set_defaults(func=cmd_evaluate)
 
     th = sub.add_parser("themes", help="刷新概念/行业板块成分（约20分钟，建议每周一次）")
@@ -616,6 +812,36 @@ def parser() -> argparse.ArgumentParser:
     rs.add_argument("archive", help="longmai-data-*.tar.gz")
     rs.add_argument("--sha256", help="压缩包校验值（默认读同目录的 .sha256 文件）")
     rs.set_defaults(func=cmd_restore)
+
+    pg = sub.add_parser("page", help="生成本地网页（先看数据问题，再看摘要和完整清单）")
+    pg.add_argument("target", nargs="?", help="交易日（默认最新清单）")
+    pg.add_argument("--open", action="store_true", help="生成后用浏览器打开")
+    pg.set_defaults(func=cmd_page)
+
+    jd = sub.add_parser("judge", help="判断日记：记录自己的判断，到期自动判对错")
+    jd.add_argument("action", choices=["add", "list", "score"])
+    jd.add_argument("text", nargs="?", default="", help="判断原文（add 时）")
+    jd.add_argument("--kind", default="free", choices=["stock_lu", "stock_bigloss", "stock_out5", "theme_fade", "free"])
+    jd.add_argument("--subject", help="股票代码/名称，或板块名（theme_fade）")
+    jd.add_argument("--days", type=int, help="几个交易日内（stock_lu 默认 1，theme_fade 默认 3）")
+    jd.add_argument("--not", dest="negate", action="store_true", help="判断“不会发生”")
+    jd.set_defaults(func=cmd_judge)
+
+    tr = sub.add_parser("trade", help="交易记录：手动记下自己的买卖（不连券商），report 对照清单")
+    tr.add_argument("action", choices=["add", "report"])
+    tr.add_argument("date", nargs="?", help="成交日 YYYY-MM-DD")
+    tr.add_argument("code", nargs="?", help="代码或名称")
+    tr.add_argument("side", nargs="?", choices=["buy", "sell"])
+    tr.add_argument("price", nargs="?", type=float)
+    tr.add_argument("qty", nargs="?", type=int)
+    tr.add_argument("--reason", help="为什么买/卖")
+    tr.set_defaults(func=cmd_trade)
+
+    sc = sub.add_parser("schedule", help="本机定时采集（竞价、清单、分时补抓、每周统计表与板块成分）")
+    sc.add_argument("action", choices=["install", "uninstall", "status", "run"])
+    sc.add_argument("job", nargs="?", help="run 时的任务名")
+    sc.add_argument("--jobs", nargs="*", help="只安装/移除这些任务")
+    sc.set_defaults(func=cmd_schedule)
 
     st = sub.add_parser("status", help="数据覆盖情况")
     st.set_defaults(func=cmd_status)

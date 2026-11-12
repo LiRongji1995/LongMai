@@ -14,6 +14,7 @@ membership it used.
 """
 from __future__ import annotations
 
+import json
 import time
 from datetime import datetime, timezone
 
@@ -92,12 +93,35 @@ def refresh(kinds=("industry", "concept"), with_history: bool = True, log=print)
     board_frame = pd.DataFrame(boards, columns=["board", "kind", "board_code", "first_date", "n_members",
                                                 "captured_at", "source"])
     member_frame = pd.DataFrame(members, columns=["board", "kind", "code"]).drop_duplicates()
+    ids = {}
     for frame, name in ((board_frame, "theme_boards.parquet"), (member_frame, "theme_members.parquet")):
         tmp = _meta(name).with_suffix(".tmp")
         frame.to_parquet(tmp, index=False)
         tmp.replace(_meta(name))
-        store.archive(_meta(name))
+        ids[name] = store.archive(_meta(name))
+    record_snapshot(stamp, ids, store.now_sh().date().isoformat())
     return dict(boards=len(boards), members=len(members), failures=failures, carried=carried)
+
+
+SNAPSHOTS = "theme_snapshots.jsonl"  # one line per refresh: which archived membership was current from which day
+
+
+def record_snapshot(captured_at: str, ids: dict, day: str) -> None:
+    """Append (never rewrite) the archive ids of a refresh, so a later exam can use the membership that was current
+    on each day instead of today's snapshot (removes the look-ahead of board membership from that day on)."""
+    line = json.dumps(dict(day=day, captured_at=captured_at, archive=ids), ensure_ascii=False)
+    with open(_meta(SNAPSHOTS), "a", encoding="utf-8") as f:
+        f.write(line + "\n")
+
+
+def snapshot_for(day: str) -> dict | None:
+    """The newest recorded refresh made on or before `day` (None before the first record)."""
+    path = _meta(SNAPSHOTS)
+    if not path.exists():
+        return None
+    rows = [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines() if x.strip()]
+    rows = [r for r in rows if r["day"] <= day]
+    return max(rows, key=lambda r: (r["day"], r["captured_at"])) if rows else None
 
 
 def _previous() -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
