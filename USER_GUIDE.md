@@ -70,6 +70,7 @@ sf evaluate temperature   # 只算温度（几秒）
 sf evaluate patterns      # V9 形态细分检验：10 个预注册标记、判定和观察组重放（约 10 分钟，见 docs/STRATEGY_LONGMAI_V9_PREREG.md）
 sf evaluate auction       # 竞价层 V1 检验（约 5 分钟，见 docs/AUCTION_V1_PREREG.md）
 sf evaluate quality       # V10 候选：小成交额 / 一字 / 低位标记的检验（约 6 分钟，见 docs/STRATEGY_LONGMAI_V10_PREREG.md；结论为不改）
+sf evaluate lateline      # V11 候选：主线后期·龙头在年线下的检验（约 3 分钟，见 docs/STRATEGY_LONGMAI_V11_PREREG.md；样本不足，不改）
 ```
 
 结果从观察日收盘价起算，不设买入价：

@@ -397,6 +397,33 @@ def cmd_evaluate(args) -> int:
             roles={k: dict(verdicts=v["verdicts"], neighbours=v["neighbours"], holding=v["holding"], deltas=v["deltas"],
                            passed=v["passed"], compare=v["compare"].reset_index().to_dict("records"))
                    for k, v in rep["roles"].items()}), ensure_ascii=False, indent=2, default=float))
+    if args.part == "lateline":  # 龙脉 V11 candidate exam (docs/STRATEGY_LONGMAI_V11_PREREG.md)
+        from . import lateline
+        print(f"龙脉 V11 候选（主线后期·年线下龙头）：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放 V9 清单（较慢）...")
+        with _quiet():
+            b, l, rep = lateline.run(log=lambda *_: None)
+        print(f"老题材门槛：近 {lateline.AGE_WINDOW} 日为主线 ≥ {rep['cut']:g} 天（train 段 2/3 分位）")
+        print("\n主线层面（描述：fade3 / still3 / 龙1 次日涨停 / 龙1 次日大面）：")
+        print(rep["describe"].to_string())
+        seg = lambda d: " / ".join(f"{d[s]['m'] * 100:.1f}%({d[s]['n']})" for s in lateline.SEGS)  # noqa: E731
+        print(f"\nQ1 老题材 fade3：龙1年线下 {seg(rep['q1']['yes'])}；龙1年线上 {seg(rep['q1']['no'])}")
+        print(f"Q1 判定：{'成立' if rep['q1_passed'] else '不成立'}，{rep['q1']['verdict']['reason']}")
+        print(f"\nQ2 老题材主线龙头 lu1：年线下 {seg(rep['q2']['yes'])}；年线上 {seg(rep['q2']['no'])}")
+        print(f"Q2 标记：{'成立' if rep['q2']['verdict']['holds'] else '不成立'}，{rep['q2']['verdict']['reason']}")
+        print(rep["compare"].round(3).to_string())
+        print(f"Q2 结论（组规则 {rep['rule']}）：" + ("采用（V11 候选）" if rep["q2_passed"] else "不改"))
+        print("稳健性邻域（只报告）：" + "；".join(
+            f"{n} Q1{'成立' if v['q1']['holds'] else '不成立'} Q2{'成立' if v['q2']['holds'] else '不成立'}"
+            for n, v in rep["neighbours"].items()))
+        b.to_parquet(out / "lateline_boards.parquet")
+        l.to_parquet(out / "lateline_leaders.parquet")
+        rep["describe"].to_csv(out / "lateline_describe.csv", encoding="utf-8-sig")
+        rep["compare"].to_csv(out / "lateline_compare.csv", encoding="utf-8-sig")
+        (out / "lateline_verdict.json").write_text(json.dumps(dict(
+            version=lateline.VERSION, rule=rep["rule"], cut=rep["cut"], q1=rep["q1"], q2=rep["q2"],
+            q1_passed=rep["q1_passed"], q2_passed=rep["q2_passed"], deltas=rep["deltas"], neighbours=rep["neighbours"],
+            first=rep["first"], last=rep["last"], boards=rep["boards"], leaders=rep["leaders"]),
+            ensure_ascii=False, indent=2, default=float))
     if args.part == "swing":  # 龙脉 V8 pre-registered exam (docs/STRATEGY_LONGMAI_V8_PREREG.md)
         from . import manifest, swing
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
@@ -536,7 +563,7 @@ def parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     ev = sub.add_parser("evaluate", help="全历史选股与水温命中率（不按开盘买入盈亏）")
-    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns", "auction", "quality"])
+    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns", "auction", "quality", "lateline"])
     ev.set_defaults(func=cmd_evaluate)
 
     th = sub.add_parser("themes", help="刷新概念/行业板块成分（约20分钟，建议每周一次）")
