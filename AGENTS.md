@@ -169,6 +169,8 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R10. Local page (`sf page`)
 1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from saved files only (written by premarket
    and auction automatically). Report its path. The page is description; data gaps are listed first.
+2. `pages/index.html` and `pages/latest.html` are navigation only and are rewritten with every new page; the
+   dated pages are never changed.
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`

@@ -234,7 +234,45 @@ def write(run: Path) -> Path:
     path = out / (datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + ".html")
     with open(path, "x", encoding="utf-8") as f:
         f.write(render(run))
+    write_index()
     return path
+
+
+def _replace(path: Path, text: str) -> None:
+    tmp = path.with_name(path.name + ".tmp")
+    tmp.write_text(text, encoding="utf-8")
+    tmp.replace(path)
+
+
+def write_index() -> Path:
+    """pages/index.html (every target, newest first, with its page versions) and pages/latest.html (opens the newest
+    page). Navigation only: rewritten on each new page; the pages themselves are never changed."""
+    root = store.home() / "pages"
+    days = sorted((d for d in root.iterdir() if d.is_dir() and sorted(d.glob("*.html"))), reverse=True)
+    rows = []
+    for d in days:
+        versions = sorted(d.glob("*.html"), reverse=True)
+        older = "".join(f'<a class="v" href="{d.name}/{v.name}">{_e(v.stem[9:13])}</a>' for v in versions[1:])
+        rows.append(f'<article class="day"><a class="main" href="{d.name}/{versions[0].name}"><span class="d">{_e(d.name)}</span>'
+                    f'<span class="dim">最新 {_e(versions[0].stem)} · 共 {len(versions)} 份</span></a>'
+                    + (f'<div class="olds"><span class="dim">更早（UTC 时分）：</span>{older}</div>' if older else "") + "</article>")
+    latest = f"{days[0].name}/{sorted(days[0].glob('*.html'))[-1].name}" if days else None
+    top = (f'<a class="go" href="{latest}">打开最新页面 → {_e(days[0].name)}</a>' if latest else "<p>还没有页面。</p>")
+    body = (f'<div class="top"><div class="brand"><span class="dot"></span>龙脉 <i>LONGMAI</i></div></div>'
+            f'<header class="hero"><div class="date">页面目录</div><div class="meta">每个交易日一行，点日期打开最新一份；'
+            f'旧版本保留不改。</div></header><section>{top}</section><section><div class="days">{"".join(rows)}</div></section>')
+    css = ".days{display:grid;gap:10px}.day{border:1px solid var(--line);border-radius:12px;padding:10px 14px}" \
+          ".main{display:flex;gap:14px;align-items:baseline;flex-wrap:wrap;text-decoration:none;color:var(--fg)}" \
+          ".d{font-size:20px;font-weight:800}.olds{margin-top:6px;font-size:12px}.v{color:var(--cyan);margin-right:8px}" \
+          ".go{display:inline-block;padding:10px 18px;border-radius:12px;font-weight:800;color:#08101d;text-decoration:none;" \
+          "background:linear-gradient(90deg,var(--cyan),var(--violet))}"
+    _replace(root / "index.html", TEMPLATE.replace("{{title}}", "龙脉 页面目录").replace("</style>", css + "</style>")
+             .replace("{{body}}", body))
+    if latest:
+        _replace(root / "latest.html", f'<!doctype html><html lang="zh-CN"><head><meta charset="utf-8">'
+                 f'<meta http-equiv="refresh" content="0; url={latest}"><title>龙脉 最新</title></head>'
+                 f'<body style="background:#07090f;color:#e8edf7"><a href="{latest}">打开最新页面</a></body></html>')
+    return root / "index.html"
 
 
 TEMPLATE = """<!doctype html>

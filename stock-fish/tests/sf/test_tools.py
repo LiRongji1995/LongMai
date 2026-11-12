@@ -199,3 +199,14 @@ def test_intraday_missing_codes_after_a_partial_capture(tmp_path, monkeypatch):
     monkeypatch.setattr(intraday, "supplement", lambda d, codes, **k: calls.append((d, codes, k["reason"])) or {})
     intraday.retry_missing([day])
     assert calls == [(day, ["sh.600002"], "retry")]
+
+
+def test_page_index_lists_days_newest_first(tmp_path, monkeypatch):
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    for day, stamps in (("2026-11-12", ["20261111T120000Z"]), ("2026-11-13", ["20261112T100000Z", "20261112T170000Z"])):
+        (tmp_path / "pages" / day).mkdir(parents=True)
+        for s in stamps:
+            (tmp_path / "pages" / day / f"{s}.html").write_text("x")
+    text = page.write_index().read_text()
+    assert text.index("2026-11-13") < text.index("2026-11-12") and "共 2 份" in text
+    assert "2026-11-13/20261112T170000Z.html" in (tmp_path / "pages" / "latest.html").read_text()
