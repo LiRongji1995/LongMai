@@ -1,7 +1,8 @@
 # Agent Rules — LongMai (龙脉), Personal Short-Term Stock Research
 
 This is a single-user, local tool for A-share (SSE/SZSE main board) short-term screening: data update,
-pre-market candidate lists with a market-temperature read and hit-rate review (the call auction is read by the person). It
+pre-market candidate lists with a market-temperature read and hit-rate review, plus a call-auction snapshot of the listed
+stocks (one pre-registered label, 竞价否定; the person reads the auction and decides). It
 never connects to a broker and never places orders; a person decides every trade intraday. It is not a commercial product: no web/API, multi-user, permission or
 security platform work.
 
@@ -104,6 +105,9 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 3. The `昨日分时` column describes the observation day's intraday facts (description only; it never changes a group
    or order). Listed stocks the evening capture missed are fetched once while the list is built (not with
    `--no-update`). Before 40 captured sessions, never read it as a forecast for the next session.
+4. The `历史同类` column gives the historical outcomes of the stock's cell (role x board height x one-price) from
+   the latest `sf baserates` table with cutoff <= observation date (description only). If the header reports the
+   table missing, run `bin/sf baserates` (~5 min) and rebuild with `--no-update`; refresh it weekly.
 
 ### R6. Intraday minute bars (`sf intraday`)
 1. Capture runs inside `sf premarket` / `sf update`. On its own: `bin/sf intraday` (latest closed session) or
@@ -116,6 +120,22 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 3. `bin/sf intraday report` prints the descriptive tables of docs/INTRADAY_STUDY.md. Before 40 captured
    sessions, report them as description only: no conclusions, no rule changes. Any rule built on them is a new
    strategy version with its own forward test, and follows the pre-registration exactly (no threshold tuning).
+
+### R7. Call-auction snapshot (`sf auction`)
+1. Between 09:25 and 09:30 Shanghai time on the list's target day: `bin/sf auction` (latest saved list; `--date` for
+   another target). It fetches quotes for the listed stocks and the prior session's limit-ups and writes a new
+   snapshot under `auction/<day>/<stamp>/` (never overwritten). Run after 09:30 it still records the open gap, but the
+   auction amount is reported missing.
+2. Report the header lines (especially `数据缺失`) and the table. `auction.ADOPTED` (exam 2026-11-12) enables only
+   the deny label, for leader/high-vol and ladder: it means "less likely to break out within 5 sessions", not
+   "more dangerous" (same-day big loss after the open was lower). High open (confirm) failed and is never shown as
+   positive; the observe group is description only. No regrouping. The `同类开盘后（历史）` column gives open-anchored
+   historical bands for buyable stocks (medians of high / low / close vs the open): report them as history, never as
+   buy or sell levels. Never present it as a buy/sell signal; the person decides every trade.
+3. `bin/sf evaluate auction` runs the pre-registered exam (slow, ~10 min). Run it only after the user has confirmed
+   the pre-registration and the sha256 of the prereg file and `sf/auction.py` are recorded; write the result into the
+   prereg file's result section whatever it is. Auction amount / unmatched volume rules need >= 40 captured sessions
+   and their own pre-registration (a new version).
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`

@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 import pandas as pd
 
-from . import (crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store,
+from . import (baserates, crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar, seats, store,
                strategy, temperature)
 
 
@@ -202,6 +202,19 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
         istatus = dict(day=observation, captured=None, error=str(error)[:100], noted=0, missing=len(table))
     istatus["supplement"] = supp
     table["昨日分时"] = table["code"].map(inotes)
+    # historical base rates of the same cell (description only, after every group and order is fixed)
+    btab, bmeta = baserates.latest(observation)
+    if btab is None:
+        table["历史同类"] = "同类统计表未生成"
+        bstatus = dict(run=None)
+    else:
+        role = table["分组"].map(GROUP_CODES).map({"leader": "leader", "avoid": "leader", "ladder": "ladder",
+                                                    "watch": "observe"})
+        hgt = facts["board_height"].reindex(table["code"]).to_numpy()
+        one = facts["one_price"].reindex(table["code"]).astype(float).to_numpy()
+        table["历史同类"] = [baserates.describe(baserates.lookup(btab, r, h, o)) if isinstance(r, str) else ""
+                         for r, h, o in zip(role, hgt, one)]
+        bstatus = dict(run=bmeta["run"], cutoff=bmeta["cutoff"], version=bmeta["version"])
     lines = lm.mainline_table(ctx, t, p)
     group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
@@ -271,7 +284,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 generated_at=datetime.now(timezone.utc).isoformat(), gate=g,
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status, manifest=manifest.build(window),
-                abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts,
+                abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
                 table=table, leaders=leaders, facts=facts)
 
 
@@ -336,6 +349,12 @@ def header(result: dict) -> list[str]:
     if it is not None and it.get("captured"):
         lines.append(f"昨日分时：{it['day']} 的盘中事实，只作描述，不影响分组与排序；已采集 {it.get('sessions', '?')} 个交易日，"
                      f"不足 {intraday.MIN_SESSIONS_FOR_TEST} 日前不下结论（docs/INTRADAY_STUDY.md）")
+    br = result.get("baserates")
+    if br is not None and br.get("run") is None:
+        missing.append("历史同类统计表未生成（运行 sf baserates）")
+    elif br is not None:
+        lines.append(f"历史同类：同角色·同板数·是否一字的历史结果（统计表 {br['run']}，截至 {br['cutoff']}），只作描述，"
+                     "不影响分组与排序；“未涨停开时”指次日没有涨停开、能买进的那部分")
     if missing:
         lines.append("数据缺失：" + "；".join(missing))
     lines.append(f"评估方式：按选股命中率与水温判断命中率复盘（不按开盘买入盈亏），规格见 docs/STRATEGY_LONGMAI_{tag}.md；非投资建议。")
@@ -344,7 +363,7 @@ def header(result: dict) -> list[str]:
 
 HIGH_VOL = "高波动：最强也最危险（历史上次日续板约24-45%，大面约38-58%），只适合盘中判断"
 GROUP_CODES = {"主线龙头": "leader", "连板梯队": "ladder", "观察": "watch", "高波动": "avoid", "回避": "avoid"}
-VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示", "昨日分时"]
+VIEW = ["分组", "名称", "角色", "成交额", "参与建议", "风险提示", "昨日分时", "历史同类"]
 
 
 def save(result: dict) -> Path:

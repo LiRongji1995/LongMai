@@ -62,6 +62,40 @@ def _capture_intraday(days: list[str]) -> str:
     return "；".join(f"{d} {r['status']}" + (f"（{r['ok']}/{r['requested']}）" if "ok" in r else "") for d, r in res.items())
 
 
+def cmd_baserates(args) -> int:
+    """历史同类统计表 (sf/baserates.py): replays the V9 list, writes research/baserates/<stamp>/."""
+    from . import baserates
+    print("历史同类统计：逐日重放 V9 清单（约 5 分钟）...")
+    with _quiet():
+        t, meta = baserates.run(log=lambda *_: None)
+    out = baserates.save(t, meta)
+    top = t[(t["level"] == 2) & (t["cls"] == "*")]
+    cols = ["role", "hb", "n", "lu1", "out5", "bigloss1", "open_limit", "nb", "b_bigloss", "b_hi", "b_lo", "b_cl"]
+    print(top[cols].round(3).to_string(index=False))
+    print(f"截至 {meta['cutoff']}，{meta['rows']} 行；已保存：{out}")
+    return 0
+
+
+def cmd_auction(args) -> int:
+    """竞价层 SF_AUCTION_V1: auction facts for the saved list (docs/AUCTION_V1_PREREG.md)."""
+    from . import auction
+    try:
+        snap = auction.snapshot(args.date)
+    except FileNotFoundError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    except Exception as error:  # network failure after bounded retries: report, never guess
+        print(f"竞价行情抓取失败：{error}", file=sys.stderr)
+        return 1
+    out = auction.save(snap)
+    for line in auction.lines(snap):
+        print(line)
+    with pd.option_context("display.unicode.east_asian_width", True, "display.width", 200):
+        print(auction.table(snap).to_string(index=False))
+    print(f"已保存：{out}")
+    return 0
+
+
 def cmd_intraday(args) -> int:
     from . import intraday, store
     if args.action == "report":
@@ -319,6 +353,50 @@ def cmd_evaluate(args) -> int:
         (out / "patterns_verdict.json").write_text(json.dumps(dict(
             verdicts=rep["verdicts"], neighbours=rep["neighbours"], adopted=rep["adopted"], passed=rep["passed"],
             first=rep["first"], last=rep["last"], rows=rep["rows"]), ensure_ascii=False, indent=2))
+    if args.part == "auction":  # 竞价层 V1 pre-registered exam (docs/AUCTION_V1_PREREG.md)
+        from . import auction
+        print(f"竞价层 V1 检验：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放 V9 清单（较慢）...")
+        with _quiet():
+            panel, rep = auction.run(log=lambda *_: None)
+        print("分界点（train 段可买股票竞价缺口的 1/3、2/3 分位）：" + "；".join(
+            f"{auction.ROLE_NAMES[r]} {lo * 100:+.2f}% / {hi * 100:+.2f}%" for r, (lo, hi) in rep["cuts"].items()))
+        print(rep["stats"].round(3).to_string())
+        print("\n判定（预注册规则）：")
+        for r, v in rep["verdicts"].items():
+            for cls, x in v.items():
+                print(f"  {auction.ROLE_NAMES[r]} {auction.CLASS_NAMES[cls]}：{'采用' if x['adopted'] else '不采用'}，{x['reason']}")
+        print("稳健性邻域（1/4、3/4 分位，只报告）：" + "；".join(
+            f"{auction.ROLE_NAMES[r]} {auction.CLASS_NAMES[c]} {'通过' if x['adopted'] else '不通过'}"
+            for r, v in rep["neighbours"].items() for c, x in v.items()))
+        panel.to_parquet(out / "auction_panel.parquet")
+        rep["stats"].to_csv(out / "auction_stats.csv", encoding="utf-8-sig")
+        (out / "auction_verdict.json").write_text(json.dumps(dict(
+            version=auction.VERSION, cuts=rep["cuts"], verdicts=rep["verdicts"], neighbour_cuts=rep["neighbour_cuts"],
+            neighbours=rep["neighbours"], first=rep["first"], last=rep["last"], rows=rep["rows"]),
+            ensure_ascii=False, indent=2))
+    if args.part == "quality":  # 龙脉 V10 candidate exam (docs/STRATEGY_LONGMAI_V10_PREREG.md)
+        from . import auction, quality
+        print(f"龙脉 V10 候选（小成交额 / 一字）：{stored[0]} ~ {stored[-1]}（{len(stored)} 天），逐日重放 V9 清单（较慢）...")
+        with _quiet():
+            panel, rep = quality.run(log=lambda *_: None)
+        cols = ["n_yes", "n_no", "unknown", "lu1_yes", "lu1_no", "out5_yes", "out5_no", "bigloss1_yes", "bigloss1_no",
+                "open_limit_yes", "a_bigloss_yes", "a_bigloss_no"]
+        print(rep["stats"][cols].round(3).to_string())
+        print(f"\n判定（预注册规则，组规则 {rep['rule']}）：")
+        for role, r in rep["roles"].items():
+            name = auction.ROLE_NAMES[role]
+            for f, v in r["verdicts"].items():
+                print(f"  {name} {f}：{'成立' if v['holds'] else '不成立'}，{v['reason']}")
+            print("  稳健性邻域（只报告）：" + "；".join(f"{n} {'成立' if v['holds'] else '不成立'}" for n, v in r["neighbours"].items()))
+            print(r["compare"].round(3).to_string())
+            print(f"  {name} 结论：" + ("采用（V10 候选）" if r["passed"] else "不改") + "\n")
+        panel.to_parquet(out / "quality_panel.parquet")
+        rep["stats"].to_csv(out / "quality_stats.csv", encoding="utf-8-sig")
+        (out / "quality_verdict.json").write_text(json.dumps(dict(
+            version=quality.VERSION, rule=rep["rule"], first=rep["first"], last=rep["last"], rows=rep["rows"],
+            roles={k: dict(verdicts=v["verdicts"], neighbours=v["neighbours"], holding=v["holding"], deltas=v["deltas"],
+                           passed=v["passed"], compare=v["compare"].reset_index().to_dict("records"))
+                   for k, v in rep["roles"].items()}), ensure_ascii=False, indent=2, default=float))
     if args.part == "swing":  # 龙脉 V8 pre-registered exam (docs/STRATEGY_LONGMAI_V8_PREREG.md)
         from . import manifest, swing
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
@@ -458,7 +536,7 @@ def parser() -> argparse.ArgumentParser:
     rv.set_defaults(func=cmd_review)
 
     ev = sub.add_parser("evaluate", help="全历史选股与水温命中率（不按开盘买入盈亏）")
-    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns"])
+    ev.add_argument("part", nargs="?", default="all", choices=["all", "screening", "temperature", "swing", "patterns", "auction", "quality"])
     ev.set_defaults(func=cmd_evaluate)
 
     th = sub.add_parser("themes", help="刷新概念/行业板块成分（约20分钟，建议每周一次）")
@@ -495,6 +573,13 @@ def parser() -> argparse.ArgumentParser:
     it.add_argument("--backfill", action="store_true", help="补抓最近 5 个已入库交易日中还没抓的")
     it.add_argument("--workers", type=int, default=4)
     it.set_defaults(func=cmd_intraday)
+
+    br = sub.add_parser("baserates", help="生成历史同类统计表（清单“历史同类”列与竞价“同类开盘后”用；建议每周一次）")
+    br.set_defaults(func=cmd_baserates)
+
+    au = sub.add_parser("auction", help="9:25 竞价：对已保存清单的股票抓竞价并描述（规则通过检验前只描述）")
+    au.add_argument("--date", help="清单的目标交易日（默认最新清单）")
+    au.set_defaults(func=cmd_auction)
 
     bk = sub.add_parser("backup", help="把数据目录打成一个压缩包（换设备用），附校验文件")
     bk.add_argument("--out", help="输出目录（默认数据目录旁的 stockfish-backups）")
