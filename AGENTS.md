@@ -121,7 +121,8 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 
 ### R6. Intraday minute bars (`sf intraday`)
 1. Capture runs inside `sf premarket` / `sf update`. On its own: `bin/sf intraday` (latest closed session) or
-   `bin/sf intraday --backfill` (stored sessions among the last 5 not captured yet). The source keeps about 5
+   `bin/sf intraday --backfill` (stored sessions among the last 5 not captured yet, and, for captured days with
+   missing stocks, only those stocks as a new supplement file). The source keeps about 5
    sessions only: if a capture failed, rerun it the same evening or the next day, and tell the user which
    days are lost if they fall out of the window.
 2. Files are written once (`intraday/raw|minute|universe|capture/`, and `intraday/supplement/` for listed stocks
