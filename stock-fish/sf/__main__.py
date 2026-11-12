@@ -265,6 +265,16 @@ def cmd_intraday(args) -> int:
         else:
             print(f"{day} {r['status']}")
         bad = bad or r["status"].startswith("FAILED") or r["status"] == "partial"
+    if args.backfill:  # captured days with missing stocks: retry only those, as new supplement files
+        retried = intraday.retry_missing([d for d, r in res.items() if r["status"] in ("cached", "partial")],
+                                         log=lambda *_: None)
+        for day, r in retried.items():
+            print(f"{day} 补抓缺失：{r.get('requested', 0)} 只，完整 {r.get('ok', 0)} 只，失败 {len(r.get('failed', {}))}")
+        left = {d: len(intraday.missing_codes(d)) for d in retried}
+        bad = any(left.values()) or any(r["status"].startswith("FAILED") for r in res.values())
+        for day, n in left.items():
+            if n:
+                print(f"{day} 仍缺 {n} 只，稍后再跑 sf intraday --backfill")
     print(f"耗时 {time.monotonic() - started:.0f}s；源数据只保留约 5 个交易日，失败的日子请尽快重跑")
     return 1 if bad else 0
 

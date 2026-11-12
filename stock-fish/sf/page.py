@@ -35,12 +35,17 @@ def alerts(summary: dict, header: list[str], now: datetime | None = None) -> lis
                            f"日志：{s.get('log')}")
     cap = store.home() / "intraday" / "capture"
     if cap.exists():
+        from . import intraday
         stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))[-5:]
         for day in stored:
             f = cap / f"{day}.json"
-            if f.exists() and json.loads(f.read_text()).get("status", "").startswith("FAILED") and \
-                    not (store.home() / "intraday" / "minute" / f"{day}.parquet").exists():
+            if not f.exists():
+                continue
+            if not intraday.captured(day):
                 out.append(f"{day} 的盘中分时没有抓到，仍在数据源约 5 个交易日的窗口内：运行 sf intraday --backfill 补抓")
+            elif intraday.missing_codes(day):
+                out.append(f"{day} 的盘中分时还缺 {len(intraday.missing_codes(day))} 只，仍在 5 日窗口内："
+                           "运行 sf intraday --backfill 补抓")
     return out
 
 

@@ -184,3 +184,18 @@ def test_schedule_converts_shanghai_times_to_local():
     assert schedule.local_slot(1, 8, 40, ZoneInfo("America/New_York"))[0] == 0  # Sunday evening in New York
     p = schedule.plist("auction", london)
     assert all(x["Hour"] in (1, 2) for x in p["StartCalendarInterval"])
+
+
+def test_intraday_missing_codes_after_a_partial_capture(tmp_path, monkeypatch):
+    from sf import intraday
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    day = "2026-11-12"
+    bars = pd.DataFrame({"code": "sh.600001", "minute": range(intraday.BARS_PER_DAY), "date": day})
+    bars.to_parquet(intraday.minute_path(day), index=False)
+    pd.DataFrame({"code": ["sh.600001", "sh.600002"], "reasons": "limit_up", "date": day}).to_parquet(
+        intraday._dir("universe") / f"{day}.parquet", index=False)
+    assert intraday.missing_codes(day) == ["sh.600002"]
+    calls = []
+    monkeypatch.setattr(intraday, "supplement", lambda d, codes, **k: calls.append((d, codes, k["reason"])) or {})
+    intraday.retry_missing([day])
+    assert calls == [(day, ["sh.600002"], "retry")]

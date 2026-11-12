@@ -223,7 +223,30 @@ def supplements(day: str) -> list:
     return _supp_files("minute", day, "*.parquet")
 
 
-def supplement(day: str, codes: list[str], workers: int = 4, log=print) -> dict:
+def missing_codes(day: str) -> list[str]:
+    """Codes of `day`'s capture universe with no complete bars yet (main file plus supplements)."""
+    if not captured(day):
+        return []
+    u = _dir("universe") / f"{day}.parquet"
+    if not u.exists():
+        return []
+    bars = load(day)
+    full = bars.groupby("code").size()
+    return sorted(set(pd.read_parquet(u)["code"]) - set(full[full >= BARS_PER_DAY].index))
+
+
+def retry_missing(days: list[str], workers: int = 2, log=print) -> dict[str, dict]:
+    """For captured days with missing stocks (e.g. the source dropped most connections), fetch only those, at a
+    lower request rate, as a new supplement file (the day's main file is never edited)."""
+    out = {}
+    for day in days:
+        need = missing_codes(day)
+        if need:
+            out[day] = supplement(day, need, workers=workers, log=log, reason="retry")
+    return out
+
+
+def supplement(day: str, codes: list[str], workers: int = 4, log=print, reason: str = "list_obs") -> dict:
     """Fetch the listed stocks that `day`'s evening capture did not include (the list built on `day` exists
     only after that capture; its stocks are in the pre-registered universe as list_obs). Written once as new
     files under supplement/; the session's main files are never edited."""
@@ -237,10 +260,10 @@ def supplement(day: str, codes: list[str], workers: int = 4, log=print) -> dict:
         return dict(status="ok", requested=0, ok=0)
     stamp, raw_path, frames, errors = _fetch_all(need, workers, log)
     parts, entry = _split(day, need, frames, errors, raw_path.name, stamp)
-    entry["kind"] = "supplement"
+    entry["kind"] = "supplement" if reason == "list_obs" else reason
     if parts:
         pd.concat(parts, ignore_index=True).to_parquet(_supp_dir("minute", day) / f"{stamp}.parquet", index=False)
-        pd.DataFrame({"code": [p["code"].iloc[0] for p in parts], "reasons": "list_obs", "date": day}).to_parquet(
+        pd.DataFrame({"code": [p["code"].iloc[0] for p in parts], "reasons": reason, "date": day}).to_parquet(
             _supp_dir("universe", day) / f"{stamp}.parquet", index=False)
     entry["status"] = "ok" if not (errors or entry["incomplete"] or entry["absent"]) else "partial"
     (_supp_dir("capture", day) / f"{stamp}.json").write_text(json.dumps(entry, ensure_ascii=False, indent=1))
