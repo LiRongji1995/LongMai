@@ -274,6 +274,10 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             if xuan.get(key):
                 xuan[key]["name"] = name.get(xuan[key]["code"], xuan[key]["code"])
     fates = context.high_fate(ctx["aw"], t, name)
+    try:
+        market = context.market_day(ctx, t, name)
+    except Exception as error:  # description only: reported, never fatal
+        market = dict(version=context.MARKET_VERSION, error=str(error)[:100])
     group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
     facts["name"] = name.reindex(facts.index)
@@ -344,7 +348,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
                 liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, dropped=dropped),
-                threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
+                market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
                 high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
 

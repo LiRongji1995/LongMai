@@ -189,7 +189,10 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R10. Local page (`sf page`)
 1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from the valid list's saved files only (written
    by premarket and auction automatically). Report its path. The page is description; data gaps are listed first.
-2. One page per target day: a new page replaces the day's older page (pages are renderings, not saved results).
+2. The review section holds two folds: the daily review report (`daily_report_html`: the observation day's market,
+   mood, ladder, themes, leaders and what to watch, from `summary.json` incl. `market`, `SF_DAILY_MARKET_V1`; facts and
+   historical rates only, never advice) and the multi-day hit-rate details.
+3. One page per target day: a new page replaces the day's older page (pages are renderings, not saved results).
    `pages/index.html` (one row per day, with the list's save time, version and an `开盘后生成` flag) and
    `pages/latest.html` are navigation only and are rewritten with every new page, as are the `pages/go/prev-<day>` /
    `next-<day>` redirects behind each page's back / previous / next buttons.

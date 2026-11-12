@@ -72,3 +72,40 @@ def _tall(h: pd.Series, min_height: int = 4, top: int = 3) -> list[str]:
         return []
     cut = min_height if int(h.iloc[0]) >= min_height else int(h.iloc[0])
     return h[h >= cut].index.tolist()[:top]
+
+
+MARKET_VERSION = "SF_DAILY_MARKET_V1"
+MARKET_FIELDS = ("lu_count", "ld_count", "broken_rate", "promo_rate", "big_loss", "prem_lu", "up_ratio", "max_height",
+                 "amount_ratio")
+
+
+def market_day(ctx: dict, t: int, name, recent: int = 5) -> dict:
+    """The observation day's short-term market facts for the daily review (description only): the mood indicators and
+    their one-year percentiles for t and t-1, the last `recent` sessions of the main ones, the whole-market amount, and
+    the main-board limit-up ladder (count per height; names from 3 boards up). Missing values stay None."""
+    tab = ctx["mood"]
+    days = list(tab.index)
+
+    def val(x):
+        return None if x is None or pd.isna(x) else float(x)
+
+    def row(k: int) -> dict:
+        if k < 0:
+            return {}
+        r = tab.iloc[k]
+        out = {c: val(r.get(c)) for c in MARKET_FIELDS}
+        out.update({f"{c}_pct": val(r.get(f"{c}_pct")) for c in MARKET_FIELDS})
+        out.update(day=str(days[k]), level=val(r.get("level")), tier=r.get("tier"))
+        return out
+
+    amt = ctx["aw"]["amount"].sum(axis=1, min_count=1)
+    w = ctx["w"]
+    sealed = w["limit_up"].iloc[t].fillna(False).astype(bool) & w["traded"].iloc[t].fillna(False).astype(bool)
+    h = w["height"].iloc[t][sealed].dropna().astype(int)
+    ladder = {str(k): int(v) for k, v in h.value_counts().sort_index().items()}
+    tall = [dict(name=str(name.get(c, c)), height=int(v)) for c, v in h[h >= 3].sort_values(ascending=False).items()]
+    return dict(version=MARKET_VERSION, today=row(t), prev=row(t - 1),
+                recent=[{k: v for k, v in row(k).items() if k in ("day", "lu_count", "ld_count", "promo_rate",
+                                                                   "big_loss", "broken_rate")}
+                        for k in range(max(0, t - recent + 1), t + 1)],
+                amount=val(amt.iloc[t]), amount_prev=val(amt.iloc[t - 1]) if t > 0 else None, ladder=ladder, tall=tall)

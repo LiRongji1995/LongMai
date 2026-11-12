@@ -391,7 +391,50 @@ def test_full_review_report_is_folded_below_the_table(tmp_path):
     pd.DataFrame([dict(code="a", role="ladder", **{"class": "deny"}, day="2026-11-12", a_lu=0.0, a_bigloss=1.0,
                        a_out5=None)]).to_csv(rev / "auction_forward.csv", index=False)
     html_ = page.review_report_html(rev)
-    assert html_.startswith('<details class="legend fullrep"><summary>完整复盘报告（点开查看）')
+    assert html_.startswith('<details class="legend fullrep"><summary>多日命中统计明细（点开查看）')
     assert "妖股召回：还没有走完" in html_ and "第9版" in html_ and "第7版" in html_ and "9%" in html_
     assert "主线龙头" in html_ and "40% → 100%" in html_ and "竞价否定" in html_ and "连板梯队" in html_
     assert "V9" not in html_ and "leader" not in html_
+
+
+def test_daily_report_summarises_the_day_and_what_to_watch():
+    summary = dict(observation="2026-11-12", target="2026-11-13",
+                   gate=dict(mood_tier="中", mood_level=0.36, reg_tier="中", slots=2),
+                   temperature=dict(name="退潮", loss_rate=0.39, text="水温：冷+亏钱效应强【退潮】"),
+                   market=dict(today=dict(lu_count=60, ld_count=6, up_ratio=0.3, up_ratio_pct=0.08, promo_rate=0.15,
+                                          promo_rate_pct=0.07, broken_rate=0.3, broken_rate_pct=0.6, big_loss=12,
+                                          big_loss_pct=0.87, prem_lu=-0.01, prem_lu_pct=0.2),
+                               prev=dict(lu_count=76, ld_count=4), amount=1.93e12, amount_prev=2.0e12,
+                               recent=[dict(day="2026-11-11", lu_count=76, ld_count=4, promo_rate=0.3, big_loss=5),
+                                       dict(day="2026-11-12", lu_count=60, ld_count=6, promo_rate=0.15, big_loss=12)],
+                               ladder={"1": 50, "5": 2}, tall=[dict(name="大东方", height=5)]),
+                   mainlines=[dict(board="传媒", lu=1, lu3=23, days=2, share=0.056)],
+                   heat=[dict(board="机器人概念", lu3=51)],
+                   threads=[dict(boards=["传媒"], age=9, today=2, peak=46)],
+                   high_fate=[dict(name="大东方", height=4, fate="晋级5板")], to_check=["大东方"])
+    table = pd.DataFrame([dict(分组="主线龙头", 名称="大东方", 角色="空间板·5板", 成交额="22.9亿·换手38%",
+                               风险提示="放量：成交额22.9亿，为前5日均值6.8亿的3.3倍；10日偏离66%，再触发2次3日异动即严重异动")])
+    html_ = page.daily_report_html(summary, table)
+    assert html_.startswith('<details class="legend fullrep daily"><summary>当日复盘报告（点开查看）')
+    for part in ("一、市场概况", "主板（不含 ST）涨停 60 家（较前日-16）", "两市成交 1.93 万亿（较前日-4%）", "晋级率", "（极低）",
+                 "大面", "二、情绪与水温", "三、连板梯队与高标", "5板 2 家", "大东方 5板",
+                 "四、主线与题材", "涨停最多但不在主线：机器人概念", "只剩峰值（46 家）的 4%", "五、龙头", "22.9亿",
+                 "六、明日关注", "约 39%", "接力环境偏弱", "亏钱效应还没消退", "处于后期", "接近严重异动", "大东方 放量：成交额22.9亿", "炒作逻辑待查"):
+        assert part in html_, part
+    old = page.daily_report_html(dict(observation="2026-11-10", target="2026-11-11"), pd.DataFrame())
+    assert "旧版清单" in old and "六、明日关注" in old
+
+
+def test_market_day_ladder_and_percentiles():
+    idx = pd.Index(["2026-01-01", "2026-01-02"])
+    mood_tab = pd.DataFrame(dict(lu_count=[70, 60], ld_count=[4, 6], promo_rate=[0.3, 0.15], promo_rate_pct=[0.5, 0.07],
+                                 big_loss=[5, 12], broken_rate=[0.2, 0.3]), index=idx)
+    w = dict(limit_up=pd.DataFrame({"a": [True, True], "b": [False, True], "c": [False, False]}, index=idx),
+             traded=pd.DataFrame(True, index=idx, columns=["a", "b", "c"]),
+             height=pd.DataFrame({"a": [4, 5], "b": [0, 1], "c": [0, 0]}, index=idx))
+    aw = dict(amount=pd.DataFrame({"a": [1e9, 2e9], "b": [1e9, 1e9], "c": [np.nan, 1e9]}, index=idx))
+    m = context.market_day(dict(mood=mood_tab, w=w, aw=aw), 1, pd.Series({"a": "大东方"}))
+    assert m["today"]["lu_count"] == 60 and m["prev"]["lu_count"] == 70 and m["today"]["promo_rate_pct"] == 0.07
+    assert m["today"]["up_ratio"] is None                      # not in the table: unknown, not zero
+    assert m["ladder"] == {"1": 1, "5": 1} and m["tall"] == [dict(name="大东方", height=5)]
+    assert m["amount"] == 4e9 and m["amount_prev"] == 2e9 and len(m["recent"]) == 2
