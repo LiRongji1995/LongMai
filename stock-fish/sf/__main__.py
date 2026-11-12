@@ -298,7 +298,16 @@ def cmd_intraday(args) -> int:
         bad = any(left.values()) or any(r["status"].startswith("FAILED") for r in res.values())
         for day, n in left.items():
             if n:
-                print(f"{day} 仍缺 {n} 只，稍后再跑 sf intraday --backfill")
+                print(f"{day} 仍缺 {n} 只 1 分钟线，稍后再跑 sf intraday --backfill")
+        from . import minute5
+        for day in days:  # coarse fallback from BaoStock for stocks the 1-minute source has not given
+            need = intraday.missing_codes(day) if intraday.captured(day) else \
+                sorted(set(sum(intraday.listed_codes(day).values(), [])))
+            need = sorted(set(need) - minute5.covered(day))
+            if need:
+                r = minute5.capture(day, need, log=lambda *_: None)
+                print(f"{day} 用5分钟线（BaoStock）补 {r['requested']} 只：成功 {r['ok']}，失败 {len(r['failed'])}，"
+                      f"无数据 {len(r['absent'])}")
     print(f"耗时 {time.monotonic() - started:.0f}s；源数据只保留约 5 个交易日，失败的日子请尽快重跑")
     return 1 if bad else 0
 

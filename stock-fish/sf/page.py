@@ -84,8 +84,12 @@ def alerts(summary: dict, header: list[str], now: datetime | None = None) -> lis
             if not intraday.captured(day):
                 out.append(f"{day} 的盘中分时没有抓到，仍在数据源约 5 个交易日的窗口内：定时任务会在 21:30 和次日 08:40 自动补抓")
             elif intraday.missing_codes(day):
-                out.append(f"{day} 的盘中分时还缺 {len(intraday.missing_codes(day))} 只，仍在 5 日窗口内："
-                           "定时任务会在 21:30 和次日 08:40 自动补抓")
+                from . import minute5
+                gap = intraday.missing_codes(day)
+                n5 = len(set(gap) & minute5.covered(day))
+                out.append(f"{day} 的盘中分时还缺 {len(gap)} 只 1 分钟线"
+                           + (f"（其中 {n5} 只已用5分钟线粗补）" if n5 else "")
+                           + "，仍在 5 日窗口内：定时任务会在 21:30 和次日 08:40 自动补抓")
     return out
 
 

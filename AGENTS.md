@@ -142,6 +142,9 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 2. Files are written once (`intraday/raw|minute|universe|capture/`, and `intraday/supplement/` for listed stocks
    fetched after the evening capture); never edit or delete them. Failed, incomplete or absent stocks are listed
    in `intraday/capture/<day>.json` and the supplement capture logs.
+   Stocks the 1-minute source still lacks get BaoStock 5-minute bars as a coarse fallback (`sf/minute5.py`,
+   `intraday/bs5/`, write-once, own capture logs): fetched by `--backfill` and while a list is built. The list
+   marks such notes `5分钟线（粗）`; the 5-minute layer is never mixed into the 1-minute study tables.
 3. `bin/sf intraday report` prints the descriptive tables of docs/INTRADAY_STUDY.md. Before 40 captured
    sessions, report them as description only: no conclusions, no rule changes. Any rule built on them is a new
    strategy version with its own forward test, and follows the pre-registration exactly (no threshold tuning).

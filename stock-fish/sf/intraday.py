@@ -14,6 +14,7 @@ Layers under intraday/ (see docs/INTRADAY_STUDY.md for definitions):
 - supplement/{minute,universe,capture}/<day>/<UTC stamp>.*   list stocks fetched after the evening capture
                                 (the list is built after it; they belong to the pre-registered universe as list_obs)
 - features/<FEATURES>/<day>[+s<n>].parquet   derived, recomputable (excluded from backups); +s<n> = with n supplements
+Stocks still missing can be described from BaoStock 5-minute bars (minute5.py, a separate coarse layer).
 Session files are written once and never modified. Missing stocks are listed in the capture log, never
 dropped silently; a stock with fewer than 241 bars on a traded day is "incomplete".
 """
@@ -492,8 +493,11 @@ def list_notes(day: str, codes: list[str], feats: pd.DataFrame | None = None,
     dict (captured, sessions, noted, missing) and the feature rows used (saved with the list)."""
     sessions = len(list(_dir("minute").glob("*.parquet")))
     status = dict(day=day, captured=captured(day), sessions=sessions, version=NOTES_VERSION, features=FEATURES)
+    from . import minute5
     if not status["captured"]:
-        return {c: "分时未采集" for c in codes}, dict(status, noted=0, missing=len(codes)), pd.DataFrame()
+        coarse = minute5.notes(day, codes)
+        notes = {c: coarse.get(c, "分时未采集") for c in codes}
+        return notes, dict(status, noted=0, coarse=len(coarse), missing=len(codes) - len(coarse)), pd.DataFrame()
     f = stored_features(day) if feats is None else feats
     if members is None:
         from . import themes
@@ -512,10 +516,14 @@ def list_notes(day: str, codes: list[str], feats: pd.DataFrame | None = None,
         for c in entry.get("absent", []):
             why[c] = "源无当日数据"
     notes = {}
+    coarse = minute5.notes(day, [c for c in codes if c not in f.index])  # 5-minute fallback (BaoStock)
     for c in codes:
         if c in f.index:
             notes[c] = describe(f.loc[c], ranks.loc[c] if c in ranks.index else None) or "无涨停相关事实"
+        elif c in coarse:
+            notes[c] = coarse[c]
         else:
             notes[c] = f"分时缺失（{why.get(c, '未在抓取名单')}）"
-    missing = sum(c not in f.index for c in codes)
-    return notes, dict(status, noted=len(codes) - missing, missing=missing), f.reindex([c for c in codes if c in f.index])
+    missing = sum(c not in f.index and c not in coarse for c in codes)
+    return notes, dict(status, noted=len(codes) - missing - len(coarse), coarse=len(coarse), missing=missing), \
+        f.reindex([c for c in codes if c in f.index])
