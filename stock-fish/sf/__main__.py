@@ -88,6 +88,30 @@ def cmd_page(args) -> int:
     return 0
 
 
+def cmd_prune(args) -> int:
+    from . import prune
+    items = prune.plan()
+    total = 0
+    for item in items:
+        if item["keep"] is None:
+            print(f"{item['target']}：{item['note']}")
+            continue
+        nbytes = sum(prune.size(p) for p in item["remove"])
+        total += nbytes
+        print(f"{item['target']}：保留 {item['keep'].name}，移除 {len(item['remove'])} 项（{nbytes / 1e6:.1f} MB）")
+        for path in item["remove"]:
+            print(f"  - {path.relative_to(prune.store.home())}")
+    if not any(i["remove"] for i in items):
+        print("没有需要清理的清单")
+        return 0
+    if not args.yes:
+        print(f"以上共 {total / 1e6:.1f} MB。这是预览；加 --yes 才会移到废纸篓。")
+        return 0
+    trash = prune.apply(items)
+    print(f"已移到废纸篓：{trash}（记录在 meta/prune.jsonl）")
+    return 0
+
+
 def cmd_judge(args) -> int:
     from . import journal
     if args.action == "add":
@@ -822,6 +846,10 @@ def parser() -> argparse.ArgumentParser:
     rs.add_argument("archive", help="longmai-data-*.tar.gz")
     rs.add_argument("--sha256", help="压缩包校验值（默认读同目录的 .sha256 文件）")
     rs.set_defaults(func=cmd_restore)
+
+    pr = sub.add_parser("prune", help="每个交易日只保留一份有效清单（预览；--yes 才移到废纸篓）")
+    pr.add_argument("--yes", action="store_true", help="确认移除")
+    pr.set_defaults(func=cmd_prune)
 
     pg = sub.add_parser("page", help="生成本地网页（先看数据问题，再看摘要和完整清单）")
     pg.add_argument("target", nargs="?", help="交易日（默认最新清单）")

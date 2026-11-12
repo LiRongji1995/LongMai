@@ -32,6 +32,9 @@ def test_threads_link_renamed_boards_and_end_after_a_gap():
     at2 = threads.build(ts, 2, {}, lambda k: lines.get(k, []))
     assert len(at2) == 1 and at2[0]["boards"] == ["传媒", "影视"] and at2[0]["age"] == 3
     assert at2[0]["peak"] == 2 and at2[0]["peak_age"] == 1
+    days = at2[0]["days"]
+    assert [d["boards"] for d in days] == [["传媒"], ["影视"], ["影视"]]
+    assert days[1]["lu"] == [("a2", 2), ("a3", 1)] and days[2]["lu"] == [("a3", 2)]   # streaks, tallest first
     at5 = threads.build(ts, 5, {}, lambda k: lines.get(k, []))
     assert [t["boards"] for t in at5] == [["光伏"]]  # the media thread ended (no link for > MAX_GAP sessions)
     assert "第3个交易日" in threads.describe(at2[0])
@@ -116,7 +119,17 @@ def test_page_puts_data_gaps_first(tmp_path, monkeypatch):
                    seats="not captured", threads=[dict(first="2026-11-02", age=9, boards=["传媒"], today=2, peak=46,
                                                        peak_age=1, listed=["吉视传媒"], lead_position="年线下-6%",
                                                        mainline_today=True, stocks=10)],
-                   high_fate=[dict(name="大东方", height=4, fate="晋级5板")])
+                   high_fate=[dict(name="大东方", height=4, fate="晋级5板")],
+                   heat=[dict(board="机器人概念", lu3=51, lu=4, n=783, share=0.065, z=3.25, streak=4,
+                              streak_capped=False, series=[1, 2, 4])],
+                   name_waves=[dict(group="字·洋", limit_ups=4, expected=0.16, members=23, leaders=["东方海洋"])],
+                   xuan=dict(kind="xuan", first="2026-11-11", age=2, boards=["名字带「东方」"], today=4, peak=4,
+                             peak_age=2, stocks=29, mainline_today=True, series=[1, 4], listed=[],
+                             groups=[dict(group="词·东方", label="名字带「东方」", members=29, window_limit_ups=41,
+                                          window_expected=7.2, today=4, expected_today=0.21, hot_today=True)],
+                             days=[dict(day="2026-11-11", age=1, boards=[], lu=[]),
+                                   dict(day="2026-11-12", age=2, boards=["名字带「东方」"],
+                                        lu=[dict(name="大东方", height=5, listed=True)])]))
     (run / "summary.json").write_text(json.dumps(summary, ensure_ascii=False))
     pd.DataFrame([dict(分组="主线龙头", 名称="大东方<b>", 角色="空间板(市场最高板)·5板", 成交额="1亿", 位置="年线上+70%",
                        参与建议="候选（由你决定）：看竞价", 风险提示="", 昨日分时="", 历史同类="")]).to_csv(
@@ -124,6 +137,10 @@ def test_page_puts_data_gaps_first(tmp_path, monkeypatch):
     text = page.render(run)
     assert text.index("先看这里") < text.index("仓位内的候选") and "龙虎榜席位未采集" in text
     assert "大东方&lt;b&gt;" in text and "大东方<b>" not in text  # escaped
+    assert "名字带「东方」" in text and "class=xuan" in text and "今日活跃" in text and "20日涨停 41 次" in text
+    assert "名字带「洋」" not in text      # the one-day row is replaced by the merged card
+    assert "题材热度榜" in text and "机器人概念" in text and ">51<" in text
+    assert "未达异常" in text and "当天异常的名字组" in text
     path = page.write(run)
     assert path.exists() and path.suffix == ".html"
 
@@ -208,5 +225,154 @@ def test_page_index_lists_days_newest_first(tmp_path, monkeypatch):
         for s in stamps:
             (tmp_path / "pages" / day / f"{s}.html").write_text("x")
     text = page.write_index().read_text()
-    assert text.index("2026-11-13") < text.index("2026-11-12") and "共 2 份" in text
+    assert text.index("2026-11-13") < text.index("2026-11-12") and "清单缺失" in text
+    assert "2026-11-13/20261112T170000Z.html" in text and "20261112T100000Z" not in text
     assert "2026-11-13/20261112T170000Z.html" in (tmp_path / "pages" / "latest.html").read_text()
+    go = tmp_path / "pages" / "go"
+    assert "url=../2026-11-13/20261112T170000Z.html" in (go / "next-2026-11-12.html").read_text()
+    assert "url=../2026-11-12/20261111T120000Z.html" in (go / "prev-2026-11-13.html").read_text()
+    assert "refresh" not in (go / "next-2026-11-13.html").read_text()   # newest day: a note, not a redirect
+    page.write_index()                                                    # go/ itself is never listed as a day
+    assert not (go / "next-go.html").exists() and ">go<" not in (tmp_path / "pages" / "index.html").read_text()
+
+
+def _run(tmp_path, target, stamp, version="SF_LONGMAI_V9"):
+    run = tmp_path / "lists" / target / stamp
+    run.mkdir(parents=True)
+    (run / "summary.json").write_text(json.dumps(dict(target=target, strategy_version=version)))
+    (run / "picks.csv").write_text("code\n")
+    return run
+
+
+def test_valid_run_is_last_list_saved_before_0925(tmp_path, monkeypatch):
+    from sf import listing
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    a = _run(tmp_path, "2026-11-12", "20261111T120000Z")
+    b = _run(tmp_path, "2026-11-12", "20261112T011000Z")   # 09:10 Shanghai: still before the open
+    c = _run(tmp_path, "2026-11-12", "20261112T033000Z")   # 11:30 Shanghai: after the open
+    (c.parent / "LATEST").write_text(c.name)
+    before = datetime(2026, 11, 12, 9, 0, tzinfo=store.SH)
+    after = datetime(2026, 11, 12, 15, 0, tzinfo=store.SH)
+    assert listing.valid_run("2026-11-12", before) == c   # pre-open: the newest is the candidate
+    assert listing.valid_run("2026-11-12", after) == b
+    assert listing.after_open(c) and not listing.after_open(b) and not listing.after_open(a)
+    assert listing.latest_run("2026-11-12") == b           # LATEST marker no longer wins over the valid run
+
+
+def test_prune_moves_other_runs_snapshots_and_pages_to_trash(tmp_path, monkeypatch):
+    from sf import listing, prune
+    monkeypatch.setenv("SF_HOME", str(tmp_path / "home"))
+    monkeypatch.setattr(prune, "trash_root", lambda: tmp_path / "trash")
+    home = tmp_path / "home"
+    old = _run(home, "2026-11-12", "20261111T120000Z", "SF_LONGMAI_V7")
+    keep = _run(home, "2026-11-12", "20261112T011000Z")
+    late = _run(home, "2026-11-12", "20261112T033000Z")
+    pending = [_run(home, "2026-11-13", "20261112T120000Z"), _run(home, "2026-11-13", "20261112T130000Z")]
+    for stamp, ref in (("20261112T012600Z", keep.name), ("20261112T033100Z", late.name)):
+        snap = home / "auction" / "2026-11-12" / stamp
+        snap.mkdir(parents=True)
+        (snap / "summary.json").write_text(json.dumps(dict(list_run=ref)))
+    (home / "pages" / "2026-11-12").mkdir(parents=True)
+    (home / "pages" / "2026-11-12" / "20261112T034000Z.html").write_text("x")
+    now = datetime(2026, 11, 12, 20, 0, tzinfo=store.SH)
+    items = prune.plan(now)
+    assert [i["target"] for i in items] == ["2026-11-12"]                # 11-13 is still before its cutoff
+    assert set(p.name for p in items[0]["remove"]) == {old.name, late.name, "20261112T033100Z", "20261112T034000Z.html"}
+    rendered = []
+    trash = prune.apply(items, render=rendered.append)
+    assert rendered == [keep] and keep.exists() and not old.exists() and not late.exists()
+    assert (trash / "lists" / "2026-11-12" / old.name / "summary.json").exists()
+    assert (home / "auction" / "2026-11-12" / "20261112T012600Z").exists()
+    assert (keep.parent / "LATEST").read_text() == keep.name
+    assert all(p.exists() for p in pending)
+    log = [json.loads(x) for x in (home / "meta" / "prune.jsonl").read_text().splitlines()]
+    assert log[0]["kept"] == keep.name and len(log[0]["moved"]) == 4
+    assert prune.plan(now)[0]["remove"] == []                             # idempotent
+
+
+def test_prune_keeps_everything_without_a_preopen_list(tmp_path, monkeypatch):
+    from sf import prune
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    _run(tmp_path, "2026-11-12", "20261112T033000Z")
+    _run(tmp_path, "2026-11-12", "20261112T040000Z")
+    items = prune.plan(datetime(2026, 11, 12, 20, 0, tzinfo=store.SH))
+    assert items[0]["keep"] is None and items[0]["remove"] == []
+
+
+def test_review_html_shows_rates_and_pending_in_words():
+    rows = pd.DataFrame([
+        dict(code="a", group="leader", baseline=True, lu1=1.0, bigloss1=0.0, max3=None, out5=None, target="2026-11-12"),
+        dict(code="b", group="leader", baseline=True, lu1=0.0, bigloss1=1.0, max3=None, out5=None, target="2026-11-12"),
+        dict(code="c", group=None, baseline=True, lu1=0.0, bigloss1=0.0, max3=None, out5=None, target="2026-11-12"),
+        dict(code="d", group="watch", baseline=False, lu1=None, bigloss1=None, max3=None, out5=None, target="2026-11-13"),
+    ])
+    text = page.review_html(rows, "R1")
+    assert "次日涨停" in text and "主线龙头" in text and "对照：当天全部主板涨停股" in text
+    assert "50%<small> 1/2</small>" in text                         # leader next-day limit-up: 1 of 2 known
+    assert "待定（0/2）" in text and "待定（0/1）" in text            # pending outcomes are not misses
+    assert "覆盖 2 份清单（交易日 11-12、11-13）" in text
+
+
+def test_thread_dialog_lists_days_newest_first():
+    th = dict(age=2, first="2026-11-11", boards=["传媒", "影视"], stocks=3, days=[
+        dict(day="2026-11-11", age=1, boards=["传媒"], lu=[dict(name="甲", height=1, listed=False)]),
+        dict(day="2026-11-12", age=2, boards=[], lu=[dict(name="甲", height=2, listed=True), dict(name="乙<", height=1, listed=False)]),
+    ])
+    html = page.thread_dialog("th0", th)
+    assert html.index(">11-12<") < html.index(">11-11<")
+    assert '<span class="in">甲<i>2板</i></span>' in html and "乙&lt;" in html and "不在前 3 主线" in html
+
+
+
+def test_xuan_merges_name_groups_and_catches_slow_hype():
+    from sf import namethemes
+    n_days = 30
+    idx = pd.Index([f"2026-01-{i + 1:02d}" if i < 31 else f"x{i}" for i in range(n_days)])
+    cols = [f"y{i}" for i in range(8)] + [f"d{i}" for i in range(4)] + ["f0"] + [f"o{i}" for i in range(3000)]
+    lu = pd.DataFrame(False, index=idx, columns=cols)
+    lu.loc[:, "o0"] = True                                    # market limit-up rate above zero
+    for i in range(10, n_days):                               # slow hype: one or two 'y' limit-ups every day
+        lu.loc[idx[i], [f"y{i % 8}"] + ([f"y{(i + 3) % 8}"] if i % 2 else [])] = True
+    lu.loc[idx[-1], ["d0", "d1", "d2"]] = True                # a one-day burst of another name
+    lu.loc[idx[15:], "f0"] = True                             # one stock's long streak: never a name wave
+    lu.loc[idx[14:17], "y7"] = True                          # the leader's streak before the name wave is confirmed
+    traded = pd.DataFrame(True, index=idx, columns=cols)
+    grp = {"音·yang(洋阳)": [f"y{i}" for i in range(8)], "字·洋": [f"y{i}" for i in range(4)],
+           "词·东方": [f"d{i}" for i in range(4)], "词·福莱": ["f0", "o1", "o2"], "字·东": [f"d{i}" for i in range(4)] + ["o3"]}
+    assert "音·yang(洋阳)" not in set(namethemes.scan_all(lu, traded, grp)["group"])   # no single day looks abnormal
+    x = namethemes.xuan(lu, traded, grp, n_days - 1)
+    labels = [g["group"] for g in x["groups"]]
+    assert labels[0] == "音·yang(洋阳)"                        # caught by the cumulative test
+    assert "词·东方" in labels or "字·东" in labels             # the one-day burst, once
+    assert not ("词·东方" in labels and "字·东" in labels)      # 东 inside 东方 is the same hype
+    assert "字·洋" not in labels and "词·福莱" not in labels    # subset of yang; a single stock's streak
+    assert x["kind"] == "xuan" and x["mainline_today"] and x["days"][-1]["boards"]
+    assert x["confirmed"] > x["first"] and x["origin"]["code"] == "y7" and x["origin"]["day"] == x["first"]
+    assert x["origin"]["height"] >= 3
+    assert x["days"][0]["prelude"] and not x["days"][-1]["prelude"]
+    assert namethemes.label_text("音·yang(洋阳)") == "谐音「洋阳」" and namethemes.label_text("字·洋") == "名字带「洋」"
+
+
+def test_heat_board_ranks_by_count_and_skips_overlapping_boards():
+    ts = _ts()
+    ts["lu"].loc[:, :] = 0.0
+    ts["lu"].iloc[:, 0] = [2, 2, 1, 0, 0, 0, 0, 0]      # 传媒
+    ts["lu"].iloc[:, 1] = [1, 2, 1, 0, 0, 0, 0, 0]      # 影视 (its stocks are mostly 传媒's)
+    ts["lu3"] = ts["lu"].rolling(3, min_periods=1).sum()
+    ts["n"] = pd.DataFrame(10, index=ts["lu"].index, columns=ts["names"])
+    ts["n3"] = ts["n"].rolling(3, min_periods=1).sum()
+    ts["rate3"] = pd.Series(0.01, index=ts["lu"].index)
+    out = threads.heat(ts, 2, {"overlap_max": 0.6})
+    assert [h["board"] for h in out][0] == "传媒" and out[0]["lu3"] == 5
+    assert all(h["board"] != "光伏" for h in out)       # no limit-ups in 3 sessions
+    assert out[0]["series"] == [2, 2, 1] and out[0]["streak"] == 3 and out[0]["streak_capped"]
+
+
+def test_page_text_is_chinese_only():
+    text = page.zh("龙脉V12 版本 20261112T171117Z · SF_LONGMAI_V9 · SF_AUCTION_V1 · 光洋股份·STRONG_CONTINUATION·"
+                   "名字扩散(音·yang(洋阳)) 谐音 yang（洋阳） 运行 sf intraday --backfill 补抓，见 docs/STRATEGY_LONGMAI_V12.md；"
+                   "watch 中性 *ST正平 TOPCon电池")
+    assert "龙脉第12版" in text and "11-13 01:11" in text and "龙脉第9版" in text and "第1版" in text
+    assert "强势延续" in text and "谐音「洋阳」" in text and "分时补抓命令" in text and "说明文档" in text and "观察" in text
+    assert "*ST正平" in text and "TOPCon电池" in text      # stock and board names are kept as they are
+    assert not any(w in text for w in ("SF_", "STRONG", "yang", "sf ", "docs/", "watch"))

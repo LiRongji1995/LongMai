@@ -4,7 +4,8 @@ it on weekdays and record each run:
 
 Times below are Shanghai time; `install` converts them to the Mac's local time zone (launchd fires in local time).
 
-  auction    09:26        sf auction (only on a trading day, 09:20-11:30; launchd runs a missed job on wake)
+  auction    09:26        sf auction (only on a trading day, 09:20-11:30; launchd runs a missed job on wake), then
+                          sf prune --yes (keep only the valid list of each past target day)
   premarket  18:40        sf premarket (update, pools, seats, minute bars, list), then sf page
   intraday   21:30, 08:40 sf intraday --backfill (retries a failed minute-bar capture at another time of day)
   baserates  Sat 10:00    sf baserates (weekly refresh of the 历史同类 table)
@@ -28,9 +29,10 @@ from . import store
 LABEL = "com.longmai.sf"
 WEEKDAYS = (1, 2, 3, 4, 5)
 JOBS = {
-    "auction": dict(args=["auction"], times=[(9, 26)], days=WEEKDAYS, window=((9, 20), (11, 30)), trading=True),
+    "auction": dict(args=["auction"], times=[(9, 26)], days=WEEKDAYS, window=((9, 20), (11, 30)), trading=True,
+                    then=[["prune", "--yes"]]),
     "premarket": dict(args=["premarket"], times=[(18, 40)], days=WEEKDAYS, window=((18, 0), (23, 59)), trading=True,
-                      then=["page"]),
+                      then=[["page"]]),
     "intraday": dict(args=["intraday", "--backfill"], times=[(21, 30), (8, 40)], days=WEEKDAYS, window=None,
                      trading=False),
     "baserates": dict(args=["baserates"], times=[(10, 0)], days=(6,), window=None, trading=False),
@@ -92,7 +94,7 @@ def run(job: str, now: datetime | None = None, runner=None) -> int:
     runner = runner or _run_sf
     code = 0
     with open(log, "w", encoding="utf-8") as f:
-        for args in [JOBS[job]["args"]] + ([JOBS[job]["then"]] if JOBS[job].get("then") else []):
+        for args in [JOBS[job]["args"]] + JOBS[job].get("then", []):
             f.write(f"$ sf {' '.join(args)}\n")
             f.flush()
             code = runner(args, f)

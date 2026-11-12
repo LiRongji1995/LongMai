@@ -63,10 +63,24 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             out.append(f"成交额仅{amount / 1e8:.1f}亿，流动性差")
         return out
 
+    liq = lm.liquidity_floor(ctx, t)
+    dropped: list[dict] = []
+
+    def too_thin(code) -> bool:
+        """V12 liquidity floor: record and skip a stock that fails it (every group)."""
+        if bool(liq["ok"].get(code, False)):
+            return False
+        if any(d["code"] == code for d in dropped):  # checked again in another group: record once
+            return True
+        amt = float(ctx["aw"]["amount"].iloc[t].get(code, np.nan))
+        dropped.append(dict(code=code, name=name.get(code, code), amount=amt, days=int(liq["days"].get(code, 0))))
+        return True
+
     zt = mainline.concentration(ctx["ts"], t)
     noted = hype.active(observation, sessions)
     rows = []
     slots_left = g["slots"]
+    leaders = leaders[[not too_thin(c) for c in leaders.index]]
     for code, s in leaders.iterrows():
         stage = facts.loc[code, "stages"] if code in facts.index else ""
         role = f"空间板(市场最高板)·{int(s['height'])}板" if s["board"] == mainline.SPACE else \
@@ -125,6 +139,8 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     r2 = r2.sort_values("act_rank")
     watch, avoid = [], []
     for code, f in r2.iterrows():
+        if too_thin(code):
+            continue
         v = lm.vetoes(ctx, t, code, p, seat_day)
         n = lm.notes(ctx, t, code, seat_day)
         home = radar.home_board(ctx["ts"], t, code, zt)
@@ -145,7 +161,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     pool_t = pool.reindex(h_main.index).fillna(False)
     turn_t = ctx["aw"]["turn"].iloc[t]
     for code in h_main[(h_main >= 2) & pool_t].index:
-        if code in taken:
+        if code in taken or too_thin(code):
             continue
         v = lm.vetoes(ctx, t, code, p, seat_day)
         flags = lm.crowded(ctx, t, code, p)
@@ -175,7 +191,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     shown = set(leaders.index) | {r["code"] for r in watch[:watch_limit] + avoid[:avoid_limit]} | taken
     for wv in waves:
         for code in wv["lead_codes"]:
-            if code in shown or code not in close.index:
+            if code in shown or code not in close.index or too_thin(code):
                 continue
             v = lm.vetoes(ctx, t, code, p, seat_day)
             amt = float(ctx["aw"]["amount"].iloc[t].get(code, np.nan))
@@ -224,11 +240,26 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     facts["amount_share"] = share.reindex(facts.index)
     lines = lm.mainline_table(ctx, t, p)
     thread_list = threads.build(ctx["ts"], t, p)
+    heat_list = threads.heat(ctx["ts"], t, p)
     for th in thread_list:  # the thread's strongest listed stock and its position, for the header
         listed = [c for c in table["code"] if c in set(th["codes"])]
         th["listed"] = [name.get(c, c) for c in listed[:3]]
         th["lead_position"] = context.position_text(vs_ma.get(listed[0]), vs_hi.get(listed[0])) if listed else None
         th.pop("codes")
+        listed_set = set(table["code"])
+        for d in th.get("days", []):  # codes to names for the page's day-by-day panel
+            d["lu"] = [dict(name=name.get(c, c), height=h, listed=c in listed_set) for c, h in d["lu"]]
+    xuan = namethemes.xuan(ctx["aw"]["limit_up"], ctx["aw"]["amount"].notna(), namethemes.groups(names_all), t)
+    if xuan is not None:  # all name hype as one thread; description only
+        codes = set(xuan.pop("codes"))
+        listed = [c for c in table["code"] if c in codes]
+        xuan["listed"] = [name.get(c, c) for c in listed[:3]]
+        xuan["lead_position"] = context.position_text(vs_ma.get(listed[0]), vs_hi.get(listed[0])) if listed else None
+        for d in xuan["days"]:
+            d["lu"] = [dict(name=name.get(c, c), height=h, listed=c in set(table["code"])) for c, h in d["lu"]]
+        for key in ("origin", "prelude_top"):
+            if xuan.get(key):
+                xuan[key]["name"] = name.get(xuan[key]["code"], xuan[key]["code"])
     fates = context.high_fate(ctx["aw"], t, name)
     group_of = table.set_index("code")["分组"].map(GROUP_CODES)
     facts["lm_group"] = group_of.reindex(facts.index)
@@ -299,7 +330,9 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
-                threads=thread_list, high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
+                liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, dropped=dropped),
+                threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
+                high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
 
 
@@ -311,6 +344,17 @@ def header(result: dict) -> list[str]:
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
              f"（深市周处置 {g['szse_cases']} 起）   规则仓位上限：{pos}",
              "说明：本系统不自动交易，以下为盯盘候选与风险提示，买卖时机和仓位由你决定。"]
+    liq = result.get("liquidity")
+    if liq:
+        if liq.get("threshold") is None:
+            lines.append("成交额门槛：未知（全市场近20日成交额数据不足），本次没有按成交额过滤")
+        else:
+            gone = liq.get("dropped") or []
+            lines.append(f"成交额门槛（你定的，未回测）：观察日或近{liq['days']}日中至少{liq['min_days']}天成交额≥{liq['threshold'] / 1e8:.1f}亿"
+                         f"（全市场近{liq['market_days']}日日均的万分之{liq['market_share'] * 1e4:g}；一字涨停的日子算达标）；"
+                         + (f"剔除{len(gone)}只：" + "、".join(f"{d['name']}({d['amount'] / 1e8:.1f}亿)" if d["amount"] == d["amount"]
+                                                            else d["name"] for d in gone[:12]) + ("等" if len(gone) > 12 else "")
+                            if gone else "没有剔除"))
     if result["mainlines"]:
         lines.append("主线：" + "；".join(f"{m['board']}（今日涨停{m['lu']}家，3日{m['lu3']}家，连续{m['days']}天，"
                                        f"成交占全市场{m.get('share', 0):.1%}）" for m in result["mainlines"]))
@@ -412,8 +456,53 @@ def save(result: dict) -> Path:
     return out
 
 
+OPEN_CUTOFF = (9, 25)  # a list counts for its target day only if it was saved before 09:25 Shanghai on that day
+
+
+def run_time(name: str) -> datetime | None:
+    """A run id (UTC stamp, e.g. 20261112T171117Z) as an aware datetime; None if it is not a stamp."""
+    try:
+        return datetime.strptime(name, "%Y%m%dT%H%M%SZ").replace(tzinfo=timezone.utc)
+    except ValueError:
+        return None
+
+
+def cutoff(target: str) -> datetime:
+    day = datetime.strptime(target, "%Y-%m-%d")
+    return datetime(day.year, day.month, day.day, *OPEN_CUTOFF, tzinfo=store.SH)
+
+
+def runs(target: str) -> list[Path]:
+    """Saved runs of one target day, oldest first."""
+    root = store.home() / "lists" / target
+    if not root.is_dir():
+        return []
+    return sorted(p for p in root.iterdir() if p.is_dir() and run_time(p.name) and (p / "summary.json").exists())
+
+
+def valid_run(target: str, now: datetime | None = None) -> Path | None:
+    """The one list that counts for `target`: the last one saved before 09:25 Shanghai on the target day. Before that
+    time the newest run is the current candidate. None when every run was saved after the cutoff."""
+    rs = runs(target)
+    if not rs:
+        return None
+    now = now or store.now_sh()
+    limit = cutoff(target)
+    if now < limit:
+        return rs[-1]
+    before = [r for r in rs if run_time(r.name) < limit]
+    return before[-1] if before else None
+
+
+def after_open(run: Path) -> bool:
+    """True when the run was saved after its target day's 09:25 cutoff (it was not visible before the open)."""
+    when = run_time(run.name)
+    return when is not None and when >= cutoff(run.parent.name)
+
+
 def latest_run(target: str | None = None) -> Path | None:
-    """The newest saved run for `target` (default: the latest target session)."""
+    """The run that counts for `target` (default: the latest target session): the valid run (see valid_run), else the
+    newest saved run."""
     root = store.home() / "lists"
     if not root.exists():
         return None
@@ -421,6 +510,12 @@ def latest_run(target: str | None = None) -> Path | None:
     if not targets:
         return None
     day = target or targets[-1]
+    try:
+        valid = valid_run(day)
+    except ValueError:
+        valid = None
+    if valid is not None:
+        return valid
     marker = root / day / "LATEST"
     if marker.exists():
         return root / day / marker.read_text().strip()

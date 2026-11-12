@@ -1,4 +1,4 @@
-"""龙脉 V9 (`SF_LONGMAI_V9`; V7 rules + the V9 stage changes) screening: market gate, mainline leaders, risk vetoes and crowding flags.
+"""龙脉 V12 (`SF_LONGMAI_V12`; V9 + the liquidity floor in `liquidity_floor`, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
 
 Specification: docs/STRATEGY_LONGMAI_V9.md (on top of docs/STRATEGY_LONGMAI_V7.md). The same `context()` + `decide()` path serves the live
 list (`listing.py`) and the entry-free evaluation (`evaluate.py`). Versions V1-V6 are at tag `legacy-r2`.
@@ -11,7 +11,7 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, regulation, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V9"  # V9 = V7 + stage changes in strategy SF_R2_LEAN_V2
+VERSION = "SF_LONGMAI_V12"  # V12 = V9 + the user's liquidity floor (user decision 2026-11-12, no backtest)
 PARAMS = dict(
     version=VERSION,
     top_k=3, min_theme_lu3=5, overlap_max=0.6,          # mainlines (concentration over 3 sessions)
@@ -20,6 +20,32 @@ PARAMS = dict(
     severe_margin=0.30, post_severe_days=10, retail_ratio=0.02,             # vetoes (高波动)
     budget={"高": 1.0, "中": 0.5, "低": 0.0}, reg_cut=0.5, max_slots=4,       # position ceiling (display)
 )
+# V12 liquidity floor (user decision 2026-11-12: "in the current market only stocks trading >= 1e9 a day", imposed
+# without a backtest). A stock may be listed (any group) only if, on the observation day or on at least LIQ_MIN_DAYS of
+# the last LIQ_DAYS sessions up to it (the user's choice, 2026-11-12), it traded at least LIQ_MARKET_SHARE of the whole-market (SSE/SZSE A shares)
+# average daily amount over the LIQ_MARKET_DAYS sessions ending that day (~1e9 at the 2026-11 level of 1.66e12), or
+# closed one-price limit-up that day (no turnover because nobody would sell). The floor follows market volume.
+LIQ_DAYS, LIQ_MIN_DAYS, LIQ_MARKET_SHARE, LIQ_MARKET_DAYS = 5, 2, 0.0006, 20
+
+
+def liquidity_floor(ctx: dict, t: int) -> dict:
+    """{ok: code -> bool, threshold: today's floor in yuan (NaN when the market average is unknown), days: count of
+    qualifying sessions}. With an unknown floor every stock passes and `threshold` is NaN (reported, not imputed)."""
+    amt = ctx["aw"]["amount"]
+    market = amt.sum(axis=1, min_count=1)
+    floor = market.rolling(LIQ_MARKET_DAYS, min_periods=LIQ_MARKET_DAYS).mean() * LIQ_MARKET_SHARE
+    lo = max(0, t - LIQ_DAYS + 1)
+    w = ctx["w"]
+    cols = amt.columns
+    one = ((w["high"] == w["low"]) & w["limit_up"].fillna(False).astype(bool)).reindex(columns=cols).fillna(False)
+    big = amt.iloc[lo:t + 1].ge(floor.iloc[lo:t + 1], axis=0)
+    good = big | one.iloc[lo:t + 1].astype(bool)
+    days = good.sum()
+    thr = float(floor.iloc[t])
+    ok = (good.iloc[-1] | (days >= LIQ_MIN_DAYS)) if pd.notna(thr) else pd.Series(True, index=cols)
+    return dict(ok=ok, threshold=thr, days=days)
+
+
 HISTORY_SESSIONS = 320  # 250-session mood percentiles + warm-up
 
 

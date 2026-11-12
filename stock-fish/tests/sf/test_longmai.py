@@ -173,7 +173,7 @@ def test_evaluate_nodes():
 def test_v7_default_and_temperature_cells():
     from sf import temperature
     p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V9" == longmai.VERSION and "amount_min" not in p
+    assert p["version"] == "SF_LONGMAI_V12" == longmai.VERSION and "amount_min" not in p
     assert longmai.params({"top_k": 5})["top_k"] == 5 and longmai.PARAMS["top_k"] == 3
     days = [f"d{i:03d}" for i in range(80)]
     tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",
@@ -181,3 +181,31 @@ def test_v7_default_and_temperature_cells():
     tab.loc[days[-1], "promo_rate_o"] = 0.95
     r = temperature.reading(tab, 79)
     assert r["name"] == "高潮延续" and r["sources"] == ["晋级率(分位95%)"] and 0.4 < r["loss_rate"] < 0.45
+
+
+def test_v12_liquidity_floor_follows_market_and_exempts_one_price():
+    days = pd.Index([f"2026-01-{i + 1:02d}" for i in range(25)])
+    cols = ["big", "spike", "thin", "yizi", "early"] + [f"m{i}" for i in range(95)]
+    amt = pd.DataFrame(1e7, index=days, columns=cols)
+    amt[[f"m{i}" for i in range(95)]] = 1.62e10             # whole market ~1.54e12 a day -> floor ~0.92e9
+    amt["big"] = 2e9
+    amt["spike"] = 1e8
+    amt.loc[days[-1], "spike"] = 3e9                       # big on the observation day: passes
+    amt["early"] = 1e8
+    amt.loc[days[-3], "early"] = 3e9                       # one big day earlier only: fails
+    amt["thin"] = 5e8
+    amt["yizi"] = 1e8
+    high = pd.DataFrame(10.0, index=days, columns=cols)
+    low = pd.DataFrame(9.0, index=days, columns=cols)
+    lu = pd.DataFrame(False, index=days, columns=cols)
+    low.loc[days[-2:], "yizi"] = 10.0
+    lu.loc[days[-2:], "yizi"] = True                       # two one-price limit-ups: exempt on those days
+    ctx = dict(aw=dict(amount=amt), w=dict(high=high, low=low, limit_up=lu))
+    out = longmai.liquidity_floor(ctx, len(days) - 1)
+    assert 0.9e9 < out["threshold"] < 0.95e9
+    assert out["ok"]["big"] and out["ok"]["yizi"] and out["ok"]["spike"]
+    assert not out["ok"]["thin"] and not out["ok"]["early"]
+    doubled = dict(aw=dict(amount=amt * 2), w=ctx["w"])     # a market twice as busy doubles the floor
+    assert abs(longmai.liquidity_floor(doubled, len(days) - 1)["threshold"] - 2 * out["threshold"]) < 1
+    short = longmai.liquidity_floor(ctx, 10)               # < 20 sessions of market data: floor unknown, no filter
+    assert pd.isna(short["threshold"]) and short["ok"].all()

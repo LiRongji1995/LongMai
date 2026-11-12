@@ -194,3 +194,189 @@ def links(list_codes: list[str], names: pd.Series, strong: pd.Index, universe: p
                               expected=round(n * rate, 1), p_value=pv,
                               partners=[names.get(c, c) for c in partners[:6]]))
     return sorted(found, key=lambda x: x["p_value"])[:max_links]
+
+
+
+THREADS_VERSION = "SF_XUAN_V1"
+XUAN_WINDOW = 20       # sessions of the cumulative test (slow, persistent name hype)
+XUAN_MIN_K = 5         # at least this many limit-ups (stock-days) in the window
+XUAN_LOOKBACK = 120    # sessions searched back for the start of the current run
+XUAN_MAX_GAP = 2       # the run breaks after more than this many sessions with no group hot
+XUAN_MAX_GROUPS = 5
+XUAN_MIN_STOCKS = 3    # the cumulative test needs limit-ups from at least this many different stocks
+XUAN_FAMILY_ALPHA = 0.01  # cumulative test: family-wise error over all name groups (Bonferroni: 0.01 / groups)
+
+
+def poisson_tail(k: int, lam: float) -> float:
+    """P(X >= k) for X ~ Poisson(lam)."""
+    if k <= 0:
+        return 1.0
+    if lam <= 0:
+        return 0.0
+    logs = [-lam + i * math.log(lam) - math.lgamma(i + 1) for i in range(k)]
+    m = max(logs)
+    below = math.exp(m) * sum(math.exp(x - m) for x in logs)
+    if below < 0.999:
+        return float(max(0.0, 1.0 - below))
+    logs = [-lam + i * math.log(lam) - math.lgamma(i + 1) for i in range(k, k + 400)]  # far tail: sum it directly
+    m = max(logs)
+    return float(min(1.0, math.exp(m) * sum(math.exp(x - m) for x in logs)))
+
+
+def xuan(limit_up: pd.DataFrame, traded: pd.DataFrame, grp: dict[str, list[str]], t: int,
+         min_k: int = 3, alpha: float = 1e-4) -> dict | None:
+    """All name hype (玄学) of the current run as one thread. Description only; never changes a group or an order.
+
+    A name group is hot on a day when either
+      daily:      the `scan` test (>= min_k limit-ups that day, binomial tail < alpha; unchanged), or
+      cumulative: over the last XUAN_WINDOW sessions >= XUAN_MIN_K limit-ups (stock-days) from >= XUAN_MIN_STOCKS
+                  different stocks, with a Poisson tail below XUAN_FAMILY_ALPHA / (number of groups) against the sum
+                  of each day's expected count
+                  (catches slow hype such as 羊字辈; one stock's streak alone does not count).
+    Groups hot at t or within XUAN_MAX_GAP sessions before it are the active ones, strongest first. A weaker group is
+    kept only if it is still hot (either test, recent days) on its members not already in a kept group: otherwise it
+    is the same hype seen through another character / word / homophone (e.g. 东 and 方 inside 东方). The run starts at the earliest day reached backwards from t through days on which an active group was
+    hot, with gaps of at most XUAN_MAX_GAP sessions (the confirmation day), and is then traced back through the lead-in:
+    days on which a member was inside a streak of >= 2 limit-ups (see below); `origin` is the earliest such streak and
+    `prelude_top` the tallest. Per day: active groups hot that day and the limit-up stocks of all
+    active groups with their streaks."""
+    from .threads import _streaks
+    lo = max(0, t - XUAN_LOOKBACK - XUAN_WINDOW + 1)
+    lu = limit_up.iloc[lo:t + 1].fillna(False).astype(bool)
+    tr = traded.iloc[lo:t + 1].fillna(False).astype(bool)
+    cols = lu.columns
+    colpos = {c: i for i, c in enumerate(cols)}
+    labels = [g for g in grp if any(c in colpos for c in grp[g])]
+    G = np.zeros((len(labels), len(cols)), dtype=np.float32)
+    for gi, g in enumerate(labels):
+        for c in grp[g]:
+            if c in colpos:
+                G[gi, colpos[c]] = 1.0
+    L, T = lu.to_numpy(np.float32), tr.to_numpy(np.float32)
+    K, N = L @ G.T, T @ G.T                      # day x group: limit-ups, traded members
+    rate = L.sum(axis=1) / np.maximum(T.sum(axis=1), 1)
+    E = N * rate[:, None]                        # expected limit-ups per day and group
+    Kw = pd.DataFrame(K).rolling(XUAN_WINDOW, min_periods=XUAN_WINDOW).sum().to_numpy()
+    seen = pd.DataFrame(L).rolling(XUAN_WINDOW, min_periods=XUAN_WINDOW).max().fillna(0).to_numpy(np.float32)
+    Dw = seen @ G.T                              # different stocks with a limit-up in the window
+    Ew = pd.DataFrame(E).rolling(XUAN_WINDOW, min_periods=XUAN_WINDOW).sum().to_numpy()
+    nd = len(lu)
+    alpha_cum = XUAN_FAMILY_ALPHA / max(len(labels), 1)  # thousands of groups are tested on every window
+    hot = np.zeros((nd, len(labels)), dtype=bool)
+    for d, g in zip(*np.nonzero(K >= min_k)):
+        hot[d, g] = binom_tail(int(K[d, g]), int(N[d, g]), float(rate[d])) < alpha
+    for d, g in zip(*np.nonzero((np.nan_to_num(Kw) >= XUAN_MIN_K) & (Dw >= XUAN_MIN_STOCKS))):
+        if not hot[d, g] and Kw[d, g] > 2 * Ew[d, g]:
+            hot[d, g] = poisson_tail(int(Kw[d, g]), float(Ew[d, g])) < alpha_cum
+    last = nd - 1
+    active = [g for g in range(len(labels)) if hot[max(0, last - XUAN_MAX_GAP):, g].any()]
+    if not active:
+        return None
+    def strength(g):
+        return poisson_tail(int(Kw[last, g]), float(Ew[last, g])) if not np.isnan(Kw[last, g]) else 1.0
+    active.sort(key=lambda g: (strength(g), {"词": 0, "字": 1, "音": 2}.get(labels[g][0], 3)))
+    def still_hot(idx: list[int]) -> bool:
+        """The two tests on a subset of members (column indices), on the recent days."""
+        if not idx:
+            return False
+        Ls, Ts = L[:, idx], T[:, idx]
+        for d in range(max(0, last - XUAN_MAX_GAP), last + 1):
+            k, n = int(Ls[d].sum()), int(Ts[d].sum())
+            if k >= min_k and binom_tail(k, n, float(rate[d])) < alpha:
+                return True
+            w = slice(max(0, d - XUAN_WINDOW + 1), d + 1)
+            kw, ew = int(Ls[w].sum()), float((Ts[w] * rate[w, None]).sum())
+            if kw >= XUAN_MIN_K and int((Ls[w].max(axis=0) > 0).sum()) >= XUAN_MIN_STOCKS and kw > 2 * ew \
+                    and poisson_tail(kw, ew) < alpha_cum:
+                return True
+        return False
+
+    chosen, covered = [], set()
+    for g in active:
+        members = [c for c in grp[labels[g]] if c in colpos]
+        rest = [colpos[c] for c in members if c not in covered]
+        if chosen and not still_hot(rest):
+            continue
+        covered |= set(members)
+        chosen.append(g)
+        if len(chosen) >= XUAN_MAX_GROUPS:
+            break
+    any_hot = hot[:, chosen].any(axis=1)
+    first = last
+    gap = 0
+    for d in range(last, -1, -1):
+        if any_hot[d]:
+            first, gap = d, 0
+        else:
+            gap += 1
+            if gap > XUAN_MAX_GAP and d < first:
+                break
+    # the lead-in (前奏): statistics confirm a name wave only once enough names follow, often days after its leader
+    # started. Walk back from the confirmation day through days on which a member of the kept groups was inside a
+    # streak of >= 2 consecutive limit-ups (gaps of at most XUAN_MAX_GAP sessions, at most XUAN_WINDOW sessions back).
+    allm_idx = sorted(set(colpos[c] for g in chosen for c in grp[labels[g]] if c in colpos))
+    Lm = L[:, allm_idx] > 0
+    def in_streak(d: int) -> bool:
+        prev = Lm[d - 1] if d > 0 else np.zeros(Lm.shape[1], bool)
+        nxt = Lm[d + 1] if d < last else np.zeros(Lm.shape[1], bool)
+        return bool((Lm[d] & (prev | nxt)).any())
+    confirmed, gap, d = first, 0, first - 1
+    while d >= max(0, confirmed - XUAN_WINDOW):
+        if in_streak(d):
+            first, gap = d, 0
+        else:
+            gap += 1
+            if gap > XUAN_MAX_GAP:
+                break
+        d -= 1
+
+    def runs_from(d0: int, d1: int) -> list[tuple[int, int, int]]:
+        """(column, start, length) of every run of consecutive limit-ups starting in [d0, d1)."""
+        out = []
+        for j in range(Lm.shape[1]):
+            d = d0
+            while d < d1:
+                if Lm[d, j] and (d == 0 or not Lm[d - 1, j]):
+                    n = 0
+                    while d + n <= last and Lm[d + n, j]:
+                        n += 1
+                    out.append((j, d, n))
+                    d += n
+                else:
+                    d += 1
+        return out
+    origin = prelude_top = None
+    if first < confirmed:
+        pre = [r for r in runs_from(first, confirmed) if r[2] >= 2]
+        if pre:
+            o = min(pre, key=lambda r: (r[1], -r[2]))
+            top = max(pre, key=lambda r: (r[2], -r[1]))
+            origin = dict(code=cols[allm_idx[o[0]]], day=lu.index[o[1]], height=o[2])
+            prelude_top = dict(code=cols[allm_idx[top[0]]], day=lu.index[top[1]], end=lu.index[top[1] + top[2] - 1],
+                               height=top[2])
+    start_capped = first == 0 and lo > 0
+    members_of = {labels[g]: [c for c in grp[labels[g]] if c in colpos] for g in chosen}
+    allm = sorted(set().union(*members_of.values()))
+    daily = lu.iloc[first:last + 1][allm].sum(axis=1)
+    days = list(lu.index)
+    group_rows = [dict(group=labels[g], label=label_text(labels[g]), members=len(members_of[labels[g]]),
+                       window_limit_ups=int(np.nan_to_num(Kw[last, g])), window_expected=round(float(np.nan_to_num(Ew[last, g])), 2),
+                       today=int(K[last, g]), expected_today=round(float(E[last, g]), 2), hot_today=bool(hot[last, g]))
+                  for g in chosen]
+    return dict(kind="xuan", first=days[first], age=last - first + 1, age_capped=bool(start_capped),
+                confirmed=days[confirmed], origin=origin, prelude_top=prelude_top,
+                boards=[r["label"] for r in group_rows], groups=group_rows,
+                today=int(daily.iloc[-1]), peak=int(daily.max()), peak_day=str(daily.idxmax()),
+                peak_age=int(np.argmax(daily.to_numpy())) + 1, stocks=len(allm), mainline_today=bool(any_hot[last]),
+                series=[int(x) for x in daily.to_numpy()], codes=allm,
+                days=[dict(day=days[d], age=d - first + 1, prelude=d < confirmed,
+                           boards=[label_text(labels[g]) for g in chosen if hot[d, g]],
+                           lu=_streaks(lu, d, allm)) for d in range(first, last + 1)])
+
+def label_text(group: str) -> str:
+    """字·洋 -> 名字带「洋」, 词·东方 -> 名字带「东方」, 音·yang(洋阳) -> 谐音「洋阳」."""
+    kind, _, key = group.partition("·")
+    if kind == "音":
+        py, _, chars = key.partition("(")
+        return f"谐音「{chars.rstrip(')')}」" if chars else "谐音"
+    return f"名字带「{key}」"

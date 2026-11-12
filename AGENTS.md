@@ -21,6 +21,10 @@ security platform work.
 3. **Reproducible results.** Every saved list stores its inputs' identity (observation date, strategy
    version, parameters) and the full per-stock fact table, so a list can be re-derived and reviewed later.
    Saved lists and review outputs are never overwritten in place; a re-run writes a new version.
+   **One valid list per trading day (user decision, 2026-11-12):** the list that counts for a target day is the last
+   one saved before 09:25 Shanghai on that day (`listing.valid_run`); review, auction and page use it. After the
+   cutoff, `sf prune` moves the day's other runs, the auction snapshots taken against them and old pages to the macOS
+   Trash and logs them in `meta/prune.jsonl` (R11). Nothing else is removed.
 
 Everything else (re-hashing every file at every stage, cumulative request budgets, one-shot retry
 authorizations, subprocess supervisor trees) is not required. Network failures may be retried with a
@@ -42,6 +46,10 @@ bounded, logged retry.
   V1-V11 and are no longer clean. New rule ideas go to `docs/HYPOTHESES.md` with the date they were raised and are
   tested on data after that date (forward record); do not pick thresholds on the stored history again. Pre-registrations
   already written (e.g. `docs/STOPLOSS_V1_PREREG.md`) run as written, with the caveat stated.
+- **Liquidity floor (user decision, 2026-11-12, `SF_LONGMAI_V12`).** Every listed stock (all groups) must have traded at
+  least 6/10000 of the whole-market 20-session average daily amount (~1e9 in 2026-11) on the observation day or on 2 of
+  the last 5 sessions (a one-price limit-up day counts as meeting it). Imposed by the user without a backtest; judge it on the forward record only.
+  Dropped stocks are listed in the header and `summary.json`. Spec: `docs/STRATEGY_LONGMAI_V12.md`.
 - Descriptive layers (历史同类, 题材线索, 位置, 高标结局, page) never change a group or an order. Changing a rule
   threshold that a note uses (e.g. the 1e8 "流动性差" note) is a rule change and needs a pre-registration.
 
@@ -56,11 +64,13 @@ bounded, logged retry.
 
 - **Language.** User-facing documents (README, USER_GUIDE, CHANGELOG, everything under `docs/`) and CLI
   output are written in Simplified Chinese; keep them Chinese when adding or editing. Code, comments,
-  docstrings, this file and commit messages stay in English.
+  docstrings and this file stay in English. Commit messages are written in Simplified Chinese (user decision,
+  2026-11-12). The local page shows Chinese only (codes, versions and stamps are translated; stock and board names are
+  kept as they are).
 - Python 3.12. Runtime deps in `stock-fish/requirements.txt`; keep them minimal.
 - Tests for `sf` live in `stock-fish/tests/sf/` and must run offline with synthetic data.
 - Publish target: `LiRongji1995/longmai` (renamed from `stockfish-qlib-quant-system` on 2026-11-10), branch `main`. Commit only the files of the
-  task; no force push or history rewrite. Verify the remote SHA after pushing. Commit messages in English.
+  task; no force push or history rewrite. Verify the remote SHA after pushing. Commit messages in Chinese.
 - Keep existing licenses and [THIRD_PARTY_NOTICES](THIRD_PARTY_NOTICES.md).
 - **Two sets of instructions.** Every operation has a human guide in [USER_GUIDE](USER_GUIDE.md) (Chinese)
   and an agent runbook below (English). When an operation changes, update both in the same commit.
@@ -111,7 +121,11 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 3. The `昨日分时` column describes the observation day's intraday facts (description only; it never changes a group
    or order). Listed stocks the evening capture missed are fetched once while the list is built (not with
    `--no-update`). Before 40 captured sessions, never read it as a forecast for the next session.
-4. The header also shows 题材线索 (theme threads: mainline boards linked across days by their limit-up stocks, with
+4. The header also shows 题材线索 (theme threads: mainline boards linked across days by their limit-up stocks; the summary keeps a
+   per-day record shown in the page's thread dialog; all name hype is merged into one 玄学 thread (`SF_XUAN_V1`:
+   the unchanged daily test or a 20-session cumulative test, family-wise 1%; traced back to the leader's streak before
+   statistical confirmation), shown first; the heat board (`SF_HEAT_V1`: boards by 3-session limit-up count, which
+   concentration-ranked mainlines under-rate for big boards); with
    age, today's vs peak limit-ups), the `位置` column (vs MA250 and the one-year high), the amount as a share of
    the whole market, and 高标结局 (yesterday's tallest boards on the observation day). All description only;
    `【数据缺失】` is now the second header line.
@@ -150,7 +164,7 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 
 ### R8. Scheduled capture (`sf schedule`)
 1. `bin/sf schedule install` writes launchd user agents (`~/Library/LaunchAgents/com.longmai.sf.<job>.plist`) for:
-   auction 09:26, premarket 18:40 (+ page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
+   auction 09:26 (+ `prune --yes`), premarket 18:40 (+ page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
    Saturday. Install only when the user asks; `bin/sf schedule uninstall` removes them.
 2. `bin/sf schedule status` shows each job's last run. Logs: `schedule/logs/`; latest status: `schedule/status/`.
    A failed job posts a local macOS notification and appears at the top of the local page.
@@ -167,10 +181,20 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    Never connect to a broker; never present results as advice.
 
 ### R10. Local page (`sf page`)
-1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from saved files only (written by premarket
-   and auction automatically). Report its path. The page is description; data gaps are listed first.
-2. `pages/index.html` and `pages/latest.html` are navigation only and are rewritten with every new page; the
-   dated pages are never changed.
+1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from the valid list's saved files only (written
+   by premarket and auction automatically). Report its path. The page is description; data gaps are listed first.
+2. One page per target day: a new page replaces the day's older page (pages are renderings, not saved results).
+   `pages/index.html` (one row per day, with the list's save time, version and an `开盘后生成` flag) and
+   `pages/latest.html` are navigation only and are rewritten with every new page, as are the `pages/go/prev-<day>` /
+   `next-<day>` redirects behind each page's back / previous / next buttons.
+
+### R11. Keep one list per day (`sf prune`)
+1. `bin/sf prune` is a dry run: per target day past its 09:25 cutoff it prints the run kept and every path to remove
+   (other list runs, auction snapshots that used them, pages). Days before their cutoff are skipped; a day with no
+   run saved before the cutoff keeps everything.
+2. Run `bin/sf prune --yes` only when the user asks (the scheduled auction job runs it daily). Files go to
+   `~/.Trash/longmai-prune-<stamp>/`, never deleted outright; the log is `meta/prune.jsonl`. Report the trash folder.
+   Emptying the Trash is the user's decision.
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`
