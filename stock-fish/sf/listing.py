@@ -67,7 +67,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     dropped: list[dict] = []
 
     def too_thin(code) -> bool:
-        """V12 liquidity floor: record and skip a stock that fails it (every group)."""
+        """V12/V14 liquidity floor: record and skip a stock that fails it (every group)."""
         if bool(liq["ok"].get(code, False)):
             return False
         if any(d["code"] == code for d in dropped):  # checked again in another group: record once
@@ -347,7 +347,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 mainlines=lines.to_dict("records"), name_waves=[{k: v for k, v in w_.items() if k != "lead_codes"} for w_ in waves],
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
-                liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, dropped=dropped),
+                liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, turn_min=lm.LIQ_TURN_MIN, dropped=dropped),
                 market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
                 high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
@@ -368,7 +368,8 @@ def header(result: dict) -> list[str]:
         else:
             gone = liq.get("dropped") or []
             lines.append(f"成交额门槛（你定的，未回测）：观察日或近{liq['days']}日中至少{liq['min_days']}天成交额≥{liq['threshold'] / 1e8:.1f}亿"
-                         f"（全市场近{liq['market_days']}日日均的万分之{liq['market_share'] * 1e4:g}；一字涨停的日子算达标）；"
+                         f"（全市场近{liq['market_days']}日日均的万分之{liq['market_share'] * 1e4:g}；一字涨停的日子算达标）"
+                         + (f"，或观察日换手率≥{liq['turn_min']:g}%" if liq.get("turn_min") is not None else "") + "；"
                          + (f"剔除{len(gone)}只：" + "、".join(f"{d['name']}({d['amount'] / 1e8:.1f}亿)" if d["amount"] == d["amount"]
                                                             else d["name"] for d in gone[:12]) + ("等" if len(gone) > 12 else "")
                             if gone else "没有剔除"))

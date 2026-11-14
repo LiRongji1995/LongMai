@@ -1,4 +1,4 @@
-"""龙脉 V13 (`SF_LONGMAI_V13`; V9 + the V12 liquidity floor + the V13 volume-surge note, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
+"""龙脉 V14 (`SF_LONGMAI_V14`; V9 + the V12 liquidity floor with the V14 turnover alternative + the V13 volume-surge note, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
 
 Specification: docs/STRATEGY_LONGMAI_V9.md (on top of docs/STRATEGY_LONGMAI_V7.md). The same `context()` + `decide()` path serves the live
 list (`listing.py`) and the entry-free evaluation (`evaluate.py`). Versions V1-V6 are at tag `legacy-r2`.
@@ -11,7 +11,8 @@ import pandas as pd
 
 from . import abnormal, crowding, mainline, mood, regulation, store, strategy, themes
 
-VERSION = "SF_LONGMAI_V13"  # V13 = V12 + the volume-surge risk note on every listed stock (user decision 2026-11-12)
+VERSION = "SF_LONGMAI_V14"  # V14 = V13 + turnover >= LIQ_TURN_MIN on the observation day also meets the floor (user decision 2026-11-13)
+# V13 = V12 + the volume-surge risk note on every listed stock (user decision 2026-11-12)
 # V12 = V9 + the user's liquidity floor (user decision 2026-11-12, no backtest)
 PARAMS = dict(
     version=VERSION,
@@ -27,11 +28,14 @@ PARAMS = dict(
 # average daily amount over the LIQ_MARKET_DAYS sessions ending that day (~1e9 at the 2026-11 level of 1.66e12), or
 # closed one-price limit-up that day (no turnover because nobody would sell). The floor follows market volume.
 LIQ_DAYS, LIQ_MIN_DAYS, LIQ_MARKET_SHARE, LIQ_MARKET_DAYS = 5, 2, 0.0006, 20
+# V14 (user decision 2026-11-13, no backtest): a stock whose observation-day turnover rate is >= LIQ_TURN_MIN percent
+# also meets the floor (OR with the amount rule). Unknown turnover never qualifies by this route (not imputed).
+LIQ_TURN_MIN = 10.0
 
 
 def liquidity_floor(ctx: dict, t: int) -> dict:
     """{ok: code -> bool, threshold: today's floor in yuan (NaN when the market average is unknown), days: count of
-    qualifying sessions}. With an unknown floor every stock passes and `threshold` is NaN (reported, not imputed)."""
+    qualifying sessions, turn_ok: code -> bool (V14 turnover route)}. With an unknown floor every stock passes and `threshold` is NaN (reported, not imputed)."""
     amt = ctx["aw"]["amount"]
     market = amt.sum(axis=1, min_count=1)
     floor = market.rolling(LIQ_MARKET_DAYS, min_periods=LIQ_MARKET_DAYS).mean() * LIQ_MARKET_SHARE
@@ -43,8 +47,10 @@ def liquidity_floor(ctx: dict, t: int) -> dict:
     good = big | one.iloc[lo:t + 1].astype(bool)
     days = good.sum()
     thr = float(floor.iloc[t])
-    ok = (good.iloc[-1] | (days >= LIQ_MIN_DAYS)) if pd.notna(thr) else pd.Series(True, index=cols)
-    return dict(ok=ok, threshold=thr, days=days)
+    turn = ctx["aw"].get("turn")
+    turn_ok = (turn.iloc[t].reindex(cols) >= LIQ_TURN_MIN) if turn is not None else pd.Series(False, index=cols)
+    ok = (good.iloc[-1] | (days >= LIQ_MIN_DAYS) | turn_ok) if pd.notna(thr) else pd.Series(True, index=cols)
+    return dict(ok=ok, threshold=thr, days=days, turn_ok=turn_ok)
 
 
 # V13 volume-surge note (user decision 2026-11-12, after 福建水泥 traded 16.9e8 against ~4-6e8 on the days before

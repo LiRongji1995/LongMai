@@ -173,7 +173,7 @@ def test_evaluate_nodes():
 def test_v7_default_and_temperature_cells():
     from sf import temperature
     p = longmai.params()
-    assert p["version"] == "SF_LONGMAI_V13" == longmai.VERSION and "amount_min" not in p
+    assert p["version"] == "SF_LONGMAI_V14" == longmai.VERSION and "amount_min" not in p
     assert longmai.params({"top_k": 5})["top_k"] == 5 and longmai.PARAMS["top_k"] == 3
     days = [f"d{i:03d}" for i in range(80)]
     tab = pd.DataFrame({"heat": 0.9, "pain": 0.1, "hot": "热", "sore": "顺", "cell": "热顺",
@@ -209,6 +209,24 @@ def test_v12_liquidity_floor_follows_market_and_exempts_one_price():
     assert abs(longmai.liquidity_floor(doubled, len(days) - 1)["threshold"] - 2 * out["threshold"]) < 1
     short = longmai.liquidity_floor(ctx, 10)               # < 20 sessions of market data: floor unknown, no filter
     assert pd.isna(short["threshold"]) and short["ok"].all()
+
+
+def test_v14_turnover_alternative_meets_floor():
+    days = pd.Index([f"2026-01-{i + 1:02d}" for i in range(25)])
+    cols = ["hot", "cold", "unknown", "edge"] + [f"m{i}" for i in range(95)]
+    amt = pd.DataFrame(1e8, index=days, columns=cols)       # all below the ~0.92e9 floor
+    amt[[f"m{i}" for i in range(95)]] = 1.62e10
+    turn = pd.DataFrame(2.0, index=days, columns=cols)
+    turn.loc[days[-1], "hot"] = 12.5                        # observation-day turnover >= 10%: passes
+    turn.loc[days[-2], "cold"] = 30.0                       # high turnover only on an earlier day: fails
+    turn.loc[days[-1], "unknown"] = np.nan                  # unknown turnover: no pass by this route
+    turn.loc[days[-1], "edge"] = 10.0                       # exactly 10%: passes
+    flat = pd.DataFrame(10.0, index=days, columns=cols)
+    ctx = dict(aw=dict(amount=amt, turn=turn),
+               w=dict(high=flat, low=flat * 0.9, limit_up=pd.DataFrame(False, index=days, columns=cols)))
+    out = longmai.liquidity_floor(ctx, len(days) - 1)
+    assert out["ok"]["hot"] and out["ok"]["edge"]
+    assert not out["ok"]["cold"] and not out["ok"]["unknown"]
 
 
 def test_v13_volume_surge_note():
