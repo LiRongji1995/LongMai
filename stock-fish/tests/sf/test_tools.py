@@ -157,7 +157,7 @@ def test_schedule_skips_and_records(tmp_path, monkeypatch):
     calls = []
     code = schedule.run("premarket", now=datetime(2026, 11, 13, 18, 40, tzinfo=store.SH),
                         runner=lambda args, out: calls.append(args) or (1 if args == ["page"] else 0))
-    assert code == 1 and calls == [["premarket"], ["page"]]
+    assert code == 1 and calls == [["premarket"], ["review"], ["page"]]
     st = json.loads((tmp_path / "schedule" / "status" / "premarket.json").read_text())
     assert st["exit"] == 1 and st["log"].endswith(".log")
     p = schedule.plist("intraday")

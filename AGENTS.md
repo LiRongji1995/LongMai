@@ -173,7 +173,7 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 
 ### R8. Scheduled capture (`sf schedule`)
 1. `bin/sf schedule install` writes launchd user agents (`~/Library/LaunchAgents/com.longmai.sf.<job>.plist`) for:
-   auction 09:26 (+ `prune --yes`), premarket 18:40 (+ page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
+   auction 09:26 (+ `prune --yes`), premarket 18:40 (+ review + page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
    Saturday. Install only when the user asks; `bin/sf schedule uninstall` removes them.
 2. `bin/sf schedule status` shows each job's last run. Logs: `schedule/logs/`; latest status: `schedule/status/`.
    A failed job posts a local macOS notification and appears at the top of the local page.

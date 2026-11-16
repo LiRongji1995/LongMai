@@ -58,7 +58,7 @@
 | 任务 | 时间 | 做什么 |
 |---|---|---|
 | auction | 工作日 09:26 | `sf auction`（只在交易日 09:20–11:30 内运行），然后 `sf prune --yes`（见“每天一份清单”） |
-| premarket | 工作日 18:40 | `sf premarket`，然后 `sf page` |
+| premarket | 工作日 18:40 | `sf premarket`，然后 `sf review`（更新命中率复盘），再 `sf page` |
 | intraday | 工作日 21:30、08:40 | `sf intraday --backfill`：换个时间补抓失败的分时 |
 | baserates | 周六 10:00 | `sf baserates` |
 | themes | 周六 11:00 | `sf themes`（每周一份板块成分快照） |

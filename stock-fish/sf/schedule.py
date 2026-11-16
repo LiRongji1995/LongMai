@@ -6,7 +6,8 @@ Times below are Shanghai time; `install` converts them to the Mac's local time z
 
   auction    09:26        sf auction (only on a trading day, 09:20-11:30; launchd runs a missed job on wake), then
                           sf prune --yes (keep only the valid list of each past target day)
-  premarket  18:40        sf premarket (update, pools, seats, minute bars, list), then sf page
+  premarket  18:40        sf premarket (update, pools, seats, minute bars, list), then sf review
+                          (hit rates of the saved lists, so the page shows them fresh), then sf page
   intraday   21:30, 08:40 sf intraday --backfill (retries a failed minute-bar capture at another time of day)
   baserates  Sat 10:00    sf baserates (weekly refresh of the 历史同类 table)
   themes     Sat 11:00    sf themes (weekly board-membership snapshot; every refresh is archived)
@@ -32,7 +33,7 @@ JOBS = {
     "auction": dict(args=["auction"], times=[(9, 26)], days=WEEKDAYS, window=((9, 20), (11, 30)), trading=True,
                     then=[["prune", "--yes"]]),
     "premarket": dict(args=["premarket"], times=[(18, 40)], days=WEEKDAYS, window=((18, 0), (23, 59)), trading=True,
-                      then=[["page"]]),
+                      then=[["review"], ["page"]]),
     "intraday": dict(args=["intraday", "--backfill"], times=[(21, 30), (8, 40)], days=WEEKDAYS, window=None,
                      trading=False),
     "baserates": dict(args=["baserates"], times=[(10, 0)], days=(6,), window=None, trading=False),
