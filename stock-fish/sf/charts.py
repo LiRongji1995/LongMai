@@ -188,11 +188,13 @@ def intraday_chart(bars: pd.DataFrame, preclose: float, up: float | None, source
     zero = y(0.0)
     area = f"{xs[0]:.1f},{zero:.1f} {line} {xs[-1]:.1f},{zero:.1f}"
     tone = "upc" if pct[-1] >= 0 else "dnc"
-    vol = b["volume"].fillna(0).to_numpy()
+    # volume in 5-minute buckets (48 a day; the 09:30 auction bar joins the first): the price line keeps every minute
+    bucket = ((b["minute"].clip(lower=1) - 1) // 5).astype(int)
+    vol = b["volume"].fillna(0).groupby(bucket).sum()
     vmax = vol.max() if len(vol) and vol.max() > 0 else 1
-    bw = max(w / 241, 0.6) if len(b) > 60 else w / 48
-    vbars = "".join(f'<rect x="{x - bw / 2:.1f}" y="{h + vh - vh * v / vmax:.1f}" width="{bw:.2f}" height="{vh * v / vmax:.1f}"/>'
-                    for x, v in zip(xs, vol) if v > 0)
+    bw = w / 48
+    vbars = "".join(f'<rect x="{k * bw + 0.3:.1f}" y="{h + vh - vh * v / vmax:.1f}" width="{bw - 0.6:.1f}" '
+                    f'height="{vh * v / vmax:.1f}"/>' for k, v in vol.items() if v > 0)
     limit = (f'<line class="lim" x1="0" x2="{w}" y1="{y(up_pct):.1f}" y2="{y(up_pct):.1f}"/>'
              f'<text class="lt" x="{w - 2}" y="{y(up_pct) - 2 if y(up_pct) > 12 else y(up_pct) + 10:.1f}">涨停 {up_pct:+.0%}</text>') if up_pct is not None else ""
     return (f'<div class="ic"><svg viewBox="0 0 {w} {h + vh}" preserveAspectRatio="none" aria-hidden="true">'
