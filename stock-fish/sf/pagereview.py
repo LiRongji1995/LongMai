@@ -47,7 +47,7 @@ def rate_chart(rows: pd.DataFrame) -> str:
     base = rows[rows["baseline"]]
     items = [(label, GROUP_CLASS[label], rate(part, "out5"), rate(part, "bigloss1"), len(part))
              for key, label in REVIEW_GROUPS if len(part := rows[rows["group"] == key])]  # same rows as review_html
-    return ('<h3>各组命中与大面 <small>全部已存清单；样本少只看方向</small></h3>'
+    return ('<h3 title="全部已存清单；虚线竖标是同日全部主板涨停股（对照）；样本少只看方向">各组命中与大面</h3>'
             + charts.rate_bars(items, (rate(base, "out5"), rate(base, "bigloss1"))))
 
 
@@ -79,7 +79,7 @@ def review_html(rows: pd.DataFrame, name: str) -> str:
             vline = ('<p class="note">按策略版本：' + "、".join(f"{_e(zh(v))} {n} 份" for v, n in per.items()) +
                      "。不同版本的规则不同，下表合在一起只能粗看；每个版本要攒够 60 份清单才单独下结论。</p>")
     legend = "".join(f"<li><b>{_e(label)}</b>：{_e(tip)}</li>" for _, label, tip in REVIEW_METRICS)
-    return (f'<h3>复盘表 <small>{len(targets)} 份清单 · <span class="good">绿</span>比对照好 · <span class="bad">红</span>比对照差</small></h3>'
+    return (f'<h3 title="{len(targets)} 份清单；绿色比对照好、红色比对照差（3 个百分点以上）">复盘表</h3>'
             f'<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>'
             f'<details class="legend"><summary>怎么读这张表</summary><ul>{legend}</ul>'

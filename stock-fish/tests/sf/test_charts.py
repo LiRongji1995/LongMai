@@ -12,7 +12,7 @@ def test_trend_tile_skips_unknown_days_and_needs_two_points():
     one = charts.trend_tile("情绪", "26%", "低档", [("11-18", 0.26)], "t-mood")
     assert "<svg" not in one and "26%" in one
     two = charts.trend_tile("情绪", "26%", "低档", [("11-16", 0.3), ("11-17", None), ("11-18", 0.26)], "t-mood")
-    assert two.count("<title>") == 2 and "近3日" in two  # the unknown day is a gap, not a zero
+    assert two.count("<title>") == 2  # the unknown day is a gap, not a zero
 
 
 def test_ladder_colours_listed_stocks_and_counts_first_boards():

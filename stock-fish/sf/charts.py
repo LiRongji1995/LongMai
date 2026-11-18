@@ -47,7 +47,6 @@ def trend_tile(label: str, value: str, sub: str, series: list[tuple[str, float |
         svg = (f'<svg class="trend" viewBox="0 0 {w} {h}" preserveAspectRatio="none" aria-hidden="true">'
                f'<polygon class="ar" points="{area}"/><polyline class="ln" points="{line}"/>'
                f'<circle class="now" cx="{lx:.1f}" cy="{ly:.1f}" r="3"/>{dots}</svg>')
-        sub = sub + f" · 近{len(series)}日"
     attrs = f' data-d="{_e(key)}" tabindex="0" role="button" title="点开看大图"' if key and svg else ""
     zoom = '<span class="kz">⤢</span>' if attrs else ""
     return (f'<div class="kpi {tone}{" open" if attrs else ""}"{attrs}><div class="kl">{_e(label)}{zoom}</div>'
@@ -197,12 +196,13 @@ def intraday_chart(bars: pd.DataFrame, preclose: float, up: float | None, source
                     f'height="{vh * v / vmax:.1f}"/>' for k, v in vol.items() if v > 0)
     limit = (f'<line class="lim" x1="0" x2="{w}" y1="{y(up_pct):.1f}" y2="{y(up_pct):.1f}"/>'
              f'<text class="lt" x="{w - 2}" y="{y(up_pct) - 2 if y(up_pct) > 12 else y(up_pct) + 10:.1f}">涨停 {up_pct:+.0%}</text>') if up_pct is not None else ""
-    return (f'<div class="ic"><svg viewBox="0 0 {w} {h + vh}" preserveAspectRatio="none" aria-hidden="true">'
+    return (f'<div class="ic" title="横轴 9:30 到 15:00，中间竖线是午休；红色虚线是涨停价，下方是每 5 分钟成交量">'
+            f'<svg viewBox="0 0 {w} {h + vh}" preserveAspectRatio="none" aria-hidden="true">'
             f'<line class="mid" x1="{w / 2}" x2="{w / 2}" y1="0" y2="{h}"/>'
             f'<line class="zero" x1="0" x2="{w}" y1="{zero:.1f}" y2="{zero:.1f}"/>{limit}'
             f'<polygon class="ar {tone}" points="{area}"/><polyline class="ln {tone}" points="{line}"/>'
             f'<g class="vol">{vbars}</g></svg>'
-            f'<div class="icx"><span>9:30</span><span>11:30/13:00</span><span>15:00</span></div>'
+
             f'<div class="ics" title="{_e(source)}">收盘 {pct[-1]:+.1%}'
             + (f' · <span class="coarse">{_e(source.split(" ")[-1])}</span>' if "粗" in source else "") + '</div></div>')
 
@@ -244,9 +244,9 @@ def rate_bars(rows: list[tuple[str, str, float | None, float | None, int]], base
         out.append(f'<div class="rr"><div class="rl"><span class="chip {cls}">{_e(label)}</span><small>{n} 次</small></div>'
                    f'{bar(o5, m1, "go", base[0])}{bar(bl, m2, "bl", base[1])}</div>')
     legend = ('<div class="rr hd"><div class="rl"></div><div class="rb">5 日走出来</div><div class="rb">次日大面</div></div>')
-    note = ('<p class="note">虚线竖标是同日全部主板涨停股的比例（对照）。走出来越长越好，大面越长越差。'
-            + (f'对照：走出来 {base[0]:.0%}，大面 {base[1]:.0%}。' if _known(base[0]) and _known(base[1]) else "") + '</p>')
-    return f'<div class="rates">{legend}{"".join(out)}</div>{note}'
+    tip = ("虚线竖标是同日全部主板涨停股的比例（对照）；走出来越长越好，大面越长越差"
+           + (f"；对照：走出来 {base[0]:.0%}，大面 {base[1]:.0%}" if _known(base[0]) and _known(base[1]) else ""))
+    return f'<div class="rates" title="{_e(tip)}">{legend}{"".join(out)}</div>'
 
 
 # ------------------------------------------------------------------ auction gaps
@@ -329,7 +329,7 @@ font-size:11px;font-weight:700;color:#1b1206}.sc.none{background:transparent;bor
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:10px}
 details.more-t summary{color:var(--cyan);font-weight:700;margin:6px 0}
 .risks{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.rk{font-size:12px;padding:1px 8px;border-radius:999px;cursor:help;white-space:nowrap}.rk.warn{background:rgba(255,93,108,.16);color:#ffb3ba}.rk.info{background:rgba(255,255,255,.07);color:var(--dim)}.rk.unk{border:1px dashed rgba(255,255,255,.25);color:var(--dim)}
-.alert.slim{padding:10px 16px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
+.alert.slim{padding:10px 16px}.brief .rk{margin-left:8px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
 .amt{margin-left:auto;font-size:12px}.riskline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 0}
 @media (max-width:600px){.rr{grid-template-columns:96px 1fr 1fr;gap:8px}.srow{grid-template-columns:120px repeat(var(--n),minmax(26px,1fr))}
 .strip{min-width:calc(120px + var(--n) * 29px)}.gr{grid-template-columns:72px 1fr 50px}.gl2{display:none}}

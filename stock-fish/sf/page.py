@@ -338,7 +338,7 @@ def render(run: Path) -> str:
         quiet = '<span class="rk unk" title="这一格历史上次日亏钱效应与平时相同">对次日无区分度</span>' \
             if tp.get("signal") is False else ""
         brief.append(f'<div title="{_e(tp["text"])}"><span class="bk">水温</span>{_e(tp.get("cell", ""))}'
-                     f'（{_e(tp.get("name", ""))}）{quiet}' + (f'<span class="dim"> · 压力来自{_e(src)}</span>' if src else "") + "</div>")
+                     f'（{_e(tp.get("name", ""))}）{quiet}' + "</div>")
     fw = summary.get("forward")
     if fw:
         names = (("leader", "龙头"), ("ladder", "梯队"), ("watch", "观察"))
@@ -348,8 +348,9 @@ def render(run: Path) -> str:
                            if k in rows and rows[k]["bigloss1"] == rows[k]["bigloss1"])
         if cells:
             brief.append(f'<div title="{_e(listing.forward_line(fw))}"><span class="bk">次日大面</span>{_e(cells)}'
-                         + (f'<span class="dim"> ｜ 同日全部涨停 {base:.0%}</span>' if base == base and base is not None else "")
-                         + f'<span class="dim"> · {"本版 " + str(fw["current_lists"]) if fw.get("current") else "全部 " + str(fw.get("lists") or "")} 份清单</span></div>')
+                         + (f' · 对照 {base:.0%}' if base == base and base is not None else "")
+                         + f'<span class="rk unk" title="同日全部主板涨停股为对照；样本是{"本版" if fw.get("current") else "全部"}已存清单，'
+                         f'不足 60 份只看方向">{fw["current_lists"] if fw.get("current") else fw.get("lists") or "?"} 份</span></div>')
     if brief:
         parts.append(f'<section class="brief">{"".join(brief)}</section>')
 
@@ -435,11 +436,11 @@ def render(run: Path) -> str:
             if pd.notna(r["board_height"]):
                 by_h.setdefault(int(r["board_height"]), []).append(
                     (r["name"], GROUP_CSS.get(r.get("lm_group")) if isinstance(r.get("lm_group"), str) else None))
-        ladder_html = ('<h3>连板天梯 <small>彩色 = 清单股</small></h3>'
+        ladder_html = ('<h3 title="观察日主板涨停股按连板数排列；彩色的是本清单里的股票（颜色同分组）">连板天梯</h3>'
                        + charts.ladder(by_h, by_h.pop(1, [])))
-    parts.append(f'<section id="threads"><h2>主线与题材线索 <small>只作描述，不改分组</small></h2>'
+    parts.append(f'<section id="threads"><h2 title="只作描述，不改分组">主线与题材线索</h2>'
                  f'<div class="mls">{mainl}</div>{ladder_html}'
-                 + (f'<h3>题材线索 <small>格内是当天涨停家数，点一行看股票</small></h3>{strip}'
+                 + (f'<h3 title="每行一条线索、每格一天，格内是当天线索内涨停家数；点一行看每天的股票">题材线索</h3>{strip}'
                     if strip else "")
                  + (f'<h3>高标结局</h3><div class="fates">{fate_html}</div>' if fate_html else "")
                  + (f'<details class="more-t"><summary>题材热度榜（表格）</summary>{heat_html}</details>' if heat_html else "")
@@ -468,9 +469,9 @@ def render(run: Path) -> str:
     fcards = "".join(card(r) for _, r in focus.iterrows())
     risk_names = "".join(f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}" title="{_e(r["角色"])}">{_e(r["名称"])}</span>'
                          for _, r in risky.iterrows())
-    parts.append(f'<section id="focus"><h2>仓位内的候选 <small>买卖由你决定</small></h2>'
+    parts.append(f'<section id="focus"><h2 title="规则给出，买卖由你决定">仓位内的候选</h2>'
                  f'<div class="grid">{fcards or "<p class=dim>今日没有仓位内的候选。</p>"}</div>'
-                 + (f'<p class="riskline">风险最大（空间板、高波动）：{risk_names}<span class="dim"> 详见完整清单</span></p>'
+                 + (f'<p class="riskline" title="空间板和高波动组；详情在完整清单">风险最大：{risk_names}</p>'
                     if risk_names else "") + "</section>")
 
     auction = _latest(store.home() / "auction" / target)
@@ -483,12 +484,12 @@ def render(run: Path) -> str:
                                          ["同类开盘后（历史）"])
         gaps = charts.gap_bars([(r["名称"], r["gap"], "竞价否定" if r["label"] == "deny" else
                                  "涨停开" if r["label"] == "limit_open" else "") for _, r in s.iterrows()])
-        parts.append(f'<section id="auction"><h2>竞价快照 <small>{_e(auction.name)}</small></h2>'
-                     f'<p class="note">开盘价相对昨收：向右红色是高开，向左绿色是低开。</p>{gaps}'
+        parts.append(f'<section id="auction"><h2 title="抓取 {_e(auction.name)}；开盘价相对昨收，向右红色高开，向左绿色低开">竞价快照</h2>'
+                     f'{gaps}'
                      '<details class="more-t"><summary>表格（全部文字）</summary>' +
                      _table(s, ["名称", "分组", "竞价缺口", "竞价标签", "同类开盘后（历史）"]) + _notes(anotes) + "</details></section>")
     else:
-        parts.append('<section id="auction"><h2>竞价快照</h2><p class="dim">还没有这个交易日的竞价快照（09:26 定时任务会自动抓取）。</p></section>')
+        parts.append('<section id="auction"><h2 title="09:26 定时任务会自动抓取">竞价快照</h2><p>还没有。</p></section>')
 
     tabs, panes = [], []
     folded, lnotes = listing.fold_repeats(table)  # repeated texts shown once below the table
@@ -499,9 +500,10 @@ def render(run: Path) -> str:
                      + "".join(card(r) for _, r in table[table["分组"] == grp].iterrows()) + '</div>'
                      + '<details class="more-t"><summary>表格（全部文字）</summary>'
                      + _table(part, listing.VIEW[1:], pos) + "</details></div>")
-    shared = "".join(f'<div class="plan">{_e(p)}<small>（{plans[p]} 只相同，卡片上不重复）</small></div>' for p in sorted(common))
+    shared = "".join(f'<div class="plan" title="{plans[p]} 只股票相同，卡片上不重复">{_e(p)}</div>' for p in sorted(common))
+    notes = f'<details class="more-t"><summary>表格里的注</summary>{_notes(lnotes)}</details>' if lnotes else ""
     parts.append(f'<section id="groups"><h2>完整清单</h2>{shared}<div class="tabs">{"".join(tabs)}</div>{"".join(panes)}'
-                 f'{_notes(lnotes)}</section>')
+                 f'{notes}</section>')
 
     rev = _latest(store.home() / "reviews")
     daily = daily_report_html(summary, table)
