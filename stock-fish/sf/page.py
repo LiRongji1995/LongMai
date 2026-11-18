@@ -335,8 +335,10 @@ def render(run: Path) -> str:
     brief = []
     if tp.get("text"):  # the full sentence stays in the tooltip and in 表头原文
         src = "、".join(re.sub(r"\(.*?\)", "", x) for x in tp.get("sources") or [])
+        quiet = '<span class="rk unk" title="这一格历史上次日亏钱效应与平时相同">对次日无区分度</span>' \
+            if tp.get("signal") is False else ""
         brief.append(f'<div title="{_e(tp["text"])}"><span class="bk">水温</span>{_e(tp.get("cell", ""))}'
-                     f'（{_e(tp.get("name", ""))}）' + (f'<span class="dim"> · 压力来自{_e(src)}</span>' if src else "") + "</div>")
+                     f'（{_e(tp.get("name", ""))}）{quiet}' + (f'<span class="dim"> · 压力来自{_e(src)}</span>' if src else "") + "</div>")
     fw = summary.get("forward")
     if fw:
         names = (("leader", "龙头"), ("ladder", "梯队"), ("watch", "观察"))

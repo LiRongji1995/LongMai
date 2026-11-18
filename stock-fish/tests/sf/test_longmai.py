@@ -181,6 +181,13 @@ def test_v7_default_and_temperature_cells():
     tab.loc[days[-1], "promo_rate_o"] = 0.95
     r = temperature.reading(tab, 79)
     assert r["name"] == "高潮延续" and r["sources"] == ["晋级率(分位95%)"] and 0.4 < r["loss_rate"] < 0.45
+    assert not r["signal"] and not r["stable"]                                   # 热顺 38/41/46 vs 33/37/48: +2 points
+    assert temperature.signal_of((0.54, 0.50, 0.57)) == (True, True)            # 热痛: higher in every segment
+    tab[["hot", "sore", "cell"]] = ["冷", "痛", "冷痛"]
+    r = temperature.reading(tab, 79)                                            # 冷痛 24/41/51: mean = base mean
+    assert not r["signal"] and not r["stable"]
+    assert "与平时（约39%）相同，这一格对次日没有区分度" in r["text"] and "方向不稳" in r["text"]
+    assert temperature.signal_of((0.17, 0.17, 0.27)) == (True, True)            # 冷顺: lower in every segment
 
 
 def test_v12_liquidity_floor_follows_market_and_exempts_one_price():

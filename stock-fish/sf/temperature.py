@@ -29,6 +29,9 @@ CELLS = {
     ("冷", "顺"): ("修复升温", "最安全", (0.17, 0.17, 0.27)),
 }
 BASE = (0.33, 0.37, 0.48)
+# Wording only (not a rule): a cell whose mean next-day rate is within this of the all-days mean is described as
+# telling nothing about the next day, and one whose three segments fall on both sides of the base as unstable.
+NO_SIGNAL = 0.03
 LABELS = {"lu_count": "涨停家数", "promo_rate": "晋级率", "max_height": "最高板", "spec_share": "短线资金占比",
           "big_loss": "大面家数", "ld_count": "跌停家数", "broken_prem": "炸板股次日表现弱", "up_ratio": "上涨家数少"}
 
@@ -61,8 +64,22 @@ def reading(tab: pd.DataFrame, t: int) -> dict:
                if pd.notna(row.get(k + "_o")) and row[k + "_o"] >= 0.8]
     prev = tab["heat"].iloc[max(0, t - 3):t].mean()
     trend = "升" if pd.notna(prev) and row["heat"] > prev + 0.05 else "降" if pd.notna(prev) and row["heat"] < prev - 0.05 else "平"
+    signal, stable = signal_of(rates)
+    odds = (f"历史上次日出现亏钱效应约{avg:.0%}，与平时（约{base:.0%}）相同，这一格对次日没有区分度" if not signal else
+            f"历史上次日出现亏钱效应约{avg:.0%}（平时约{base:.0%}）")
+    if not stable:
+        odds += "；三段历史一段低于平时、其余高于平时（或相反），方向不稳"
     text = (f"水温：{row['hot']}+{'亏钱效应强' if row['sore'] == '痛' else '亏钱效应弱'}【{name}，{note}】"
-            f"热度{row['heat']:.2f}(较前3日{trend}) 亏钱{row['pain']:.2f}；历史上次日出现亏钱效应约{avg:.0%}（平时约{base:.0%}）"
+            f"热度{row['heat']:.2f}(较前3日{trend}) 亏钱{row['pain']:.2f}；{odds}"
             + (f"；压力来源：{'、'.join(sources)}" if sources else ""))
     return dict(cell=row["cell"], name=name, heat=round(float(row["heat"]), 3), pain=round(float(row["pain"]), 3),
-                loss_rate=round(avg, 2), sources=sources, trend=trend, text=text)
+                loss_rate=round(avg, 2), signal=signal, stable=stable, sources=sources, trend=trend, text=text)
+
+
+def signal_of(rates: tuple[float, float, float]) -> tuple[bool, bool]:
+    """(whether the cell's mean next-day rate differs from the all-days mean by NO_SIGNAL or more, whether all three
+    segments sit on the same side of their base)."""
+    diff = [r - b for r, b in zip(rates, BASE)]
+    signal = abs(sum(rates) / 3 - sum(BASE) / 3) >= NO_SIGNAL
+    stable = all(d > 0 for d in diff) or all(d < 0 for d in diff)
+    return signal, stable
