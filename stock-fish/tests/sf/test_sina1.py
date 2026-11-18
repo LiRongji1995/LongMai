@@ -128,3 +128,22 @@ def test_snapshot_header_names_the_backup_source(tmp_path, monkeypatch):
     snap = auction.snapshot(quotes=q, now=datetime(2026, 11, 12, 9, 26, tzinfo=store.SH))
     assert snap["sources"]["counts"] == {"eastmoney": 1, "sina": 1}
     assert any(x.startswith("行情源：东方财富 1 只，新浪 1 只") for x in auction.lines(snap))
+
+
+def test_page_does_not_flag_gaps_that_sina_filled(tmp_path, monkeypatch):
+    from sf import page
+    from tests.sf import test_intraday as ti
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    ti._store_day(tmp_path, monkeypatch, ["sh.600001", "sz.000002"])
+
+    def fetch(code):
+        if code == "sz.000002":
+            raise ConnectionError("dropped")
+        return ti._body([11.0] * 241)
+    monkeypatch.setattr(intraday, "fetch", fetch)
+    intraday.capture([ti.DAY], log=lambda *_: None)
+    assert intraday.missing_codes(ti.DAY) == ["sz.000002"]
+    assert any("还缺 1 只" in a for a in page.alerts({}, []))
+    sina1.capture(ti.DAY, ["sz.000002"], log=lambda *_: None, fetcher=lambda c: _body([11.0] * 238, days=(ti.DAY,)),
+                  pause=0)
+    assert not any("盘中分时" in a for a in page.alerts({}, []))

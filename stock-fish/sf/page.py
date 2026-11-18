@@ -86,6 +86,8 @@ def alerts(summary: dict, header: list[str], now: datetime | None = None) -> lis
             elif intraday.missing_codes(day):
                 from . import minute5, sina1
                 gap = intraday.missing_codes(day)
+                if not set(gap) - sina1.covered(day):
+                    continue  # every gap has Sina 1-minute bars (same resolution): not a data problem
                 ns = len(set(gap) & sina1.covered(day))
                 n5 = len((set(gap) - sina1.covered(day)) & minute5.covered(day))
                 fill = "，".join(x for x in (f"{ns} 只已用新浪1分钟线补" if ns else "",
