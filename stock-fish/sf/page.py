@@ -255,10 +255,44 @@ def thread_dialog(key: str, th: dict) -> str:
             + '</p></dialog>')
 
 
+# Short card tags for the risk notes (display only: the saved list and the table keep the full sentences, which also
+# show on hover). Order matters: the first pattern that matches a note names it. Tone: warn = a risk, info = a fact,
+# unk = something that could not be checked.
+RISK_TAGS = (
+    (r"前\d+日成交额缺失", lambda m, t: "放量未检查", "unk"),
+    (r"放量分歧", lambda m, t: "放量分歧", "warn"),
+    (r"放量：.*?的([\d.]+)倍", lambda m, t: f"放量{float(m.group(1)):.1f}倍", "warn"),
+    (r"有效游资买入(\d+)家", lambda m, t: f"游资买入{m.group(1)}家", "info"),
+    (r"一字板", lambda m, t: "一字无换手", "info"),
+    (r"榜单净卖", lambda m, t: "榜单净卖", "warn"),
+    (r"机构净买", lambda m, t: "机构净买", "info"),
+    (r"流动性差", lambda m, t: "流动性差", "warn"),
+    (r"追高.*均亏", lambda m, t: "追高历史均亏", "warn"),
+    (r"拉萨散户", lambda m, t: "散户席位净买", "warn"),
+    (r"严重异动", lambda m, t: "近严重异动", "warn"),
+    (r"名字跟风", lambda m, t: "名字跟风", "warn"),
+)
+
+
+def risk_tags(text: str) -> str:
+    """The risk notes of one stock as small tags; an unknown note keeps its first words (up to 8 characters)."""
+    out = []
+    for note in (n.strip() for n in re.split(r"[；;]", text or "") if n.strip()):
+        for pattern, label, tone in RISK_TAGS:
+            m = re.search(pattern, note)
+            if m:
+                out.append((label(m, note), tone, note))
+                break
+        else:
+            short = re.split(r"[：:（(，,]", note)[0][:8]
+            out.append((short, "warn", note))
+    return "".join(f'<span class="rk {tone}" title="{_e(full)}">{_e(lab)}</span>' for lab, tone, full in out)
+
+
 def _stock_card(r: pd.Series, vs_hi, chart: str = "", position: str = "", common: set | None = None) -> str:
     """One stock: role, intraday chart, amount and turnover, position, plan (left out when it is the shared plan shown
     once above the cards) and risk notes."""
-    risk = f'<div class="risk">{_e(r["风险提示"])}</div>' if r.get("风险提示") else ""
+    risk = f'<div class="risks">{risk_tags(r["风险提示"])}</div>' if r.get("风险提示") else ""
     where = position or (f'<div class="kv">{_e(r.get("位置", ""))}</div>{posbar(vs_hi)}')
     amount = "·".join(str(r.get("成交额", "")).split("·")[:2])  # amount and turnover; ranks stay in the table
     plan = "" if common and r["参与建议"] in common else f'<div class="plan">{_e(r["参与建议"])}</div>'

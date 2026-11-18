@@ -74,3 +74,12 @@ def test_tile_opens_a_large_chart_with_every_value():
     assert ">34<" in dlg and ">41<" in dlg and "<td>2026-11-17</td><td><span class=dim>无</span>" in dlg
     assert "2026-11-15" not in dlg                                          # a day no series knows is left out
     assert charts.trend_dialog("k", "t", [("a", "t-lu", [("2026-11-18", None)])]) == ""
+
+
+def test_risk_notes_become_tags_with_the_full_text_on_hover():
+    html = page.risk_tags("一字板(今日几乎无换手)；有效游资买入1家；放量：成交额12.0亿，为前5日均值3.0亿的4.0倍；"
+                          "前5日成交额缺失，放量未检查；某个新提示：很长的说明")
+    assert '>一字无换手<' in html and '>游资买入1家<' in html and '>放量4.0倍<' in html
+    assert 'class="rk unk"' in html and '>放量未检查<' in html
+    assert '>某个新提示<' in html and 'title="某个新提示：很长的说明"' in html     # unknown notes keep their first words
+    assert html.count('class="rk ') == 5 and page.risk_tags("") == ""

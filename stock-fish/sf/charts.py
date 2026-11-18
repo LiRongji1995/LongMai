@@ -326,6 +326,7 @@ font-size:11px;font-weight:700;color:#1b1206}.sc.none{background:transparent;bor
 .gv2{font-variant-numeric:tabular-nums;text-align:right}.gl2{color:var(--amber);font-size:12px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:10px}
 details.more-t summary{color:var(--cyan);font-weight:700;margin:6px 0}
+.risks{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.rk{font-size:12px;padding:1px 8px;border-radius:999px;cursor:help;white-space:nowrap}.rk.warn{background:rgba(255,93,108,.16);color:#ffb3ba}.rk.info{background:rgba(255,255,255,.07);color:var(--dim)}.rk.unk{border:1px dashed rgba(255,255,255,.25);color:var(--dim)}
 .alert.slim{padding:10px 16px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
 .amt{margin-left:auto;font-size:12px}.riskline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 0}
 @media (max-width:600px){.rr{grid-template-columns:96px 1fr 1fr;gap:8px}.srow{grid-template-columns:120px repeat(var(--n),minmax(26px,1fr))}
