@@ -358,19 +358,61 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
                 liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, turn_min=lm.LIQ_TURN_MIN, dropped=dropped),
-                themes=themes.freshness(), market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
+                themes=themes.freshness(), forward=forward_record(lm.VERSION), market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
                 high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
+
+
+THREAD_MIN_TODAY = 2  # header shows a theme thread only when it is a mainline today, has >= 2 limit-ups or a listed stock
+
+
+def forward_record(version: str) -> dict | None:
+    """Next-day big-loss and breakout rates of saved lists from the latest `sf review` run (it only uses outcomes
+    known when it ran). Description only: shown in the header, never used by any rule."""
+    root = store.home() / "reviews"
+    runs = sorted(p for p in root.iterdir() if (p / "stats.csv").exists()) if root.exists() else []
+    if not runs:
+        return None
+    run = runs[-1]
+
+    def rows(frame):
+        return {g: dict(bigloss1=r["bigloss1"], out5=r["out5"], n=int(r["n"])) for g, r in frame.iterrows()}
+    overall = pd.read_csv(run / "stats.csv", index_col=0, encoding="utf-8-sig")
+    out = dict(run=run.name, version=version, all=rows(overall),
+               lists=json.loads((run / "report.json").read_text()).get("lists") if (run / "report.json").exists() else None)
+    if (run / "stats_by_version.csv").exists():
+        v = pd.read_csv(run / "stats_by_version.csv", encoding="utf-8-sig")
+        v = v[v["version"] == version]
+        if len(v):
+            out["current"] = rows(v.set_index("group"))
+            out["current_lists"] = int(v["lists"].max())
+    return out
+
+
+def forward_line(fw: dict) -> str:
+    names = {"leader": "龙头", "ladder": "梯队", "watch": "观察", "baseline": "同日全部涨停"}
+
+    def part(rows):
+        return "｜".join(f"{names[g]} {rows[g]['bigloss1']:.0%}" for g in names
+                        if g in rows and rows[g]["bigloss1"] == rows[g]["bigloss1"])
+    tag = fw["version"].rsplit("_", 1)[-1]
+    text = "前向复盘·次日大面率（已存清单的实际结果，样本少只作参考）："
+    if fw.get("current"):
+        text += f"{tag.replace('V', '第')}版 {fw['current_lists']} 份：{part(fw['current'])}；"
+    return text + (f"全部 {fw['lists']} 份：" if fw.get("lists") else "全部：") + part(fw["all"])
 
 
 def header(result: dict) -> list[str]:
     g = result["gate"]
     pos = {4: "满仓(4只×1/4)", 2: "半仓(2只×1/4)", 1: "1/4仓(1只)", 0: "空仓：规则不开新仓"}.get(g["slots"], f"{g['slots']}只×1/4")
     tag = result.get("strategy_version", lm.VERSION).rsplit("_", 1)[-1]
-    lines = [f"龙脉{tag} 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}",
+    lines = [f"龙脉{tag} 盘前清单  观察日 {result['observation']} → 交易日 {result['target']}"
+             + ("  【规则空仓：下面的股票只作观察，规则不开新仓】" if g["slots"] == 0 else ""),
              f"情绪：{g['mood_tier']}档（分位 {g['mood_level']}）   监管温度：{g['reg_tier']}"
              f"（深市周处置 {g['szse_cases']} 起）   规则仓位上限：{pos}",
              "说明：本系统不自动交易，以下为盯盘候选与风险提示，买卖时机和仓位由你决定。"]
+    if result.get("forward"):
+        lines.append(forward_line(result["forward"]))
     liq = result.get("liquidity")
     if liq:
         if liq.get("threshold") is None:
@@ -398,9 +440,15 @@ def header(result: dict) -> list[str]:
         lines[at] += f"（板块成分 {th['captured'][5:]} 采集）"
     if result.get("temperature"):
         lines.append(result["temperature"]["text"])
+    quiet = 0
     for th in result.get("threads", []):
+        if not (th.get("mainline_today") or th.get("today", 0) >= THREAD_MIN_TODAY or th.get("listed")):
+            quiet += 1  # still saved in summary.json and shown in the page's thread dialog
+            continue
         lead = f"；清单内 {'、'.join(th['listed'])}（{th['listed'][0]} {th['lead_position']}）" if th.get("listed") else ""
         lines.append("题材线索：" + threads.describe(th) + lead)
+    if quiet:
+        lines.append(f"题材线索：另有 {quiet} 条今日涨停不足{THREAD_MIN_TODAY}家、不是主线、也没有清单股，未列出（页面的题材线索里有全部）")
     if result.get("high_fate"):
         lines.append("高标结局（前一交易日的高标在观察日）：" + "；".join(f"{f['name']} {f['height']}板→{f['fate']}" for f in result["high_fate"]))
     for wv in result.get("name_waves", []):
@@ -449,13 +497,12 @@ def header(result: dict) -> list[str]:
                                                                  if it.get("missing") else ""))
         elif it.get("missing"):
             missing.append(f"{it['missing']} 只清单股无 {it['day']} 分时（见“昨日分时”列）")
-        if it.get("sina") and not it.get("error"):
-            missing.append(f"{it['sina']} 只清单股的 {it['day']} 分时来自新浪1分钟线（东方财富缺，备用源）")
         if it.get("coarse") and not it.get("error"):
             missing.append(f"{it['coarse']} 只清单股的 {it['day']} 分时只有5分钟线（粗，开板次数和封板时间只到5分钟一档）")
     if it is not None and it.get("captured"):
         lines.append(f"昨日分时：{it['day']} 的盘中事实，只作描述，不影响分组与排序；已采集 {it.get('sessions', '?')} 个交易日，"
-                     f"不足 {intraday.MIN_SESSIONS_FOR_TEST} 日前不下结论（docs/INTRADAY_STUDY.md）")
+                     f"不足 {intraday.MIN_SESSIONS_FOR_TEST} 日前不下结论（docs/INTRADAY_STUDY.md）"
+                     + (f"；其中 {it['sina']} 只来自新浪1分钟线（东方财富缺，备用源，精度相同）" if it.get("sina") else ""))
     br = result.get("baserates")
     if br is not None and br.get("run") is None:
         missing.append("历史同类统计表未生成（运行 sf baserates）")

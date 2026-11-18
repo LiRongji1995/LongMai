@@ -246,6 +246,11 @@ def render(run: Path) -> str:
           f'<div class="tv">{slots} 只 × 1/4</div><div class="tl">监管温度 {_e(g.get("reg_tier"))}'
           f'（深市周处置 {_e(g.get("szse_cases"))} 起）</div></div>'
         + '</section>')
+    if slots == 0:
+        parts.append('<section class="alert"><h2>规则空仓</h2><ul><li>情绪和监管闸门给出的仓位上限是 0：'
+                     '下面的股票只作观察，规则不开新仓。</li></ul></section>')
+    if summary.get("forward"):
+        parts.append(f'<section class="note">{_e(listing.forward_line(summary["forward"]))}</section>')
     if tp.get("text"):
         parts.append(f'<section class="note">{_e(tp["text"])}</section>')
 

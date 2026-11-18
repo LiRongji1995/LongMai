@@ -148,7 +148,9 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    concentration-ranked mainlines under-rate for big boards); with
    age, today's vs peak limit-ups), the `位置` column (vs MA250 and the one-year high), the amount as a share of
    the whole market, and 高标结局 (yesterday's tallest boards on the observation day). All description only;
-   `【数据缺失】` is now the second header line.
+   `【数据缺失】` is now the second header line. A zero position cap is flagged on the title line; the header also shows
+   the next-day big-loss rates of saved lists from the latest `sf review` (`listing.forward_record`), and lists only the
+   theme threads that are a mainline today, have >= 2 limit-ups or hold a listed stock (the rest are counted in one line).
 5. The `历史同类` column gives the historical outcomes of the stock's cell (role x board height x one-price) from
    the latest `sf baserates` table with cutoff <= observation date (description only). If the header reports the
    table missing or of an older version (replayed without the liquidity floor), run `bin/sf baserates` (~5 min) and

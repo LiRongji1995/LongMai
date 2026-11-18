@@ -177,3 +177,38 @@ def test_completeness_compares_only_with_a_nearby_session(home):
     store.write_session("2024-06-03", _snapshot(900), "t", "TEST")   # far back: fewer listed stocks is normal
     with pytest.raises(ValueError, match="partial"):
         store.write_session("2024-06-04", _snapshot(800), "t", "TEST")  # next to 2024-06-03: still checked
+
+
+# ------------------------------------------------------------------ header: no-new-position flag, big-loss line, quiet threads
+
+def _thread(boards, today, mainline=False, listed=()):
+    return dict(boards=boards, age=3, first="2026-11-16", mainline_today=mainline, today=today, peak=5, peak_age=1,
+                listed=list(listed), lead_position="年线上")
+
+
+def test_header_flags_no_position_shows_big_loss_and_folds_quiet_threads(tmp_path, monkeypatch):
+    import json as _json
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    run = tmp_path / "reviews" / "20261118T160423Z"
+    run.mkdir(parents=True)
+    pd.DataFrame({"bigloss1": [0.32, 0.256], "out5": [0.23, 0.14], "n": [27, 328]},
+                 index=["leader", "baseline"]).to_csv(run / "stats.csv", encoding="utf-8-sig")
+    pd.DataFrame(dict(version=[longmai.VERSION] * 2, group=["leader", "baseline"], lists=[4, 4], n=[11, 132],
+                      bigloss1=[0.556, 0.33], out5=[np.nan, np.nan])).to_csv(run / "stats_by_version.csv",
+                                                                              index=False, encoding="utf-8-sig")
+    (run / "report.json").write_text(_json.dumps(dict(lists=7)))
+    fw = listing.forward_record(longmai.VERSION)
+    assert fw["run"] == run.name and fw["current_lists"] == 4 and fw["lists"] == 7
+    result = dict(gate=dict(slots=0, mood_tier="低", mood_level=0.2, reg_tier="中", szse_cases=1),
+                  observation="2026-11-18", target="2026-11-19", strategy_version=longmai.VERSION, mainlines=[],
+                  forward=fw, threads=[_thread(["算力"], 16, mainline=True), _thread(["百货"], 0),
+                                       _thread(["光刻胶"], 1, listed=["盛剑科技"]), _thread(["净水"], 1)])
+    head = listing.header(result)
+    assert "【规则空仓" in head[0]
+    big = next(x for x in head if x.startswith("前向复盘"))
+    assert "第14版 4 份：龙头 56%｜同日全部涨停 33%" in big and "全部 7 份：龙头 32%｜同日全部涨停 26%" in big
+    shown = [x for x in head if x.startswith("题材线索：")]
+    assert any("算力" in x for x in shown) and any("光刻胶" in x for x in shown)
+    assert not any("百货" in x or "净水" in x for x in shown) and "另有 2 条" in shown[-1]
+    result["gate"]["slots"] = 2
+    assert "【规则空仓" not in listing.header(result)[0]
