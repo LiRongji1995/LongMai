@@ -79,10 +79,9 @@ def review_html(rows: pd.DataFrame, name: str) -> str:
             vline = ('<p class="note">按策略版本：' + "、".join(f"{_e(zh(v))} {n} 份" for v, n in per.items()) +
                      "。不同版本的规则不同，下表合在一起只能粗看；每个版本要攒够 60 份清单才单独下结论。</p>")
     legend = "".join(f"<li><b>{_e(label)}</b>：{_e(tip)}</li>" for _, label, tip in REVIEW_METRICS)
-    return (f'<h3 title="{len(targets)} 份清单；绿色比对照好、红色比对照差（3 个百分点以上）">复盘表</h3>'
+    return (f'<details class="more-t"><summary>复盘表（全部指标，{len(targets)} 份清单）</summary>'
             f'<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
-            f'<tbody>{"".join(body)}</tbody></table></div>'
-            f'<details class="legend"><summary>怎么读这张表</summary><ul>{legend}</ul>'
+            f'<tbody>{"".join(body)}</tbody></table></div><ul class="note">{legend}</ul>'
             f'<p class="note">复盘 {_e(name)}，覆盖交易日 {days}，每只股票每次入选算一次。百分比后面的小字是“命中/已有结果”；'
             f'还没走完的天数显示为待定，不算失败。绿色、红色表示比对照好或差 3 个百分点以上。</p>{vline}'
             f'<p class="note">样本还很少（几天、几十只次），只能看个方向，不能下结论。只是描述，不是买卖建议。</p></details>')

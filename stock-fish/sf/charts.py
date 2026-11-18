@@ -155,7 +155,7 @@ def thread_strip(rows: list[dict], days: list[str]) -> str:
             cells.append(f'<div class="sc{" today" if i == len(days) - 1 else ""}{" lt" if alpha < 0.45 else ""}" style="--a:{alpha:.2f}" '
                          f'title="{_e(d)} 涨停 {c} 家">{c if c else ""}</div>')
         tag = '<span class="xuan">玄学</span>' if r.get("xuan") else ""
-        live = '<span class="live">今日主线</span>' if r.get("live") else ""
+        live = '<i class="lv" title="今日主线"></i>' if r.get("live") else ""
         attrs = f' data-d="{_e(r["key"])}" tabindex="0" role="button" title="点开看每天的详情"' if r.get("key") else ""
         body.append(f'<div class="srow{" open" if r.get("key") else ""}"{attrs}><div class="sn">{tag}<b>{_e(r["name"])}</b>'
                     f'<small>第{r["age"]}天</small>{live}</div>{"".join(cells)}</div>')
@@ -329,7 +329,8 @@ font-size:11px;font-weight:700;color:#1b1206}.sc.none{background:transparent;bor
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:10px}
 details.more-t summary{color:var(--cyan);font-weight:700;margin:6px 0}
 .risks{display:flex;flex-wrap:wrap;gap:5px;margin-top:8px}.rk{font-size:12px;padding:1px 8px;border-radius:999px;cursor:help;white-space:nowrap}.rk.warn{background:rgba(255,93,108,.16);color:#ffb3ba}.rk.info{background:rgba(255,255,255,.07);color:var(--dim)}.rk.unk{border:1px dashed rgba(255,255,255,.25);color:var(--dim)}
-.alert.slim{padding:10px 16px}.brief .rk{margin-left:8px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
+.alert.slim{padding:10px 16px}.lv{flex:none;width:8px;height:8px;border-radius:50%;background:var(--green);box-shadow:0 0 6px var(--green)}
+.ml-h{color:var(--dim);font-size:13px;align-self:center}.riskline{margin:0 0 10px}.brief .rk{margin-left:8px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
 .amt{margin-left:auto;font-size:12px}.riskline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 0}
 @media (max-width:600px){.rr{grid-template-columns:96px 1fr 1fr;gap:8px}.srow{grid-template-columns:120px repeat(var(--n),minmax(26px,1fr))}
 .strip{min-width:calc(120px + var(--n) * 29px)}.gr{grid-template-columns:72px 1fr 50px}.gl2{display:none}}

@@ -277,7 +277,7 @@ def render(run: Path) -> str:
 
     nav = "".join(f'<a href="#{k}"><i></i>{v}</a>' for k, v in (
         ("dash", "总览"), ("threads", "题材线索"), ("focus", "候选"), ("auction", "竞价"), ("groups", "完整清单"),
-        ("review", "复盘"), ("daily", "当日复盘报告")))
+        ("review", "复盘"), ("daily", "当日复盘报告")) if k != "focus" or len(focus))
     hop = (f'<div class="hop"><a href="../index.html" title="页面目录">← 目录</a>'
            f'<a href="../go/prev-{_e(target)}.html" title="前一个有页面的交易日">‹ 前一天</a>'
            f'<a href="../go/next-{_e(target)}.html" title="后一个有页面的交易日">后一天 ›</a></div>')
@@ -391,8 +391,10 @@ def render(run: Path) -> str:
     fates = summary.get("high_fate") or []
     fate_html = "".join(f'<div class="fate {"up" if f.get("sealed") else "down"}"><b>{_e(f["name"])}</b>'
                         f'<span>{f["height"]}板 → {_e(f["fate"])}</span></div>' for f in fates)
-    mainl = "".join(f'<div class="ml"><b>{_e(m["board"])}</b><span>今{m["lu"]} · 3日{m["lu3"]} · 连续{m["days"]}天 · '
-                    f'成交占比{m.get("share", 0) * 100:.1f}%</span></div>' for m in summary.get("mainlines") or [])
+    mainl = "".join(f'<div class="ml" title="今日涨停{m["lu"]}家 · 3日{m["lu3"]}家 · 连续{m["days"]}天 · '
+                    f'成交占全市场{m.get("share", 0) * 100:.1f}%"><b>{_e(m["board"])}</b><span>今{m["lu"]}</span></div>'
+                    for m in summary.get("mainlines") or [])
+    mainl = f'<div class="ml-h">主线</div>{mainl}' if mainl else ""
     waves = "".join(f'<div class="ml wave"><b>{_e(w["group"].replace("字·", "名字带「").replace("词·", "名字带「"))}」</b>'
                     f'<span>今日涨停 {w["limit_ups"]} 家（随机约 {w["expected"]:.2f} 家，组内 {w["members"]} 只）· 龙头 '
                     f'{_e("、".join(w.get("leaders") or []))}</span></div>' for w in summary.get("name_waves") or [])
@@ -469,10 +471,10 @@ def render(run: Path) -> str:
     fcards = "".join(card(r) for _, r in focus.iterrows())
     risk_names = "".join(f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}" title="{_e(r["角色"])}">{_e(r["名称"])}</span>'
                          for _, r in risky.iterrows())
-    parts.append(f'<section id="focus"><h2 title="规则给出，买卖由你决定">仓位内的候选</h2>'
-                 f'<div class="grid">{fcards or "<p class=dim>今日没有仓位内的候选。</p>"}</div>'
-                 + (f'<p class="riskline" title="空间板和高波动组；详情在完整清单">风险最大：{risk_names}</p>'
-                    if risk_names else "") + "</section>")
+    riskline = f'<p class="riskline" title="空间板和高波动组">风险最大：{risk_names}</p>' if risk_names else ""
+    if fcards:  # on a day without candidates (e.g. no position allowed) the section is left out
+        parts.append(f'<section id="focus"><h2 title="规则给出，买卖由你决定">仓位内的候选</h2>'
+                     f'<div class="grid">{fcards}</div></section>')
 
     auction = _latest(store.home() / "auction" / target)
     if auction is not None and (auction / "snapshot.parquet").exists():
@@ -502,7 +504,7 @@ def render(run: Path) -> str:
                      + _table(part, listing.VIEW[1:], pos) + "</details></div>")
     shared = "".join(f'<div class="plan" title="{plans[p]} 只股票相同，卡片上不重复">{_e(p)}</div>' for p in sorted(common))
     notes = f'<details class="more-t"><summary>表格里的注</summary>{_notes(lnotes)}</details>' if lnotes else ""
-    parts.append(f'<section id="groups"><h2>完整清单</h2>{shared}<div class="tabs">{"".join(tabs)}</div>{"".join(panes)}'
+    parts.append(f'<section id="groups"><h2>完整清单</h2>{riskline}{shared}<div class="tabs">{"".join(tabs)}</div>{"".join(panes)}'
                  f'{notes}</section>')
 
     rev = _latest(store.home() / "reviews")
