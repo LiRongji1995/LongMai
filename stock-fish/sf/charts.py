@@ -135,7 +135,8 @@ def intraday_chart(bars: pd.DataFrame, preclose: float, up: float | None, source
             f'<polygon class="ar {tone}" points="{area}"/><polyline class="ln {tone}" points="{line}"/>'
             f'<g class="vol">{vbars}</g></svg>'
             f'<div class="icx"><span>9:30</span><span>11:30/13:00</span><span>15:00</span></div>'
-            f'<div class="ics">收盘 {pct[-1]:+.1%} · {_e(source)}</div></div>')
+            f'<div class="ics" title="{_e(source)}">收盘 {pct[-1]:+.1%}'
+            + (f' · <span class="coarse">{_e(source.split(" ")[-1])}</span>' if "粗" in source else "") + '</div></div>')
 
 
 # ------------------------------------------------------------------ position: price and MA250 against the one-year high
@@ -153,7 +154,7 @@ def position_bar(vs_high, vs_ma) -> str:
     words = f"距一年高 {float(vs_high):.0%}" + (f" · 年线{'上' if float(vs_ma) >= 0 else '下'} {abs(float(vs_ma)):.0%}"
                                               if _known(vs_ma) else "")
     return (f'<div class="pb"><div class="pt">{tick}<b style="left:{x(float(vs_high)):.1f}%"></b></div>'
-            f'<div class="pl"><span>{lo:.0%}</span><span>{_e(words)}</span><span>一年高</span></div></div>')
+            f'<div class="pl" title="左端为一年最高价下方 {-lo:.0%}，右端为一年最高；白点是现价，黄线是年线">{_e(words)}</div></div>')
 
 
 # ------------------------------------------------------------------ review: hit rate vs big loss per group
@@ -230,11 +231,11 @@ font-size:11px;font-weight:700;color:#1b1206}.sc.none{background:transparent;bor
 .ic .lt{fill:var(--red);font-size:9px;text-anchor:end}
 .ic .ln{fill:none;stroke-width:1.5;vector-effect:non-scaling-stroke}.ic .ln.upc{stroke:var(--red)}.ic .ln.dnc{stroke:var(--green)}
 .ic .ar{opacity:.14}.ic .ar.upc{fill:var(--red)}.ic .ar.dnc{fill:var(--green)}.ic .vol rect{fill:rgba(138,150,173,.45)}
-.icx{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}.ics{font-size:12px;color:var(--dim)}
+.icx{display:flex;justify-content:space-between;font-size:10px;color:var(--dim)}.ics{font-size:12px;color:var(--dim)}.coarse{color:var(--amber)}
 .pb{margin:6px 0}.pt{position:relative;height:6px;border-radius:6px;background:linear-gradient(90deg,rgba(255,93,108,.25),rgba(52,211,153,.35))}
 .pt b{position:absolute;top:-3px;width:12px;height:12px;margin-left:-6px;border-radius:50%;background:var(--fg);box-shadow:0 0 8px var(--cyan)}
 .pt i{position:absolute;top:-4px;width:2px;height:14px;margin-left:-1px;background:var(--amber)}
-.pl{display:flex;justify-content:space-between;font-size:11px;color:var(--dim);margin-top:4px}.pb.none{color:var(--dim);font-size:12px}
+.pl{font-size:11px;color:var(--dim);margin-top:4px}.pb.none{color:var(--dim);font-size:12px}
 .rates{display:grid;gap:8px}.rr{display:grid;grid-template-columns:150px 1fr 1fr;gap:12px;align-items:center}
 .rr.hd{color:var(--dim);font-size:12px}.rl{display:flex;align-items:center;gap:6px}
 .rb{display:flex;align-items:center;gap:8px;font-variant-numeric:tabular-nums}
@@ -248,6 +249,8 @@ font-size:11px;font-weight:700;color:#1b1206}.sc.none{background:transparent;bor
 .gv2{font-variant-numeric:tabular-nums;text-align:right}.gl2{color:var(--amber);font-size:12px}
 .cards{display:grid;grid-template-columns:repeat(auto-fill,minmax(250px,1fr));gap:12px;margin-bottom:10px}
 details.more-t summary{color:var(--cyan);font-weight:700;margin:6px 0}
+.alert.slim{padding:10px 16px}.brief{display:grid;gap:4px;padding:12px 16px}.bk{display:inline-block;min-width:4.5em;color:var(--dim);font-size:12px}
+.amt{margin-left:auto;font-size:12px}.riskline{display:flex;flex-wrap:wrap;gap:6px;align-items:center;margin:12px 0 0}
 @media (max-width:600px){.rr{grid-template-columns:96px 1fr 1fr;gap:8px}.srow{grid-template-columns:120px repeat(var(--n),minmax(26px,1fr))}
 .strip{min-width:calc(120px + var(--n) * 29px)}.gr{grid-template-columns:72px 1fr 50px}.gl2{display:none}}
 """

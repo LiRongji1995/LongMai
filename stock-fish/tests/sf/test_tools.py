@@ -310,7 +310,7 @@ def test_review_html_shows_rates_and_pending_in_words():
     assert "次日涨停" in text and "主线龙头" in text and "对照：当天全部主板涨停股" in text
     assert "50%<small> 1/2</small>" in text                         # leader next-day limit-up: 1 of 2 known
     assert "待定（0/2）" in text and "待定（0/1）" in text            # pending outcomes are not misses
-    assert "覆盖 2 份清单（交易日 11-12、11-13）" in text
+    assert "2 份清单" in text and "覆盖交易日 11-12、11-13" in text
 
 
 def test_thread_dialog_lists_days_newest_first():

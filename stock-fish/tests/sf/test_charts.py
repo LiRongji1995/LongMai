@@ -32,7 +32,10 @@ def test_thread_strip_marks_missing_days_and_today():
 def test_intraday_chart_draws_limit_and_says_its_source():
     bars = pd.DataFrame({"minute": range(241), "close": [10.0] * 120 + [11.0] * 121, "volume": [100.0] * 241})
     html = charts.intraday_chart(bars, 10.0, 11.0, "11-18 新浪1分钟线")
-    assert 'class="lim"' in html and "涨停 +10%" in html and "收盘 +10.0% · 11-18 新浪1分钟线" in html
+    assert 'class="lim"' in html and "涨停 +10%" in html and "收盘 +10.0%" in html
+    assert 'title="11-18 新浪1分钟线"' in html and "coarse" not in html               # same precision: source in the tooltip
+    coarse = charts.intraday_chart(bars, 10.0, 11.0, "11-18 5分钟线（粗）")
+    assert '<span class="coarse">5分钟线（粗）</span>' in coarse                       # coarse bars say so on the card
     assert "无分时数据" in charts.intraday_chart(None, 10.0, 11.0, "x")
     assert "无分时数据" in charts.intraday_chart(bars, math.nan, 11.0, "x")
 

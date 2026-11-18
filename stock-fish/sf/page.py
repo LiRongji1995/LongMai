@@ -255,13 +255,17 @@ def thread_dialog(key: str, th: dict) -> str:
             + '</p></dialog>')
 
 
-def _stock_card(r: pd.Series, vs_hi, chart: str = "", position: str = "") -> str:
+def _stock_card(r: pd.Series, vs_hi, chart: str = "", position: str = "", common: set | None = None) -> str:
+    """One stock: role, intraday chart, amount and turnover, position, plan (left out when it is the shared plan shown
+    once above the cards) and risk notes."""
     risk = f'<div class="risk">{_e(r["风险提示"])}</div>' if r.get("风险提示") else ""
     where = position or (f'<div class="kv">{_e(r.get("位置", ""))}</div>{posbar(vs_hi)}')
+    amount = "·".join(str(r.get("成交额", "")).split("·")[:2])  # amount and turnover; ranks stay in the table
+    plan = "" if common and r["参与建议"] in common else f'<div class="plan">{_e(r["参与建议"])}</div>'
     return (f'<article class="stock"><div class="sh"><span class="nm">{_e(r["名称"])}</span>'
-            f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}">{_e(r["分组"])}</span></div>'
-            f'<div class="role">{_e(r["角色"])}</div>{chart}<div class="kv">{_e(r.get("成交额", ""))}</div>'
-            f'{where}<div class="plan">{_e(r["参与建议"])}</div>{risk}</article>')
+            f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}">{_e(r["分组"])}</span>'
+            f'<span class="kv amt" title="{_e(r.get("成交额", ""))}">{_e(amount)}</span></div>'
+            f'<div class="role">{_e(r["角色"])}</div>{chart}{where}{plan}{risk}</article>')
 
 
 def render(run: Path) -> str:
@@ -327,12 +331,25 @@ def render(run: Path) -> str:
           f'（深市周处置 {_e(g.get("szse_cases"))} 起）</div></div>'
         + '</section>')
     if slots == 0:
-        parts.append('<section class="alert"><h2>规则空仓</h2><ul><li>情绪和监管闸门给出的仓位上限是 0：'
-                     '下面的股票只作观察，规则不开新仓。</li></ul></section>')
-    if summary.get("forward"):
-        parts.append(f'<section class="note">{_e(listing.forward_line(summary["forward"]))}</section>')
-    if tp.get("text"):
-        parts.append(f'<section class="note">{_e(tp["text"])}</section>')
+        parts.append('<section class="alert slim"><b>规则空仓</b>：今天只观察，不开新仓。</section>')
+    brief = []
+    if tp.get("text"):  # the full sentence stays in the tooltip and in 表头原文
+        src = "、".join(re.sub(r"\(.*?\)", "", x) for x in tp.get("sources") or [])
+        brief.append(f'<div title="{_e(tp["text"])}"><span class="bk">水温</span>{_e(tp.get("cell", ""))}'
+                     f'（{_e(tp.get("name", ""))}）' + (f'<span class="dim"> · 压力来自{_e(src)}</span>' if src else "") + "</div>")
+    fw = summary.get("forward")
+    if fw:
+        names = (("leader", "龙头"), ("ladder", "梯队"), ("watch", "观察"))
+        rows = fw.get("current") or fw.get("all") or {}
+        base = rows.get("baseline", {}).get("bigloss1")
+        cells = " · ".join(f"{n} {rows[k]['bigloss1']:.0%}" for k, n in names
+                           if k in rows and rows[k]["bigloss1"] == rows[k]["bigloss1"])
+        if cells:
+            brief.append(f'<div title="{_e(listing.forward_line(fw))}"><span class="bk">次日大面</span>{_e(cells)}'
+                         + (f'<span class="dim"> ｜ 同日全部涨停 {base:.0%}</span>' if base == base and base is not None else "")
+                         + f'<span class="dim"> · {"本版 " + str(fw["current_lists"]) if fw.get("current") else "全部 " + str(fw.get("lists") or "")} 份清单</span></div>')
+    if brief:
+        parts.append(f'<section class="brief">{"".join(brief)}</section>')
 
     cards, dialogs = [], []
     name_th = [(summary["xuan"], True)] if summary.get("xuan") else []
@@ -391,7 +408,7 @@ def render(run: Path) -> str:
         f'<td class="hs">{spark(h.get("series") or [], 160, 30)}</td>'
         f'<td class="hn">{h["n"]}</td><td class="hn">{h["share"] * 100:.1f}%</td>'
         f'<td class="hn">{"" if h.get("z") is None else format(h["z"], ".2f")}</td></tr>' for h in summary.get("heat") or [])
-    heat_html = (f'<h3>题材热度榜 <small>按近 3 日涨停家次排序；主线按“涨停是否集中”选，会压低成分股多的大题材，两者对照看</small></h3>'
+    heat_html = (f'<p class="note">按近 3 日涨停家次排序；主线按“涨停是否集中”选，会压低成分股多的大题材，两者对照看。</p>'
                  f'<div class="scroll"><table class="heat"><colgroup><col class="c-b"><col class="c-n"><col class="c-n">'
                  f'<col class="c-n"><col class="c-s"><col class="c-n"><col class="c-n"><col class="c-n"></colgroup>'
                  f'<thead><tr><th>板块</th><th class="hn">3日涨停</th><th class="hn">今日涨停</th>'
@@ -416,14 +433,15 @@ def render(run: Path) -> str:
             if pd.notna(r["board_height"]):
                 by_h.setdefault(int(r["board_height"]), []).append(
                     (r["name"], GROUP_CSS.get(r.get("lm_group")) if isinstance(r.get("lm_group"), str) else None))
-        ladder_html = ('<h3>连板天梯 <small>观察日主板涨停股按连板数排列；彩色的是本清单里的股票（颜色同分组）</small></h3>'
+        ladder_html = ('<h3>连板天梯 <small>彩色 = 清单股</small></h3>'
                        + charts.ladder(by_h, by_h.pop(1, [])))
     parts.append(f'<section id="threads"><h2>主线与题材线索 <small>只作描述，不改分组</small></h2>'
                  f'<div class="mls">{mainl}</div>{ladder_html}'
-                 + (f'<h3>题材线索 <small>每行一条线索，每格一天，颜色越深当天线索内涨停越多；点一行看每天的股票</small></h3>{strip}'
+                 + (f'<h3>题材线索 <small>格内是当天涨停家数，点一行看股票</small></h3>{strip}'
                     if strip else "")
                  + (f'<h3>高标结局</h3><div class="fates">{fate_html}</div>' if fate_html else "")
-                 + f'{heat_html}{wave_html}<details class="more-t"><summary>线索卡片（详细）</summary>'
+                 + (f'<details class="more-t"><summary>题材热度榜（表格）</summary>{heat_html}</details>' if heat_html else "")
+                 + f'{wave_html}<details class="more-t"><summary>线索卡片（详细）</summary>'
                  f'<div class="grid">{"".join(cards) or "<p>没有线索记录（旧版清单）。</p>"}</div></details></section>'
                  + "".join(dialogs))
 
@@ -440,15 +458,18 @@ def render(run: Path) -> str:
         vm = fx["vs_ma250"].get(r["名称"]) if "vs_ma250" in fx else None
         return chart, charts.position_bar(vh, vm)
 
+    plans = table["参与建议"].value_counts()
+    common = {p for p, n in plans.items() if n >= 3 and p}  # shown once above the cards instead of on each
+
     def card(r):
-        return _stock_card(r, pos.get(r["名称"]), *visuals(r))
+        return _stock_card(r, pos.get(r["名称"]), *visuals(r), common=common)
     fcards = "".join(card(r) for _, r in focus.iterrows())
-    parts.append(f'<section id="focus"><h2>仓位内的候选 <small>规则给出，买卖由你决定</small></h2>'
-                 f'<div class="grid">{fcards or "<p>今日没有仓位内的候选。</p>"}</div>')
-    if len(risky):
-        parts.append('<h3>风险最大</h3><div class="grid">' +
-                     "".join(card(r) for _, r in risky.iterrows()) + "</div>")
-    parts.append("</section>")
+    risk_names = "".join(f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}" title="{_e(r["角色"])}">{_e(r["名称"])}</span>'
+                         for _, r in risky.iterrows())
+    parts.append(f'<section id="focus"><h2>仓位内的候选 <small>买卖由你决定</small></h2>'
+                 f'<div class="grid">{fcards or "<p class=dim>今日没有仓位内的候选。</p>"}</div>'
+                 + (f'<p class="riskline">风险最大（空间板、高波动）：{risk_names}<span class="dim"> 详见完整清单</span></p>'
+                    if risk_names else "") + "</section>")
 
     auction = _latest(store.home() / "auction" / target)
     if auction is not None and (auction / "snapshot.parquet").exists():
@@ -476,7 +497,9 @@ def render(run: Path) -> str:
                      + "".join(card(r) for _, r in table[table["分组"] == grp].iterrows()) + '</div>'
                      + '<details class="more-t"><summary>表格（全部文字）</summary>'
                      + _table(part, listing.VIEW[1:], pos) + "</details></div>")
-    parts.append(f'<section id="groups"><h2>完整清单</h2><div class="tabs">{"".join(tabs)}</div>{"".join(panes)}{_notes(lnotes)}</section>')
+    shared = "".join(f'<div class="plan">{_e(p)}<small>（{plans[p]} 只相同，卡片上不重复）</small></div>' for p in sorted(common))
+    parts.append(f'<section id="groups"><h2>完整清单</h2>{shared}<div class="tabs">{"".join(tabs)}</div>{"".join(panes)}'
+                 f'{_notes(lnotes)}</section>')
 
     rev = _latest(store.home() / "reviews")
     daily = daily_report_html(summary, table)
@@ -568,13 +591,12 @@ def review_html(rows: pd.DataFrame, name: str) -> str:
             vline = ('<p class="note">按策略版本：' + "、".join(f"{_e(zh(v))} {n} 份" for v, n in per.items()) +
                      "。不同版本的规则不同，下表合在一起只能粗看；每个版本要攒够 60 份清单才单独下结论。</p>")
     legend = "".join(f"<li><b>{_e(label)}</b>：{_e(tip)}</li>" for _, label, tip in REVIEW_METRICS)
-    return (f'<h3>最近一次复盘 <small>{_e(name)}</small></h3>'
-            f'<p class="note">覆盖 {len(targets)} 份清单（交易日 {days}），每只股票每次入选算一次。'
-            f'百分比后面的小字是“命中/已有结果”；还没走完的天数显示为待定，不算失败。'
-            f'<span class="good">绿色</span>表示比对照好 3 个百分点以上，<span class="bad">红色</span>表示差 3 个百分点以上。</p>'
-            f'{vline}<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
+    return (f'<h3>复盘表 <small>{len(targets)} 份清单 · <span class="good">绿</span>比对照好 · <span class="bad">红</span>比对照差</small></h3>'
+            f'<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>'
-            f'<details class="legend"><summary>每一列是什么意思</summary><ul>{legend}</ul>'
+            f'<details class="legend"><summary>怎么读这张表</summary><ul>{legend}</ul>'
+            f'<p class="note">复盘 {_e(name)}，覆盖交易日 {days}，每只股票每次入选算一次。百分比后面的小字是“命中/已有结果”；'
+            f'还没走完的天数显示为待定，不算失败。绿色、红色表示比对照好或差 3 个百分点以上。</p>{vline}'
             f'<p class="note">样本还很少（几天、几十只次），只能看个方向，不能下结论。只是描述，不是买卖建议。</p></details>')
 
 
