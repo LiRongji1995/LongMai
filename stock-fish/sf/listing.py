@@ -13,7 +13,7 @@ import numpy as np
 import pandas as pd
 
 from . import (baserates, context, crowding, intraday, longmai as lm, mainline, manifest, namethemes, notes as hype, radar,
-               seats, store, strategy, temperature, threads)
+               seats, store, strategy, temperature, themes, threads)
 
 
 def build(observation: str | None = None, update_external: bool = True, watch_limit: int = 10,
@@ -63,12 +63,12 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
             out.append(f"成交额仅{amount / 1e8:.1f}亿，流动性差")
         return out
 
-    liq = lm.liquidity_floor(ctx, t)
+    liq = d["liq"]  # the V12/V14 floor computed by decide (the same test the replays use)
     dropped: list[dict] = []
 
     def too_thin(code) -> bool:
         """V12/V14 liquidity floor: record and skip a stock that fails it (every group)."""
-        if bool(liq["ok"].get(code, False)):
+        if lm.passes_floor(liq, code):
             return False
         if any(d["code"] == code for d in dropped):  # checked again in another group: record once
             return True
@@ -80,7 +80,8 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     noted = hype.active(observation, sessions)
     rows = []
     slots_left = g["slots"]
-    leaders = leaders[[not too_thin(c) for c in leaders.index]]
+    for c in d["thin"]:  # leaders already dropped by decide: recorded for the header
+        too_thin(c)
     for code, s in leaders.iterrows():
         stage = facts.loc[code, "stages"] if code in facts.index else ""
         role = f"空间板(市场最高板)·{int(s['height'])}板" if s["board"] == mainline.SPACE else \
@@ -348,7 +349,7 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
                 params=p, seats=seat_status, manifest=manifest.build(window),
                 abnormal_index_ok=bool(ctx["index_ok"]), intraday=istatus, intraday_facts=ifacts, baserates=bstatus,
                 liquidity=dict(threshold=None if pd.isna(liq['threshold']) else liq['threshold'], days=lm.LIQ_DAYS, min_days=lm.LIQ_MIN_DAYS, market_share=lm.LIQ_MARKET_SHARE, market_days=lm.LIQ_MARKET_DAYS, turn_min=lm.LIQ_TURN_MIN, dropped=dropped),
-                market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
+                themes=themes.freshness(), market=market, threads=thread_list, heat=heat_list, heat_version=threads.HEAT_VERSION, xuan=xuan, xuan_version=namethemes.THREADS_VERSION,
                 high_fate=fates, context_version=context.VERSION, threads_version=threads.VERSION,
                 table=table, leaders=leaders, facts=facts)
 
@@ -382,6 +383,10 @@ def header(result: dict) -> list[str]:
             lines.append(f"题材拥挤：{'、'.join(hot)} 成交占比处于60日最高位，历史上2日内退潮概率约高出一半（提示，不是规则）")
     else:
         lines.append("主线：无（没有题材当日涨停≥3家）")
+    th = result.get("themes")
+    if th and th.get("captured"):  # on the 主线 line itself (a 题材拥挤 line may follow it)
+        at = max(i for i, line in enumerate(lines) if line.startswith("主线："))
+        lines[at] += f"（板块成分 {th['captured'][5:]} 采集）"
     if result.get("temperature"):
         lines.append(result["temperature"]["text"])
     for th in result.get("threads", []):
@@ -420,6 +425,10 @@ def header(result: dict) -> list[str]:
         missing.append(f"龙虎榜席位{state}（拉萨散户否决与席位提示未检查）")
     if not result.get("abnormal_index_ok", True):
         missing.append("近30日指数行情不全（异动/严重异动状态未知）")
+    th = result.get("themes")
+    if th and th.get("stale"):
+        age = f"已 {th['age_days']} 天未刷新（最近 {th['captured']}）" if th.get("captured") else "采集时间未知"
+        missing.append(f"板块成分{age}，主线和题材线索可能漏掉新题材（运行 sf themes）")
     it = result.get("intraday")
     if it is not None:
         if it.get("error"):
@@ -437,6 +446,8 @@ def header(result: dict) -> list[str]:
     if br is not None and br.get("run") is None:
         missing.append("历史同类统计表未生成（运行 sf baserates）")
     elif br is not None:
+        if br.get("version") and br["version"] != baserates.VERSION:
+            missing.append("历史同类统计表是旧口径（没有按成交额门槛筛选），运行 sf baserates 更新")
         lines.append(f"历史同类：同角色·同板数·是否一字的历史结果（统计表 {br['run']}，截至 {br['cutoff']}），只作描述，"
                      "不影响分组与排序；“未涨停开时”指次日没有涨停开、能买进的那部分")
     if missing:
@@ -448,6 +459,25 @@ def header(result: dict) -> list[str]:
 HIGH_VOL = "高波动：最强也最危险（历史上次日续板约24-45%，大面约38-58%），只适合盘中判断"
 GROUP_CODES = {"主线龙头": "leader", "连板梯队": "ladder", "观察": "watch", "高波动": "avoid", "回避": "avoid"}
 VIEW = ["分组", "名称", "角色", "成交额", "位置", "参与建议", "风险提示", "昨日分时", "历史同类"]
+
+
+FOLD = ["参与建议", "历史同类"]  # columns whose long texts often repeat down the rows
+
+
+def fold_repeats(frame: pd.DataFrame, cols=FOLD, min_len: int = 14) -> tuple[pd.DataFrame, list[str]]:
+    """Display only (screen and page; saved files keep the full text in every row): a long text that appears in two or
+    more rows of a column is shown once as a numbered note and the cells say 见注N. Returns the folded copy and the
+    notes (`注N：text`), numbered in order of first appearance across `cols`."""
+    out, notes, number = frame.copy(), [], {}
+    for col in [c for c in cols if c in out.columns]:
+        text = out[col].fillna("").astype(str)
+        counts = text.value_counts()
+        for value in text[text.map(lambda v: len(v) >= min_len and counts[v] >= 2)].drop_duplicates():
+            if value not in number:
+                number[value] = len(number) + 1
+                notes.append(f"注{number[value]}：{value}")
+        out[col] = text.map(lambda v: f"见注{number[v]}" if v in number else v)
+    return out, notes
 
 
 def save(result: dict) -> Path:

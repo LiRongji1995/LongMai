@@ -156,6 +156,11 @@ def _table(frame: pd.DataFrame, cols: list[str], pos: dict | None = None) -> str
             f'<tbody>{"".join(rows)}</tbody></table></div>')
 
 
+def _notes(notes: list[str]) -> str:
+    """The numbered notes of listing.fold_repeats under a table."""
+    return "" if not notes else '<p class="note">' + "<br>".join(_e(n) for n in notes) + "</p>"
+
+
 def thread_dialog(key: str, th: dict) -> str:
     """A dialog with the thread's day-by-day record, newest day first: the mainline boards linked that day, how many of
     the thread's stocks closed limit-up and which ones (with their streak; stocks on this list are marked)."""
@@ -325,18 +330,20 @@ def render(run: Path) -> str:
         s = s.assign(竞价缺口=(s["gap"] * 100).round(1).astype(str) + "%",
                      竞价标签=s["label"].map({"deny": "竞价否定（5日内较少走出来）", "limit_open": "涨停开",
                                             "neutral": "中性", "confirm": "中性", "description": "只描述"}).fillna(s["label"]))
+        s, anotes = listing.fold_repeats(s.rename(columns={"name": "名称", "group": "分组", "bands": "同类开盘后（历史）"}),
+                                         ["同类开盘后（历史）"])
         parts.append(f'<section id="auction"><h2>竞价快照 <small>{_e(auction.name)}</small></h2>' +
-                     _table(s.rename(columns={"name": "名称", "group": "分组", "bands": "同类开盘后（历史）"}),
-                            ["名称", "分组", "竞价缺口", "竞价标签", "同类开盘后（历史）"]) + "</section>")
+                     _table(s, ["名称", "分组", "竞价缺口", "竞价标签", "同类开盘后（历史）"]) + _notes(anotes) + "</section>")
     else:
         parts.append('<section id="auction"><h2>竞价快照</h2><p class="dim">还没有这个交易日的竞价快照（09:26 定时任务会自动抓取）。</p></section>')
 
     tabs, panes = [], []
+    folded, lnotes = listing.fold_repeats(table)  # repeated texts shown once below the table
     for i, grp in enumerate(g_ for g_ in GROUPS if (table["分组"] == g_).any()):
-        part = table[table["分组"] == grp]
+        part = folded[folded["分组"] == grp]
         tabs.append(f'<button class="tab {GROUP_CLASS[grp]}{" on" if i == 0 else ""}" data-p="p{i}">{grp} {len(part)}</button>')
         panes.append(f'<div class="pane{" on" if i == 0 else ""}" id="p{i}">' + _table(part, listing.VIEW[1:], pos) + "</div>")
-    parts.append(f'<section id="groups"><h2>完整清单</h2><div class="tabs">{"".join(tabs)}</div>{"".join(panes)}</section>')
+    parts.append(f'<section id="groups"><h2>完整清单</h2><div class="tabs">{"".join(tabs)}</div>{"".join(panes)}{_notes(lnotes)}</section>')
 
     rev = _latest(store.home() / "reviews")
     daily = daily_report_html(summary, table)
@@ -403,12 +410,18 @@ def review_html(rows: pd.DataFrame, name: str) -> str:
         body.append(f'<tr class="{"base" if key == "baseline" else ""}"><td>{chip or _e(label)}</td>'
                     f"<td>{len(part)}</td>{cells}</tr>")
     days = "、".join(t[5:] for t in targets)
+    vline = ""
+    if "strategy_version" in rows:
+        per = rows.dropna(subset=["strategy_version"]).groupby("strategy_version", sort=False)["target"].nunique()
+        if len(per):
+            vline = ('<p class="note">按策略版本：' + "、".join(f"{_e(zh(v))} {n} 份" for v, n in per.items()) +
+                     "。不同版本的规则不同，下表合在一起只能粗看；每个版本要攒够 60 份清单才单独下结论。</p>")
     legend = "".join(f"<li><b>{_e(label)}</b>：{_e(tip)}</li>" for _, label, tip in REVIEW_METRICS)
     return (f'<h3>最近一次复盘 <small>{_e(name)}</small></h3>'
             f'<p class="note">覆盖 {len(targets)} 份清单（交易日 {days}），每只股票每次入选算一次。'
             f'百分比后面的小字是“命中/已有结果”；还没走完的天数显示为待定，不算失败。'
             f'<span class="good">绿色</span>表示比对照好 3 个百分点以上，<span class="bad">红色</span>表示差 3 个百分点以上。</p>'
-            f'<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
+            f'{vline}<div class="scroll"><table class="rev"><thead><tr><th>分组</th><th>入选次数</th>{head}</tr></thead>'
             f'<tbody>{"".join(body)}</tbody></table></div>'
             f'<details class="legend"><summary>每一列是什么意思</summary><ul>{legend}</ul>'
             f'<p class="note">样本还很少（几天、几十只次），只能看个方向，不能下结论。只是描述，不是买卖建议。</p></details>')

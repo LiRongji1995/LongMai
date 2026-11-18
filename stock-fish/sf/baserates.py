@@ -1,6 +1,6 @@
 """Historical base rates (历史同类) for listed stocks: description only, never changes a group or order.
 
-`sf baserates` replays the live V9 list over the stored history (`auction.replay`) and writes a table, once,
+`sf baserates` replays the live list (V9 roles + the liquidity floor) over the stored history (`auction.replay(floor=True)`) and writes a table, once,
 under research/baserates/<UTC stamp>/. Each listed stock is matched to a cell (role x board height x one-price)
 and shown what happened to the same cell historically:
   from the observation close: lu1 (晋级), out5 (5 日走出来), bigloss1 (次日大面), share opening at the limit-up price
@@ -23,7 +23,7 @@ import pandas as pd
 
 from . import auction, store, strategy
 
-VERSION = "SF_BASERATES_V1"
+VERSION = "SF_BASERATES_V2"  # V2: the replay applies the live liquidity floor (same population as the list)
 MIN_N = 30
 ROLE_NAMES = {"leader": "主线龙头", "ladder": "连板梯队", "observe": "观察"}
 
@@ -88,7 +88,7 @@ def table(p: pd.DataFrame) -> pd.DataFrame:
 
 def run(log=print) -> tuple[pd.DataFrame, dict]:
     stored = sorted(x.stem for x in (store.home() / "bars").glob("*.parquet"))
-    panel = auction.replay(stored, log=log)
+    panel = auction.replay(stored, log=log, floor=True)
     w = strategy.panel(store.load_window(stored))
     p = enrich(panel, w)
     meta = dict(version=VERSION, cutoff=stored[-1], first=str(p["obs"].min()), rows=int(len(p)),

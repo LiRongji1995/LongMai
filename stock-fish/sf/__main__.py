@@ -88,6 +88,38 @@ def cmd_page(args) -> int:
     return 0
 
 
+def cmd_publish(args) -> int:
+    from . import publish
+    if args.if_configured and not publish.password_file().exists():
+        print("私有站点未设置（没有 publish/password.txt），跳过上传")
+        return 0
+    if args.new_password:
+        path = publish.new_password()
+        code = publish.push_password(args.project)
+        print(f"已生成新密码（只存在 {path}，不显示）；" + ("已设为 Cloudflare 加密变量 SITE_PASSWORD" if code == 0
+                                                       else f"设置到 Cloudflare 失败（退出码 {code}），站点仍按旧密码或关闭"))
+        if code:
+            return code
+    try:
+        r = publish.export()
+    except FileNotFoundError as error:
+        print(error, file=sys.stderr)
+        return 1
+    print(f"已导出 {r['files']} 个页面（{r['size'] / 1024:.0f} KB）到 {r['out']}；本机路径已替换")
+    if r["leaks"]:
+        print(f"【注意】仍含本机路径，不上传：{'、'.join(r['leaks'])}", file=sys.stderr)
+        return 1
+    if not args.deploy:
+        print("未上传；上传用 sf publish --deploy")
+        return 0
+    if not publish.password_file().exists():
+        print("还没有设置密码，不上传（先运行 sf publish --new-password）", file=sys.stderr)
+        return 1
+    code = publish.deploy(args.project)
+    print(f"已上传到 https://{args.project}.pages.dev（需密码）" if code == 0 else f"上传失败（退出码 {code}）")
+    return code
+
+
 def cmd_prune(args) -> int:
     from . import prune
     items = prune.plan()
@@ -260,8 +292,12 @@ def cmd_auction(args) -> int:
     out = auction.save(snap)
     for line in auction.lines(snap):
         print(line)
+    from . import listing
+    shown, notes = listing.fold_repeats(auction.table(snap), ["同类开盘后（历史）"])
     with pd.option_context("display.unicode.east_asian_width", True, "display.width", 200):
-        print(auction.table(snap).to_string(index=False))
+        print(shown.to_string(index=False))
+    if notes:
+        print("\n".join(notes))
     print(f"已保存：{out}")
     page_path = _page_for(snap["target"])
     if page_path:
@@ -301,14 +337,15 @@ def cmd_intraday(args) -> int:
                 print(f"{day} 仍缺 {n} 只 1 分钟线，稍后再跑 sf intraday --backfill")
         from . import minute5
         for day in days:  # coarse fallback from BaoStock for stocks the 1-minute source has not given
-            need = intraday.missing_codes(day) if intraday.captured(day) else \
-                sorted(set(sum(intraday.listed_codes(day).values(), [])))
+            # a day with no 1-minute file at all: its whole capture universe (limit-ups, touched, listed stocks)
+            need = intraday.missing_codes(day) if intraday.captured(day) else sorted(intraday.universe(day)["code"])
             need = sorted(set(need) - minute5.covered(day))
             if need:
                 r = minute5.capture(day, need, log=lambda *_: None)
                 print(f"{day} 用5分钟线（BaoStock）补 {r['requested']} 只：成功 {r['ok']}，失败 {len(r['failed'])}，"
                       f"无数据 {len(r['absent'])}")
-    print(f"耗时 {time.monotonic() - started:.0f}s；源数据只保留约 5 个交易日，失败的日子请尽快重跑")
+    print(f"耗时 {time.monotonic() - started:.0f}s；1 分钟线的源只保留约 5 个交易日，失败的日子请尽快重跑；"
+          "5 分钟线（BaoStock）保留很久，以后还能补")
     return 1 if bad else 0
 
 
@@ -448,12 +485,14 @@ def cmd_premarket(args) -> int:
         result = listing.build(args.date, update_external=not args.no_update)
     path = listing.save(result)
     print("\n".join(listing.header(result)))
-    table = result["table"]
+    table, notes = listing.fold_repeats(result["table"])  # repeated texts once, as notes (the saved CSV keeps them)
     for group in ("主线龙头", "连板梯队", "观察", "高波动"):
         part = table[table["分组"] == group]
         print(f"\n【{group}】{len(part)} 只")
         if len(part):
             print(part[listing.VIEW[1:]].to_string(index=False))
+    if notes:
+        print("\n" + "\n".join(notes))
     if not args.no_update:
         print(f"\n盘中分时：{intraday_status}")
     print(f"\n已保存 {path}/盘前清单.csv  (耗时 {time.monotonic() - started:.1f}s)")
@@ -471,7 +510,10 @@ def cmd_show(args) -> int:
         return 1
     if (run / "盘前概况.txt").exists():
         print((run / "盘前概况.txt").read_text().strip())
-    print(pd.read_csv(run / "盘前清单.csv").to_string(index=False))
+    table, notes = listing.fold_repeats(pd.read_csv(run / "盘前清单.csv", dtype=str, keep_default_na=False))
+    print(table.to_string(index=False))
+    if notes:
+        print("\n" + "\n".join(notes))
     return 0
 
 
@@ -488,6 +530,14 @@ def cmd_review(args) -> int:
     print(f"复盘 {rep['lists']} 份清单（{rep['first']} ~ {rep['last']}），口径：观察日收盘起，不按开盘买入盈亏")
     print("lu1=次日涨停  max3=3日内最高涨幅  out5=5日内≥2个涨停或最高+20%  bigloss1=次日大面；baseline=当日全部主板涨停")
     print(rep["stats"].to_string())
+    versions = review.by_version(rows)
+    if not versions.empty and versions.index.get_level_values("version").nunique() > 1:
+        print("\n按策略版本分开（不同版本的清单规则不同，上表合在一起只能粗看）：")
+        print(versions.to_string())
+    if not versions.empty:
+        from . import longmai
+        mine = versions.xs(longmai.VERSION, level="version")["lists"].max() if longmai.VERSION in versions.index.get_level_values("version") else 0
+        print(f"\n当前版本 {longmai.VERSION} 已有 {int(mine)} 份清单；满 {review.MIN_FORWARD_DAYS} 份、结果走完后才对它下结论。")
     if rep["recall"] is not None:
         print(f"\n妖股召回（观察日涨停、5日内再涨停≥3次）：{rep['recall']:.0%}（{rep['winners']}只）")
         for m in rep["missed"]:
@@ -846,6 +896,13 @@ def parser() -> argparse.ArgumentParser:
     au = sub.add_parser("auction", help="9:25 竞价：对已保存清单的股票抓竞价并描述（规则通过检验前只描述）")
     au.add_argument("--date", help="清单的目标交易日（默认最新清单）")
     au.set_defaults(func=cmd_auction)
+
+    pb = sub.add_parser("publish", help="把本地页面导出并上传到需密码的 Cloudflare Pages 站点")
+    pb.add_argument("--deploy", action="store_true", help="导出后上传到 Cloudflare Pages（站点需密码）")
+    pb.add_argument("--new-password", action="store_true", help="生成新密码并设到 Cloudflare（旧密码和已登录的设备失效）")
+    pb.add_argument("--project", default="longmai-pages", help="Cloudflare Pages 项目名")
+    pb.add_argument("--if-configured", action="store_true", help="没设置密码时直接跳过（定时任务用）")
+    pb.set_defaults(func=cmd_publish)
 
     bk = sub.add_parser("backup", help="把数据目录打成一个压缩包（换设备用），附校验文件")
     bk.add_argument("--out", help="输出目录（默认数据目录旁的 stockfish-backups）")

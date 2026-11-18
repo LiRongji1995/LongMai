@@ -66,6 +66,27 @@ def report(rows: pd.DataFrame) -> dict:
                 winners=len(winners), missed=winners.loc[~listed, ["obs", "code", "name"]].to_dict("records"))
 
 
+def by_version(rows: pd.DataFrame) -> pd.DataFrame:
+    """The same hit rates per strategy version recorded in each saved list (index: version, group), with the number
+    of lists behind them. Lists of different rule versions are different populations: pooled numbers (report) are a
+    quick look only, and a version is judged on its own rows once it has MIN_FORWARD_DAYS lists."""
+    if rows.empty or "strategy_version" not in rows:
+        return pd.DataFrame()
+    rows = rows.assign(strategy_version=rows["strategy_version"].fillna("未记录"))
+    out = {}
+    for version, part in rows.groupby("strategy_version", sort=False):
+        groups = {g: part[part["group"] == g] for g in ("leader", "ladder", "watch", "avoid")}
+        groups["baseline"] = part[part["baseline"]]
+        for g, sub in groups.items():
+            if len(sub):
+                out[(version, g)] = {"lists": int(part["obs"].nunique()), "n": len(sub),
+                                     **sub[METRICS].mean().round(3).to_dict(),
+                                     "pending_out5": int(sub["out5"].isna().sum())}
+    table = pd.DataFrame(out).T
+    table.index.names = ["version", "group"]
+    return table
+
+
 def save(rows: pd.DataFrame, rep: dict) -> Path:
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     out = store.home() / "reviews" / stamp
@@ -73,6 +94,9 @@ def save(rows: pd.DataFrame, rep: dict) -> Path:
     rows.to_csv(out / "rows.csv", index=False, encoding="utf-8-sig")
     if "stats" in rep:
         rep["stats"].to_csv(out / "stats.csv", encoding="utf-8-sig")
+    versions = by_version(rows)
+    if not versions.empty:
+        versions.to_csv(out / "stats_by_version.csv", encoding="utf-8-sig")
     stored = sorted(p.stem for p in (store.home() / "bars").glob("*.parquet"))
     meta = {k: v for k, v in rep.items() if k != "stats"} | {"manifest": manifest.build(stored)}
     (out / "report.json").write_text(json.dumps(meta, ensure_ascii=False, indent=2, default=str))

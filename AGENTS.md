@@ -56,6 +56,11 @@ bounded, logged retry.
 - **Volume-surge note (user decision, 2026-11-12, `SF_LONGMAI_V13`).** Every listed stock (all groups, sealed or not) whose
   observation-day amount is >= 3x the mean of its previous 5 sessions gets a `放量：…` risk note (with < 3 known prior
   days: `前5日成交额缺失，放量未检查`). A note only: no group, order or slot changes. Spec: `docs/STRATEGY_LONGMAI_V13.md`.
+- **V14 is frozen (user decision, 2026-11-16).** No rule or threshold change until `SF_LONGMAI_V14` has 60 saved lists with
+  complete outcomes (`sf review` prints the count and per-version hit rates). New ideas go to `docs/HYPOTHESES.md`. If the
+  user asks for a rule change before that, remind them of this decision once, then follow their answer.
+- **One screening path.** The liquidity floor is applied inside `longmai.decide` (`passes_floor`); the list, `sf evaluate`
+  and `sf baserates` share it. Replays of exams pre-registered on the V9 list pass `longmai.V9_OVERRIDES` (no floor).
 - Descriptive layers (历史同类, 题材线索, 位置, 高标结局, page) never change a group or an order. Changing a rule
   threshold that a note uses (e.g. the 1e8 "流动性差" note) is a rule change and needs a pre-registration.
 
@@ -65,6 +70,12 @@ bounded, logged retry.
   `SF_HOME`). Paths come from arguments, environment
   or script location — never hard-code a personal path.
 - Never commit data, lists, credentials or environments.
+- **Private page site (user decision, 2026-11-18).** The rendered pages (only) are uploaded to the Cloudflare Pages
+  project `longmai-pages` on the user's account, behind a password gate (`sf/site/_middleware.js`, secret
+  `SITE_PASSWORD`; the password lives only in `publish/password.txt`, mode 600; never print, log or commit it). Compute
+  stays local; no other data leaves the machine; the site is never public. The user authorized agents to run
+  `sf publish --deploy` / `--new-password` and wrangler for this project, and the scheduled auction and premarket jobs
+  upload automatically. Never change other Cloudflare settings or projects, and never remove the gate.
 
 ## Engineering
 
@@ -137,14 +148,20 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    `【数据缺失】` is now the second header line.
 5. The `历史同类` column gives the historical outcomes of the stock's cell (role x board height x one-price) from
    the latest `sf baserates` table with cutoff <= observation date (description only). If the header reports the
-   table missing, run `bin/sf baserates` (~5 min) and rebuild with `--no-update`; refresh it weekly.
+   table missing or of an older version (replayed without the liquidity floor), run `bin/sf baserates` (~5 min) and
+   rebuild with `--no-update`; refresh it weekly.
+6. On screen and on the page, a long text repeated down a column is printed once below the table (`见注N`,
+   `listing.fold_repeats`); the saved files keep the full text in every row. The 主线 header line states when the board
+   membership was captured; older than 10 days it is listed under `数据缺失` (run `bin/sf themes`).
 
 ### R6. Intraday minute bars (`sf intraday`)
 1. Capture runs inside `sf premarket` / `sf update`. On its own: `bin/sf intraday` (latest closed session) or
    `bin/sf intraday --backfill` (stored sessions among the last 5 not captured yet, and, for captured days with
    missing stocks, only those stocks as a new supplement file). The source keeps about 5
    sessions only: if a capture failed, rerun it the same evening or the next day, and tell the user which
-   days are lost if they fall out of the window.
+   days are lost if they fall out of the window. When the first 12 finished requests of a run all fail, the rest are
+   not sent (logged as not requested) and the day is reported failed: retry at the next scheduled time. A day with no
+   1-minute file gets 5-minute bars for its whole capture universe from `--backfill` (BaoStock keeps them long).
 2. Files are written once (`intraday/raw|minute|universe|capture/`, and `intraday/supplement/` for listed stocks
    fetched after the evening capture); never edit or delete them. Failed, incomplete or absent stocks are listed
    in `intraday/capture/<day>.json` and the supplement capture logs.
@@ -174,7 +191,9 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R8. Scheduled capture (`sf schedule`)
 1. `bin/sf schedule install` writes launchd user agents (`~/Library/LaunchAgents/com.longmai.sf.<job>.plist`) for:
    auction 09:26 (+ `prune --yes`), premarket 18:40 (+ review + page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
-   Saturday. Install only when the user asks; `bin/sf schedule uninstall` removes them.
+   Saturday (a failed themes run is retried Sun / Mon / Tue, a failed baserates run on Sun; a retry slot does nothing
+   after a successful run). Install only when the user asks; `bin/sf schedule uninstall` removes them. After the job
+   table changes in code, the installed agents keep the old slots until the user reinstalls.
 2. `bin/sf schedule status` shows each job's last run. Logs: `schedule/logs/`; latest status: `schedule/status/`.
    A failed job posts a local macOS notification and appears at the top of the local page.
 3. When the minute-bar source drops connections, retry at another time only. Never switch to undocumented hosts,
@@ -207,6 +226,16 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 2. Run `bin/sf prune --yes` only when the user asks (the scheduled auction job runs it daily). Files go to
    `~/.Trash/longmai-prune-<stamp>/`, never deleted outright; the log is `meta/prune.jsonl`. Report the trash folder.
    Emptying the Trash is the user's decision.
+
+### R12. Private page site (`sf publish`)
+1. `bin/sf publish --deploy` rewrites `publish/site/` from `pages/` (HTML only, local paths replaced, no-index headers,
+   `robots.txt`), copies the password gate to `publish/functions/` and uploads with wrangler. If it reports pages that
+   still contain a local path (exit 1), **STOP** and fix the scrub first. The scheduled jobs run it with
+   `--if-configured` (skipped when `publish/password.txt` is absent).
+2. After changing the gate, check without the password that `/`, a day page and `/robots.txt` return the login page
+   (401), a wrong password returns 401, and the right one sets the cookie; never print the password while checking.
+3. New machine or lost password: `npx wrangler@3 login` (the user signs in), then `bin/sf publish --new-password --deploy`.
+   Report the site URL and the password file path, never the password.
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`

@@ -5,12 +5,15 @@ it on weekdays and record each run:
 Times below are Shanghai time; `install` converts them to the Mac's local time zone (launchd fires in local time).
 
   auction    09:26        sf auction (only on a trading day, 09:20-11:30; launchd runs a missed job on wake), then
-                          sf prune --yes (keep only the valid list of each past target day)
+                          sf prune --yes (keep only the valid list of each past target day), then
+                          sf publish --deploy --if-configured (private page site; skipped when not set up)
   premarket  18:40        sf premarket (update, pools, seats, minute bars, list), then sf review
-                          (hit rates of the saved lists, so the page shows them fresh), then sf page
+                          (hit rates of the saved lists, so the page shows them fresh), then sf page, then
+                          sf publish --deploy --if-configured
   intraday   21:30, 08:40 sf intraday --backfill (retries a failed minute-bar capture at another time of day)
-  baserates  Sat 10:00    sf baserates (weekly refresh of the 历史同类 table)
-  themes     Sat 11:00    sf themes (weekly board-membership snapshot; every refresh is archived)
+  baserates  Sat 10:00    sf baserates (weekly refresh of the 历史同类 table); retried Sun if Saturday's run failed
+  themes     Sat 11:00    sf themes (weekly board-membership snapshot; every refresh is archived); retried
+                          Sun / Mon / Tue at the same time while the latest run has failed
 
 Each run writes a log under SF_HOME/schedule/logs/ and the latest status per job under SF_HOME/schedule/status/;
 a failure posts a local macOS notification. Nothing is uploaded or sent anywhere. The computer must be on and awake.
@@ -31,14 +34,15 @@ LABEL = "com.longmai.sf"
 WEEKDAYS = (1, 2, 3, 4, 5)
 JOBS = {
     "auction": dict(args=["auction"], times=[(9, 26)], days=WEEKDAYS, window=((9, 20), (11, 30)), trading=True,
-                    then=[["prune", "--yes"]]),
+                    then=[["prune", "--yes"], ["publish", "--deploy", "--if-configured"]]),
     "premarket": dict(args=["premarket"], times=[(18, 40)], days=WEEKDAYS, window=((18, 0), (23, 59)), trading=True,
-                      then=[["review"], ["page"]]),
+                      then=[["review"], ["page"], ["publish", "--deploy", "--if-configured"]]),
     "intraday": dict(args=["intraday", "--backfill"], times=[(21, 30), (8, 40)], days=WEEKDAYS, window=None,
                      trading=False),
-    "baserates": dict(args=["baserates"], times=[(10, 0)], days=(6,), window=None, trading=False),
-    "themes": dict(args=["themes"], times=[(11, 0)], days=(6,), window=None, trading=False),
+    "baserates": dict(args=["baserates"], times=[(10, 0)], days=(6,), retry_days=(7,), window=None, trading=False),
+    "themes": dict(args=["themes"], times=[(11, 0)], days=(6,), retry_days=(7, 1, 2), window=None, trading=False),
 }
+DAY_NAMES = {1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
 
 
 def repo_root() -> Path:
@@ -51,10 +55,23 @@ def _dir(name: str) -> Path:
     return path
 
 
-def should_run(job: str, now: datetime, sessions: list[str]) -> str | None:
-    """None if the job should run now, else the reason to skip it."""
+def last_status(job: str) -> dict | None:
+    path = store.home() / "schedule" / "status" / f"{job}.json"
+    try:
+        return json.loads(path.read_text()) if path.exists() else None
+    except ValueError:
+        return None
+
+
+def should_run(job: str, now: datetime, sessions: list[str], last: dict | None = None) -> str | None:
+    """None if the job should run now, else the reason to skip it. On a retry day (not one of the job's own days)
+    the job runs only while its latest recorded run has failed (`last`: that status, default from the status file)."""
     spec = JOBS[job]
     today = str(now.date())
+    if now.isoweekday() in spec.get("retry_days", ()) and now.isoweekday() not in spec["days"]:
+        last = last_status(job) if last is None else last
+        if last is None or last.get("exit") == 0:
+            return "上次运行成功，不需要重试"
     if spec["trading"] and today not in sessions:
         return "非交易日"
     if spec["window"]:
@@ -141,7 +158,8 @@ def local_offset(tz=None) -> float:
 
 def plist(job: str, tz=None) -> dict:
     spec = JOBS[job]
-    slots = [local_slot(d, h, m, tz) for d in spec["days"] for h, m in spec["times"]]
+    slots = [local_slot(d, h, m, tz) for d in tuple(spec["days"]) + tuple(spec.get("retry_days", ()))
+             for h, m in spec["times"]]
     intervals = [dict(Weekday=d, Hour=h, Minute=m) for d, h, m in slots]
     env = {k: os.environ[k] for k in ("SF_HOME", "SF_PYTHON") if k in os.environ}
     env["PATH"] = "/usr/bin:/bin:/usr/sbin:/sbin"
@@ -203,5 +221,7 @@ def status() -> list[dict]:
         out.append(dict(job=job, installed=path.exists(), last=json.loads(s.read_text()) if s.exists() else None,
                         times="、".join(f"{h:02d}:{m:02d}" for h, m in JOBS[job]["times"]),
                         local="、".join(f"{h:02d}:{m:02d}" for _, h, m in local),
-                        days="工作日" if JOBS[job]["days"] == WEEKDAYS else "周六"))
+                        days=("工作日" if JOBS[job]["days"] == WEEKDAYS else "周六") +
+                        ("（失败后" + "、".join(DAY_NAMES[d] for d in JOBS[job]["retry_days"]) + "重试）"
+                         if JOBS[job].get("retry_days") else "")))
     return out

@@ -83,20 +83,26 @@ def auction_outcomes(w: dict) -> dict[str, pd.DataFrame]:
 
 # ------------------------------------------------------------------ replay (the exam)
 
-def replay(sessions: list[str], start: int = 60, log=print) -> pd.DataFrame:
-    """One row per (observation t, listed stock) with its V9 role and the auction facts / outcomes of T = t+1."""
+def replay(sessions: list[str], start: int = 60, log=print, floor: bool = False) -> pd.DataFrame:
+    """One row per (observation t, listed stock) with its role and the auction facts / outcomes of T = t+1.
+    floor=False replays the V9 list the exams were pre-registered on (auction, quality, stoploss); floor=True applies
+    the live liquidity floor to every role, as the list does (used by `sf baserates`)."""
     ctx = longmai.context(sessions, log=log)
     w = ctx["w"]
-    sp, lp = strategy.params(), longmai.params()  # the live V9 list
+    sp, lp = strategy.params(), longmai.params(None if floor else longmai.V9_OVERRIDES)
     index = list(w["close"].index)
     rows = []
     for t in range(start, len(index) - 1):
         pool = strategy.eligible(w, ctx["basic"], ctx["calendar"], t, sp)
         facts = strategy.evaluate(strategy.features(w, t, pool, sp), sp)
-        leaders = set(longmai.decide(ctx, t, index[t + 1], lp, None, pool)["leaders"].index)
+        d = longmai.decide(ctx, t, index[t + 1], lp, None, pool)
+        leaders, thin = set(d["leaders"].index), set(d["thin"])
+
+        def ok(codes):
+            return {c for c in codes if c not in thin and longmai.passes_floor(d["liq"], c)}
         h = w["height"].iloc[t]
-        ladder = set(h[(h >= 2) & pool.reindex(h.index).fillna(False)].index) - leaders
-        observe = set(facts.index[facts["r2_selected"].fillna(False).astype(bool)]) - leaders - ladder
+        ladder = ok(set(h[(h >= 2) & pool.reindex(h.index).fillna(False)].index) - leaders)
+        observe = ok(set(facts.index[facts["r2_selected"].fillna(False).astype(bool)]) - leaders - ladder)
         role = {**{c: "observe" for c in observe}, **{c: "ladder" for c in ladder}, **{c: "leader" for c in leaders}}
         if role:
             rows.append(pd.DataFrame({"code": list(role), "role": list(role.values()), "obs": index[t],

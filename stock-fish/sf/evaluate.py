@@ -6,7 +6,8 @@ Screening (per observation session t, outcomes from t's close onward, adjusted p
   max3      highest high over t+1..t+3 relative to t's close
   out5      "走出来": >= 2 limit-ups within t+1..t+5, or max high within t+1..t+5 >= +20%
   bigloss1  "大面" on t+1: low <= -7% or close <= -5% versus t's close
-Groups: candidate (rule leaders that are not vetoed / crowded), ladder (other main-board 2板+),
+Groups (after the live liquidity floor, applied by longmai.decide as in the list): candidate (rule leaders that
+are not vetoed / crowded), ladder (other main-board 2板+),
 crowded, vetoed, and the baseline of
 all main-board limit-ups that day. Recall: of the stocks that were limit-up on t and then made >= 3
 limit-ups within t+1..t+5 (the realized 妖股), the share that were listed (any group) on t.
@@ -77,8 +78,9 @@ def screening_panel(log=print) -> pd.DataFrame:
             rows.append(dict(obs=day, code=code, group=group, board=s["board"], height=s["height"]))
             listed.add(code)
         h = w["height"].iloc[t]  # 连板梯队: main-board 2板+ not already listed
+        thin = set(d["thin"])  # leaders dropped by the liquidity floor are not listed in any group
         for code in h[(h >= 2) & pool.reindex(h.index).fillna(False)].index:
-            if code not in listed:
+            if code not in listed and code not in thin and longmai.passes_floor(d["liq"], code):
                 v = longmai.vetoes(ctx, t, code, p, longmai.seat_day(ctx, day))
                 group = "vetoed" if v else "crowded" if longmai.crowded(ctx, t, code, p) else "ladder"
                 rows.append(dict(obs=day, code=code, group=group, board=None, height=float(h[code])))

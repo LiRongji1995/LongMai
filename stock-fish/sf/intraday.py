@@ -22,6 +22,7 @@ from __future__ import annotations
 
 import gzip
 import json
+import threading
 import time
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
@@ -37,6 +38,11 @@ URL = "https://push2his.eastmoney.com/api/qt/stock/trends2/get"
 PARAMS = {"fields1": "f1,f2,f3,f4,f5,f6,f7,f8,f9,f10,f11,f12,f13", "fields2": "f51,f52,f53,f54,f55,f56,f57,f58",
           "ut": "7eea3edcaed734bea9cbfc24409ed989", "ndays": "5", "iscr": "0"}
 BARS_PER_DAY = 241
+# Give up early when the source refuses everything: if the first GIVE_UP_AFTER finished requests all failed, the
+# rest are not sent (logged per code as not requested) so a blocked source costs seconds, not minutes; the next
+# scheduled run tries again. This never hides a failure: the day is still reported FAILED / partial.
+GIVE_UP_AFTER = 12
+NOT_REQUESTED = "not requested: the source refused the first requests of this run"
 LOT = 100  # the source's volume unit is 手 (100 shares)
 READY_HOUR_MINUTE = (15, 30)  # a session's bars are complete after the close
 
@@ -171,12 +177,21 @@ def _fetch_all(codes: list[str], workers: int, log) -> tuple[str, object, dict, 
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     raw_path = _dir("raw") / f"{stamp}.jsonl.gz"
     bodies, errors = {}, {}
+    lock, tally, stop = threading.Lock(), dict(done=0, ok=0), threading.Event()
 
     def one(code):
+        if stop.is_set():
+            return code, None, NOT_REQUESTED
         try:
-            return code, fetch(code), None
-        except Exception as error:  # recorded per code in the capture log; the day reports it as failed
-            return code, None, str(error)[:120]
+            body, error = fetch(code), None
+        except Exception as exc:  # recorded per code in the capture log; the day reports it as failed
+            body, error = None, str(exc)[:120]
+        with lock:
+            tally["done"] += 1
+            tally["ok"] += error is None
+            if tally["ok"] == 0 and tally["done"] >= GIVE_UP_AFTER:
+                stop.set()
+        return code, body, error
 
     started = time.monotonic()
     with ThreadPoolExecutor(max_workers=workers) as pool, gzip.open(raw_path, "wt", encoding="utf-8") as raw:

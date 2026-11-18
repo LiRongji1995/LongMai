@@ -108,7 +108,8 @@ def _retry(fn, *args, attempts=3, pause=3.0):
             return fn(*args)
         except Exception as error:  # network hiccups are routine; retry is explicit and bounded
             last = error
-            time.sleep(pause * (attempt + 1))
+            if attempt + 1 < attempts:  # no pause after the final failure
+                time.sleep(pause * (attempt + 1))
     raise last
 
 

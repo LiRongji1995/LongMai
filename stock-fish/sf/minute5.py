@@ -64,9 +64,17 @@ def _limit(seconds: int):
         signal.signal(signal.SIGALRM, old)
 
 
-def _login(bs) -> None:
-    with contextlib.redirect_stdout(io.StringIO()):
-        bs.login()
+LOGIN_FAILED = "登录超时或失败，未请求"
+
+
+def _login(bs) -> bool:
+    """Log in under the same time limit as a query (BaoStock's socket has no timeout of its own); False on failure."""
+    try:
+        with _limit(QUERY_TIMEOUT), contextlib.redirect_stdout(io.StringIO()):
+            bs.login()
+        return True
+    except (_Timeout, Exception):
+        return False
 
 
 def _times() -> list[str]:
@@ -105,8 +113,13 @@ def capture(day: str, codes: list[str], log=print, bs=None) -> dict:
         import baostock as bs
     stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ")
     frames, failed, absent = [], {}, []
-    _login(bs)
+    logged_in = _login(bs)
+    if not logged_in:
+        log("BaoStock 登录超时或失败，5分钟线本次未请求")
     for code in need:
+        if not logged_in:
+            failed[code] = LOGIN_FAILED
+            continue
         try:
             with _limit(QUERY_TIMEOUT):
                 rs = bs.query_history_k_data_plus(code, FIELDS, start_date=day, end_date=day, frequency="5",
@@ -125,11 +138,13 @@ def capture(day: str, codes: list[str], log=print, bs=None) -> dict:
         except _Timeout:
             failed[code] = "超时"
             log(f"{code} 5分钟线查询超时，重新登录")
-            with contextlib.suppress(Exception):
-                _login(bs)
+            logged_in = _login(bs)
+            if not logged_in:
+                log("BaoStock 重新登录超时或失败，其余股票本次未请求")
         except Exception as error:  # logged per stock; the stock stays missing
             failed[code] = str(error)[:80]
-    with contextlib.suppress(Exception), contextlib.redirect_stdout(io.StringIO()):
+    with contextlib.suppress(_Timeout, Exception), _limit(QUERY_TIMEOUT), \
+            contextlib.redirect_stdout(io.StringIO()):
         bs.logout()
     ok = [f["code"].iloc[0] for f in frames]
     if frames:

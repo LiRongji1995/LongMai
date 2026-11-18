@@ -67,6 +67,20 @@ def test_capture_writes_once_and_logs_failures(tmp_path, monkeypatch):
     assert len(logs) == 1 and json.loads(logs[0].read_text())["failed"]["sh.600003"].startswith("socket")
 
 
+def test_a_hanging_login_times_out_and_every_stock_is_reported(tmp_path, monkeypatch):
+    import time
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    monkeypatch.setattr(minute5, "QUERY_TIMEOUT", 1)
+
+    class Hanging(FakeBS):
+        def login(self):
+            time.sleep(5)                                       # BaoStock's socket has no timeout of its own
+    started = time.monotonic()
+    entry = minute5.capture(DAY, ["sh.600001", "sh.600002"], log=lambda *_: None, bs=Hanging({}))
+    assert time.monotonic() - started < 4
+    assert entry["ok"] == 0 and set(entry["failed"].values()) == {minute5.LOGIN_FAILED}
+
+
 def test_features_and_coarse_note(tmp_path, monkeypatch):
     monkeypatch.setenv("SF_HOME", str(tmp_path))
     _daily(tmp_path)

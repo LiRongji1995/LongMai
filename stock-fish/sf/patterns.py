@@ -102,7 +102,7 @@ def replay(sessions: list[str], start: int = 60, log=print) -> pd.DataFrame:
     """One row per (observation session, R2-selected stock) with stage matches, V7 group, flags and outcomes."""
     ctx = longmai.context(sessions, log=log)
     w = ctx["w"]
-    sp, lp = strategy.params(strategy.V7_OVERRIDES), longmai.params()  # the exam split the V7 stages
+    sp, lp = strategy.params(strategy.V7_OVERRIDES), longmai.params(longmai.V9_OVERRIDES)  # the exam split the V7 stages
     index = list(w["close"].index)
     rows = []
     for t in range(start, len(index) - 1):

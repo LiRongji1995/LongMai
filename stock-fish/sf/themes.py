@@ -124,6 +124,26 @@ def snapshot_for(day: str) -> dict | None:
     return max(rows, key=lambda r: (r["day"], r["captured_at"])) if rows else None
 
 
+STALE_DAYS = 10  # a weekly refresh that failed once is still fresh; beyond this the list reports it as a data gap
+
+
+def freshness(today: str | None = None) -> dict | None:
+    """When the stored membership was last captured: {captured: 'YYYY-MM-DD' of the newest board capture, age_days,
+    carried: boards whose last request failed and kept older members, stale: age_days > STALE_DAYS}. None when no
+    membership is stored; captured None (stale) when the capture time is unknown."""
+    boards, _ = _previous()
+    if boards is None:
+        return None
+    stamps = boards["captured_at"].dropna().astype(str)
+    carried = int((boards["source"] == "carried").sum()) if "source" in boards else 0
+    if stamps.empty:
+        return dict(captured=None, age_days=None, carried=carried, stale=True)
+    newest = datetime.fromisoformat(stamps.max()).astimezone(store.SH).date()
+    now = datetime.strptime(today, "%Y-%m-%d").date() if today else store.now_sh().date()
+    age = (now - newest).days
+    return dict(captured=newest.isoformat(), age_days=age, carried=carried, stale=age > STALE_DAYS)
+
+
 def _previous() -> tuple[pd.DataFrame | None, pd.DataFrame | None]:
     b, m = _meta("theme_boards.parquet"), _meta("theme_members.parquet")
     if not (b.exists() and m.exists()):

@@ -1,4 +1,4 @@
-"""龙脉 V14 (`SF_LONGMAI_V14`; V9 + the V12 liquidity floor with the V14 turnover alternative + the V13 volume-surge note, applied by listing.py) screening: market gate, mainline leaders, risk vetoes and crowding flags.
+"""龙脉 V14 (`SF_LONGMAI_V14`; V9 + the V12 liquidity floor with the V14 turnover alternative + the V13 volume-surge note, applied by `decide`) screening: market gate, mainline leaders, risk vetoes and crowding flags.
 
 Specification: docs/STRATEGY_LONGMAI_V9.md (on top of docs/STRATEGY_LONGMAI_V7.md). The same `context()` + `decide()` path serves the live
 list (`listing.py`) and the entry-free evaluation (`evaluate.py`). Versions V1-V6 are at tag `legacy-r2`.
@@ -21,7 +21,10 @@ PARAMS = dict(
     crowd_surge=2.0, stop_loss=0.07,                    # crowding flag; reference stop shown in the list
     severe_margin=0.30, post_severe_days=10, retail_ratio=0.02,             # vetoes (高波动)
     budget={"高": 1.0, "中": 0.5, "低": 0.0}, reg_cut=0.5, max_slots=4,       # position ceiling (display)
+    liq_floor=True,                                     # V12/V14 liquidity floor (every group), applied by decide
 )
+# Replays of exams that were pre-registered on the V9 list (no liquidity floor) pass these overrides.
+V9_OVERRIDES = {"liq_floor": False}
 # V12 liquidity floor (user decision 2026-11-12: "in the current market only stocks trading >= 1e9 a day", imposed
 # without a backtest). A stock may be listed (any group) only if, on the observation day or on at least LIQ_MIN_DAYS of
 # the last LIQ_DAYS sessions up to it (the user's choice, 2026-11-12), it traded at least LIQ_MARKET_SHARE of the whole-market (SSE/SZSE A shares)
@@ -204,16 +207,26 @@ def decide(ctx: dict, t: int, target: str, p: dict, seat_day: pd.DataFrame | Non
     if pool is None:
         pool = strategy.eligible(w, ctx["basic"], ctx["calendar"], t, strategy.params())
     g = gate(ctx, t, target, p)
+    liq = liquidity_floor(ctx, t) if p.get("liq_floor", True) else None
     sig = mainline.signals(w, ctx["aw"], ctx["ts"], pool, t, p)
     if sig.empty:
-        return dict(gate=g, leaders=sig, pool=pool)
+        return dict(gate=g, leaders=sig, pool=pool, liq=liq, thin=[])
     day = w["close"].index[t]
     sig["board_lu3"] = [np.inf if b == mainline.SPACE else float(ctx["ts"]["lu3"].loc[day, b]) for b in sig["board"]]
     sig["vetoes"] = [vetoes(ctx, t, c, p, seat_day) for c in sig.index]
     sig["notes"] = [notes(ctx, t, c, seat_day) for c in sig.index]
     sig["crowded"] = [crowded(ctx, t, c, p) for c in sig.index]
     sig = sig.sort_values(["board_lu3", "leader_rank", "turn_rank"], ascending=[False, True, True])
-    return dict(gate=g, leaders=sig, pool=pool)
+    # The floor drops leaders after ranking (a thin leader keeps its rank slot; nobody is promoted into it).
+    keep = [passes_floor(liq, c) for c in sig.index]
+    thin = [c for c, k in zip(sig.index, keep) if not k]
+    return dict(gate=g, leaders=sig[keep], pool=pool, liq=liq, thin=thin)
+
+
+def passes_floor(liq: dict | None, code: str) -> bool:
+    """True when `code` meets the liquidity floor of `decide` (always True when the floor is switched off). The one
+    test used by the live list and by every replay (evaluate, baserates), for every group."""
+    return True if liq is None else bool(liq["ok"].get(code, False))
 
 
 def seat_day(ctx: dict, day: str) -> pd.DataFrame | None:

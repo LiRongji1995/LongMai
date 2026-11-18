@@ -64,7 +64,7 @@ def replay(sessions: list[str], start: int = 60, log=print) -> tuple[pd.DataFram
     """(board-day rows, leader rows, panel w) over the stored history."""
     ctx = longmai.context(sessions, log=log)
     w, aw, ts = ctx["w"], ctx["aw"], ctx["ts"]
-    sp, lp = strategy.params(), longmai.params()
+    sp, lp = strategy.params(), longmai.params(longmai.V9_OVERRIDES)
     index = list(w["close"].index)
     lines = {t: mainline.mainlines(ts, t, lp) for t in range(max(0, start - AGE_WINDOW + 1), len(index))}
     boards, leaders = [], []

@@ -119,7 +119,7 @@ def replay(sessions: list[str], start: int = 60, log=print) -> tuple[pd.DataFram
     Returns (scored, v7) long frames keyed by (obs, code)."""
     ctx = longmai.context(sessions, log=log)
     w, ts = ctx["w"], ctx["ts"]
-    sp, lp = strategy.params(), longmai.params()
+    sp, lp = strategy.params(), longmai.params(longmai.V9_OVERRIDES)
     index = list(w["close"].index)
     scored, v7 = [], []
     for t in range(start, len(index)):
