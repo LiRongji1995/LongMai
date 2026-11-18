@@ -14,9 +14,12 @@ Times below are Shanghai time; `install` converts them to the Mac's local time z
   baserates  Sat 10:00    sf baserates (weekly refresh of the 历史同类 table); retried Sun if Saturday's run failed
   themes     Sat 11:00    sf themes (weekly board-membership snapshot; every refresh is archived); retried
                           Sun / Mon / Tue at the same time while the latest run has failed
+  rotate     daily 17:00  sf publish --rotate: once the site password is 3 days old, a new one is set on
+                          Cloudflare, the pages are redeployed and the password is mailed to the user's own Gmail
 
 Each run writes a log under SF_HOME/schedule/logs/ and the latest status per job under SF_HOME/schedule/status/;
-a failure posts a local macOS notification. Nothing is uploaded or sent anywhere. The computer must be on and awake.
+a failure posts a local macOS notification. Only the rendered pages are uploaded (private site) and the rotated
+site password is mailed to the user; nothing else is sent anywhere. The computer must be on and awake.
 """
 from __future__ import annotations
 
@@ -41,6 +44,9 @@ JOBS = {
                      trading=False),
     "baserates": dict(args=["baserates"], times=[(10, 0)], days=(6,), retry_days=(7,), window=None, trading=False),
     "themes": dict(args=["themes"], times=[(11, 0)], days=(6,), retry_days=(7, 1, 2), window=None, trading=False),
+    # daily check; `sf publish --rotate` changes the site password only once it is 3 days old, then mails it
+    "rotate": dict(args=["publish", "--rotate", "--if-configured"], times=[(17, 0)], days=(1, 2, 3, 4, 5, 6, 7),
+                   window=None, trading=False),
 }
 DAY_NAMES = {1: "周一", 2: "周二", 3: "周三", 4: "周四", 5: "周五", 6: "周六", 7: "周日"}
 
@@ -221,7 +227,8 @@ def status() -> list[dict]:
         out.append(dict(job=job, installed=path.exists(), last=json.loads(s.read_text()) if s.exists() else None,
                         times="、".join(f"{h:02d}:{m:02d}" for h, m in JOBS[job]["times"]),
                         local="、".join(f"{h:02d}:{m:02d}" for _, h, m in local),
-                        days=("工作日" if JOBS[job]["days"] == WEEKDAYS else "周六") +
+                        days=("工作日" if JOBS[job]["days"] == WEEKDAYS else "每天" if len(JOBS[job]["days"]) == 7
+                              else "、".join(DAY_NAMES[d] for d in JOBS[job]["days"])) +
                         ("（失败后" + "、".join(DAY_NAMES[d] for d in JOBS[job]["retry_days"]) + "重试）"
                          if JOBS[job].get("retry_days") else "")))
     return out

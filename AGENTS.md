@@ -76,6 +76,9 @@ bounded, logged retry.
   stays local; no other data leaves the machine; the site is never public. The user authorized agents to run
   `sf publish --deploy` / `--new-password` and wrangler for this project, and the scheduled auction and premarket jobs
   upload automatically. Never change other Cloudflare settings or projects, and never remove the gate.
+  **Rotation (user decision, 2026-11-18):** the password changes every 3 days (`sf publish --rotate`, daily `rotate`
+  job) and is mailed from the user's own Gmail to itself; the address is in `publish/mail.json` (not in the repo), the
+  Gmail app password only in the macOS Keychain (service `longmai-gmail`), entered by the user. Never mail anything else.
 
 ## Engineering
 
@@ -236,6 +239,11 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    (401), a wrong password returns 401, and the right one sets the cookie; never print the password while checking.
 3. New machine or lost password: `npx wrangler@3 login` (the user signs in), then `bin/sf publish --new-password --deploy`.
    Report the site URL and the password file path, never the password.
+4. Rotation: `bin/sf publish --rotate` (no-op before 3 days; `--force` now). The Gmail app password is added by the user
+   with `security add-generic-password -s longmai-gmail -a <address> -w` (interactive); never ask for it in chat.
+   `sf schedule install --jobs rotate` adds the daily check (17:00 Shanghai). A sandboxed agent shell cannot see the
+   Keychain (the item looks missing); run Keychain checks and `--rotate` outside the sandbox. After a rotation the new
+   password takes about 1-2 minutes to work on the site.
 
 ### R5. Rebuild data from scratch (no backup available)
 Takes about 2 hours on the user's 2017 laptop, network bound: `bin/sf update --sessions 320 --workers 4`

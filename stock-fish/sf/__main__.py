@@ -93,6 +93,12 @@ def cmd_publish(args) -> int:
     if args.if_configured and not publish.password_file().exists():
         print("私有站点未设置（没有 publish/password.txt），跳过上传")
         return 0
+    if args.rotate:
+        from . import mail
+        if not mail.configured():
+            print("没有设置邮件（publish/mail.json 和钥匙串里的 Gmail 应用专用密码），不更换密码")
+            return 0 if args.if_configured else 1
+        return publish.rotate(args.project, force=args.force)
     if args.new_password:
         path = publish.new_password()
         code = publish.push_password(args.project)
@@ -901,7 +907,9 @@ def parser() -> argparse.ArgumentParser:
     pb.add_argument("--deploy", action="store_true", help="导出后上传到 Cloudflare Pages（站点需密码）")
     pb.add_argument("--new-password", action="store_true", help="生成新密码并设到 Cloudflare（旧密码和已登录的设备失效）")
     pb.add_argument("--project", default="longmai-pages", help="Cloudflare Pages 项目名")
-    pb.add_argument("--if-configured", action="store_true", help="没设置密码时直接跳过（定时任务用）")
+    pb.add_argument("--if-configured", action="store_true", help="没设置密码或邮件时直接跳过（定时任务用）")
+    pb.add_argument("--rotate", action="store_true", help="密码满 3 天就换新的、上传并发到你的邮箱")
+    pb.add_argument("--force", action="store_true", help="和 --rotate 一起用：不满 3 天也换")
     pb.set_defaults(func=cmd_publish)
 
     bk = sub.add_parser("backup", help="把数据目录打成一个压缩包（换设备用），附校验文件")

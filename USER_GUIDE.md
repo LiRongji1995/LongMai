@@ -54,7 +54,7 @@
 ## 定时采集（`sf schedule`）
 
 有些数据只能当天抓：09:25 的竞价、只保留约 5 个交易日的分时。没人运行就永久缺失，所以可以装本机定时任务（macOS launchd，
-在本机运行；除了把页面传到你的私有站点，不上传任何数据）：
+在本机运行；除了把页面传到你的私有站点、把新密码发到你的邮箱，不上传任何数据）：
 
 | 任务 | 时间 | 做什么 |
 |---|---|---|
@@ -63,6 +63,7 @@
 | intraday | 工作日 21:30、08:40 | `sf intraday --backfill`：换个时间补抓失败的分时 |
 | baserates | 周六 10:00 | `sf baserates`；周六失败的话周日同一时间重试 |
 | themes | 周六 11:00 | `sf themes`（每周一份板块成分快照）；失败的话周日、周一、周二同一时间重试，成功后不再跑 |
+| rotate | 每天 17:00 | `sf publish --rotate`：私有站点密码满 3 天就换新的并发到你的邮箱 |
 
 ```sh
 sf schedule install      # 安装（可加 --jobs auction premarket 只装部分）
@@ -99,7 +100,19 @@ sf schedule uninstall    # 全部移除
 sf publish                    # 只导出到 stockfish-data/publish/site，不上传
 sf publish --deploy           # 导出并上传
 sf publish --new-password     # 换密码（旧密码和已登录的手机都失效），再加 --deploy 一起上传
+sf publish --rotate --force   # 马上换密码、上传并发邮件（不等满 3 天）
 ```
+
+**每 3 天自动换密码（2026-11-18 起，你定的）**：定时任务 rotate 每天北京时间 17:00（伦敦 09:00）检查一次，密码满 3 天就
+生成新密码、设到 Cloudflare、重新上传，并从你的 Gmail 发一封“龙脉站点新密码”给你自己；本机文件同时更新。
+换密码后手机上的登录失效，用邮件里的新密码重新输入。Cloudflare 没接受新密码时旧密码继续有效；邮件发不出去时新密码只在本机文件里，
+任务记为失败并弹出本机通知。
+
+邮件设置（只需一次）：
+1. 收件地址存在 `stockfish-data/publish/mail.json`（不进仓库）。
+2. Gmail 的“应用专用密码”存在 macOS 钥匙串里（服务名 `longmai-gmail`），不放在文件里。在 Google 账号开启两步验证后，
+   到 https://myaccount.google.com/apppasswords 生成一个，然后在终端运行下面这行，按提示粘贴（输入时不显示）：
+   `security add-generic-password -s longmai-gmail -a <你的 Gmail 地址> -w`
 
 **怎么上锁的**：站点前有一层密码检查（Cloudflare Pages Functions，代码在 `stock-fish/sf/site/_middleware.js`）。
 密码以加密变量 `SITE_PASSWORD` 存在 Cloudflare 上；这个变量不存在时站点对所有请求都拒绝。没有用 Zero Trust（它要求绑定信用卡）。

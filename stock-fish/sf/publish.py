@@ -15,12 +15,15 @@ import re
 import secrets
 import shutil
 import subprocess
+import time
 from pathlib import Path
 
 from . import store
 
 LOCAL = "（本机数据目录）"
 PROJECT = "longmai-pages"
+ROTATE_DAYS = 3        # user decision 2026-11-18: a new password every 3 days, mailed to the user
+ROTATE_SLACK = 0.1     # days: a daily slot a little early still counts
 WRANGLER = ["npx", "--yes", "wrangler@3"]
 NODE_DIRS = ("/usr/local/bin", "/opt/homebrew/bin")   # launchd jobs start with a bare PATH
 HEADERS = "/*\n  X-Robots-Tag: noindex, nofollow, noarchive\n  Referrer-Policy: no-referrer\n"
@@ -71,15 +74,26 @@ def export(out: Path | None = None) -> dict:
     return dict(out=out, files=len(files), size=size, leaks=leaks)
 
 
-def new_password() -> Path:
-    """Write a new random password (never printed); the caller pushes it to Cloudflare."""
+def generate() -> str:
+    return secrets.token_urlsafe(18)
+
+
+def new_password(value: str | None = None) -> Path:
+    """Write the password file (mode 600; a new random one unless `value` is given). Never printed."""
     path = password_file()
     path.parent.mkdir(parents=True, exist_ok=True)
     fd = os.open(path, os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600)
     with os.fdopen(fd, "w") as f:
-        f.write(secrets.token_urlsafe(18) + "\n")
+        f.write((value or generate()) + "\n")
     os.chmod(path, 0o600)
     return path
+
+
+def password_age_days(now: float | None = None) -> float | None:
+    path = password_file()
+    if not path.exists():
+        return None
+    return ((now or time.time()) - path.stat().st_mtime) / 86400
 
 
 def _env() -> dict:
@@ -90,8 +104,8 @@ def _env() -> dict:
     return env
 
 
-def push_password(project: str = PROJECT, runner=subprocess.run) -> int:
-    value = password_file().read_text().strip()
+def push_password(project: str = PROJECT, runner=subprocess.run, value: str | None = None) -> int:
+    value = value or password_file().read_text().strip()
     result = runner([*WRANGLER, "pages", "secret", "put", "SITE_PASSWORD", "--project-name", project],
                     input=value, text=True, capture_output=True, cwd=root(), env=_env())
     return result.returncode
@@ -105,3 +119,38 @@ def deploy(project: str = PROJECT, runner=subprocess.run, log=print) -> int:
     for line in tail:
         log(re.sub(r"\x1b\[[0-9;]*m", "", line))
     return result.returncode
+
+
+def mail_body(value: str, project: str = PROJECT) -> str:
+    return (f"龙脉私有站点的密码已更换。\n\n网址：https://{project}.pages.dev\n新密码：{value}\n\n"
+            f"旧密码和已登录的设备都已失效，打开网址输入新密码即可（30 天内不用再输）。\n"
+            f"刚收到邮件时如果提示密码不对，等 1-2 分钟再试（Cloudflare 切换需要一点时间）。\n"
+            f"下一次更换约在 {ROTATE_DAYS} 天后。这封邮件由你的 Mac 上的定时任务自动发送。\n")
+
+
+def rotate(project: str = PROJECT, runner=subprocess.run, send=None, log=print, force: bool = False) -> int:
+    """Every ROTATE_DAYS: new password -> Cloudflare secret -> local file -> redeploy (secrets apply to new
+    deployments) -> mail it to the user. The file is only replaced once Cloudflare has accepted the new value."""
+    from . import mail
+    send = send or mail.send
+    age = password_age_days()
+    if not force and age is not None and age < ROTATE_DAYS - ROTATE_SLACK:
+        log(f"密码已用 {age:.1f} 天，未到 {ROTATE_DAYS} 天，不更换")
+        return 0
+    value = generate()
+    code = push_password(project, runner, value=value)
+    if code:
+        log(f"新密码设置到 Cloudflare 失败（退出码 {code}），旧密码仍有效，未更换")
+        return code
+    new_password(value)
+    export()
+    code = deploy(project, runner, log)
+    if code:
+        log(f"上传失败（退出码 {code}）：新密码已存到本机文件，站点在下次上传后才用新密码")
+    try:
+        send("龙脉站点新密码", mail_body(value, project))
+        log("新密码已发到你的邮箱")
+    except Exception as error:  # the password stays in the local file; the job is marked failed
+        log(f"邮件发送失败：{type(error).__name__}；新密码只在本机文件 {password_file()}")
+        return 1
+    return code
