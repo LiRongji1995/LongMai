@@ -121,7 +121,8 @@ def capture(day: str, codes: list[str], log=print, bs=None) -> dict:
             failed[code] = LOGIN_FAILED
             continue
         try:
-            with _limit(QUERY_TIMEOUT):
+            # BaoStock prints its own "接收数据异常" on a failed query; the failure is recorded per stock instead
+            with _limit(QUERY_TIMEOUT), contextlib.redirect_stdout(io.StringIO()):
                 rs = bs.query_history_k_data_plus(code, FIELDS, start_date=day, end_date=day, frequency="5",
                                                   adjustflag="3")
                 rows = []

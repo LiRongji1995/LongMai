@@ -1,6 +1,7 @@
 """Private page site on Cloudflare Pages (user decision, 2026-11-18).
 
-Only the rendered pages leave the machine: pages/<day>/*.html, pages/go/*.html, index.html and latest.html. Local
+Only the rendered pages leave the machine: pages/<day>/*.html, pages/go/*.html, index.html and latest.html. On the
+site each day also has a fixed address /<day>/ (its newest page); links point there and older page names redirect. Local
 paths inside them are replaced and no-index headers are added; nothing else under SF_HOME is copied. The export
 (`publish/site/` plus the password gate in `publish/functions/`) is a rendering, rewritten on every run.
 
@@ -63,8 +64,15 @@ def export(out: Path | None = None) -> dict:
     for p in files:
         target = out / p.relative_to(src)
         target.parent.mkdir(parents=True, exist_ok=True)
-        target.write_text(scrub(p.read_text(encoding="utf-8")), encoding="utf-8")
+        target.write_text(stable_links(scrub(p.read_text(encoding="utf-8"))), encoding="utf-8")
+    days = sorted({p.parent.name for p in files if DAY.fullmatch(p.parent.name)})
+    for day in days:  # a fixed address per day: /<day>/ always shows that day's newest page
+        newest = max((out / day).glob("*.html"), key=lambda p: p.name)
+        shutil.copyfile(newest, out / day / "index.html")
     (out / "_headers").write_text(HEADERS)
+    # page files are named by render time; an address bar left on an older name (still served by the host from an
+    # earlier upload) is sent to the day's fixed address instead of showing the old rendering
+    (out / "_redirects").write_text("".join(f"/{d}/2* /{d}/ 302\n" for d in days))
     (out / "robots.txt").write_text(ROBOTS)
     functions = out.parent / "functions"
     functions.mkdir(exist_ok=True)
@@ -72,6 +80,15 @@ def export(out: Path | None = None) -> dict:
     leaks = [str(p.relative_to(out)) for p in out.rglob("*.html") if "/Users/" in p.read_text(encoding="utf-8")]
     size = sum(p.stat().st_size for p in out.rglob("*") if p.is_file())
     return dict(out=out, files=len(files), size=size, leaks=leaks)
+
+
+DAY = re.compile(r"\d{4}-\d{2}-\d{2}")
+PAGE_LINK = re.compile(r"(\d{4}-\d{2}-\d{2})/\d{8}T\d{6}Z\.html")
+
+
+def stable_links(text: str) -> str:
+    """Links to a day's page file -> the day's fixed address (<day>/), so links never pin an old rendering."""
+    return PAGE_LINK.sub(r"\1/", text)
 
 
 def generate() -> str:

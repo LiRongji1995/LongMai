@@ -220,6 +220,10 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R10. Local page (`sf page`)
 1. `bin/sf page [target] --open` writes `pages/<target>/<stamp>.html` from the valid list's saved files only (written
    by premarket and auction automatically). Report its path. The page is description; data gaps are listed first.
+   Charts (`sf/charts.py`, inline SVG, no scripts from outside): overview tiles with the last 20 observation days
+   (`page.history`, from saved lists), limit-up ladder and theme-thread strip, per-stock intraday mini chart
+   (`page.minute_bars`: Eastmoney 1-minute, else Sina 1-minute, else BaoStock 5-minute, source named) and position bar,
+   auction gap bars, review rate bars. Unknown values are left out of a chart, never drawn as zero.
 2. The review section holds two folds: the daily review report (`daily_report_html`: the observation day's market,
    mood, ladder, themes, leaders and what to watch, from `summary.json` incl. `market`, `SF_DAILY_MARKET_V1`; facts and
    historical rates only, never advice) and the multi-day hit-rate details.
@@ -237,7 +241,8 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
    Emptying the Trash is the user's decision.
 
 ### R12. Private page site (`sf publish`)
-1. `bin/sf publish --deploy` rewrites `publish/site/` from `pages/` (HTML only, local paths replaced, no-index headers,
+1. `bin/sf publish --deploy` rewrites `publish/site/` from `pages/` (HTML only, local paths replaced, links to a day's page
+   rewritten to the fixed `/<day>/` address (its newest page, `index.html`), older page names redirected there by `_redirects`, no-index headers,
    `robots.txt`), copies the password gate to `publish/functions/` and uploads with wrangler. If it reports pages that
    still contain a local path (exit 1), **STOP** and fix the scrub first. The scheduled jobs run it with
    `--if-configured` (skipped when `publish/password.txt` is absent).

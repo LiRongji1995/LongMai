@@ -37,6 +37,21 @@ def test_export_copies_pages_and_the_gate_only_and_removes_local_paths(tmp_path,
     assert not (publish.export()["out"] / "stale.html").exists()                       # rewritten each time
 
 
+def test_each_day_gets_a_fixed_address_and_old_page_names_redirect(tmp_path, monkeypatch):
+    monkeypatch.setenv("SF_HOME", str(tmp_path))
+    pages = tmp_path / "pages"
+    (pages / "2026-11-19").mkdir(parents=True)
+    (pages / "index.html").write_text('<a href="2026-11-19/20261118T164705Z.html">x</a>')
+    (pages / "2026-11-19" / "20261118T164315Z.html").write_text("old")
+    (pages / "2026-11-19" / "20261118T164705Z.html").write_text(
+        '<a href="../go/prev-2026-11-19.html">p</a><a href="../2026-11-18/20261118T012642Z.html">q</a>new')
+    out = publish.export()["out"]
+    assert (out / "index.html").read_text() == '<a href="2026-11-19/">x</a>'
+    day = (out / "2026-11-19" / "index.html").read_text()
+    assert day.endswith("new") and 'href="../2026-11-18/"' in day                       # the newest page, stable links
+    assert (out / "_redirects").read_text() == "/2026-11-19/2* /2026-11-19/ 302\n"
+
+
 def test_password_is_private_and_sent_on_stdin_only(tmp_path, monkeypatch):
     monkeypatch.setenv("SF_HOME", str(tmp_path))
     path = publish.new_password()

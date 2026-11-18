@@ -14,7 +14,7 @@ from pathlib import Path
 
 import pandas as pd
 
-from . import listing, namethemes, store
+from . import charts, listing, namethemes, store
 
 GROUPS = ("主线龙头", "连板梯队", "观察", "高波动")
 GROUP_CLASS = {"主线龙头": "g-lead", "连板梯队": "g-ladder", "观察": "g-watch", "高波动": "g-risk"}
@@ -107,17 +107,6 @@ def _latest(path: Path) -> Path | None:
 
 # ------------------------------------------------------------------ small visual pieces (inline SVG / CSS only)
 
-def ring(value, label: str, sub: str, tone: str) -> str:
-    """A circular gauge for a 0..1 value (unknown shows as an empty ring with '?')."""
-    known = value is not None and not (isinstance(value, float) and pd.isna(value))
-    v = min(max(float(value), 0.0), 1.0) if known else 0.0
-    r, c = 34, 2 * 3.14159 * 34
-    return (f'<div class="gauge {tone}"><svg viewBox="0 0 84 84" aria-hidden="true"><circle class="trk" cx="42" cy="42" r="{r}"/>'
-            f'<circle class="val" cx="42" cy="42" r="{r}" stroke-dasharray="{c * v:.1f} {c:.1f}"/></svg>'
-            f'<div class="gv">{f"{v * 100:.0f}" if known else "?"}</div><div class="gl">{_e(label)}</div>'
-            f'<div class="gs">{_e(sub)}</div></div>')
-
-
 def spark(series: list[int], width: int = 220, height: int = 46) -> str:
     """Daily bars of a thread's limit-ups; the peak and the latest day are highlighted."""
     if not series:
@@ -140,6 +129,79 @@ def posbar(vs_hi) -> str:
         return '<div class="pos unknown"></div>'
     fill = max(0.0, min(1.0, 1 + float(vs_hi)))
     return f'<div class="pos"><span style="width:{fill * 100:.0f}%"></span></div>'
+
+
+GROUP_CSS = {"leader": "g-lead", "ladder": "g-ladder", "watch": "g-watch", "avoid": "g-risk"}
+
+
+def history(summary: dict, n: int = 20) -> list[dict]:
+    """Per observation day up to this list's: mood, heat, pain (from the saved lists) and limit-up / limit-down counts,
+    promotion and failed-board rates (the lists' market facts, older days from this list's `market.recent`)."""
+    days: dict[str, dict] = {}
+    root = store.home() / "lists"
+    targets = sorted(p.name for p in root.iterdir() if p.is_dir() and p.name < summary["target"]) if root.exists() else []
+    for t in targets[-n:]:
+        run = listing.latest_run(t)
+        try:
+            s = json.loads((run / "summary.json").read_text()) if run is not None else None
+        except (OSError, ValueError):
+            s = None
+        if s:
+            days[s["observation"]] = _facts_of(s)
+    days[summary["observation"]] = _facts_of(summary)
+    for r in (summary.get("market") or {}).get("recent") or []:  # market facts of earlier days not on a saved list
+        d = days.setdefault(r["day"], {})
+        for k, src in (("lu", "lu_count"), ("ld", "ld_count"), ("promo", "promo_rate"), ("broken", "broken_rate")):
+            if d.get(k) is None:
+                d[k] = r.get(src)
+    return [dict(day=d, **days[d]) for d in sorted(days)[-n:]]
+
+
+def _facts_of(s: dict) -> dict:
+    g, tp = s.get("gate") or {}, s.get("temperature") or {}
+    td = (s.get("market") or {}).get("today") or {}
+    return dict(mood=g.get("mood_level"), heat=tp.get("heat"), pain=tp.get("pain"), lu=td.get("lu_count"),
+                ld=td.get("ld_count"), promo=td.get("promo_rate"), broken=td.get("broken_rate"))
+
+
+def minute_bars(day: str, codes: list[str]) -> dict[str, tuple[pd.DataFrame, str]]:
+    """The observation day's bars of `codes` from the stored layers, best first: Eastmoney 1-minute, Sina 1-minute,
+    BaoStock 5-minute (bar end times mapped to trading minutes). Codes with none are left out."""
+    from . import intraday, minute5, sina1
+    out: dict[str, tuple[pd.DataFrame, str]] = {}
+    for loader, label in ((intraday.load, "1分钟线"), (sina1.load, "新浪1分钟线")):
+        try:
+            bars = loader(day)
+        except Exception:  # a damaged layer: the next one is tried
+            bars = None
+        if bars is not None:
+            for c, g in bars[bars["code"].isin([c for c in codes if c not in out])].groupby("code"):
+                out[c] = (g[["minute", "close", "volume"]], label)
+    try:
+        b5 = minute5.load(day)
+    except Exception:
+        b5 = None
+    if b5 is not None:
+        for c, g in b5[b5["code"].isin([c for c in codes if c not in out])].groupby("code"):
+            m = g["bar"].map(lambda i: 5 * (i + 1) if i < 24 else 120 + 5 * (i - 23))
+            out[c] = (g.assign(minute=m)[["minute", "close", "volume"]], "5分钟线（粗）")
+    return out
+
+
+def up_limits(day: str, codes: list[str]) -> dict[str, tuple[float, float]]:
+    """(previous close, limit-up price) of `codes` on `day` from the stored daily bars."""
+    from .strategy import _round_price, limit_ratio
+    try:
+        d = pd.read_parquet(store.bar_path(day)).drop_duplicates("code").set_index("code")
+    except OSError:
+        return {}
+    have = [c for c in codes if c in d.index]
+    if not have:
+        return {}
+    st = d.loc[have, "isST"].astype(str).eq("1").to_numpy()[None, :]
+    ratio = limit_ratio([day], have, st)[0]
+    pre = d.loc[have, "preclose"].astype(float).to_numpy()
+    return {c: (p, float(u)) for c, p, u in zip(have, pre, _round_price(pre * (1 + ratio)))}
 
 
 def _table(frame: pd.DataFrame, cols: list[str], pos: dict | None = None) -> str:
@@ -193,24 +255,26 @@ def thread_dialog(key: str, th: dict) -> str:
             + '</p></dialog>')
 
 
-def _stock_card(r: pd.Series, vs_hi) -> str:
+def _stock_card(r: pd.Series, vs_hi, chart: str = "", position: str = "") -> str:
     risk = f'<div class="risk">{_e(r["风险提示"])}</div>' if r.get("风险提示") else ""
+    where = position or (f'<div class="kv">{_e(r.get("位置", ""))}</div>{posbar(vs_hi)}')
     return (f'<article class="stock"><div class="sh"><span class="nm">{_e(r["名称"])}</span>'
             f'<span class="chip {GROUP_CLASS.get(r["分组"], "")}">{_e(r["分组"])}</span></div>'
-            f'<div class="role">{_e(r["角色"])}</div><div class="kv">{_e(r.get("成交额", ""))}</div>'
-            f'<div class="kv">{_e(r.get("位置", ""))}</div>{posbar(vs_hi)}'
-            f'<div class="plan">{_e(r["参与建议"])}</div>{risk}</article>')
+            f'<div class="role">{_e(r["角色"])}</div>{chart}<div class="kv">{_e(r.get("成交额", ""))}</div>'
+            f'{where}<div class="plan">{_e(r["参与建议"])}</div>{risk}</article>')
 
 
 def render(run: Path) -> str:
     summary = json.loads((run / "summary.json").read_text())
     header = listing.header(summary)
     table = pd.read_csv(run / "盘前清单.csv", dtype=str).fillna("")
-    pos = {}
+    pos, facts = {}, pd.DataFrame()
     if (run / "facts.parquet").exists():
-        f = pd.read_parquet(run / "facts.parquet")
-        if "vs_high250" in f and "name" in f:
-            pos = dict(zip(f["name"], f["vs_high250"]))
+        facts = pd.read_parquet(run / "facts.parquet")
+        if "vs_high250" in facts and "name" in facts:
+            pos = dict(zip(facts["name"], facts["vs_high250"]))
+    picks = pd.read_csv(run / "picks.csv", dtype=str) if (run / "picks.csv").exists() else pd.DataFrame(columns=["code", "名称"])
+    code_of = dict(zip(picks["名称"], picks["code"]))
     target, obs = summary["target"], summary["observation"]
     al = alerts(summary, header)
     g = summary["gate"]
@@ -239,11 +303,25 @@ def render(run: Path) -> str:
     slots = int(g.get("slots") or 0)
     dots = "".join(f'<i class="{"on" if i < slots else ""}"></i>' for i in range(4))
     trend = {"升": "↑", "降": "↓"}.get(tp.get("trend"), "")
+    hist = history(summary)
+
+    def series(key):
+        return [(h["day"], h.get(key)) for h in hist]
+
+    def val(x, fmt):
+        return "?" if x is None or (isinstance(x, float) and pd.isna(x)) else fmt.format(x)
+    td = (summary.get("market") or {}).get("today") or {}
     parts.append(
-        '<div id="dash" class="sec-h"><h2>总览</h2></div><section class="dash">'
-        + ring(g.get("mood_level"), "情绪分位", f"{g.get('mood_tier', '?')}档", "t-mood")
-        + ring(tp.get("heat"), "热度", f"较前3日{tp.get('trend', '?')}{trend}", "t-heat")
-        + ring(tp.get("pain"), "亏钱效应", tp.get("cell", ""), "t-pain")
+        '<div id="dash" class="sec-h"><h2>总览</h2></div><section class="dash kpis">'
+        + charts.trend_tile("情绪分位", val(g.get("mood_level"), "{:.0%}"), f"{g.get('mood_tier', '?')}档",
+                            series("mood"), "t-mood", lo=0, hi=1)
+        + charts.trend_tile("热度", val(tp.get("heat"), "{:.0%}"), f"较前3日{tp.get('trend', '?')}{trend}",
+                            series("heat"), "t-heat", lo=0, hi=1)
+        + charts.trend_tile("亏钱效应", val(tp.get("pain"), "{:.0%}"), tp.get("cell", ""), series("pain"), "t-pain", lo=0, hi=1)
+        + charts.trend_tile("涨停家数", val(td.get("lu_count"), "{:.0f}"), f"跌停 {val(td.get('ld_count'), '{:.0f}')} 家",
+                            series("lu"), "t-lu", fmt="{:.0f}家")
+        + charts.trend_tile("晋级率", val(td.get("promo_rate"), "{:.0%}"), f"炸板率 {val(td.get('broken_rate'), '{:.0%}')}",
+                            series("promo"), "t-pro")
         + f'<div class="tile"><div class="tl">规则仓位上限</div><div class="slots">{dots}</div>'
           f'<div class="tv">{slots} 只 × 1/4</div><div class="tl">监管温度 {_e(g.get("reg_tier"))}'
           f'（深市周处置 {_e(g.get("szse_cases"))} 起）</div></div>'
@@ -321,17 +399,55 @@ def render(run: Path) -> str:
                  f'<th class="hn">成分股</th><th class="hn">涨停/成分股</th>'
                  f'<th class="hn" title="涨停集中度分，主线按它排序">集中度</th></tr></thead>'
                  f'<tbody>{heat_rows}</tbody></table></div>') if heat_rows else ""
+    srows, sdays = [], set()
+    for i, (th, is_name) in enumerate(name_th + [(th, False) for th in summary.get("threads") or []]):
+        counts = {d["day"]: len(d["lu"]) for d in th.get("days") or []}
+        sdays |= set(counts)
+        srows.append(dict(name="名字炒作" if is_name else "/".join(th["boards"][:2]) + ("等" if len(th["boards"]) > 2 else ""),
+                          age=th["age"], live=th.get("mainline_today"), xuan=is_name, counts=counts,
+                          key=f"th{i}" if th.get("days") else None))
+    strip = charts.thread_strip(srows, sorted(d for d in sdays if d <= obs)[-15:])
+    ladder_html = ""
+    if not facts.empty and {"limit_up", "board_height", "name"} <= set(facts.columns):
+        lu = facts[facts["limit_up"].fillna(False).astype(bool)
+                   & (facts["eligible"].fillna(False).astype(bool) if "eligible" in facts else True)]
+        by_h: dict[int, list] = {}
+        for _, r in lu.sort_values("amount", ascending=False).iterrows():
+            if pd.notna(r["board_height"]):
+                by_h.setdefault(int(r["board_height"]), []).append(
+                    (r["name"], GROUP_CSS.get(r.get("lm_group")) if isinstance(r.get("lm_group"), str) else None))
+        ladder_html = ('<h3>连板天梯 <small>观察日主板涨停股按连板数排列；彩色的是本清单里的股票（颜色同分组）</small></h3>'
+                       + charts.ladder(by_h, by_h.pop(1, [])))
     parts.append(f'<section id="threads"><h2>主线与题材线索 <small>只作描述，不改分组</small></h2>'
-                 f'<div class="mls">{mainl}</div>{heat_html}{wave_html}<div class="grid">{"".join(cards) or "<p>没有线索记录（旧版清单）。</p>"}</div>'
-                 + (f'<h3>高标结局</h3><div class="fates">{fate_html}</div>' if fate_html else "") + '</section>'
+                 f'<div class="mls">{mainl}</div>{ladder_html}'
+                 + (f'<h3>题材线索 <small>每行一条线索，每格一天，颜色越深当天线索内涨停越多；点一行看每天的股票</small></h3>{strip}'
+                    if strip else "")
+                 + (f'<h3>高标结局</h3><div class="fates">{fate_html}</div>' if fate_html else "")
+                 + f'{heat_html}{wave_html}<details class="more-t"><summary>线索卡片（详细）</summary>'
+                 f'<div class="grid">{"".join(cards) or "<p>没有线索记录（旧版清单）。</p>"}</div></details></section>'
                  + "".join(dialogs))
 
-    fcards = "".join(_stock_card(r, pos.get(r["名称"])) for _, r in focus.iterrows())
+    codes = [c for c in picks["code"].dropna()]
+    mins, lims = minute_bars(obs, codes), up_limits(obs, codes)
+    fx = facts.set_index("name") if "name" in facts else pd.DataFrame()
+
+    def visuals(r):
+        c = code_of.get(r["名称"])
+        bars, label = mins.get(c, (None, ""))
+        pre, up = lims.get(c, (None, None))
+        chart = charts.intraday_chart(bars, pre, up, f"{obs[5:]} {label}") if c else ""
+        vh = fx["vs_high250"].get(r["名称"]) if "vs_high250" in fx else None
+        vm = fx["vs_ma250"].get(r["名称"]) if "vs_ma250" in fx else None
+        return chart, charts.position_bar(vh, vm)
+
+    def card(r):
+        return _stock_card(r, pos.get(r["名称"]), *visuals(r))
+    fcards = "".join(card(r) for _, r in focus.iterrows())
     parts.append(f'<section id="focus"><h2>仓位内的候选 <small>规则给出，买卖由你决定</small></h2>'
                  f'<div class="grid">{fcards or "<p>今日没有仓位内的候选。</p>"}</div>')
     if len(risky):
         parts.append('<h3>风险最大</h3><div class="grid">' +
-                     "".join(_stock_card(r, pos.get(r["名称"])) for _, r in risky.iterrows()) + "</div>")
+                     "".join(card(r) for _, r in risky.iterrows()) + "</div>")
     parts.append("</section>")
 
     auction = _latest(store.home() / "auction" / target)
@@ -342,8 +458,12 @@ def render(run: Path) -> str:
                                             "neutral": "中性", "confirm": "中性", "description": "只描述"}).fillna(s["label"]))
         s, anotes = listing.fold_repeats(s.rename(columns={"name": "名称", "group": "分组", "bands": "同类开盘后（历史）"}),
                                          ["同类开盘后（历史）"])
-        parts.append(f'<section id="auction"><h2>竞价快照 <small>{_e(auction.name)}</small></h2>' +
-                     _table(s, ["名称", "分组", "竞价缺口", "竞价标签", "同类开盘后（历史）"]) + _notes(anotes) + "</section>")
+        gaps = charts.gap_bars([(r["名称"], r["gap"], "竞价否定" if r["label"] == "deny" else
+                                 "涨停开" if r["label"] == "limit_open" else "") for _, r in s.iterrows()])
+        parts.append(f'<section id="auction"><h2>竞价快照 <small>{_e(auction.name)}</small></h2>'
+                     f'<p class="note">开盘价相对昨收：向右红色是高开，向左绿色是低开。</p>{gaps}'
+                     '<details class="more-t"><summary>表格（全部文字）</summary>' +
+                     _table(s, ["名称", "分组", "竞价缺口", "竞价标签", "同类开盘后（历史）"]) + _notes(anotes) + "</details></section>")
     else:
         parts.append('<section id="auction"><h2>竞价快照</h2><p class="dim">还没有这个交易日的竞价快照（09:26 定时任务会自动抓取）。</p></section>')
 
@@ -352,14 +472,18 @@ def render(run: Path) -> str:
     for i, grp in enumerate(g_ for g_ in GROUPS if (table["分组"] == g_).any()):
         part = folded[folded["分组"] == grp]
         tabs.append(f'<button class="tab {GROUP_CLASS[grp]}{" on" if i == 0 else ""}" data-p="p{i}">{grp} {len(part)}</button>')
-        panes.append(f'<div class="pane{" on" if i == 0 else ""}" id="p{i}">' + _table(part, listing.VIEW[1:], pos) + "</div>")
+        panes.append(f'<div class="pane{" on" if i == 0 else ""}" id="p{i}"><div class="cards">'
+                     + "".join(card(r) for _, r in table[table["分组"] == grp].iterrows()) + '</div>'
+                     + '<details class="more-t"><summary>表格（全部文字）</summary>'
+                     + _table(part, listing.VIEW[1:], pos) + "</details></div>")
     parts.append(f'<section id="groups"><h2>完整清单</h2><div class="tabs">{"".join(tabs)}</div>{"".join(panes)}{_notes(lnotes)}</section>')
 
     rev = _latest(store.home() / "reviews")
     daily = daily_report_html(summary, table)
     rv = "" if rev is not None and (rev / "rows.csv").exists() else daily
     if rev is not None and (rev / "rows.csv").exists():
-        rv += review_html(pd.read_csv(rev / "rows.csv"), rev.name) + daily + review_report_html(rev)
+        rows = pd.read_csv(rev / "rows.csv")
+        rv += rate_chart(rows) + review_html(rows, rev.name) + daily + review_report_html(rev)
     elif rev is not None and (rev / "stats.csv").exists():
         st = pd.read_csv(rev / "stats.csv").rename(columns={"Unnamed: 0": "组"})
         rv += f'<h3>最近一次复盘 <small>{_e(rev.name)}</small></h3>' + _table(st.round(3), list(st.columns))
@@ -371,7 +495,8 @@ def render(run: Path) -> str:
     parts.append(f'<section id="review"><h2>复盘</h2>{rv or "<p class=dim>还没有复盘记录。</p>"}</section>')
     parts.append('<section class="foot"><details><summary>表头原文</summary><pre>' + _e("\n".join(header)) +
                  "</pre></details><p>本页只读取已保存的文件，不重新计算。本系统不交易，买卖由你决定；非投资建议。</p></section>")
-    return TEMPLATE.replace("{{title}}", f"龙脉 {target}").replace("{{body}}", "\n".join(parts))
+    return TEMPLATE.replace("{{title}}", f"龙脉 {target}").replace("</style>", charts.CSS + "</style>", 1) \
+        .replace("{{body}}", "\n".join(parts))
 
 
 REVIEW_GROUPS = (("leader", "主线龙头"), ("ladder", "连板梯队"), ("watch", "观察"), ("avoid", "高波动"))
@@ -397,6 +522,22 @@ def _cell(part: pd.Series, key: str, base: float | None) -> tuple[str, float | N
     elif base is not None and key == "bigloss1":
         tone = "good" if value < base - 0.03 else "bad" if value > base + 0.03 else ""
     return (f'<span class="{tone}">{text}</span>' if tone else text), value
+
+
+def rate_chart(rows: pd.DataFrame) -> str:
+    """5-session breakout and next-day big loss per list group, next to all main-board limit-ups of the same days."""
+    if rows.empty:
+        return ""
+    rows = rows.assign(baseline=rows["baseline"].astype(str).str.lower().eq("true"))
+
+    def rate(part, k):
+        known = part[k].dropna()
+        return float(known.mean()) if len(known) else None
+    base = rows[rows["baseline"]]
+    items = [(label, GROUP_CLASS[label], rate(part, "out5"), rate(part, "bigloss1"), len(part))
+             for key, label in REVIEW_GROUPS if len(part := rows[rows["group"] == key])]  # same rows as review_html
+    return ('<h3>各组命中与大面 <small>全部已存清单；样本少只看方向</small></h3>'
+            + charts.rate_bars(items, (rate(base, "out5"), rate(base, "bigloss1"))))
 
 
 def review_html(rows: pd.DataFrame, name: str) -> str:
@@ -914,7 +1055,7 @@ background:#0d1424;color:var(--fg)}.tdlg::backdrop{background:rgba(3,6,12,.72)}
 document.querySelectorAll('.tab').forEach(function(b){b.addEventListener('click',function(){
 document.querySelectorAll('.tab,.pane').forEach(function(x){x.classList.remove('on')});
 b.classList.add('on');document.getElementById(b.dataset.p).classList.add('on');});});
-document.querySelectorAll('.thread[data-d]').forEach(function(c){function o(){var d=document.getElementById(c.dataset.d);
+document.querySelectorAll('[data-d]').forEach(function(c){function o(){var d=document.getElementById(c.dataset.d);
 if(d&&d.showModal)d.showModal();}c.addEventListener('click',o);c.addEventListener('keydown',function(e){if(e.key==='Enter')o();});});
 document.querySelectorAll('dialog').forEach(function(d){d.addEventListener('click',function(e){if(e.target===d)d.close();});
 d.querySelector('.x').addEventListener('click',function(){d.close();});});
