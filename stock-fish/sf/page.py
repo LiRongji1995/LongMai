@@ -318,18 +318,29 @@ def render(run: Path) -> str:
     parts.append(
         '<div id="dash" class="sec-h"><h2>总览</h2></div><section class="dash kpis">'
         + charts.trend_tile("情绪分位", val(g.get("mood_level"), "{:.0%}"), f"{g.get('mood_tier', '?')}档",
-                            series("mood"), "t-mood", lo=0, hi=1)
+                            series("mood"), "t-mood", lo=0, hi=1, key="kd-mood")
         + charts.trend_tile("热度", val(tp.get("heat"), "{:.0%}"), f"较前3日{tp.get('trend', '?')}{trend}",
-                            series("heat"), "t-heat", lo=0, hi=1)
-        + charts.trend_tile("亏钱效应", val(tp.get("pain"), "{:.0%}"), tp.get("cell", ""), series("pain"), "t-pain", lo=0, hi=1)
+                            series("heat"), "t-heat", lo=0, hi=1, key="kd-temp")
+        + charts.trend_tile("亏钱效应", val(tp.get("pain"), "{:.0%}"), tp.get("cell", ""), series("pain"), "t-pain", lo=0, hi=1,
+                            key="kd-temp")
         + charts.trend_tile("涨停家数", val(td.get("lu_count"), "{:.0f}"), f"跌停 {val(td.get('ld_count'), '{:.0f}')} 家",
-                            series("lu"), "t-lu", fmt="{:.0f}家")
+                            series("lu"), "t-lu", fmt="{:.0f}家", key="kd-lu")
         + charts.trend_tile("晋级率", val(td.get("promo_rate"), "{:.0%}"), f"炸板率 {val(td.get('broken_rate'), '{:.0%}')}",
-                            series("promo"), "t-pro")
+                            series("promo"), "t-pro", key="kd-pro")
         + f'<div class="tile"><div class="tl">规则仓位上限</div><div class="slots">{dots}</div>'
           f'<div class="tv">{slots} 只 × 1/4</div><div class="tl">监管温度 {_e(g.get("reg_tier"))}'
           f'（深市周处置 {_e(g.get("szse_cases"))} 起）</div></div>'
         + '</section>')
+    parts.append(  # the large charts behind the overview tiles
+        charts.trend_dialog("kd-mood", "情绪分位（近一年分位，越高越热）", [("情绪分位", "t-mood", series("mood"))], lo=0, hi=1,
+                            note="情绪档位按这个分位划分；规则仓位上限由情绪和监管温度共同决定。")
+        + charts.trend_dialog("kd-temp", "水温：热度与亏钱效应", [("热度", "t-heat", series("heat")),
+                                                         ("亏钱效应", "t-pain", series("pain"))], lo=0, hi=1,
+                              note="两个分数都是近一年的分位。热度高、亏钱低是暖；亏钱高是痛。")
+        + charts.trend_dialog("kd-lu", "涨停与跌停家数（主板，不含 ST）", [("涨停", "t-lu", series("lu")), ("跌停", "t-ld", series("ld"))],
+                              fmt="{:.0f}")
+        + charts.trend_dialog("kd-pro", "晋级率与炸板率", [("晋级率", "t-pro", series("promo")), ("炸板率", "t-brk", series("broken"))],
+                              lo=0, hi=1, note="晋级率：昨日涨停今日再涨停的比例；炸板率：盘中触及涨停但收盘没封住的比例。"))
     if slots == 0:
         parts.append('<section class="alert slim"><b>规则空仓</b>：今天只观察，不开新仓。</section>')
     brief = []

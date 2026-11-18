@@ -58,3 +58,19 @@ def test_review_chart_uses_the_same_rows_as_the_table():
                              out5=[1.0, 0.0, 0.0, 0.0], bigloss1=[0.0, 1.0, 0.0, 1.0]))
     html = page.rate_chart(rows)
     assert "2 次" in html and "50%" in html  # a listed limit-up is also in the baseline and still counted
+
+
+def test_tile_opens_a_large_chart_with_every_value():
+    tile = charts.trend_tile("涨停家数", "34", "跌停 41 家", [("2026-11-17", 30.0), ("2026-11-18", 34.0)], "t-lu",
+                             fmt="{:.0f}家", key="kd-lu")
+    assert 'data-d="kd-lu"' in tile and "⤢" in tile
+    assert 'data-d=' not in charts.trend_tile("x", "1", "", [("2026-11-18", 1.0)], "t-lu", key="kd-x")  # no chart, no zoom
+    dlg = charts.trend_dialog("kd-lu", "涨停与跌停", [("涨停", "t-lu", [("2026-11-16", 20.0), ("2026-11-17", None),
+                                                                     ("2026-11-18", 34.0)]),
+                                                     ("跌停", "t-ld", [("2026-11-17", 50.0), ("2026-11-18", 41.0)]),
+                                                     ("空", "t-pro", [("2026-11-15", None)])], fmt="{:.0f}")
+    assert dlg.startswith('<dialog id="kd-lu"') and 'class="x"' in dlg
+    assert dlg.count('<polyline class="bl t-lu"') == 2                     # the unknown day breaks the line
+    assert ">34<" in dlg and ">41<" in dlg and "<td>2026-11-17</td><td><span class=dim>无</span>" in dlg
+    assert "2026-11-15" not in dlg                                          # a day no series knows is left out
+    assert charts.trend_dialog("k", "t", [("a", "t-lu", [("2026-11-18", None)])]) == ""

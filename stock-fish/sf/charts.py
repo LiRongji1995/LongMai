@@ -22,8 +22,9 @@ def _known(x) -> bool:
 # ------------------------------------------------------------------ overview: big number + trend line
 
 def trend_tile(label: str, value: str, sub: str, series: list[tuple[str, float | None]], tone: str,
-               fmt: str = "{:.0%}", lo: float | None = None, hi: float | None = None) -> str:
-    """A tile with the latest value large and a small line of the recent days under it (hover shows each day)."""
+               fmt: str = "{:.0%}", lo: float | None = None, hi: float | None = None, key: str | None = None) -> str:
+    """A tile with the latest value large and a small line of the recent days under it (hover shows each day). With
+    `key` the tile opens the dialog of that id (see trend_dialog)."""
     pts = [(d, v) for d, v in series if _known(v)]
     svg = ""
     if len(pts) >= 2:
@@ -47,8 +48,73 @@ def trend_tile(label: str, value: str, sub: str, series: list[tuple[str, float |
                f'<polygon class="ar" points="{area}"/><polyline class="ln" points="{line}"/>'
                f'<circle class="now" cx="{lx:.1f}" cy="{ly:.1f}" r="3"/>{dots}</svg>')
         sub = sub + f" · 近{len(series)}日"
-    return (f'<div class="kpi {tone}"><div class="kl">{_e(label)}</div><div class="kn">{_e(value)}</div>'
-            f'{svg}<div class="ks">{_e(sub)}</div></div>')
+    attrs = f' data-d="{_e(key)}" tabindex="0" role="button" title="点开看大图"' if key and svg else ""
+    zoom = '<span class="kz">⤢</span>' if attrs else ""
+    return (f'<div class="kpi {tone}{" open" if attrs else ""}"{attrs}><div class="kl">{_e(label)}{zoom}</div>'
+            f'<div class="kn">{_e(value)}</div>{svg}<div class="ks">{_e(sub)}</div></div>')
+
+
+def trend_dialog(key: str, title: str, lines: list[tuple[str, str, list[tuple[str, float | None]]]],
+                 fmt: str = "{:.0%}", lo: float | None = None, hi: float | None = None, note: str = "") -> str:
+    """A dialog with a large chart of one or more daily series (name, css tone, [(day, value)]): date ticks, grid lines,
+    every known value written at its point, and the values as a table below. Unknown days are gaps, never zeros."""
+    days = sorted({d for _, _, pts in lines for d, v in pts if _known(v)})  # days no series knows are left out
+    vals = [v for _, _, pts in lines for _, v in pts if _known(v)]
+    if not days or not vals:
+        return ""
+    w, h, left, right, top, bottom = 640, 260, 46, 16, 18, 34
+    a = min(vals) if lo is None else min(lo, min(vals))
+    b = max(vals) if hi is None else max(hi, max(vals))
+    if lo is None and hi is None:  # counts: start at 0, leave headroom
+        a, b = 0.0, max(vals) * 1.15 or 1.0
+    b = b if b > a else a + 1
+    n = max(len(days) - 1, 1)
+
+    def x(i):  # a little inside the axes so the first and last labels clear them
+        return left + 18 + (w - left - right - 36) * i / n
+
+    def y(v):
+        return top + (h - top - bottom) * (b - v) / (b - a)
+    grid = []
+    for k in range(5):
+        v = a + (b - a) * k / 4
+        grid.append(f'<line class="g" x1="{left}" x2="{w - right}" y1="{y(v):.1f}" y2="{y(v):.1f}"/>'
+                    f'<text class="ya" x="{left - 6}" y="{y(v) + 4:.1f}">{_e(fmt.format(v))}</text>')
+    xt = "".join(f'<text class="xa" x="{x(i):.1f}" y="{h - 12}">{_e(d[5:].replace("-", "/"))}</text>' for i, d in enumerate(days))
+    paths, legend = [], []
+    pos = {d: i for i, d in enumerate(days)}
+    below: set[tuple[int, int]] = set()  # (line, day) labels written under their point: another line's label is close above
+    for i in range(len(days)):
+        at = sorted((y(v), li) for li, (_, _, pts) in enumerate(lines)
+                    for d, v in pts if _known(v) and pos.get(d) == i)
+        for (y0, _), (y1, li) in zip(at, at[1:]):
+            if y1 - y0 < 16:
+                below.add((li, i))
+    for li, (name, tone, pts) in enumerate(lines):
+        known = [(pos[d], v) for d, v in pts if _known(v)]
+        segs, cur = [], []
+        for i, v in sorted(known):  # a missing day breaks the line
+            if cur and i != cur[-1][0] + 1:
+                segs.append(cur)
+                cur = []
+            cur.append((i, v))
+        if cur:
+            segs.append(cur)
+        for seg in segs:
+            paths.append(f'<polyline class="bl {tone}" points="{" ".join(f"{x(i):.1f},{y(v):.1f}" for i, v in seg)}"/>')
+        paths += [f'<circle class="bd {tone}" cx="{x(i):.1f}" cy="{y(v):.1f}" r="3.5"/>'
+                  f'<text class="bv {tone}" x="{x(i):.1f}" y="{y(v) + 18 if (li, i) in below else y(v) - 8:.1f}">'
+                  f'{_e(fmt.format(v))}</text>' for i, v in known]
+        legend.append(f'<span class="lg {tone}"><i></i>{_e(name)}</span>')
+    head = "".join(f"<th>{_e(name)}</th>" for name, _, _ in lines)
+    rows = "".join(f'<tr><td>{_e(d)}</td>' + "".join(
+        f'<td>{_e(fmt.format(dict(pts).get(d))) if _known(dict(pts).get(d)) else "<span class=dim>无</span>"}</td>'
+        for _, _, pts in lines) + "</tr>" for d in reversed(days))
+    return (f'<dialog id="{_e(key)}" class="tdlg"><div class="dh"><div><b>{_e(title)}</b>'
+            f'<div class="legendrow">{"".join(legend)}</div></div><button class="x" aria-label="关闭">×</button></div>'
+            f'<svg class="big" viewBox="0 0 {w} {h}" aria-hidden="true">{"".join(grid)}{xt}{"".join(paths)}</svg>'
+            + (f'<p class="note">{_e(note)}</p>' if note else "")
+            + f'<div class="scroll"><table><thead><tr><th>观察日</th>{head}</tr></thead><tbody>{rows}</tbody></table></div></dialog>')
 
 
 # ------------------------------------------------------------------ limit-up ladder
@@ -209,6 +275,17 @@ CSS = """
 .trend .ln{fill:none;stroke:currentColor;stroke-width:1.6;vector-effect:non-scaling-stroke}
 .trend .ar{fill:currentColor;opacity:.12}.trend .now{fill:currentColor}.trend .hit{fill:transparent}
 .kpi.t-mood{color:var(--cyan)}.kpi.t-heat{color:var(--amber)}.kpi.t-pain{color:var(--red)}.kpi.t-lu{color:var(--green)}
+.kpi.open{cursor:pointer;transition:border-color .15s,transform .15s;border:1px solid transparent}
+.kpi.open:hover{transform:translateY(-2px);border-color:rgba(56,225,255,.5)}.kz{float:right;color:var(--dim);font-size:13px}
+.big{width:100%;height:auto;display:block;margin:4px 0 8px}.big .g{stroke:rgba(255,255,255,.08)}
+.big .ya{fill:var(--dim);font-size:11px;text-anchor:end}.big .xa{fill:var(--dim);font-size:11px;text-anchor:middle}
+.big .bl{fill:none;stroke-width:2;stroke:currentColor}.big .bd{fill:currentColor}
+.big .bv{fill:currentColor;font-size:11px;font-weight:700;text-anchor:middle}
+.t-mood{color:var(--cyan)}.t-heat{color:var(--amber)}.t-pain,.t-ld{color:var(--red)}.t-lu{color:var(--green)}.t-pro{color:var(--violet)}
+.t-brk{color:var(--amber)}.legendrow{display:flex;gap:14px;margin-top:4px;font-size:12px}
+.lg{display:flex;align-items:center;gap:6px}.lg i{width:14px;height:3px;border-radius:2px;background:currentColor}
+.lg{color:var(--fg)}.lg.t-mood i{background:var(--cyan)}.lg.t-heat i{background:var(--amber)}.lg.t-pain i,.lg.t-ld i{background:var(--red)}
+.lg.t-lu i{background:var(--green)}.lg.t-pro i{background:var(--violet)}.lg.t-brk i{background:var(--amber)}
 .kpi.t-ld{color:var(--red)}.kpi.t-pro{color:var(--violet)}.kpi .kn{color:var(--fg)}
 .ladder{display:flex;gap:10px;overflow-x:auto;padding-bottom:4px}
 .lcol{flex:0 0 auto;min-width:96px;display:flex;flex-direction:column;gap:6px;padding:10px;border-radius:12px;
