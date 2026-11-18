@@ -219,14 +219,23 @@ def build(observation: str | None = None, update_external: bool = True, watch_li
     try:
         inotes, istatus, ifacts = intraday.list_notes(observation, table["code"].tolist())
         gaps = [c for c, n in inotes.items() if n.startswith(("分时缺失", "分时未采集"))]
-        if gaps and update_external:  # the 1-minute source refused or missed them: coarse 5-minute fallback
+        istatus_sina = istatus_bs5 = None
+        if gaps and update_external:  # the Eastmoney 1-minute source refused or missed them: Sina 1-minute bars
+            from . import sina1
+            try:
+                istatus_sina = sina1.capture(observation, gaps, log=lambda *_: None)
+            except Exception as error:  # reported; the stocks stay missing
+                istatus_sina = dict(status=f"FAILED: {str(error)[:100]}")
+            inotes, istatus, ifacts = intraday.list_notes(observation, table["code"].tolist())
+            gaps = [c for c, n in inotes.items() if n.startswith(("分时缺失", "分时未采集"))]
+        if gaps and update_external:  # still missing: coarse 5-minute fallback (BaoStock)
             from . import minute5
             try:
                 istatus_bs5 = minute5.capture(observation, gaps, log=lambda *_: None)
             except Exception as error:  # reported; the stocks stay missing
                 istatus_bs5 = dict(status=f"FAILED: {str(error)[:100]}")
             inotes, istatus, ifacts = intraday.list_notes(observation, table["code"].tolist())
-            istatus["bs5"] = istatus_bs5
+        istatus["sina1"], istatus["bs5"] = istatus_sina, istatus_bs5
     except Exception as error:  # reported in the header as missing, never silently blank
         inotes, ifacts = {c: "分时说明出错" for c in table["code"]}, pd.DataFrame()
         istatus = dict(day=observation, captured=None, error=str(error)[:100], noted=0, missing=len(table))
@@ -433,10 +442,15 @@ def header(result: dict) -> list[str]:
     if it is not None:
         if it.get("error"):
             missing.append(f"昨日分时说明出错（{it['error']}）")
-        elif not it.get("captured"):
+        elif not it.get("captured") and not (it.get("sina") or it.get("coarse")):
             missing.append(f"{it['day']} 盘中分时未采集（清单无分时说明）")
+        elif not it.get("captured"):
+            missing.append(f"{it['day']} 东方财富盘中分时未采集" + (f"（另有 {it['missing']} 只清单股无分时）"
+                                                                 if it.get("missing") else ""))
         elif it.get("missing"):
             missing.append(f"{it['missing']} 只清单股无 {it['day']} 分时（见“昨日分时”列）")
+        if it.get("sina") and not it.get("error"):
+            missing.append(f"{it['sina']} 只清单股的 {it['day']} 分时来自新浪1分钟线（东方财富缺，备用源）")
         if it.get("coarse") and not it.get("error"):
             missing.append(f"{it['coarse']} 只清单股的 {it['day']} 分时只有5分钟线（粗，开板次数和封板时间只到5分钟一档）")
     if it is not None and it.get("captured"):

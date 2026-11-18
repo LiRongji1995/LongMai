@@ -337,20 +337,30 @@ def cmd_intraday(args) -> int:
         for day, r in retried.items():
             print(f"{day} 补抓缺失：{r.get('requested', 0)} 只，完整 {r.get('ok', 0)} 只，失败 {len(r.get('failed', {}))}")
         left = {d: len(intraday.missing_codes(d)) for d in retried}
-        bad = any(left.values()) or any(r["status"].startswith("FAILED") for r in res.values())
         for day, n in left.items():
             if n:
-                print(f"{day} 仍缺 {n} 只 1 分钟线，稍后再跑 sf intraday --backfill")
-        from . import minute5
-        for day in days:  # coarse fallback from BaoStock for stocks the 1-minute source has not given
+                print(f"{day} 仍缺 {n} 只东方财富 1 分钟线，稍后再跑 sf intraday --backfill")
+        from . import minute5, sina1
+        # with --backfill a day counts as failed only when it has no Eastmoney file or a stock lacks 1-minute bars
+        # from both sources (Eastmoney's gaps filled by Sina are reported above but no longer a failure)
+        bad = any(r["status"].startswith("FAILED") for r in res.values())
+        for day in days:  # fallbacks for stocks the Eastmoney 1-minute source has not given
             # a day with no 1-minute file at all: its whole capture universe (limit-ups, touched, listed stocks)
             need = intraday.missing_codes(day) if intraday.captured(day) else sorted(intraday.universe(day)["code"])
-            need = sorted(set(need) - minute5.covered(day))
-            if need:
+            need = sorted(set(need) - sina1.covered(day))
+            if need:  # Sina 1-minute bars (about 8 sessions kept)
+                r = sina1.capture(day, need, log=lambda *_: None)
+                print(f"{day} 用新浪1分钟线补 {r['requested']} 只：成功 {r['ok']}，失败 {len(r['failed'])}，"
+                      f"无数据 {len(r['absent'])}")
+            no_minute = sorted(set(need) - sina1.covered(day))  # no 1-minute bars from either source
+            if no_minute or not intraday.captured(day):
+                bad = True  # a stock without any 1-minute bars (or a day without the Eastmoney file) is a failure
+            need = sorted(set(no_minute) - minute5.covered(day))
+            if need:  # still missing: coarse 5-minute bars from BaoStock
                 r = minute5.capture(day, need, log=lambda *_: None)
                 print(f"{day} 用5分钟线（BaoStock）补 {r['requested']} 只：成功 {r['ok']}，失败 {len(r['failed'])}，"
                       f"无数据 {len(r['absent'])}")
-    print(f"耗时 {time.monotonic() - started:.0f}s；1 分钟线的源只保留约 5 个交易日，失败的日子请尽快重跑；"
+    print(f"耗时 {time.monotonic() - started:.0f}s；东方财富 1 分钟线只保留约 5 个交易日、新浪约 8 个，失败的日子请尽快重跑；"
           "5 分钟线（BaoStock）保留很久，以后还能补")
     return 1 if bad else 0
 
@@ -782,7 +792,14 @@ def cmd_status(args) -> int:
 def cmd_themes(args) -> int:
     from . import themes
     started = time.monotonic()
-    result = themes.refresh(with_history=not args.no_history)
+    try:
+        result = themes.refresh(with_history=not args.no_history)
+    except Exception as error:  # the board list itself failed: nothing is replaced, the old membership stays
+        fresh = themes.freshness() or {}
+        kept = f"沿用 {fresh['captured']} 采集的成分（{fresh['age_days']} 天前）" if fresh.get("captured") else "没有旧成分可用"
+        print(f"板块成分刷新失败：东方财富的板块列表请求失败（{type(error).__name__}: {str(error)[:80]}）。"
+              f"{kept}；定时任务会在周日到周五 11:00 自动重试，直到成功", file=sys.stderr)
+        return 1
     print(f"板块 {result['boards']} 个，成分 {result['members']} 条，沿用旧成分 {len(result['carried'])} 个，"
           f"缺失 {len(result['failures'])} 个，耗时 {time.monotonic() - started:.0f}s")
     for kind, name, error in result["failures"]:

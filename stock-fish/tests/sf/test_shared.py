@@ -73,9 +73,10 @@ def test_weekly_jobs_retry_only_after_a_failed_run():
     assert schedule.should_run("themes", saturday, [], last=dict(exit=0)) is None       # its own day: always
     assert schedule.should_run("themes", sunday, [], last=dict(exit=1)) is None         # failed: retry
     assert "不需要重试" in schedule.should_run("themes", sunday, [], last=dict(exit=0))
-    tuesday, wednesday = datetime(2026, 11, 17, 11, 0, tzinfo=store.SH), datetime(2026, 11, 18, 11, 0, tzinfo=store.SH)
-    assert schedule.should_run("themes", tuesday, [], last=dict(exit=1)) is None
-    assert 3 not in schedule.JOBS["themes"]["retry_days"] and wednesday.isoweekday() == 3
+    friday = datetime(2026, 11, 20, 11, 0, tzinfo=store.SH)
+    assert schedule.should_run("themes", friday, [], last=dict(exit=1)) is None          # retried every day to Fri
+    assert "不需要重试" in schedule.should_run("themes", friday, [], last=dict(exit=0))
+    assert set(schedule.JOBS["themes"]["retry_days"]) == {7, 1, 2, 3, 4, 5}
 
 
 def test_retry_status_is_read_from_the_status_file(tmp_path, monkeypatch):
@@ -94,10 +95,10 @@ def test_retry_status_is_read_from_the_status_file(tmp_path, monkeypatch):
 def test_plist_has_a_slot_for_every_retry_day(tmp_path, monkeypatch):
     monkeypatch.setenv("SF_HOME", str(tmp_path))
     slots = schedule.plist("themes", tz=store.SH)["StartCalendarInterval"]
-    assert sorted(s["Weekday"] for s in slots) == [0, 1, 2, 6]                          # Sun, Mon, Tue, Sat (launchd)
+    assert sorted(s["Weekday"] for s in slots) == [0, 1, 2, 3, 4, 5, 6]                    # every day (launchd: 0 = Sun)
     assert len(schedule.plist("auction", tz=store.SH)["StartCalendarInterval"]) == 5
     row = next(s for s in schedule.status() if s["job"] == "themes")
-    assert "失败后周日、周一、周二重试" in row["days"]
+    assert "失败后周日、周一、周二、周三、周四、周五重试" in row["days"]
 
 
 # ------------------------------------------------------------------ theme freshness

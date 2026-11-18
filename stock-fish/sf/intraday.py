@@ -14,7 +14,8 @@ Layers under intraday/ (see docs/INTRADAY_STUDY.md for definitions):
 - supplement/{minute,universe,capture}/<day>/<UTC stamp>.*   list stocks fetched after the evening capture
                                 (the list is built after it; they belong to the pre-registered universe as list_obs)
 - features/<FEATURES>/<day>[+s<n>].parquet   derived, recomputable (excluded from backups); +s<n> = with n supplements
-Stocks still missing can be described from BaoStock 5-minute bars (minute5.py, a separate coarse layer).
+Stocks still missing can be described from Sina 1-minute bars (sina1.py) and then from BaoStock 5-minute bars
+(minute5.py, a coarse layer); both are separate layers, never mixed into these files.
 Session files are written once and never modified. Missing stocks are listed in the capture log, never
 dropped silently; a stock with fewer than 241 bars on a traded day is "incomplete".
 """
@@ -303,9 +304,12 @@ def load(day: str) -> pd.DataFrame | None:
 
 # ------------------------------------------------------------------ features
 
-def features(day: str, minute: pd.DataFrame | None = None, daily: pd.DataFrame | None = None) -> pd.DataFrame:
+def features(day: str, minute: pd.DataFrame | None = None, daily: pd.DataFrame | None = None,
+             bars_per_day: int = BARS_PER_DAY, auction_bar: bool = True) -> pd.DataFrame:
     """Per-stock intraday facts for `day` (index: code), all known after that close. Minutes count trading
-    minutes from 09:30 (0 = the 09:30 bar, 120 = 11:30, 240 = 15:00). NaN = not applicable or unknown."""
+    minutes from 09:30 (0 = the 09:30 bar, 120 = 11:30, 240 = 15:00). NaN = not applicable or unknown.
+    Times are read from the `minute` column (Eastmoney: equal to the bar position). Another source's bars
+    (sina1.py: no separate 09:30 bar, `auction_bar=False`) use the same minute numbering."""
     from .strategy import limit_ratio
     minute = load(day) if minute is None else minute
     if minute is None or minute.empty:
@@ -320,31 +324,35 @@ def features(day: str, minute: pd.DataFrame | None = None, daily: pd.DataFrame |
         up = np.floor(pre * (1 + limit_ratio([day], [code], np.array([[st]]))[0, 0]) * 100 + 0.5) / 100
         close, high, low = g["close"].to_numpy(), g["high"].to_numpy(), g["low"].to_numpy()
         vol, amt = g["volume"].to_numpy(), g["amount"].to_numpy()
+        mins = g["minute"].to_numpy().astype(int)
         at = close >= up - 1e-9
         touched = high >= up - 1e-9
-        first_touch = int(np.argmax(touched)) if touched.any() else np.nan
-        first_seal = int(np.argmax(at)) if at.any() else np.nan
-        after = at[int(first_seal):] if at.any() else np.array([], dtype=bool)
+        first_touch = int(mins[np.argmax(touched)]) if touched.any() else np.nan
+        first_seal_pos = int(np.argmax(at)) if at.any() else None
+        first_seal = int(mins[first_seal_pos]) if first_seal_pos is not None else np.nan
+        after = at[first_seal_pos:] if first_seal_pos is not None else np.array([], dtype=bool)
         reopen = int(((after[:-1]) & (~after[1:])).sum()) if len(after) > 1 else 0
         closed_at = bool(at[-1]) if len(at) else False
         last_seal = np.nan
         if closed_at:
             breaks = np.flatnonzero(~at)
-            last_seal = int(breaks[-1] + 1) if len(breaks) else 0
+            last_seal = int(mins[breaks[-1] + 1]) if len(breaks) else int(mins[0])
         total_vol, total_amt = vol.sum(), amt.sum()
         vwap = total_amt / total_vol if total_vol > 0 else np.nan
         running = g["avg"].to_numpy()
         rows.append(dict(
-            code=code, bars=len(g), complete=len(g) == BARS_PER_DAY, preclose=pre, up_limit=up,
+            code=code, bars=len(g), complete=len(g) == bars_per_day, preclose=pre, up_limit=up,
             closed_at_limit=closed_at, touched_limit=bool(touched.any()),
             one_word=bool(len(g) and (low >= up - 1e-9).all()),
             first_touch_min=first_touch, first_seal_min=first_seal, last_seal_min=last_seal,
             sealed_share=float(after.mean()) if len(after) else np.nan, reopen_count=reopen if at.any() else np.nan,
             vwap=vwap, close_vs_vwap=close[-1] / vwap - 1 if vwap and not np.isnan(vwap) else np.nan,
             above_vwap_share=float((close > running).mean()) if len(g) else np.nan,
-            auction_vol_share=vol[0] / total_vol if total_vol > 0 else np.nan,
-            open30_vol_share=vol[:31].sum() / total_vol if total_vol > 0 else np.nan,
-            tail30_vol_share=vol[-30:].sum() / total_vol if total_vol > 0 else np.nan,
+            auction_vol_share=vol[0] / total_vol if total_vol > 0 and auction_bar else np.nan,
+            open30_vol_share=vol[mins <= 30].sum() / total_vol if total_vol > 0 else np.nan,
+            # Eastmoney keeps its original positional definition (the last 30 bars) so cached features match
+            tail30_vol_share=(vol[-30:] if auction_bar else vol[mins >= 211]).sum() / total_vol
+            if total_vol > 0 else np.nan,
             fade_from_high=(high.max() - close[-1]) / pre if pre else np.nan,
         ))
     out = pd.DataFrame(rows).set_index("code")
@@ -470,7 +478,7 @@ def clock(m) -> str:
     return f"{(base + off) // 60:02d}:{(base + off) % 60:02d}"
 
 
-def describe(r: pd.Series, lead: pd.Series | None = None) -> str:
+def describe(r: pd.Series, lead: pd.Series | None = None, per_day: int = BARS_PER_DAY) -> str:
     """One line of facts from a features row; NaN facts are left out, never shown as zero."""
     parts = []
     st = r.get("seal_type", "")
@@ -497,7 +505,7 @@ def describe(r: pd.Series, lead: pd.Series | None = None) -> str:
         if pd.notna(r.get("open30_vol_share")) and pd.notna(r.get("tail30_vol_share")):
             parts.append(f"成交 早30分{r['open30_vol_share']:.0%}/尾30分{r['tail30_vol_share']:.0%}")
     if not bool(r.get("complete", True)):
-        parts.append(f"分时不全（{int(r['bars'])}/{BARS_PER_DAY}根）")
+        parts.append(f"分时不全（{int(r['bars'])}/{per_day}根）")
     return "；".join(parts)
 
 
@@ -508,11 +516,13 @@ def list_notes(day: str, codes: list[str], feats: pd.DataFrame | None = None,
     dict (captured, sessions, noted, missing) and the feature rows used (saved with the list)."""
     sessions = len(list(_dir("minute").glob("*.parquet")))
     status = dict(day=day, captured=captured(day), sessions=sessions, version=NOTES_VERSION, features=FEATURES)
-    from . import minute5
-    if not status["captured"]:
-        coarse = minute5.notes(day, codes)
-        notes = {c: coarse.get(c, "分时未采集") for c in codes}
-        return notes, dict(status, noted=0, coarse=len(coarse), missing=len(codes) - len(coarse)), pd.DataFrame()
+    from . import minute5, sina1
+    if not status["captured"]:  # Sina 1-minute bars first, then the coarse BaoStock 5-minute bars
+        second = sina1.notes(day, codes)
+        coarse = minute5.notes(day, [c for c in codes if c not in second])
+        notes = {c: second.get(c) or coarse.get(c, "分时未采集") for c in codes}
+        return notes, dict(status, noted=0, sina=len(second), coarse=len(coarse),
+                           missing=len(codes) - len(second) - len(coarse)), pd.DataFrame()
     f = stored_features(day) if feats is None else feats
     if members is None:
         from . import themes
@@ -531,14 +541,18 @@ def list_notes(day: str, codes: list[str], feats: pd.DataFrame | None = None,
         for c in entry.get("absent", []):
             why[c] = "源无当日数据"
     notes = {}
-    coarse = minute5.notes(day, [c for c in codes if c not in f.index])  # 5-minute fallback (BaoStock)
+    second = sina1.notes(day, [c for c in codes if c not in f.index])  # Sina 1-minute bars
+    coarse = minute5.notes(day, [c for c in codes if c not in f.index and c not in second])  # BaoStock 5-minute
     for c in codes:
         if c in f.index:
             notes[c] = describe(f.loc[c], ranks.loc[c] if c in ranks.index else None) or "无涨停相关事实"
+        elif c in second:
+            notes[c] = second[c]
         elif c in coarse:
             notes[c] = coarse[c]
         else:
             notes[c] = f"分时缺失（{why.get(c, '未在抓取名单')}）"
-    missing = sum(c not in f.index and c not in coarse for c in codes)
-    return notes, dict(status, noted=len(codes) - missing - len(coarse), coarse=len(coarse), missing=missing), \
+    missing = sum(c not in f.index and c not in second and c not in coarse for c in codes)
+    return notes, dict(status, noted=len(codes) - missing - len(second) - len(coarse), sina=len(second),
+                       coarse=len(coarse), missing=missing), \
         f.reindex([c for c in codes if c in f.index])

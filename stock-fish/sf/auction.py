@@ -20,6 +20,8 @@ g = open_T / preclose_T - 1 and role-specific cut points fixed on the train segm
 """
 from __future__ import annotations
 
+import contextlib
+import io
 import json
 from datetime import datetime, time as dtime, timezone
 from pathlib import Path
@@ -213,8 +215,58 @@ QUOTE_FIELDS = "f12,f14,f2,f5,f6,f17,f18"
 AUCTION_END = dtime(9, 30)
 
 
-def fetch_quotes(codes: list[str]) -> pd.DataFrame:
-    """Latest quotes for `codes` (one batched request, bounded retry). Missing codes are simply absent."""
+QUOTE_COLUMNS = ["code", "open", "preclose", "price", "volume", "amount", "source"]
+SOURCE_NAMES = {"eastmoney": "东方财富", "sina": "新浪"}
+
+
+def fetch_quotes(codes: list[str], primary=None, backup=None, log=print) -> pd.DataFrame:
+    """Latest quotes for `codes`: Eastmoney first; codes it failed or did not return are fetched from Sina (the
+    whole-market quote list AKShare documents as `stock_zh_a_spot`, only when needed: it is ~70 paged requests).
+    Every row records its `source`; codes neither source has stay absent (reported missing by the snapshot)."""
+    primary = primary or fetch_eastmoney
+    backup = backup or fetch_sina
+    errors = {}
+    try:
+        q = primary(codes)
+    except Exception as error:  # reported in the snapshot header; the backup source is tried
+        q, errors["eastmoney"] = pd.DataFrame(columns=QUOTE_COLUMNS[:-1]), str(error)[:120]
+    q = q.assign(source="eastmoney")
+    need = sorted(set(codes) - set(q["code"]))
+    if need:
+        log(f"东方财富缺 {len(need)} 只行情，改从新浪取")
+        try:
+            b = backup(need).assign(source="sina")
+            q = pd.concat([q, b[b["code"].isin(need)]], ignore_index=True)
+        except Exception as error:  # both failed: the codes stay missing, never filled in
+            errors["sina"] = str(error)[:120]
+    q = q[QUOTE_COLUMNS].reset_index(drop=True)
+    q.attrs["errors"] = errors
+    return q
+
+
+def fetch_sina(codes: list[str]) -> pd.DataFrame:
+    """Sina whole-market quotes (AKShare `stock_zh_a_spot`), cut to `codes`; volume converted to 手 like Eastmoney."""
+    import akshare as ak
+    with contextlib.redirect_stderr(io.StringIO()):  # its progress bar
+        s = ak.stock_zh_a_spot()
+    return parse_sina(s, codes)
+
+
+def parse_sina(s: pd.DataFrame, codes: list[str]) -> pd.DataFrame:
+    s = s.copy()
+    s["code"] = s["代码"].astype(str).str[:2] + "." + s["代码"].astype(str).str[2:]
+    s = s[s["code"].isin(codes)]
+    q = pd.DataFrame({"code": s["code"], "open": pd.to_numeric(s["今开"], errors="coerce"),
+                      "preclose": pd.to_numeric(s["昨收"], errors="coerce"),
+                      "price": pd.to_numeric(s["最新价"], errors="coerce"),
+                      "volume": pd.to_numeric(s["成交量"], errors="coerce") / 100,
+                      "amount": pd.to_numeric(s["成交额"], errors="coerce")})
+    q.loc[~(q["open"] > 0), "open"] = np.nan  # 0 before the open: unknown, not a price
+    return q.reset_index(drop=True)
+
+
+def fetch_eastmoney(codes: list[str]) -> pd.DataFrame:
+    """Latest Eastmoney quotes for `codes` (one batched request, bounded retry). Missing codes are simply absent."""
     import requests
     secids = ",".join(("1." if c.startswith("sh.") else "0.") + c[3:] for c in codes)
 
@@ -286,7 +338,9 @@ def snapshot(target: str | None = None, quotes: pd.DataFrame | None = None, now:
                   mean_gap=float(prev["gap"].mean()) if prev["gap"].notna().any() else None,
                   open_limit=int(prev["open_limit"].eq(1.0).sum()), gap_le_m5=int((prev["gap"] <= -0.05).sum()))
     missing = [c for c in listed.index if pd.isna(rows.loc[c, "gap"])]
-    return dict(version=VERSION, target=summary["target"], observation=summary["observation"], list_run=run_dir.name,
+    src = quotes["source"].value_counts().to_dict() if "source" in quotes else {}
+    sources = dict(counts={k: int(v) for k, v in src.items()}, errors=dict(quotes.attrs.get("errors", {})))
+    return dict(version=VERSION, sources=sources, target=summary["target"], observation=summary["observation"], list_run=run_dir.name,
                 list_version=summary.get("version") or summary.get("strategy_version"),
                 fetched_at=now.isoformat(timespec="seconds"), in_auction=in_auction, adopted=sorted(ADOPTED),
                 listed=rows.loc[listed.index], market=market, baserates=None if bmeta is None else bmeta["run"], missing=missing, quotes=quotes)
@@ -321,8 +375,14 @@ def lines(snap: dict) -> list[str]:
     else:
         head.append(f"同类开盘后：历史上同角色·同板数·是否一字（及竞价否定）且没有涨停开的票，开盘后最高/最低/收盘相对开盘价的中位数"
                     f"（统计表 {snap['baserates']}）；只描述历史分布，不是买卖点位")
+    src = snap.get("sources") or {}
+    if src.get("counts", {}).get("sina") or src.get("errors"):
+        n = src.get("counts", {})
+        err = "；".join(f"{SOURCE_NAMES.get(k, k)}失败（{v[:40]}）" for k, v in src.get("errors", {}).items())
+        head.append(f"行情源：东方财富 {n.get('eastmoney', 0)} 只，新浪 {n.get('sina', 0)} 只"
+                    + (f"；{err}" if err else "") + "（每只股票的来源记在快照里）")
     if snap["missing"]:
-        head.append(f"数据缺失：{len(snap['missing'])} 只没有竞价价格（停牌或源无数据）")
+        head.append(f"数据缺失：{len(snap['missing'])} 只没有竞价价格（停牌或两个源都无数据）")
     if m["mean_gap"] is not None:
         head.append(f"昨日涨停 {m['prev_limit_ups']} 家，今日竞价平均 {m['mean_gap'] * 100:+.1f}%，"
                     f"涨停开 {m['open_limit']} 家，低开 ≥5% {m['gap_le_m5']} 家（只作描述）")

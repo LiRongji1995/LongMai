@@ -168,9 +168,10 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 2. Files are written once (`intraday/raw|minute|universe|capture/`, and `intraday/supplement/` for listed stocks
    fetched after the evening capture); never edit or delete them. Failed, incomplete or absent stocks are listed
    in `intraday/capture/<day>.json` and the supplement capture logs.
-   Stocks the 1-minute source still lacks get BaoStock 5-minute bars as a coarse fallback (`sf/minute5.py`,
-   `intraday/bs5/`, write-once, own capture logs): fetched by `--backfill` and while a list is built. The list
-   marks such notes `5分钟线（粗）`; the 5-minute layer is never mixed into the 1-minute study tables.
+   Stocks the Eastmoney 1-minute source still lacks get Sina 1-minute bars first (`sf/sina1.py`, `intraday/sina1/`,
+   ~8 sessions kept, 238 bars/day, notes start `新浪1分钟线：`), then BaoStock 5-minute bars as a coarse fallback
+   (`sf/minute5.py`, `intraday/bs5/`, notes `5分钟线（粗）`). Both are write-once with their own capture logs, fetched
+   by `--backfill` and while a list is built, and never mixed into the 1-minute study tables.
 3. `bin/sf intraday report` prints the descriptive tables of docs/INTRADAY_STUDY.md. Before 40 captured
    sessions, report them as description only: no conclusions, no rule changes. Any rule built on them is a new
    strategy version with its own forward test, and follows the pre-registration exactly (no threshold tuning).
@@ -178,7 +179,9 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R7. Call-auction snapshot (`sf auction`)
 1. Between 09:25 and 09:30 Shanghai time on the list's target day: `bin/sf auction` (latest saved list; `--date` for
    another target). It fetches quotes for the listed stocks and the prior session's limit-ups and writes a new
-   snapshot under `auction/<day>/<stamp>/` (never overwritten). Run after 09:30 it still records the open gap, but the
+   snapshot under `auction/<day>/<stamp>/` (never overwritten). Quotes come from Eastmoney; codes it fails or misses
+   are fetched from Sina (AKShare `stock_zh_a_spot`, whole market, ~70 requests, only when needed); each quote's
+   `source` is stored and the header names the sources when Sina was used. Run after 09:30 it still records the open gap, but the
    auction amount is reported missing.
 2. Report the header lines (especially `数据缺失`) and the table. `auction.ADOPTED` (exam 2026-11-12) enables only
    the deny label, for leader/high-vol and ladder: it means "less likely to break out within 5 sessions", not
@@ -194,13 +197,14 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R8. Scheduled capture (`sf schedule`)
 1. `bin/sf schedule install` writes launchd user agents (`~/Library/LaunchAgents/com.longmai.sf.<job>.plist`) for:
    auction 09:26 (+ `prune --yes`), premarket 18:40 (+ review + page), intraday backfill 21:30 and 08:40 on weekdays; baserates and themes on
-   Saturday (a failed themes run is retried Sun / Mon / Tue, a failed baserates run on Sun; a retry slot does nothing
+   Saturday (a failed themes run is retried daily Sun to Fri, a failed baserates run on Sun; a retry slot does nothing
    after a successful run). Install only when the user asks; `bin/sf schedule uninstall` removes them. After the job
    table changes in code, the installed agents keep the old slots until the user reinstalls.
 2. `bin/sf schedule status` shows each job's last run. Logs: `schedule/logs/`; latest status: `schedule/status/`.
    A failed job posts a local macOS notification and appears at the top of the local page.
-3. When the minute-bar source drops connections, retry at another time only. Never switch to undocumented hosts,
-   spoof headers or otherwise work around the source's limits.
+3. When a source drops connections, retry at another time only. The backup sources (Sina for auction quotes and
+   1-minute bars, BaoStock 5-minute bars) are the endpoints AKShare documents, used at a low request rate; never add
+   undocumented hosts, spoof headers or otherwise work around a source's limits.
 
 ### R9. Judgment diary and trade log (`sf judge`, `sf trade`)
 1. Record the user's own calls with `bin/sf judge add "<their words>" --kind ... --subject ... [--days N] [--not]`
