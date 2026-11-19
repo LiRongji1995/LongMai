@@ -128,8 +128,23 @@ def push_password(project: str = PROJECT, runner=subprocess.run, value: str | No
     return result.returncode
 
 
-def deploy(project: str = PROJECT, runner=subprocess.run, log=print) -> int:
-    """Upload publish/site with the gate in publish/functions (run from publish/ so wrangler finds functions/)."""
+DEPLOY_TRIES = 2
+RETRY_PAUSE = 30  # seconds
+
+
+def deploy(project: str = PROJECT, runner=subprocess.run, log=print, pause=time.sleep) -> int:
+    """Upload publish/site with the gate in publish/functions; one logged retry (npx sometimes fails transiently)."""
+    for attempt in range(1, DEPLOY_TRIES + 1):
+        code = _deploy_once(project, runner, log)
+        if code == 0 or attempt == DEPLOY_TRIES:
+            return code
+        log(f"上传失败（退出码 {code}），{RETRY_PAUSE} 秒后重试一次")
+        pause(RETRY_PAUSE)
+    return code
+
+
+def _deploy_once(project: str, runner, log) -> int:
+    """One upload (run from publish/ so wrangler finds functions/)."""
     result = runner([*WRANGLER, "pages", "deploy", "site", "--project-name", project, "--branch", "main",
                      "--commit-dirty=true"], text=True, capture_output=True, cwd=root(), env=_env())
     tail = (result.stdout or "").strip().splitlines()[-2:] + (result.stderr or "").strip().splitlines()[-3:]

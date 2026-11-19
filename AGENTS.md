@@ -243,7 +243,7 @@ report each check's result, and stop and ask at every **STOP**. Run commands fro
 ### R12. Private page site (`sf publish`)
 1. `bin/sf publish --deploy` rewrites `publish/site/` from `pages/` (HTML only, local paths replaced, links to a day's page
    rewritten to the fixed `/<day>/` address (its newest page, `index.html`), older page names redirected there by `_redirects`, no-index headers,
-   `robots.txt`), copies the password gate to `publish/functions/` and uploads with wrangler. If it reports pages that
+   `robots.txt`), copies the password gate to `publish/functions/` and uploads with wrangler (one logged retry after 30 s). If it reports pages that
    still contain a local path (exit 1), **STOP** and fix the scrub first. The scheduled jobs run it with
    `--if-configured` (skipped when `publish/password.txt` is absent).
 2. After changing the gate, check without the password that `/`, a day page and `/robots.txt` return the login page

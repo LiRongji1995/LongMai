@@ -149,3 +149,16 @@ def test_mail_reads_the_app_password_from_the_keychain(tmp_path, monkeypatch):
     monkeypatch.setattr(mail, "app_password", lambda addr: "abcdefghijklmnop")
     mail.send("主题", "正文", smtp=FakeSMTP)
     assert seen == dict(host="smtp.gmail.com", login=("me@example.com", "abcdefghijklmnop"), to="me@example.com")
+
+
+def test_deploy_retries_once_then_reports_failure():
+    codes, calls, waits, logs = [1, 0], [], [], []
+
+    def fake(cmd, **kw):
+        calls.append(cmd)
+        return subprocess.CompletedProcess(cmd, codes[len(calls) - 1], "", "")
+    assert publish.deploy(runner=fake, log=logs.append, pause=waits.append) == 0
+    assert len(calls) == 2 and waits == [publish.RETRY_PAUSE] and any("重试" in x for x in logs)
+    codes[:] = [1, 1]
+    calls.clear()
+    assert publish.deploy(runner=fake, log=lambda *_: None, pause=lambda _: None) == 1 and len(calls) == 2
